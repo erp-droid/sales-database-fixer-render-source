@@ -1,0 +1,396 @@
+URL: https://meadowbrook.acumatica.com/entity/lightspeed/24.200.001/BusinessAccount/c65accd4-7ded-f011-8370-025dbe72350a?$expand=Attributes,Contacts,MainAddress,PrimaryContact
+
+{
+    "id": "c65accd4-7ded-f011-8370-025dbe72350a",
+    "rowNumber": 1,
+    "note": {
+        "value": ""
+    },
+    "AccountRef": {},
+    "Attributes": [
+        {
+            "id": "6b0b299b-e817-f111-8372-025dbe72350a",
+            "rowNumber": 1,
+            "note": null,
+            "AttributeDescription": {
+                "value": "Industry Type"
+            },
+            "AttributeID": {
+                "value": "INDUSTRY"
+            },
+            "RefNoteID": {
+                "value": "c65accd4-7ded-f011-8370-025dbe72350a"
+            },
+            "Required": {
+                "value": false
+            },
+            "Value": {
+                "value": "Distributi"
+            },
+            "ValueDescription": {
+                "value": "Distribution"
+            },
+            "custom": {},
+            "_links": {
+                "files:put": "/entity/lightspeed/24.200.001/files/PX.Objects.CR.BusinessAccountMaint/Answers/6b0b299b-e817-f111-8372-025dbe72350a/{filename}"
+            }
+        },
+        {
+            "id": "6c0b299b-e817-f111-8372-025dbe72350a",
+            "rowNumber": 2,
+            "note": null,
+            "AttributeDescription": {
+                "value": "Industry Type Sub-Category"
+            },
+            "AttributeID": {
+                "value": "INDSUBCATE"
+            },
+            "RefNoteID": {
+                "value": "c65accd4-7ded-f011-8370-025dbe72350a"
+            },
+            "Required": {
+                "value": false
+            },
+            "Value": {
+                "value": "Manufactur"
+            },
+            "ValueDescription": {
+                "value": "Pharmaceuticals"
+            },
+            "custom": {},
+            "_links": {
+                "files:put": "/entity/lightspeed/24.200.001/files/PX.Objects.CR.BusinessAccountMaint/Answers/6c0b299b-e817-f111-8372-025dbe72350a/{filename}"
+            }
+        },
+        {
+            "id": "6d0b299b-e817-f111-8372-025dbe72350a",
+            "rowNumber": 3,
+            "note": null,
+            "AttributeDescription": {
+                "value": "Client Type"
+            },
+            "AttributeID": {
+                "value": "CLIENTTYPE"
+            },
+            "RefNoteID": {
+                "value": "c65accd4-7ded-f011-8370-025dbe72350a"
+            },
+            "Required": {
+                "value": false
+            },
+            "Value": {
+                "value": "A"
+            },
+            "ValueDescription": {
+                "value": "A - Type Clients"
+            },
+            "custom": {},
+            "_links": {
+                "files:put": "/entity/lightspeed/24.200.001/files/PX.Objects.CR.BusinessAccountMaint/Answers/6d0b299b-e817-f111-8372-025dbe72350a/{filename}"
+            }
+        },
+        {
+            "id": "6e0b299b-e817-f111-8372-025dbe72350a",
+            "rowNumber": 4,
+            "note": null,
+            "AttributeDescription": {
+                "value": "Company Region"
+            },
+            "AttributeID": {
+                "value": "REGION"
+            },
+            "RefNoteID": {
+                "value": "c65accd4-7ded-f011-8370-025dbe72350a"
+            },
+            "Required": {
+                "value": false
+            },
+            "Value": {
+                "value": "Region 1"
+            },
+            "ValueDescription": {
+                "value": "Region 1"
+            },
+            "custom": {},
+            "_links": {
+                "files:put": "/entity/lightspeed/24.200.001/files/PX.Objects.CR.BusinessAccountMaint/Answers/6e0b299b-e817-f111-8372-025dbe72350a/{filename}"
+            }
+        },
+        {
+            "id": "6f0b299b-e817-f111-8372-025dbe72350a",
+            "rowNumber": 5,
+            "note": null,
+            "AttributeDescription": {
+                "value": "Week"
+            },
+            "AttributeID": {
+                "value": "WEEK"
+            },
+            "RefNoteID": {
+                "value": "c65accd4-7ded-f011-8370-025dbe72350a"
+            },
+            "Required": {
+                "value": false
+            },
+            "Value": {
+                "value": "Week 1"
+            },
+            "ValueDescription": {
+                "value": "Week 1"
+            },
+            "custom": {},
+            "_links": {
+                "files:put": "/entity/lightspeed/24.200.001/files/PX.Objects.CR.BusinessAccountMaint/Answers/6f0b299b-e817-f111-8372-025dbe72350a/{filename}"
+            }
+        }
+    ],
+    "BusinessAccountID": {
+        "value": "02670D2595"
+    },
+    "ClassID": {
+        "value": "CUSTOMER"
+    },
+    "Contacts": [
+        {
+            "id": "21b3b035-a7ef-f011-8370-025dbe72350a",
+            "rowNumber": 1,
+            "note": {
+                "value": ""
+            },
+            "Active": {
+                "value": true
+            },
+            "City": {},
+            "ContactID": {
+                "value": 157497
+            },
+            "DisplayName": {
+                "value": "Jorge Serrano"
+            },
+            "Email": {
+                "value": "jserrano@meadowb.com"
+            },
+            "JobTitle": {},
+            "Owner": {},
+            "Phone1": {
+                "value": "4162304681"
+            },
+            "Type": {
+                "value": "Contact"
+            },
+            "Workgroup": {},
+            "custom": {},
+            "_links": {
+                "files:put": "/entity/lightspeed/24.200.001/files/PX.Objects.CR.BusinessAccountMaint/Contacts/21b3b035-a7ef-f011-8370-025dbe72350a/{filename}"
+            }
+        },
+        {
+            "id": "80b4ba86-a8ef-f011-8370-025dbe72350a",
+            "rowNumber": 2,
+            "note": {
+                "value": ""
+            },
+            "Active": {
+                "value": true
+            },
+            "City": {},
+            "ContactID": {
+                "value": 158410
+            },
+            "DisplayName": {
+                "value": "Derek Cowell"
+            },
+            "Email": {
+                "value": "dcowell@meadowb.com"
+            },
+            "JobTitle": {
+                "value": "VP of Capital Projects"
+            },
+            "Owner": {},
+            "Phone1": {
+                "value": "4164520752"
+            },
+            "Type": {
+                "value": "Contact"
+            },
+            "Workgroup": {},
+            "custom": {},
+            "_links": {
+                "files:put": "/entity/lightspeed/24.200.001/files/PX.Objects.CR.BusinessAccountMaint/Contacts/80b4ba86-a8ef-f011-8370-025dbe72350a/{filename}"
+            }
+        }
+    ],
+    "CurrencyID": {
+        "value": "CAD"
+    },
+    "Duplicate": {
+        "value": "Not Validated"
+    },
+    "EnableCurrencyOverride": {
+        "value": false
+    },
+    "LastIncomingActivity": {},
+    "LastModifiedDateTime": {
+        "value": "2026-03-04T16:39:08.13+00:00"
+    },
+    "LastOutgoingActivity": {},
+    "MainAddress": {
+        "id": "fcb8dd6e-c7a9-40f3-980d-e764d8c242a1",
+        "rowNumber": 1,
+        "note": null,
+        "AddressLine1": {
+            "value": "5579 McAdam Road"
+        },
+        "AddressLine2": {},
+        "City": {
+            "value": "Mississauga"
+        },
+        "Country": {
+            "value": "CA"
+        },
+        "PostalCode": {
+            "value": "L4Z 1N4"
+        },
+        "State": {
+            "value": "ON"
+        },
+        "custom": {}
+    },
+    "Name": {
+        "value": "MeadowBrook Construction - Internal"
+    },
+    "NoteID": {
+        "value": "c65accd4-7ded-f011-8370-025dbe72350a"
+    },
+    "Owner": {
+        "value": "109343"
+    },
+    "OwnerEmployeeName": {
+        "value": "Jorge Serrano"
+    },
+    "ParentAccount": {},
+    "PrimaryContact": {
+        "id": "6d0e68b2-33a6-424c-ad62-9628ab333c6a",
+        "rowNumber": 1,
+        "note": null,
+        "Active": {
+            "value": true
+        },
+        "BusinessAccount": {
+            "value": "02670D2595"
+        },
+        "CompanyName": {
+            "value": "MeadowBrook Construction - Internal"
+        },
+        "ContactClass": {},
+        "ContactID": {
+            "value": 157497
+        },
+        "ContactMethod": {
+            "value": "Any"
+        },
+        "DateOfBirth": {},
+        "DisplayName": {
+            "value": "Jorge Serrano"
+        },
+        "DoNotCall": {
+            "value": false
+        },
+        "DoNotEmail": {
+            "value": false
+        },
+        "DoNotFax": {
+            "value": false
+        },
+        "DoNotMail": {
+            "value": false
+        },
+        "Duplicate": {
+            "value": "Not Validated"
+        },
+        "DuplicateFound": {
+            "value": false
+        },
+        "Email": {
+            "value": "jserrano@meadowb.com"
+        },
+        "Fax": {},
+        "FaxType": {
+            "value": "Fax"
+        },
+        "FirstName": {
+            "value": "Jorge"
+        },
+        "Gender": {},
+        "Image": {},
+        "JobTitle": {},
+        "LanguageOrLocale": {},
+        "LastModifiedDateTime": {
+            "value": "2026-01-21T13:01:43.573+00:00"
+        },
+        "LastName": {
+            "value": "Serrano"
+        },
+        "MaritalStatus": {},
+        "MiddleName": {},
+        "NoMarketing": {
+            "value": false
+        },
+        "NoMassMail": {
+            "value": false
+        },
+        "NoteID": {
+            "value": "21b3b035-a7ef-f011-8370-025dbe72350a"
+        },
+        "OverrideAccountAddress": {},
+        "Owner": {},
+        "OwnerEmployeeName": {},
+        "ParentAccount": {},
+        "Phone1": {
+            "value": "4162304681"
+        },
+        "Phone1Type": {
+            "value": "Business 1"
+        },
+        "Phone2": {},
+        "Phone2Type": {
+            "value": "Cell"
+        },
+        "Phone3": {},
+        "Phone3Type": {
+            "value": "Home"
+        },
+        "Reason": {},
+        "Source": {},
+        "SourceCampaign": {},
+        "SpouseOrPartnerName": {},
+        "Status": {
+            "value": "Active"
+        },
+        "Title": {},
+        "Type": {
+            "value": "Contact"
+        },
+        "WebSite": {},
+        "Workgroup": {},
+        "WorkgroupDescription": {},
+        "custom": {}
+    },
+    "ShippingAddressOverride": {
+        "value": false
+    },
+    "SourceCampaign": {},
+    "Status": {
+        "value": "Active"
+    },
+    "Type": {
+        "value": "Customer"
+    },
+    "Workgroup": {},
+    "WorkgroupDescription": {},
+    "custom": {},
+    "_links": {
+        "self": "/entity/lightspeed/24.200.001/BusinessAccount/c65accd4-7ded-f011-8370-025dbe72350a",
+        "files:put": "/entity/lightspeed/24.200.001/files/PX.Objects.CR.BusinessAccountMaint/BAccount/c65accd4-7ded-f011-8370-025dbe72350a/{filename}"
+    }
+}

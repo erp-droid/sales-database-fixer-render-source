@@ -1,0 +1,129 @@
+.page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.card {
+  width: min(460px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 30px;
+}
+
+.brandTop {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.brandLogo {
+  width: min(240px, 74vw);
+  height: auto;
+  object-fit: contain;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--accent-strong);
+  font-family: var(--font-mono), "Courier New", monospace;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 8px 0 6px;
+  color: var(--ink-strong);
+  font-size: clamp(28px, 4vw, 36px);
+}
+
+.subtitle {
+  margin: 0 0 20px;
+  color: var(--ink-muted);
+}
+
+.form {
+  display: grid;
+  gap: 14px;
+}
+
+.label {
+  display: grid;
+  gap: 6px;
+  color: var(--ink-strong);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.input:focus {
+  outline: 2px solid #90c9ef;
+  outline-offset: 1px;
+}
+
+.rememberRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  user-select: none;
+}
+
+.rememberCheckbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+.submit {
+  margin-top: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  padding: 11px 16px;
+  cursor: pointer;
+}
+
+.submit:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.submit:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.forgotPassword {
+  justify-self: start;
+  margin-top: -2px;
+  color: var(--accent-strong);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.forgotPassword:hover {
+  color: var(--accent);
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 14px;
+}

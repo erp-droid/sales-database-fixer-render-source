@@ -1,0 +1,240 @@
+GET: https://meadowbrook.acumatica.com/entity/lightspeed/24.200.001/Contact?$filter=BusinessAccount eq '02670D2595'
+
+[
+    {
+        "id": "21b3b035-a7ef-f011-8370-025dbe72350a",
+        "rowNumber": 1,
+        "note": {
+            "value": ""
+        },
+        "Active": {
+            "value": true
+        },
+        "Attention": {},
+        "BusinessAccount": {
+            "value": "02670D2595"
+        },
+        "CompanyName": {
+            "value": "MeadowBrook Construction - Internal"
+        },
+        "ContactClass": {},
+        "ContactID": {
+            "value": 157497
+        },
+        "ContactMethod": {
+            "value": "Any"
+        },
+        "DateOfBirth": {},
+        "DisplayName": {
+            "value": "Jorge Serrano"
+        },
+        "DoNotCall": {
+            "value": false
+        },
+        "DoNotEmail": {
+            "value": false
+        },
+        "DoNotFax": {
+            "value": false
+        },
+        "DoNotMail": {
+            "value": false
+        },
+        "Duplicate": {
+            "value": "Not Validated"
+        },
+        "DuplicateFound": {
+            "value": false
+        },
+        "Email": {
+            "value": "jserrano@meadowb.com"
+        },
+        "ExtRefNbr": {},
+        "Fax": {},
+        "FaxType": {
+            "value": "Fax"
+        },
+        "FirstName": {
+            "value": "Jorge"
+        },
+        "Gender": {},
+        "Image": {},
+        "JobTitle": {},
+        "LanguageOrLocale": {},
+        "LastIncomingActivity": {},
+        "LastModifiedDateTime": {
+            "value": "2026-01-21T13:01:43.573+00:00"
+        },
+        "LastName": {
+            "value": "Serrano"
+        },
+        "LastOutgoingActivity": {},
+        "MaritalStatus": {},
+        "MiddleName": {},
+        "NoMarketing": {
+            "value": false
+        },
+        "NoMassMail": {
+            "value": false
+        },
+        "NoteID": {
+            "value": "21b3b035-a7ef-f011-8370-025dbe72350a"
+        },
+        "OverrideAccountAddress": {},
+        "Owner": {},
+        "OwnerEmployeeName": {},
+        "ParentAccount": {},
+        "Phone1": {
+            "value": "4162304681"
+        },
+        "Phone1Type": {
+            "value": "Business 1"
+        },
+        "Phone2": {},
+        "Phone2Type": {
+            "value": "Cell"
+        },
+        "Phone3": {},
+        "Phone3Type": {
+            "value": "Home"
+        },
+        "Reason": {},
+        "Source": {},
+        "SourceCampaign": {},
+        "SpouseOrPartnerName": {},
+        "Status": {
+            "value": "Active"
+        },
+        "Title": {},
+        "Type": {
+            "value": "Contact"
+        },
+        "WebSite": {},
+        "Workgroup": {},
+        "WorkgroupDescription": {},
+        "custom": {},
+        "_links": {
+            "self": "/entity/lightspeed/24.200.001/Contact/21b3b035-a7ef-f011-8370-025dbe72350a",
+            "files:put": "/entity/lightspeed/24.200.001/files/PX.Objects.CR.ContactMaint/Contact/21b3b035-a7ef-f011-8370-025dbe72350a/{filename}"
+        }
+    },
+    {
+        "id": "80b4ba86-a8ef-f011-8370-025dbe72350a",
+        "rowNumber": 2,
+        "note": {
+            "value": ""
+        },
+        "Active": {
+            "value": true
+        },
+        "Attention": {},
+        "BusinessAccount": {
+            "value": "02670D2595"
+        },
+        "CompanyName": {
+            "value": "MeadowBrook Construction - Internal"
+        },
+        "ContactClass": {},
+        "ContactID": {
+            "value": 158410
+        },
+        "ContactMethod": {
+            "value": "Any"
+        },
+        "DateOfBirth": {},
+        "DisplayName": {
+            "value": "Derek Cowell"
+        },
+        "DoNotCall": {
+            "value": false
+        },
+        "DoNotEmail": {
+            "value": false
+        },
+        "DoNotFax": {
+            "value": false
+        },
+        "DoNotMail": {
+            "value": false
+        },
+        "Duplicate": {
+            "value": "Not Validated"
+        },
+        "DuplicateFound": {
+            "value": false
+        },
+        "Email": {
+            "value": "dcowell@meadowb.com"
+        },
+        "ExtRefNbr": {},
+        "Fax": {},
+        "FaxType": {
+            "value": "Fax"
+        },
+        "FirstName": {
+            "value": "Derek"
+        },
+        "Gender": {},
+        "Image": {},
+        "JobTitle": {
+            "value": "VP of Capital Projects"
+        },
+        "LanguageOrLocale": {},
+        "LastIncomingActivity": {},
+        "LastModifiedDateTime": {
+            "value": "2026-01-21T13:01:43.697+00:00"
+        },
+        "LastName": {
+            "value": "Cowell"
+        },
+        "LastOutgoingActivity": {},
+        "MaritalStatus": {},
+        "MiddleName": {},
+        "NoMarketing": {
+            "value": false
+        },
+        "NoMassMail": {
+            "value": false
+        },
+        "NoteID": {
+            "value": "80b4ba86-a8ef-f011-8370-025dbe72350a"
+        },
+        "OverrideAccountAddress": {},
+        "Owner": {},
+        "OwnerEmployeeName": {},
+        "ParentAccount": {},
+        "Phone1": {
+            "value": "4164520752"
+        },
+        "Phone1Type": {
+            "value": "Business 1"
+        },
+        "Phone2": {},
+        "Phone2Type": {
+            "value": "Cell"
+        },
+        "Phone3": {},
+        "Phone3Type": {
+            "value": "Home"
+        },
+        "Reason": {},
+        "Source": {},
+        "SourceCampaign": {},
+        "SpouseOrPartnerName": {},
+        "Status": {
+            "value": "Active"
+        },
+        "Title": {},
+        "Type": {
+            "value": "Contact"
+        },
+        "WebSite": {},
+        "Workgroup": {},
+        "WorkgroupDescription": {},
+        "custom": {},
+        "_links": {
+            "self": "/entity/lightspeed/24.200.001/Contact/80b4ba86-a8ef-f011-8370-025dbe72350a",
+            "files:put": "/entity/lightspeed/24.200.001/files/PX.Objects.CR.ContactMaint/Contact/80b4ba86-a8ef-f011-8370-025dbe72350a/{filename}"
+        }
+    }
+]
