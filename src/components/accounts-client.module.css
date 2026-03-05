@@ -192,6 +192,26 @@
   border-color: #b7c8e3;
 }
 
+.newAccountButton {
+  border: 1px solid #7db889;
+  background: #ebf8ee;
+  color: #1f6c39;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.newContactButton {
+  border: 1px solid #8cbbe8;
+  background: #e9f4ff;
+  color: #1f5f9f;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .syncButton {
   border: 1px solid #8cbbe8;
   background: #e9f4ff;
@@ -280,6 +300,13 @@
   gap: 6px;
 }
 
+.contactCellWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .primaryBadge {
   display: inline-flex;
   align-items: center;
@@ -293,6 +320,30 @@
   line-height: 1;
   padding: 3px 7px;
   text-transform: uppercase;
+}
+
+.makePrimaryButton {
+  border: 1px solid #f0b54a;
+  background: #fff6e3;
+  color: #8a5a00;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.makePrimaryButton:hover:not(:disabled) {
+  border-color: #d79a2a;
+  background: #ffefcc;
+}
+
+.makePrimaryButton:disabled {
+  opacity: 0.65;
+  cursor: progress;
 }
 
 .sortButton {
@@ -355,6 +406,46 @@
 
 .selectedRow {
   background: #ecf6ff;
+}
+
+.inlineSelectWrap {
+  display: grid;
+  gap: 4px;
+}
+
+.inlineSelect {
+  width: 100%;
+  border: 1px solid #c8d6e9;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.inlineSelect:disabled {
+  background: #f3f6fb;
+  color: #7386a0;
+}
+
+.inlineTextInput {
+  width: 100%;
+  border: 1px solid #c8d6e9;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.inlineTextInput:disabled {
+  background: #f3f6fb;
+  color: #7386a0;
+}
+
+.inlineSavingText {
+  font-size: 11px;
+  color: #1f5f9f;
 }
 
 .loadingCell {
@@ -491,6 +582,19 @@
   color: var(--ink-strong);
 }
 
+.inlineCheckbox {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.inlineCheckbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .drawerBody input,
 .drawerBody select,
 .drawerBody textarea {
@@ -573,7 +677,6 @@
 }
 
 .saveButton {
-  margin-top: 6px;
   border: 0;
   border-radius: 9px;
   background: var(--accent);
@@ -585,6 +688,32 @@
 
 .saveButton:disabled {
   opacity: 0.6;
+}
+
+.drawerActions {
+  margin-top: 6px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.drawerActions .saveButton {
+  margin-top: 0;
+}
+
+.deleteContactButton {
+  border: 1px solid #e3b0ad;
+  border-radius: 9px;
+  background: #fff4f3;
+  color: #a2332a;
+  padding: 11px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.deleteContactButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .saveError {

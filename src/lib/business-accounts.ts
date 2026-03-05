@@ -22,12 +22,29 @@ type QueryOptions = {
   filterPrimaryContactName?: string;
   filterPrimaryContactPhone?: string;
   filterPrimaryContactEmail?: string;
+  filterNotes?: string;
   filterCategory?: Category;
   filterLastModified?: string;
   sortBy?: SortBy;
   sortDir?: SortDir;
   page: number;
   pageSize: number;
+};
+
+export type PrimaryContactCandidate = {
+  contactId: number | null;
+  recordId: string | null;
+  email: string | null;
+  name: string | null;
+  rowNumber: number | null;
+  index: number;
+};
+
+export type PrimaryContactHint = {
+  contactId: number | null;
+  recordId: string | null;
+  email: string | null;
+  name: string | null;
 };
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -177,6 +194,355 @@ function chooseFirst(values: Array<string | null>): string | null {
   }
 
   return null;
+}
+
+function normalizeComparable(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+
+  return value.trim().toLowerCase();
+}
+
+function hasText(value: string | null | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function selectBestPrimaryCandidateIndex(
+  candidates: PrimaryContactCandidate[],
+): number | null {
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const sorted = [...candidates].sort((left, right) => {
+    const leftRowNumber = left.rowNumber ?? Number.POSITIVE_INFINITY;
+    const rightRowNumber = right.rowNumber ?? Number.POSITIVE_INFINITY;
+    if (leftRowNumber !== rightRowNumber) {
+      return leftRowNumber - rightRowNumber;
+    }
+
+    const leftContactId = left.contactId ?? Number.POSITIVE_INFINITY;
+    const rightContactId = right.contactId ?? Number.POSITIVE_INFINITY;
+    if (leftContactId !== rightContactId) {
+      return leftContactId - rightContactId;
+    }
+
+    return left.index - right.index;
+  });
+
+  return sorted[0]?.index ?? null;
+}
+
+export function selectPrimaryContactIndex(
+  candidates: PrimaryContactCandidate[],
+  hint: PrimaryContactHint,
+): number | null {
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  if (hint.contactId !== null) {
+    const byContactId = candidates.filter(
+      (candidate) => candidate.contactId !== null && candidate.contactId === hint.contactId,
+    );
+    const selectedByContactId = selectBestPrimaryCandidateIndex(byContactId);
+    if (selectedByContactId !== null) {
+      return selectedByContactId;
+    }
+  }
+
+  const normalizedRecordId = normalizeComparable(hint.recordId);
+  if (normalizedRecordId) {
+    const byRecordId = candidates.filter(
+      (candidate) => normalizeComparable(candidate.recordId) === normalizedRecordId,
+    );
+    const selectedByRecordId = selectBestPrimaryCandidateIndex(byRecordId);
+    if (selectedByRecordId !== null) {
+      return selectedByRecordId;
+    }
+  }
+
+  const normalizedEmail = normalizeComparable(hint.email);
+  if (normalizedEmail) {
+    const byEmail = candidates.filter(
+      (candidate) => normalizeComparable(candidate.email) === normalizedEmail,
+    );
+    const selectedByEmail = selectBestPrimaryCandidateIndex(byEmail);
+    if (selectedByEmail !== null) {
+      return selectedByEmail;
+    }
+  }
+
+  const normalizedName = normalizeComparable(hint.name);
+  if (normalizedName) {
+    const byName = candidates.filter(
+      (candidate) => normalizeComparable(candidate.name) === normalizedName,
+    );
+    const selectedByName = selectBestPrimaryCandidateIndex(byName);
+    if (selectedByName !== null) {
+      return selectedByName;
+    }
+  }
+
+  return null;
+}
+
+type IndexedRow = {
+  row: BusinessAccountRow;
+  index: number;
+};
+
+function accountPrimaryKey(row: BusinessAccountRow, index: number): string {
+  if (hasText(row.accountRecordId)) {
+    return row.accountRecordId.trim();
+  }
+  if (hasText(row.id)) {
+    return row.id.trim();
+  }
+  if (hasText(row.businessAccountId)) {
+    return row.businessAccountId.trim();
+  }
+  if (hasText(row.companyName)) {
+    return row.companyName.trim();
+  }
+
+  return `row-${index}`;
+}
+
+function selectBestPrimaryRowIndex(entries: IndexedRow[]): number | null {
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const sorted = [...entries].sort((left, right) => {
+    const leftContactId = left.row.contactId ?? Number.POSITIVE_INFINITY;
+    const rightContactId = right.row.contactId ?? Number.POSITIVE_INFINITY;
+    if (leftContactId !== rightContactId) {
+      return leftContactId - rightContactId;
+    }
+
+    const leftRowKey = left.row.rowKey ?? "";
+    const rightRowKey = right.row.rowKey ?? "";
+    const rowKeyCompare = leftRowKey.localeCompare(rightRowKey, undefined, {
+      sensitivity: "base",
+      numeric: true,
+    });
+    if (rowKeyCompare !== 0) {
+      return rowKeyCompare;
+    }
+
+    return left.index - right.index;
+  });
+
+  return sorted[0]?.index ?? null;
+}
+
+export function enforceSinglePrimaryPerAccountRows(
+  rows: BusinessAccountRow[],
+): BusinessAccountRow[] {
+  if (rows.length <= 1) {
+    return rows;
+  }
+
+  const grouped = new Map<string, IndexedRow[]>();
+  rows.forEach((row, index) => {
+    const key = accountPrimaryKey(row, index);
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.push({ row, index });
+      return;
+    }
+
+    grouped.set(key, [{ row, index }]);
+  });
+
+  let changed = false;
+  const next = [...rows];
+
+  grouped.forEach((entries) => {
+    if (entries.length <= 1) {
+      return;
+    }
+
+    const primaryContactId = entries.reduce<number | null>((value, entry) => {
+      if (value !== null) {
+        return value;
+      }
+      return entry.row.primaryContactId ?? null;
+    }, null);
+
+    const byPrimaryContactId =
+      primaryContactId !== null
+        ? entries.filter(
+            (entry) =>
+              entry.row.contactId !== null &&
+              entry.row.contactId !== undefined &&
+              entry.row.contactId === primaryContactId,
+          )
+        : [];
+    const flaggedPrimaryRows =
+      byPrimaryContactId.length === 0
+        ? entries.filter((entry) => entry.row.isPrimaryContact === true)
+        : [];
+
+    const selectedIndex =
+      selectBestPrimaryRowIndex(byPrimaryContactId) ??
+      selectBestPrimaryRowIndex(flaggedPrimaryRows);
+    const selectedEntry =
+      selectedIndex !== null ? entries.find((entry) => entry.index === selectedIndex) : undefined;
+    const selectedContactId = selectedEntry?.row.contactId ?? primaryContactId;
+
+    if (selectedIndex === null) {
+      return;
+    }
+
+    entries.forEach((entry) => {
+      const shouldBePrimary = entry.index === selectedIndex;
+      const existingRow = next[entry.index];
+      if (!existingRow) {
+        return;
+      }
+
+      const primaryIdChanged =
+        selectedContactId !== null &&
+        selectedContactId !== undefined &&
+        existingRow.primaryContactId !== selectedContactId;
+      const primaryFlagChanged = Boolean(existingRow.isPrimaryContact) !== shouldBePrimary;
+      if (!primaryIdChanged && !primaryFlagChanged) {
+        return;
+      }
+
+      changed = true;
+      next[entry.index] = {
+        ...existingRow,
+        primaryContactId:
+          selectedContactId !== null && selectedContactId !== undefined
+            ? selectedContactId
+            : existingRow.primaryContactId,
+        isPrimaryContact: shouldBePrimary,
+      };
+    });
+  });
+
+  return changed ? next : rows;
+}
+
+function normalizeAttributeCandidate(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function canonicalIndustryType(value: string | null | undefined): string {
+  const normalized = normalizeAttributeCandidate(value);
+  if (!normalized) {
+    return "";
+  }
+
+  const key = normalized.toLowerCase();
+  const map: Record<string, string> = {
+    distributi: "Distributi",
+    distribution: "Distributi",
+    manufactur: "Manufactur",
+    manufacturing: "Manufactur",
+    recreation: "Recreation",
+    service: "Service",
+  };
+
+  return map[key] ?? normalized;
+}
+
+function canonicalSubCategory(value: string | null | undefined): string {
+  const normalized = normalizeAttributeCandidate(value);
+  if (!normalized) {
+    return "";
+  }
+
+  const key = normalized.toLowerCase();
+  const map: Record<string, string> = {
+    automotive: "Automotive",
+    distributi: "Distributi",
+    "food & beverage": "Distributi",
+    electronic: "Electronic",
+    electronics: "Electronic",
+    fabric: "Fabric",
+    fabrication: "Fabric",
+    general: "General",
+    manufactur: "Manufactur",
+    pharmaceuticals: "Manufactur",
+    package: "Package",
+    packaging: "Package",
+    plastics: "Plastics",
+    recreation: "Recreation",
+    "aerospace & defense": "Recreation",
+    service: "Service",
+    chemical: "Service",
+  };
+
+  return map[key] ?? normalized;
+}
+
+function canonicalCompanyRegion(value: string | null | undefined): string {
+  const normalized = normalizeAttributeCandidate(value);
+  if (!normalized) {
+    return "";
+  }
+
+  const key = normalized.toLowerCase().replace(/\s+/g, " ").trim();
+  const map: Record<string, string> = {
+    "region 1": "Region 1",
+    "region 2": "Region 2",
+    "region 3": "Region 3",
+    "region 4": "Region 4",
+    "region 5": "Region 5",
+  };
+
+  return map[key] ?? normalized;
+}
+
+function canonicalWeek(value: string | null | undefined): string {
+  const normalized = normalizeAttributeCandidate(value);
+  if (!normalized) {
+    return "";
+  }
+
+  const weekMatch = normalized.match(/^week\s*(\d+)$/i);
+  if (weekMatch) {
+    return `Week ${weekMatch[1]}`;
+  }
+
+  return normalized;
+}
+
+function upsertAttributeValue(
+  attributes: unknown[],
+  attributeId: string,
+  value: string,
+): { hasExisting: boolean; next: unknown[] } {
+  let hasExisting = false;
+  const next = attributes.map((attribute) => {
+    const id = readNullableString(attribute, "AttributeID");
+    if (id !== attributeId) {
+      return attribute;
+    }
+
+    hasExisting = true;
+    return {
+      ...(isRecord(attribute) ? attribute : {}),
+      AttributeID: {
+        value: attributeId,
+      },
+      Value: {
+        value,
+      },
+    };
+  });
+
+  return { hasExisting, next };
 }
 
 function readAccountPhone(record: unknown): string | null {
@@ -417,6 +783,21 @@ export function normalizeBusinessAccountRows(account: unknown): BusinessAccountR
   const primaryFromPayload = composeContactName(primary);
   const primaryEmail = readFirstString(primary, ["Email", "EMail"]) || null;
   const primaryRecordId = readRecordIdentity(primary);
+  const primaryHint: PrimaryContactHint = {
+    contactId: primaryId,
+    recordId: primaryRecordId,
+    email: primaryEmail,
+    name: primaryFromPayload,
+  };
+  const primaryCandidates: PrimaryContactCandidate[] = contacts.map((contact, index) => ({
+    contactId: readNullableNumber(contact, "ContactID"),
+    recordId: readRecordIdentity(contact),
+    email: readFirstString(contact, ["Email", "EMail"]) || null,
+    name: composeContactName(contact),
+    rowNumber: readNullableNumber(contact, "rowNumber"),
+    index,
+  }));
+  const selectedPrimaryIndex = selectPrimaryContactIndex(primaryCandidates, primaryHint);
   const rows: BusinessAccountRow[] = [];
 
   for (let index = 0; index < contacts.length; index += 1) {
@@ -426,30 +807,11 @@ export function normalizeBusinessAccountRows(account: unknown): BusinessAccountR
     const contactPhone = readFirstString(contact, ["Phone1", "Phone2", "Phone3"]) || null;
     const contactEmail = readFirstString(contact, ["Email", "EMail"]) || null;
     const contactRecordId = readRecordIdentity(contact);
-    const isPrimaryById = primaryId !== null && contactId !== null && contactId === primaryId;
-    const isPrimaryByRecordId =
-      !isPrimaryById &&
-      Boolean(primaryRecordId) &&
-      Boolean(contactRecordId) &&
-      primaryRecordId!.toLowerCase() === contactRecordId!.toLowerCase();
-    const isPrimaryByEmail =
-      !isPrimaryById &&
-      !isPrimaryByRecordId &&
-      Boolean(primaryEmail) &&
-      Boolean(contactEmail) &&
-      primaryEmail!.toLowerCase() === contactEmail!.toLowerCase();
-    const isPrimaryByName =
-      !isPrimaryById &&
-      !isPrimaryByRecordId &&
-      !isPrimaryByEmail &&
-      Boolean(primaryFromPayload) &&
-      Boolean(contactName) &&
-      primaryFromPayload === contactName;
-    const isPrimary = isPrimaryById || isPrimaryByRecordId || isPrimaryByEmail || isPrimaryByName;
+    const isPrimary = selectedPrimaryIndex !== null && selectedPrimaryIndex === index;
 
     rows.push({
       ...base,
-      rowKey: `${base.id}:contact:${contactId ?? index}`,
+      rowKey: `${base.id}:contact:${contactId ?? contactRecordId ?? index}`,
       accountRecordId: base.id,
       contactId,
       isPrimaryContact: isPrimary,
@@ -483,7 +845,7 @@ export function normalizeBusinessAccountRows(account: unknown): BusinessAccountR
     ];
   }
 
-  return rows;
+  return enforceSinglePrimaryPerAccountRows(rows);
 }
 
 export function queryBusinessAccounts(
@@ -538,6 +900,10 @@ export function queryBusinessAccounts(
       return false;
     }
 
+    if (!includesFilter(row.notes, options.filterNotes)) {
+      return false;
+    }
+
     if (!includesLastModifiedFilter(row.lastModifiedIso, options.filterLastModified)) {
       return false;
     }
@@ -557,6 +923,7 @@ export function queryBusinessAccounts(
       row.primaryContactName,
       row.primaryContactPhone,
       row.primaryContactEmail,
+      row.notes,
       row.businessAccountId,
     ]
       .filter(Boolean)
@@ -637,36 +1004,36 @@ export function buildBusinessAccountUpdatePayload(
   existingRawAccount: unknown,
   update: BusinessAccountUpdateRequest,
 ): Record<string, unknown> {
+  const existingPrimary = getField(existingRawAccount, "PrimaryContact");
+  const existingPrimaryRecordId = readRecordIdentity(existingPrimary);
   const attributes = [...readArrayField(existingRawAccount, "Attributes")];
+  const attributeUpdates: Array<{ id: string; value: string }> = [
+    { id: "CLIENTTYPE", value: update.category ?? "" },
+    { id: "INDUSTRY", value: canonicalIndustryType(update.industryType) },
+    { id: "INDSUBCATE", value: canonicalSubCategory(update.subCategory) },
+    { id: "REGION", value: canonicalCompanyRegion(update.companyRegion) },
+    { id: "WEEK", value: canonicalWeek(update.week) },
+  ];
 
-  let hasClientType = false;
-  const updatedAttributes = attributes.map((attribute) => {
-    const id = readNullableString(attribute, "AttributeID");
-    if (id !== "CLIENTTYPE") {
-      return attribute;
+  let updatedAttributes = attributes;
+  for (const attributeUpdate of attributeUpdates) {
+    const upsert = upsertAttributeValue(
+      updatedAttributes,
+      attributeUpdate.id,
+      attributeUpdate.value,
+    );
+    updatedAttributes = upsert.next;
+
+    if (!upsert.hasExisting) {
+      updatedAttributes.push({
+        AttributeID: {
+          value: attributeUpdate.id,
+        },
+        Value: {
+          value: attributeUpdate.value,
+        },
+      });
     }
-
-    hasClientType = true;
-    return {
-      ...(isRecord(attribute) ? attribute : {}),
-      AttributeID: {
-        value: "CLIENTTYPE",
-      },
-      Value: {
-        value: update.category ?? "",
-      },
-    };
-  });
-
-  if (!hasClientType) {
-    updatedAttributes.push({
-      AttributeID: {
-        value: "CLIENTTYPE",
-      },
-      Value: {
-        value: update.category ?? "",
-      },
-    });
   }
 
   return {
@@ -697,6 +1064,20 @@ export function buildBusinessAccountUpdatePayload(
       },
     },
     Attributes: updatedAttributes,
+    ...(update.setAsPrimaryContact && update.targetContactId !== null
+      ? {
+          PrimaryContact: {
+            ...(existingPrimaryRecordId
+              ? {
+                  id: existingPrimaryRecordId,
+                }
+              : {}),
+            ContactID: {
+              value: update.targetContactId,
+            },
+          },
+        }
+      : {}),
   };
 }
 
@@ -716,6 +1097,152 @@ export function buildPrimaryContactUpdatePayload(
     note: {
       value: update.notes ?? "",
     },
+  };
+}
+
+export function readRawBusinessAccountPrimaryContactId(rawAccount: unknown): number | null {
+  if (!isRecord(rawAccount)) {
+    return null;
+  }
+
+  const primary = rawAccount.PrimaryContact;
+  return (
+    readNullableNumber(primary, "ContactID") ??
+    readNullableNumber(rawAccount, "PrimaryContactID") ??
+    readNullableNumber(rawAccount, "MainContactID")
+  );
+}
+
+export function resolveBusinessAccountRecordId(
+  rawAccount: unknown,
+  fallbackId: string,
+): string {
+  if (isRecord(rawAccount)) {
+    const rawId = typeof rawAccount.id === "string" ? rawAccount.id.trim() : "";
+    if (rawId) {
+      return rawId;
+    }
+
+    const noteId = readNullableString(rawAccount, "NoteID");
+    if (noteId) {
+      return noteId;
+    }
+  }
+
+  return fallbackId;
+}
+
+export function buildBusinessAccountIdentityPayload(
+  rawAccount: unknown,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+
+  if (!isRecord(rawAccount)) {
+    return payload;
+  }
+
+  const rawId = typeof rawAccount.id === "string" ? rawAccount.id.trim() : "";
+  if (rawId) {
+    payload.id = rawId;
+  }
+
+  const noteId = readNullableString(rawAccount, "NoteID");
+  if (noteId) {
+    payload.NoteID = {
+      value: noteId,
+    };
+  }
+
+  const businessAccountId =
+    readNullableString(rawAccount, "BusinessAccountID") ??
+    readNullableString(rawAccount, "BAccountID") ??
+    readNullableString(rawAccount, "AccountCD");
+  if (businessAccountId) {
+    payload.BusinessAccountID = {
+      value: businessAccountId,
+    };
+  }
+
+  return payload;
+}
+
+export function buildBusinessAccountUpdateIdentifiers(
+  rawAccount: unknown,
+  fallbackId: string,
+): string[] {
+  const rawId =
+    isRecord(rawAccount) && typeof rawAccount.id === "string" ? rawAccount.id.trim() : "";
+  const businessAccountId =
+    readNullableString(rawAccount, "BusinessAccountID") ??
+    readNullableString(rawAccount, "BAccountID") ??
+    readNullableString(rawAccount, "AccountCD");
+  const noteId = readNullableString(rawAccount, "NoteID");
+
+  return [businessAccountId ?? "", rawId, noteId ?? "", fallbackId]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .filter((value, index, array) => array.indexOf(value) === index);
+}
+
+export function buildPrimaryContactFallbackPayloads(
+  rawAccount: unknown,
+  targetContactId: number,
+): Array<Record<string, unknown>> {
+  const primary =
+    isRecord(rawAccount) && isRecord(rawAccount.PrimaryContact) ? rawAccount.PrimaryContact : null;
+  const primaryRecordId =
+    primary && typeof primary.id === "string" && primary.id.trim() ? primary.id.trim() : null;
+
+  return [
+    {
+      PrimaryContact: {
+        ...(primaryRecordId ? { id: primaryRecordId } : {}),
+        ContactID: {
+          value: targetContactId,
+        },
+      },
+    },
+    {
+      PrimaryContact: {
+        value: String(targetContactId),
+      },
+    },
+    {
+      MainContact: {
+        value: String(targetContactId),
+      },
+    },
+    {
+      MainContact: {
+        ContactID: {
+          value: targetContactId,
+        },
+      },
+    },
+    {
+      PrimaryContactID: {
+        value: targetContactId,
+      },
+    },
+    {
+      MainContactID: {
+        value: targetContactId,
+      },
+    },
+  ];
+}
+
+export function withAccountContacts(
+  businessAccount: unknown,
+  contacts: unknown[],
+): unknown {
+  if (!isRecord(businessAccount)) {
+    return businessAccount;
+  }
+
+  return {
+    ...businessAccount,
+    Contacts: contacts,
   };
 }
 

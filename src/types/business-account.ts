@@ -13,6 +13,7 @@ export type SortBy =
   | "primaryContactName"
   | "primaryContactPhone"
   | "primaryContactEmail"
+  | "notes"
   | "category"
   | "lastModifiedIso";
 
@@ -57,8 +58,14 @@ export type BusinessAccountUpdateRequest = {
   state: string;
   postalCode: string;
   country: string;
+  targetContactId: number | null;
+  setAsPrimaryContact: boolean;
   salesRepId: string | null;
   salesRepName: string | null;
+  industryType: string | null;
+  subCategory: string | null;
+  companyRegion: string | null;
+  week: string | null;
   primaryContactName: string | null;
   primaryContactPhone: string | null;
   primaryContactEmail: string | null;
@@ -76,10 +83,12 @@ export type BusinessAccountsResponse = {
 
 export type BusinessAccountDetailResponse = {
   row: BusinessAccountRow;
+  rows?: BusinessAccountRow[];
 };
 
 export type BusinessAccountMapPoint = {
   id: string;
+  accountRecordId?: string;
   businessAccountId: string;
   companyName: string;
   fullAddress: string;
@@ -98,6 +107,15 @@ export type BusinessAccountMapPoint = {
   latitude: number;
   longitude: number;
   geocodeProvider: "address-complete" | "nominatim" | "arcgis";
+  contacts?: Array<{
+    rowKey?: string;
+    contactId: number | null;
+    name: string | null;
+    phone: string | null;
+    email: string | null;
+    isPrimary: boolean;
+    notes: string | null;
+  }>;
 };
 
 export type BusinessAccountMapResponse = {
@@ -105,4 +123,23 @@ export type BusinessAccountMapResponse = {
   totalCandidates: number;
   geocodedCount: number;
   unmappedCount: number;
+};
+
+export type PostalRegion = {
+  id: string;
+  name: string;
+  styleId: string | null;
+  strokeColor: string;
+  strokeOpacity: number;
+  strokeWidth: number;
+  fillColor: string;
+  fillOpacity: number;
+  polygons: Array<Array<[number, number]>>;
+};
+
+export type PostalRegionsResponse = {
+  items: PostalRegion[];
+  total: number;
+  sourceUrl: string;
+  generatedAtIso: string;
 };

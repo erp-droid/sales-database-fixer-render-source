@@ -1,6 +1,6 @@
 "use client";
 
-import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -14,16 +14,30 @@ import type {
   SortBy,
   SortDir,
 } from "@/types/business-account";
-import { queryBusinessAccounts } from "@/lib/business-accounts";
+import type {
+  BusinessAccountCreateResponse,
+  BusinessAccountContactCreatePartialResponse,
+  BusinessAccountContactCreateResponse,
+} from "@/types/business-account-create";
+import {
+  enforceSinglePrimaryPerAccountRows,
+  queryBusinessAccounts,
+} from "@/lib/business-accounts";
+import {
+  type CachedDataset,
+  readCachedDatasetFromStorage,
+  writeCachedDatasetToStorage,
+} from "@/lib/client-dataset-cache";
+import { formatPhoneDraftValue, normalizePhoneForSave } from "@/lib/phone";
+import { CreateBusinessAccountDrawer } from "@/components/create-business-account-drawer";
+import {
+  CreateContactDrawer,
+  type CreateContactAccountOption,
+} from "@/components/create-contact-drawer";
 
 import styles from "./accounts-client.module.css";
 
 const PAGE_SIZE = 25;
-const DATASET_STORAGE_KEY = "businessAccounts.dataset.v3";
-const LEGACY_DATASET_STORAGE_KEYS = [
-  "businessAccounts.dataset.v2",
-  "businessAccounts.dataset.v1",
-] as const;
 
 type SessionResponse = {
   authenticated: boolean;
@@ -31,11 +45,6 @@ type SessionResponse = {
     id: string;
     name: string;
   } | null;
-};
-
-type CachedDataset = {
-  rows: BusinessAccountRow[];
-  lastSyncedAt: string | null;
 };
 
 type SyncBatchResponse = BusinessAccountsResponse & {
@@ -91,6 +100,7 @@ type HeaderFilters = {
   primaryContactName: string;
   primaryContactPhone: string;
   primaryContactEmail: string;
+  notes: string;
   category: Category | "";
   lastModified: string;
 };
@@ -106,12 +116,23 @@ const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   primaryContactName: "",
   primaryContactPhone: "",
   primaryContactEmail: "",
+  notes: "",
   category: "",
   lastModified: "",
 };
 
-const COLUMN_STORAGE_KEY = "businessAccounts.columnOrder.v1";
-const COLUMN_VISIBILITY_STORAGE_KEY = "businessAccounts.visibleColumns.v1";
+const COLUMN_STORAGE_KEY = "businessAccounts.columnOrder.v2";
+const LEGACY_COLUMN_STORAGE_KEYS = ["businessAccounts.columnOrder.v1"] as const;
+const COLUMN_VISIBILITY_STORAGE_KEY = "businessAccounts.visibleColumns.v2";
+const LEGACY_COLUMN_VISIBILITY_STORAGE_KEYS = [
+  "businessAccounts.visibleColumns.v1",
+] as const;
+
+type AttributeOption = {
+  value: string;
+  label: string;
+  aliases?: string[];
+};
 
 type ColumnConfig = {
   id: SortBy;
@@ -119,6 +140,13 @@ type ColumnConfig = {
   filterKey: keyof HeaderFilters;
   filterPlaceholder: string;
 };
+
+type InlineEditableColumn =
+  | "industryType"
+  | "subCategory"
+  | "companyRegion"
+  | "week"
+  | "category";
 
 const COLUMN_CONFIGS: ColumnConfig[] = [
   {
@@ -182,6 +210,12 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
     filterPlaceholder: "Filter email",
   },
   {
+    id: "notes",
+    label: "Notes",
+    filterKey: "notes",
+    filterPlaceholder: "Filter notes",
+  },
+  {
     id: "category",
     label: "Category",
     filterKey: "category",
@@ -197,6 +231,139 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
 
 const DEFAULT_COLUMN_ORDER = COLUMN_CONFIGS.map((column) => column.id);
 
+const CATEGORY_OPTIONS: AttributeOption[] = [
+  { value: "A", label: "A - Type Customers", aliases: ["A - Type Clients"] },
+  { value: "B", label: "B - Type Customers", aliases: ["B - Type Clients"] },
+  { value: "C", label: "C - Type Customers", aliases: ["C - Type Clients"] },
+  { value: "D", label: "D - Type Customers", aliases: ["D - Type Clients"] },
+];
+
+const INDUSTRY_TYPE_OPTIONS: AttributeOption[] = [
+  { value: "Distributi", label: "Distribution", aliases: ["Distributi"] },
+  { value: "Manufactur", label: "Manufacturing", aliases: ["Manufactur"] },
+  { value: "Recreation", label: "Recreation" },
+  { value: "Service", label: "Service" },
+];
+
+const SUB_CATEGORY_OPTIONS: AttributeOption[] = [
+  { value: "Automotive", label: "Automotive" },
+  { value: "Distributi", label: "Food & Beverage", aliases: ["Distribution"] },
+  { value: "Electronic", label: "Electronics", aliases: ["Electronic"] },
+  { value: "Fabric", label: "Fabrication" },
+  { value: "General", label: "General" },
+  { value: "Manufactur", label: "Pharmaceuticals", aliases: ["Manufacturing"] },
+  { value: "Package", label: "Packaging" },
+  { value: "Plastics", label: "Plastics" },
+  { value: "Recreation", label: "Aerospace & Defense" },
+  { value: "Service", label: "Chemical" },
+];
+
+const COMPANY_REGION_DEFAULT_OPTIONS: AttributeOption[] = [
+  { value: "Region 1", label: "Region 1" },
+  { value: "Region 2", label: "Region 2" },
+  { value: "Region 3", label: "Region 3" },
+  { value: "Region 4", label: "Region 4" },
+  { value: "Region 5", label: "Region 5" },
+];
+
+const WEEK_OPTIONS: AttributeOption[] = Array.from({ length: 15 }, (_, index) => {
+  const value = `Week ${index + 1}`;
+  return {
+    value,
+    label: value,
+  };
+});
+
+function normalizeOptionComparable(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizeOptionValue(
+  options: AttributeOption[],
+  value: string | null | undefined,
+): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const comparable = normalizeOptionComparable(value);
+  for (const option of options) {
+    if (normalizeOptionComparable(option.value) === comparable) {
+      return option.value;
+    }
+    if (normalizeOptionComparable(option.label) === comparable) {
+      return option.value;
+    }
+    if (
+      option.aliases &&
+      option.aliases.some(
+        (alias) => normalizeOptionComparable(alias) === comparable,
+      )
+    ) {
+      return option.value;
+    }
+  }
+
+  return value.trim() || null;
+}
+
+function normalizeRegionValue(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const match = trimmed.match(/^region\s*(\d+)$/i);
+  if (match) {
+    return `Region ${match[1]}`;
+  }
+
+  return trimmed;
+}
+
+function normalizeWeekValue(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const match = trimmed.match(/^week\s*(\d+)$/i);
+  if (match) {
+    return `Week ${match[1]}`;
+  }
+
+  return trimmed;
+}
+
+function withCurrentOption(
+  options: AttributeOption[],
+  currentValue: string | null | undefined,
+): AttributeOption[] {
+  if (!currentValue || !currentValue.trim()) {
+    return options;
+  }
+
+  const comparable = normalizeOptionComparable(currentValue);
+  const exists = options.some(
+    (option) =>
+      normalizeOptionComparable(option.value) === comparable ||
+      normalizeOptionComparable(option.label) === comparable,
+  );
+  if (exists) {
+    return options;
+  }
+
+  return [{ value: currentValue.trim(), label: currentValue.trim() }, ...options];
+}
+
 function isValidColumnOrder(value: unknown): value is SortBy[] {
   if (!Array.isArray(value) || value.length !== DEFAULT_COLUMN_ORDER.length) {
     return false;
@@ -210,7 +377,7 @@ function isValidColumnOrder(value: unknown): value is SortBy[] {
   return DEFAULT_COLUMN_ORDER.every((column) => unique.has(column));
 }
 
-function isValidVisibleColumns(value: unknown): value is SortBy[] {
+function isKnownColumnList(value: unknown): value is SortBy[] {
   if (!Array.isArray(value) || value.length === 0) {
     return false;
   }
@@ -221,6 +388,10 @@ function isValidVisibleColumns(value: unknown): value is SortBy[] {
   }
 
   return value.every((column) => DEFAULT_COLUMN_ORDER.includes(column));
+}
+
+function isValidVisibleColumns(value: unknown): value is SortBy[] {
+  return isKnownColumnList(value);
 }
 
 function getColumnConfig(columnId: SortBy): ColumnConfig {
@@ -288,6 +459,15 @@ function buildAddressLookupSearchTerm(draft: BusinessAccountUpdateRequest | null
     .trim();
 }
 
+function normalizeCountryDraftValue(value: string | null | undefined): string {
+  const normalized = value?.trim().toUpperCase() ?? "";
+  if (!normalized || normalized === "CA" || normalized === "CAN") {
+    return "CA";
+  }
+
+  return normalized;
+}
+
 function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
   return {
     companyName: row.companyName,
@@ -296,9 +476,15 @@ function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
     city: row.city,
     state: row.state,
     postalCode: row.postalCode,
-    country: row.country,
+    country: normalizeCountryDraftValue(row.country),
+    targetContactId: row.contactId ?? row.primaryContactId ?? null,
+    setAsPrimaryContact: false,
     salesRepId: row.salesRepId ?? null,
     salesRepName: row.salesRepName ?? null,
+    industryType: normalizeOptionValue(INDUSTRY_TYPE_OPTIONS, row.industryType),
+    subCategory: normalizeOptionValue(SUB_CATEGORY_OPTIONS, row.subCategory),
+    companyRegion: normalizeRegionValue(row.companyRegion),
+    week: normalizeWeekValue(row.week),
     primaryContactName: row.primaryContactName,
     primaryContactPhone: row.primaryContactPhone,
     primaryContactEmail: row.primaryContactEmail,
@@ -370,14 +556,10 @@ function mergeSyncedRows(
   existing: BusinessAccountRow,
   incoming: BusinessAccountRow,
 ): BusinessAccountRow {
-  const incomingIsPrimary = incoming.isPrimaryContact === true;
-  const incomingExplicitlyNotPrimary = incoming.isPrimaryContact === false;
-  const existingIsPrimary = existing.isPrimaryContact === true;
   const mergedIsPrimary =
-    incomingIsPrimary ||
-    (existingIsPrimary && incomingExplicitlyNotPrimary)
-      ? true
-      : incoming.isPrimaryContact ?? existing.isPrimaryContact;
+    incoming.isPrimaryContact !== undefined
+      ? incoming.isPrimaryContact
+      : existing.isPrimaryContact;
 
   const merged: BusinessAccountRow = {
     ...existing,
@@ -623,6 +805,114 @@ function matchEmployeeByName(
   );
 }
 
+function findEmployeeById(
+  employees: EmployeeOption[],
+  id: string | null | undefined,
+): EmployeeOption | null {
+  if (!id) {
+    return null;
+  }
+
+  const normalizedId = id.trim();
+  if (!normalizedId) {
+    return null;
+  }
+
+  return employees.find((employee) => employee.id === normalizedId) ?? null;
+}
+
+function collectEmployeeOptionsFromRows(rows: BusinessAccountRow[]): EmployeeOption[] {
+  const byId = new Map<string, EmployeeOption>();
+
+  rows.forEach((row) => {
+    const id = row.salesRepId?.trim() ?? "";
+    const name = row.salesRepName?.trim() ?? "";
+    if (!id || !name) {
+      return;
+    }
+
+    if (!byId.has(id)) {
+      byId.set(id, { id, name });
+    }
+  });
+
+  return [...byId.values()];
+}
+
+function mergeEmployeeOptions(
+  primary: EmployeeOption[],
+  secondary: EmployeeOption[],
+): EmployeeOption[] {
+  const byId = new Map<string, EmployeeOption>();
+
+  [...primary, ...secondary].forEach((item) => {
+    const id = item.id.trim();
+    const name = item.name.trim();
+    if (!id || !name) {
+      return;
+    }
+
+    if (!byId.has(id)) {
+      byId.set(id, { id, name });
+    }
+  });
+
+  return [...byId.values()];
+}
+
+function formatCreateContactAccountAddress(row: BusinessAccountRow): string {
+  if (hasText(row.address)) {
+    return row.address;
+  }
+
+  return [row.addressLine1, row.addressLine2, row.city, row.state, row.postalCode, row.country]
+    .map((part) => part?.trim() ?? "")
+    .filter(Boolean)
+    .join(", ");
+}
+
+function buildCreateContactAccountOptions(
+  rows: BusinessAccountRow[],
+): CreateContactAccountOption[] {
+  const byAccount = new Map<string, CreateContactAccountOption>();
+
+  rows.forEach((row) => {
+    const businessAccountRecordId = (row.accountRecordId ?? row.id ?? "").trim();
+    const businessAccountId = row.businessAccountId.trim();
+    const companyName = row.companyName.trim();
+    if (!businessAccountRecordId || !businessAccountId || !companyName) {
+      return;
+    }
+
+    const key = businessAccountRecordId || businessAccountId;
+    if (byAccount.has(key)) {
+      return;
+    }
+
+    byAccount.set(key, {
+      businessAccountRecordId,
+      businessAccountId,
+      companyName,
+      address: formatCreateContactAccountAddress(row),
+    });
+  });
+
+  return [...byAccount.values()].sort((left, right) => {
+    const companyCompare = left.companyName.localeCompare(right.companyName, undefined, {
+      sensitivity: "base",
+      numeric: true,
+    });
+    if (companyCompare !== 0) {
+      return companyCompare;
+    }
+
+    return left.address.localeCompare(right.address, undefined, {
+      sensitivity: "base",
+      numeric: true,
+    });
+  });
+}
+
 function isBusinessAccountDetailResponse(
   payload: unknown,
 ): payload is BusinessAccountDetailResponse {
@@ -636,7 +926,142 @@ function isBusinessAccountDetailResponse(
   }
 
   const rowRecord = record.row as Record<string, unknown>;
-  return typeof rowRecord.id === "string";
+  if (typeof rowRecord.id !== "string") {
+    return false;
+  }
+
+  if ("rows" in record && record.rows !== undefined && !isBusinessAccountRows(record.rows)) {
+    return false;
+  }
+
+  return true;
+}
+
+function readDetailResponseRows(payload: unknown): BusinessAccountRow[] | null {
+  if (!isBusinessAccountDetailResponse(payload)) {
+    return null;
+  }
+
+  if (Array.isArray(payload.rows) && payload.rows.length > 0) {
+    return payload.rows;
+  }
+
+  return null;
+}
+
+function readDetailResponseRow(payload: unknown): BusinessAccountRow | null {
+  if (isBusinessAccountDetailResponse(payload)) {
+    return payload.row;
+  }
+
+  if (isBusinessAccountRow(payload)) {
+    return payload;
+  }
+
+  return null;
+}
+
+function findMatchingAccountRow(
+  rows: BusinessAccountRow[],
+  sourceRow: BusinessAccountRow,
+): BusinessAccountRow | null {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  if (sourceRow.rowKey) {
+    const byRowKey = rows.find((row) => row.rowKey === sourceRow.rowKey);
+    if (byRowKey) {
+      return byRowKey;
+    }
+  }
+
+  if (sourceRow.contactId !== null && sourceRow.contactId !== undefined) {
+    const byContactId = rows.find(
+      (row) =>
+        row.contactId !== null &&
+        row.contactId !== undefined &&
+        row.contactId === sourceRow.contactId,
+    );
+    if (byContactId) {
+      return byContactId;
+    }
+  }
+
+  if (sourceRow.isPrimaryContact) {
+    const primaryRow = rows.find((row) => row.isPrimaryContact);
+    if (primaryRow) {
+      return primaryRow;
+    }
+  }
+
+  return rows[0] ?? null;
+}
+
+function removeDeletedContactFromAccountRows(
+  rows: BusinessAccountRow[],
+  targetContactId: number,
+  targetRowKey: string | null,
+): BusinessAccountRow[] {
+  const deletedWasPrimary = rows.some((row) => {
+    const matchesRowKey = targetRowKey ? getRowKey(row) === targetRowKey : false;
+    const matchesContactId =
+      row.contactId !== null &&
+      row.contactId !== undefined &&
+      row.contactId === targetContactId;
+
+    if (!matchesRowKey && !matchesContactId) {
+      return false;
+    }
+
+    return row.isPrimaryContact === true || row.primaryContactId === targetContactId;
+  });
+
+  const remainingRows = rows.filter((row) => {
+    if (targetRowKey && getRowKey(row) === targetRowKey) {
+      return false;
+    }
+
+    return !(
+      row.contactId !== null &&
+      row.contactId !== undefined &&
+      row.contactId === targetContactId
+    );
+  });
+
+  if (remainingRows.length === 0) {
+    const fallbackRow = rows[0];
+    if (!fallbackRow) {
+      return [];
+    }
+
+    return [
+      {
+        ...fallbackRow,
+        rowKey: `${fallbackRow.accountRecordId ?? fallbackRow.id}:primary`,
+        contactId: null,
+        isPrimaryContact: false,
+        primaryContactId: null,
+        primaryContactName: null,
+        primaryContactPhone: null,
+        primaryContactEmail: null,
+        notes: null,
+      },
+    ];
+  }
+
+  if (!deletedWasPrimary) {
+    return enforceSinglePrimaryPerAccountRows(remainingRows);
+  }
+
+  return enforceSinglePrimaryPerAccountRows(
+    remainingRows.map((row) => ({
+      ...row,
+      primaryContactId:
+        row.primaryContactId === targetContactId ? null : row.primaryContactId,
+      isPrimaryContact: false,
+    })),
+  );
 }
 
 function renderColumnValue(row: BusinessAccountRow, columnId: SortBy): string {
@@ -661,6 +1086,8 @@ function renderColumnValue(row: BusinessAccountRow, columnId: SortBy): string {
       return renderCell(row.phoneNumber ?? row.primaryContactPhone);
     case "primaryContactEmail":
       return renderCell(row.primaryContactEmail);
+    case "notes":
+      return renderCell(row.notes);
     case "category":
       return renderCell(row.category);
     case "lastModifiedIso":
@@ -670,11 +1097,70 @@ function renderColumnValue(row: BusinessAccountRow, columnId: SortBy): string {
   }
 }
 
+function isInlineEditableColumn(columnId: SortBy): columnId is InlineEditableColumn {
+  return (
+    columnId === "industryType" ||
+    columnId === "subCategory" ||
+    columnId === "companyRegion" ||
+    columnId === "week" ||
+    columnId === "category"
+  );
+}
+
 function getRowKey(row: BusinessAccountRow, index = 0): string {
   return (
     row.rowKey ??
     `${row.accountRecordId ?? row.id}:${row.contactId ?? "contact"}:${index}`
   );
+}
+
+function mergeRowsByKey(
+  currentRows: BusinessAccountRow[],
+  incomingRows: BusinessAccountRow[],
+): BusinessAccountRow[] {
+  const mergedByKey = new Map<string, BusinessAccountRow>();
+
+  currentRows.forEach((row, index) => {
+    mergedByKey.set(getRowKey(row, index), row);
+  });
+
+  incomingRows.forEach((row, index) => {
+    const key = getRowKey(row, index);
+    const existing = mergedByKey.get(key);
+    mergedByKey.set(key, existing ? mergeSyncedRows(existing, row) : row);
+  });
+
+  return enforceSinglePrimaryPerAccountRows(Array.from(mergedByKey.values()));
+}
+
+function clearCachedMapData() {
+  try {
+    window.localStorage.removeItem("businessAccounts.mapCache.v3");
+  } catch {
+    // Ignore storage failures while updating client caches.
+  }
+}
+
+function replaceRowsForAccount(
+  currentRows: BusinessAccountRow[],
+  incomingRows: BusinessAccountRow[],
+  businessAccountRecordId: string,
+  businessAccountId: string,
+): BusinessAccountRow[] {
+  const nextRows = currentRows.filter((row) => {
+    const rowAccountRecordId = row.accountRecordId ?? row.id;
+    if (rowAccountRecordId === businessAccountRecordId) {
+      return false;
+    }
+
+    if (businessAccountId && row.businessAccountId === businessAccountId) {
+      return false;
+    }
+
+    return true;
+  });
+
+  return enforceSinglePrimaryPerAccountRows([...incomingRows, ...nextRows]);
 }
 
 function buildPaginationNumbers(
@@ -742,6 +1228,7 @@ export function AccountsClient() {
 
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [allRows, setAllRows] = useState<BusinessAccountRow[]>([]);
+  const allRowsRef = useRef<BusinessAccountRow[]>([]);
   const [cacheHydrated, setCacheHydrated] = useState(false);
   const [q, setQ] = useState("");
   const [headerFilters, setHeaderFilters] = useState<HeaderFilters>(
@@ -749,6 +1236,7 @@ export function AccountsClient() {
   );
   const [columnOrder, setColumnOrder] = useState<SortBy[]>(DEFAULT_COLUMN_ORDER);
   const [visibleColumns, setVisibleColumns] = useState<SortBy[]>(DEFAULT_COLUMN_ORDER);
+  const [columnPrefsHydrated, setColumnPrefsHydrated] = useState(false);
   const [draggedColumn, setDraggedColumn] = useState<SortBy | null>(null);
   const [sortBy, setSortBy] = useState<SortBy>("companyName");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -765,10 +1253,17 @@ export function AccountsClient() {
   const [error, setError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<BusinessAccountRow | null>(null);
+  const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false);
+  const [isCreateContactDrawerOpen, setIsCreateContactDrawerOpen] = useState(false);
   const [draft, setDraft] = useState<BusinessAccountUpdateRequest | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeletingContact, setIsDeletingContact] = useState(false);
+  const [inlineSavingRowKey, setInlineSavingRowKey] = useState<string | null>(null);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+  const [inlinePhoneDrafts, setInlinePhoneDrafts] = useState<Record<string, string>>({});
+  const [inlineNotesDrafts, setInlineNotesDrafts] = useState<Record<string, string>>({});
   const [employeeOptions, setEmployeeOptions] = useState<EmployeeOption[]>([]);
   const [isEmployeesLoading, setIsEmployeesLoading] = useState(false);
   const [employeesError, setEmployeesError] = useState<string | null>(null);
@@ -794,12 +1289,19 @@ export function AccountsClient() {
     [draft],
   );
   const debouncedAddressLookupSearchTerm = useDebouncedValue(addressLookupSearchTerm, 250);
-  const addressLookupCountry = draft?.country || "CA";
+  const addressLookupCountry = normalizeCountryDraftValue(draft?.country);
   const allRowsCountRef = useRef(0);
+
+  useEffect(() => {
+    allRowsRef.current = allRows;
+    allRowsCountRef.current = allRows.length;
+  }, [allRows]);
+
+  const deferredAllRows = useDeferredValue(allRows);
 
   const queryResult = useMemo(
     () =>
-      queryBusinessAccounts(allRows, {
+      queryBusinessAccounts(deferredAllRows, {
         q: debouncedQ,
         filterCompanyName: debouncedHeaderFilters.companyName,
         filterSalesRep: debouncedHeaderFilters.salesRepName,
@@ -811,6 +1313,7 @@ export function AccountsClient() {
         filterPrimaryContactName: debouncedHeaderFilters.primaryContactName,
         filterPrimaryContactPhone: debouncedHeaderFilters.primaryContactPhone,
         filterPrimaryContactEmail: debouncedHeaderFilters.primaryContactEmail,
+        filterNotes: debouncedHeaderFilters.notes,
         filterCategory: debouncedHeaderFilters.category || undefined,
         filterLastModified: debouncedHeaderFilters.lastModified,
         sortBy,
@@ -818,15 +1321,82 @@ export function AccountsClient() {
         page,
         pageSize: PAGE_SIZE,
       }),
-    [allRows, debouncedHeaderFilters, debouncedQ, page, sortBy, sortDir],
+    [debouncedHeaderFilters, debouncedQ, deferredAllRows, page, sortBy, sortDir],
   );
 
   const rows = queryResult.items;
   const total = queryResult.total;
+  const inlineSaveInProgress = inlineSavingRowKey !== null;
   const visibleColumnOrder = useMemo(
     () => columnOrder.filter((columnId) => visibleColumns.includes(columnId)),
     [columnOrder, visibleColumns],
   );
+  const companyRegionOptions = useMemo(() => {
+    const byValue = new Map<string, AttributeOption>();
+    COMPANY_REGION_DEFAULT_OPTIONS.forEach((option) => {
+      byValue.set(normalizeOptionComparable(option.value), option);
+    });
+
+    allRows.forEach((row) => {
+      const normalized = normalizeRegionValue(row.companyRegion);
+      if (!normalized) {
+        return;
+      }
+
+      const key = normalizeOptionComparable(normalized);
+      if (!byValue.has(key)) {
+        byValue.set(key, { value: normalized, label: normalized });
+      }
+    });
+
+    const draftValue = normalizeRegionValue(draft?.companyRegion);
+    if (draftValue) {
+      const key = normalizeOptionComparable(draftValue);
+      if (!byValue.has(key)) {
+        byValue.set(key, { value: draftValue, label: draftValue });
+      }
+    }
+
+    return [...byValue.values()];
+  }, [allRows, draft?.companyRegion]);
+  const industryTypeOptions = useMemo(
+    () => withCurrentOption(INDUSTRY_TYPE_OPTIONS, draft?.industryType),
+    [draft?.industryType],
+  );
+  const subCategoryOptions = useMemo(
+    () => withCurrentOption(SUB_CATEGORY_OPTIONS, draft?.subCategory),
+    [draft?.subCategory],
+  );
+  const weekOptions = useMemo(
+    () => withCurrentOption(WEEK_OPTIONS, draft?.week),
+    [draft?.week],
+  );
+  const sortedEmployeeOptions = useMemo(() => {
+    const fromRows = collectEmployeeOptionsFromRows(allRows);
+    const merged = mergeEmployeeOptions(employeeOptions, fromRows);
+    return merged.sort((left, right) =>
+      left.name.localeCompare(right.name, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      }),
+    );
+  }, [allRows, employeeOptions]);
+  const createContactAccountOptions = useMemo(
+    () => buildCreateContactAccountOptions(allRows),
+    [allRows],
+  );
+  const selectedSalesRepOption = useMemo(() => {
+    if (!draft?.salesRepId) {
+      return null;
+    }
+
+    return (
+      findEmployeeById(sortedEmployeeOptions, draft.salesRepId) ?? {
+        id: draft.salesRepId,
+        name: draft.salesRepName ?? draft.salesRepId,
+      }
+    );
+  }, [draft?.salesRepId, draft?.salesRepName, sortedEmployeeOptions]);
 
   const totalPages = useMemo(() => {
     return Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -863,47 +1433,86 @@ export function AccountsClient() {
   }, [isSyncing, syncStartedAt]);
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(COLUMN_STORAGE_KEY);
-      if (!stored) {
-        return;
-      }
+    const columnStorageCandidates = [COLUMN_STORAGE_KEY, ...LEGACY_COLUMN_STORAGE_KEYS];
+    for (const key of columnStorageCandidates) {
+      try {
+        const storedColumnOrder = window.localStorage.getItem(key);
+        if (!storedColumnOrder) {
+          continue;
+        }
+        const parsedColumnOrder = JSON.parse(storedColumnOrder) as unknown;
+        if (isValidColumnOrder(parsedColumnOrder)) {
+          setColumnOrder(parsedColumnOrder);
+          break;
+        }
 
-      const parsed = JSON.parse(stored) as unknown;
-      if (isValidColumnOrder(parsed)) {
-        setColumnOrder(parsed);
+        if (key === COLUMN_STORAGE_KEY || !isKnownColumnList(parsedColumnOrder)) {
+          continue;
+        }
+
+        const migratedColumnOrder = [
+          ...parsedColumnOrder,
+          ...DEFAULT_COLUMN_ORDER.filter((column) => !parsedColumnOrder.includes(column)),
+        ];
+        setColumnOrder(migratedColumnOrder);
+        break;
+      } catch {
+        // Ignore malformed localStorage values.
       }
-    } catch {
-      // Ignore malformed localStorage values.
     }
+
+    const columnVisibilityCandidates = [
+      COLUMN_VISIBILITY_STORAGE_KEY,
+      ...LEGACY_COLUMN_VISIBILITY_STORAGE_KEYS,
+    ];
+    for (const key of columnVisibilityCandidates) {
+      try {
+        const storedVisibleColumns = window.localStorage.getItem(key);
+        if (!storedVisibleColumns) {
+          continue;
+        }
+        const parsedVisibleColumns = JSON.parse(storedVisibleColumns) as unknown;
+        if (isValidVisibleColumns(parsedVisibleColumns) && key === COLUMN_VISIBILITY_STORAGE_KEY) {
+          setVisibleColumns(parsedVisibleColumns);
+          break;
+        }
+
+        if (!isKnownColumnList(parsedVisibleColumns)) {
+          continue;
+        }
+
+        const migratedVisibleColumns = [
+          ...parsedVisibleColumns,
+          ...DEFAULT_COLUMN_ORDER.filter((column) => !parsedVisibleColumns.includes(column)),
+        ];
+        setVisibleColumns(migratedVisibleColumns);
+        break;
+      } catch {
+        // Ignore malformed localStorage values.
+      }
+    }
+
+    setColumnPrefsHydrated(true);
   }, []);
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
-      if (!stored) {
-        return;
-      }
-
-      const parsed = JSON.parse(stored) as unknown;
-      if (isValidVisibleColumns(parsed)) {
-        setVisibleColumns(parsed);
-      }
-    } catch {
-      // Ignore malformed localStorage values.
+    if (!columnPrefsHydrated) {
+      return;
     }
-  }, []);
 
-  useEffect(() => {
     window.localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(columnOrder));
-  }, [columnOrder]);
+  }, [columnOrder, columnPrefsHydrated]);
 
   useEffect(() => {
+    if (!columnPrefsHydrated) {
+      return;
+    }
+
     window.localStorage.setItem(
       COLUMN_VISIBILITY_STORAGE_KEY,
       JSON.stringify(visibleColumns),
     );
-  }, [visibleColumns]);
+  }, [columnPrefsHydrated, visibleColumns]);
 
   useEffect(() => {
     if (!visibleColumns.includes(sortBy) && visibleColumnOrder.length > 0) {
@@ -913,28 +1522,11 @@ export function AccountsClient() {
   }, [sortBy, visibleColumnOrder, visibleColumns]);
 
   useEffect(() => {
-    const candidateKeys = [DATASET_STORAGE_KEY, ...LEGACY_DATASET_STORAGE_KEYS];
-    for (const key of candidateKeys) {
-      try {
-        const raw = window.localStorage.getItem(key);
-        if (!raw) {
-          continue;
-        }
-
-        const parsed = JSON.parse(raw) as Partial<CachedDataset>;
-        if (!isBusinessAccountRows(parsed.rows)) {
-          continue;
-        }
-
-        allRowsCountRef.current = parsed.rows.length;
-        setAllRows(parsed.rows);
-        setLastSyncedAt(
-          typeof parsed.lastSyncedAt === "string" ? parsed.lastSyncedAt : null,
-        );
-        break;
-      } catch {
-        // Ignore malformed cached dataset and try next key.
-      }
+    const cachedDataset = readCachedDatasetFromStorage();
+    if (cachedDataset && isBusinessAccountRows(cachedDataset.rows)) {
+      allRowsCountRef.current = cachedDataset.rows.length;
+      setAllRows(enforceSinglePrimaryPerAccountRows(cachedDataset.rows));
+      setLastSyncedAt(cachedDataset.lastSyncedAt);
     }
 
     setCacheHydrated(true);
@@ -945,17 +1537,17 @@ export function AccountsClient() {
       return;
     }
 
+    if (isSyncing) {
+      return;
+    }
+
     const payload: CachedDataset = {
       rows: allRows,
       lastSyncedAt,
     };
 
-    try {
-      window.localStorage.setItem(DATASET_STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // Ignore cache write failures (e.g. quota exceeded).
-    }
-  }, [allRows, cacheHydrated, lastSyncedAt]);
+    writeCachedDatasetToStorage(payload);
+  }, [allRows, cacheHydrated, isSyncing, lastSyncedAt]);
 
   useEffect(() => {
     async function fetchSession() {
@@ -970,7 +1562,7 @@ export function AccountsClient() {
 
         setSession({ authenticated: true, user: null });
         setError(
-          "Unable to validate your Acumatica session right now. Your cookie is still present; try refreshing data again.",
+          "Acumatica session check is temporarily unavailable. You are still signed in with your existing cookie. Click 'Sync records' to retry; only sign in again if this keeps failing for a few minutes.",
         );
         return;
       }
@@ -978,21 +1570,21 @@ export function AccountsClient() {
       // Avoid forcing a re-login on temporary auth probe failures (e.g. upstream 5xx).
       setSession({ authenticated: true, user: null });
       setError(
-        "Session check is temporarily unavailable. Continuing with your existing session.",
+        "Acumatica session check is temporarily unavailable. You are still signed in with your existing cookie. Click 'Sync records' to retry; only sign in again if this keeps failing for a few minutes.",
       );
     }
 
     fetchSession().catch(() => {
       setSession({ authenticated: true, user: null });
       setError(
-        "Session check is temporarily unavailable. Continuing with your existing session.",
+        "Acumatica session check is temporarily unavailable. You are still signed in with your existing cookie. Click 'Sync records' to retry; only sign in again if this keeps failing for a few minutes.",
       );
     });
   }, [router]);
 
   useEffect(() => {
     if (
-      !selected ||
+      (!selected && !isCreateDrawerOpen) ||
       employeeOptions.length > 0 ||
       isEmployeesLoading ||
       employeesFetchAttemptedRef.current
@@ -1049,7 +1641,28 @@ export function AccountsClient() {
     void fetchEmployees();
 
     return () => controller.abort();
-  }, [employeeOptions.length, isEmployeesLoading, selected]);
+  }, [employeeOptions.length, isCreateDrawerOpen, isEmployeesLoading, selected]);
+
+  useEffect(() => {
+    if (!draft || draft.salesRepId || !draft.salesRepName || sortedEmployeeOptions.length === 0) {
+      return;
+    }
+
+    const matchedEmployee = matchEmployeeByName(sortedEmployeeOptions, draft.salesRepName);
+    if (!matchedEmployee) {
+      return;
+    }
+
+    setDraft((current) =>
+      current && !current.salesRepId
+        ? {
+            ...current,
+            salesRepId: matchedEmployee.id,
+            salesRepName: matchedEmployee.name,
+          }
+        : current,
+    );
+  }, [draft, sortedEmployeeOptions]);
 
   useEffect(() => {
     if (!session?.authenticated || !cacheHydrated) {
@@ -1057,7 +1670,7 @@ export function AccountsClient() {
     }
 
     const isInitialSync = syncVersion === 0;
-    if (isInitialSync && allRowsCountRef.current > 0) {
+    if (isInitialSync) {
       setLoading(false);
       return;
     }
@@ -1066,6 +1679,7 @@ export function AccountsClient() {
 
     async function syncRows() {
       const startedAt = Date.now();
+      const previousRowsSnapshot = allRowsRef.current;
       if (isInitialSync) {
         setLoading(true);
       }
@@ -1086,6 +1700,7 @@ export function AccountsClient() {
         const pageDelayMs = 120;
         let currentPage = 1;
         let hasMore = true;
+        const maxSyncPages = 1200;
 
         while (hasMore) {
           const params = new URLSearchParams({
@@ -1128,17 +1743,7 @@ export function AccountsClient() {
 
           if (!controller.signal.aborted) {
             const nextRows = Array.from(deduped.values());
-            setAllRows((currentRows) => {
-              const currentByKey = new Map<string, BusinessAccountRow>();
-              currentRows.forEach((row, index) => {
-                currentByKey.set(getRowKey(row, index), row);
-              });
-
-              return nextRows.map((row, index) => {
-                const current = currentByKey.get(getRowKey(row, index));
-                return current ? mergeSyncedRows(current, row) : row;
-              });
-            });
+            setAllRows((currentRows) => mergeRowsByKey(currentRows, nextRows));
             setLoading(false);
             setSyncProgress({
               fetchedPages: currentPage,
@@ -1152,7 +1757,7 @@ export function AccountsClient() {
             typeof syncPayload.hasMore === "boolean"
               ? syncPayload.hasMore
               : syncPayload.items.length >= pageSize;
-          hasMore = hasMoreFlag && syncPayload.items.length > 0;
+          hasMore = hasMoreFlag && currentPage < maxSyncPages;
           if (hasMore) {
             await new Promise((resolve) => {
               window.setTimeout(resolve, pageDelayMs);
@@ -1163,17 +1768,7 @@ export function AccountsClient() {
 
         if (!controller.signal.aborted) {
           const nextRows = Array.from(deduped.values());
-          setAllRows((currentRows) => {
-            const currentByKey = new Map<string, BusinessAccountRow>();
-            currentRows.forEach((row, index) => {
-              currentByKey.set(getRowKey(row, index), row);
-            });
-
-            return nextRows.map((row, index) => {
-              const current = currentByKey.get(getRowKey(row, index));
-              return current ? mergeSyncedRows(current, row) : row;
-            });
-          });
+          setAllRows(enforceSinglePrimaryPerAccountRows(nextRows));
           setLastSyncedAt(new Date().toISOString());
           setLastSyncDurationMs(Date.now() - startedAt);
         }
@@ -1182,6 +1777,7 @@ export function AccountsClient() {
           return;
         }
 
+        setAllRows(enforceSinglePrimaryPerAccountRows(previousRowsSnapshot));
         setError(fetchError instanceof Error ? fetchError.message : "Failed to sync data.");
       } finally {
         if (!controller.signal.aborted) {
@@ -1356,10 +1952,12 @@ export function AccountsClient() {
             }
 
             setAllRows((currentRows) =>
-              currentRows.map((currentRow) =>
-                getRowKey(currentRow) === rowKey
-                  ? mergeSyncedRows(currentRow, refreshedRow)
-                  : currentRow,
+              enforceSinglePrimaryPerAccountRows(
+                currentRows.map((currentRow) =>
+                  getRowKey(currentRow) === rowKey
+                    ? mergeSyncedRows(currentRow, refreshedRow)
+                    : currentRow,
+                ),
               ),
             );
           } catch {
@@ -1521,36 +2119,38 @@ export function AccountsClient() {
 
               const targetRowKey = getRowKey(targetRow);
 
-              return currentRows.map((row) => {
-                if ((row.accountRecordId ?? row.id) !== accountRecordId) {
-                  return row;
-                }
+              return enforceSinglePrimaryPerAccountRows(
+                currentRows.map((row) => {
+                  if ((row.accountRecordId ?? row.id) !== accountRecordId) {
+                    return row;
+                  }
 
-                const isPrimaryContact = getRowKey(row) === targetRowKey;
-                return {
-                  ...row,
-                  isPrimaryContact,
-                  ...(isPrimaryContact
-                    ? {
-                        primaryContactId:
-                          refreshedRow.primaryContactId ?? row.primaryContactId,
-                        primaryContactName: pickPreferredContactName(
-                          row.primaryContactName,
-                          refreshedRow.primaryContactName,
-                          row.companyName,
-                        ),
-                        primaryContactPhone: pickPreferredText(
-                          row.primaryContactPhone,
-                          refreshedRow.primaryContactPhone,
-                        ),
-                        primaryContactEmail: pickPreferredText(
-                          row.primaryContactEmail,
-                          refreshedRow.primaryContactEmail,
-                        ),
-                      }
-                    : {}),
-                };
-              });
+                  const isPrimaryContact = getRowKey(row) === targetRowKey;
+                  return {
+                    ...row,
+                    isPrimaryContact,
+                    ...(isPrimaryContact
+                      ? {
+                          primaryContactId:
+                            refreshedRow.primaryContactId ?? row.primaryContactId,
+                          primaryContactName: pickPreferredContactName(
+                            row.primaryContactName,
+                            refreshedRow.primaryContactName,
+                            row.companyName,
+                          ),
+                          primaryContactPhone: pickPreferredText(
+                            row.primaryContactPhone,
+                            refreshedRow.primaryContactPhone,
+                          ),
+                          primaryContactEmail: pickPreferredText(
+                            row.primaryContactEmail,
+                            refreshedRow.primaryContactEmail,
+                          ),
+                        }
+                      : {}),
+                  };
+                }),
+              );
             });
           } catch {
             // Ignore per-account primary resolution errors.
@@ -1657,17 +2257,19 @@ export function AccountsClient() {
             }
 
             setAllRows((currentRows) =>
-              currentRows.map((row) => {
-                if ((row.accountRecordId ?? row.id) !== accountRecordId) {
-                  return row;
-                }
+              enforceSinglePrimaryPerAccountRows(
+                currentRows.map((row) => {
+                  if ((row.accountRecordId ?? row.id) !== accountRecordId) {
+                    return row;
+                  }
 
-                return {
-                  ...row,
-                  salesRepId: pickPreferredText(row.salesRepId, refreshedRow.salesRepId),
-                  salesRepName: pickPreferredText(row.salesRepName, refreshedRow.salesRepName),
-                };
-              }),
+                  return {
+                    ...row,
+                    salesRepId: pickPreferredText(row.salesRepId, refreshedRow.salesRepId),
+                    salesRepName: pickPreferredText(row.salesRepName, refreshedRow.salesRepName),
+                  };
+                }),
+              ),
             );
           } catch {
             // Ignore per-account sales rep hydration errors.
@@ -1736,6 +2338,7 @@ export function AccountsClient() {
     resolvedPrimaryAccountIdsRef.current.clear();
     resolvingSalesRepAccountIdsRef.current.clear();
     resolvedSalesRepAccountIdsRef.current.clear();
+    setInlineNotesDrafts({});
     setSyncVersion((current) => current + 1);
   }
 
@@ -1798,11 +2401,66 @@ export function AccountsClient() {
     setVisibleColumns(DEFAULT_COLUMN_ORDER);
   }
 
+  function openCreateDrawer() {
+    setIsCreateContactDrawerOpen(false);
+    closeDrawer();
+    setEmployeesError(null);
+    setIsCreateDrawerOpen(true);
+  }
+
+  function closeCreateDrawer() {
+    setIsCreateDrawerOpen(false);
+    if (employeeOptions.length === 0) {
+      employeesFetchAttemptedRef.current = false;
+    }
+  }
+
+  function openCreateContactDrawer() {
+    setIsCreateDrawerOpen(false);
+    closeDrawer();
+    setIsCreateContactDrawerOpen(true);
+  }
+
+  function closeCreateContactDrawer() {
+    setIsCreateContactDrawerOpen(false);
+  }
+
+  function handleAccountCreated(result: BusinessAccountCreateResponse) {
+    setAllRows((currentRows) =>
+      replaceRowsForAccount(
+        currentRows,
+        result.accountRows,
+        result.businessAccountRecordId,
+        result.businessAccountId,
+      ),
+    );
+    setLastSyncedAt(new Date().toISOString());
+    clearCachedMapData();
+  }
+
+  function handleContactCreated(
+    result:
+      | BusinessAccountContactCreateResponse
+      | BusinessAccountContactCreatePartialResponse,
+  ) {
+    setAllRows((currentRows) =>
+      replaceRowsForAccount(
+        currentRows,
+        result.accountRows,
+        result.businessAccountRecordId,
+        result.businessAccountId,
+      ),
+    );
+    setLastSyncedAt(new Date().toISOString());
+    clearCachedMapData();
+  }
+
   function closeDrawer() {
     setSelected(null);
     setDraft(null);
     setSaveError(null);
     setSaveNotice(null);
+    setIsDeletingContact(false);
     setAddressSuggestions([]);
     setAddressLookupError(null);
     setIsAddressLookupLoading(false);
@@ -1814,10 +2472,13 @@ export function AccountsClient() {
   }
 
   async function openDrawer(row: BusinessAccountRow) {
+    setIsCreateDrawerOpen(false);
+    setIsCreateContactDrawerOpen(false);
     setSelected(row);
     setDraft(buildDraft(row));
     setSaveError(null);
     setSaveNotice(null);
+    setIsDeletingContact(false);
     setAddressSuggestions([]);
     setAddressLookupError(null);
     setIsAddressLookupLoading(false);
@@ -1847,7 +2508,9 @@ export function AccountsClient() {
       }
 
       const refreshedRow = isBusinessAccountDetailResponse(payload)
-        ? payload.row
+        ? (readDetailResponseRows(payload)
+            ? findMatchingAccountRow(readDetailResponseRows(payload) ?? [], row) ?? payload.row
+            : payload.row)
         : isBusinessAccountRow(payload)
           ? payload
           : null;
@@ -1856,48 +2519,44 @@ export function AccountsClient() {
         return;
       }
 
+      const refreshedRows = readDetailResponseRows(payload);
       const canonicalAccountRecordId =
         refreshedRow.accountRecordId ?? refreshedRow.id ?? accountRecordId;
-      const preserveMetadata = {
-        accountRecordId: canonicalAccountRecordId,
-        rowKey: row.rowKey,
-        contactId: row.contactId,
-        isPrimaryContact: row.isPrimaryContact,
-        phoneNumber: row.phoneNumber,
-      };
-
       const mergedRow =
         row.isPrimaryContact === false
           ? {
               ...row,
+              ...refreshedRow,
               accountRecordId: canonicalAccountRecordId,
-              companyName: refreshedRow.companyName,
-              salesRepId: refreshedRow.salesRepId,
-              salesRepName: refreshedRow.salesRepName,
-              industryType: refreshedRow.industryType,
-              subCategory: refreshedRow.subCategory,
-              companyRegion: refreshedRow.companyRegion,
-              week: refreshedRow.week,
-              address: refreshedRow.address,
-              addressLine1: refreshedRow.addressLine1,
-              addressLine2: refreshedRow.addressLine2,
-              city: refreshedRow.city,
-              state: refreshedRow.state,
-              postalCode: refreshedRow.postalCode,
-              country: refreshedRow.country,
-              category: refreshedRow.category,
-              lastModifiedIso: refreshedRow.lastModifiedIso,
+              rowKey: refreshedRow.rowKey ?? row.rowKey,
+              contactId: refreshedRow.contactId ?? row.contactId,
+              isPrimaryContact:
+                refreshedRow.isPrimaryContact ?? row.isPrimaryContact,
+              phoneNumber: refreshedRow.phoneNumber ?? row.phoneNumber,
             }
           : {
               ...refreshedRow,
-              ...preserveMetadata,
+              accountRecordId: canonicalAccountRecordId,
             };
 
-      setAllRows((currentRows) =>
-        currentRows.map((currentRow) =>
-          getRowKey(currentRow) === getRowKey(row) ? mergedRow : currentRow,
-        ),
-      );
+      if (refreshedRows && refreshedRows.length > 0) {
+        setAllRows((currentRows) =>
+          replaceRowsForAccount(
+            currentRows,
+            refreshedRows,
+            canonicalAccountRecordId,
+            refreshedRow.businessAccountId,
+          ),
+        );
+      } else {
+        setAllRows((currentRows) =>
+          enforceSinglePrimaryPerAccountRows(
+            currentRows.map((currentRow) =>
+              getRowKey(currentRow) === getRowKey(row) ? mergedRow : currentRow,
+            ),
+          ),
+        );
+      }
       setSelected(mergedRow);
       setDraft(buildDraft(mergedRow));
     } catch {
@@ -1947,7 +2606,7 @@ export function AccountsClient() {
               city: payload.address.city,
               state: payload.address.state,
               postalCode: payload.address.postalCode,
-              country: payload.address.country,
+              country: normalizeCountryDraftValue(payload.address.country),
             }
           : current,
       );
@@ -1970,49 +2629,65 @@ export function AccountsClient() {
     router.refresh();
   }
 
-  async function handleSave() {
-    if (!selected || !draft) {
-      return;
+  async function saveRowDraft(
+    sourceRow: BusinessAccountRow,
+    sourceDraft: BusinessAccountUpdateRequest,
+    mode: "drawer" | "inline",
+  ): Promise<boolean> {
+    const sourceRowKey = getRowKey(sourceRow);
+    const isInline = mode === "inline";
+
+    if (isInline) {
+      setInlineSavingRowKey(sourceRowKey);
+      setInlineError(null);
+      setSaveNotice(null);
+    } else {
+      setIsSaving(true);
+      setSaveError(null);
+      setSaveNotice(null);
     }
 
-    setIsSaving(true);
-    setSaveError(null);
-    setSaveNotice(null);
-
+    let saved = false;
     try {
-      const salesRepName = draft.salesRepName?.trim() ?? "";
-      let effectiveDraft = draft;
+      const salesRepName = sourceDraft.salesRepName?.trim() ?? "";
+      let effectiveDraft: BusinessAccountUpdateRequest = {
+        ...sourceDraft,
+        country: normalizeCountryDraftValue(sourceDraft.country),
+      };
 
       if (!salesRepName) {
         effectiveDraft = {
-          ...draft,
+          ...effectiveDraft,
           salesRepName: null,
           salesRepId: null,
         };
-      } else if (!draft.salesRepId) {
+      } else if (!effectiveDraft.salesRepId) {
         const matchedEmployee = matchEmployeeByName(employeeOptions, salesRepName);
         if (!matchedEmployee) {
-          setSaveError(
+          throw new Error(
             "Select a valid Sales Rep from the list so Acumatica receives the correct employee ID.",
           );
-          return;
         }
 
         effectiveDraft = {
-          ...draft,
+          ...effectiveDraft,
           salesRepName: matchedEmployee.name,
           salesRepId: matchedEmployee.id,
         };
       }
 
-      const accountRecordId = selected.accountRecordId ?? selected.id;
-      const selectedBusinessAccountId = selected.businessAccountId;
+      const accountRecordId = sourceRow.accountRecordId ?? sourceRow.id;
+      const selectedBusinessAccountId = sourceRow.businessAccountId;
+      const selectedContactId = sourceRow.contactId ?? sourceRow.primaryContactId ?? null;
       const response = await fetch(`/api/business-accounts/${accountRecordId}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(effectiveDraft),
+        body: JSON.stringify({
+          ...effectiveDraft,
+          targetContactId: effectiveDraft.targetContactId ?? selectedContactId,
+        }),
       });
 
       const payload = await readJsonResponse<BusinessAccountRow | { error?: string }>(
@@ -2020,10 +2695,9 @@ export function AccountsClient() {
       );
 
       if (response.status === 401) {
-        setSaveError(
+        throw new Error(
           "Acumatica rejected save due session state. Please retry without signing in again.",
         );
-        return;
       }
 
       if (!response.ok) {
@@ -2035,12 +2709,17 @@ export function AccountsClient() {
       }
 
       const updatedRow = payload as BusinessAccountRow;
-      const updatedAccountRecordId = updatedRow.accountRecordId ?? updatedRow.id ?? accountRecordId;
+      const updatedAccountRecordId =
+        updatedRow.accountRecordId ?? updatedRow.id ?? accountRecordId;
+      const updatedContactId = updatedRow.contactId ?? selectedContactId;
+      const updatedPrimaryContactId = updatedRow.primaryContactId;
+
       setAllRows((currentRows) =>
-        currentRows.map((row) => {
-          const rowAccountRecordId = row.accountRecordId ?? row.id;
-          const sameAccount =
-            rowAccountRecordId === accountRecordId ||
+        enforceSinglePrimaryPerAccountRows(
+          currentRows.map((row) => {
+            const rowAccountRecordId = row.accountRecordId ?? row.id;
+            const sameAccount =
+              rowAccountRecordId === accountRecordId ||
             rowAccountRecordId === updatedAccountRecordId ||
             row.businessAccountId === selectedBusinessAccountId;
           if (!sameAccount) {
@@ -2066,12 +2745,24 @@ export function AccountsClient() {
             country: updatedRow.country,
             category: updatedRow.category,
             lastModifiedIso: updatedRow.lastModifiedIso,
+            primaryContactId: updatedPrimaryContactId,
+            isPrimaryContact:
+              updatedPrimaryContactId !== null &&
+              row.contactId !== null &&
+              row.contactId !== undefined
+                ? row.contactId === updatedPrimaryContactId
+                : row.isPrimaryContact,
           };
 
-          if (row.isPrimaryContact) {
+          if (
+            updatedContactId !== null &&
+            row.contactId !== null &&
+            row.contactId !== undefined &&
+            row.contactId === updatedContactId
+          ) {
             return {
               ...updatedCommon,
-              primaryContactId: updatedRow.primaryContactId,
+              contactId: updatedContactId,
               primaryContactName: updatedRow.primaryContactName,
               primaryContactPhone: updatedRow.primaryContactPhone,
               primaryContactEmail: updatedRow.primaryContactEmail,
@@ -2079,52 +2770,349 @@ export function AccountsClient() {
             };
           }
 
-          return updatedCommon;
-        }),
+            return updatedCommon;
+          }),
+        ),
       );
 
-      const selectedAfterSave: BusinessAccountRow = {
-        ...selected,
-        accountRecordId: updatedAccountRecordId,
-        companyName: updatedRow.companyName,
-        salesRepId: updatedRow.salesRepId,
-        salesRepName: updatedRow.salesRepName,
-        industryType: updatedRow.industryType,
-        subCategory: updatedRow.subCategory,
-        companyRegion: updatedRow.companyRegion,
-        week: updatedRow.week,
-        address: updatedRow.address,
-        addressLine1: updatedRow.addressLine1,
-        addressLine2: updatedRow.addressLine2,
-        city: updatedRow.city,
-        state: updatedRow.state,
-        postalCode: updatedRow.postalCode,
-        country: updatedRow.country,
-        category: updatedRow.category,
-        lastModifiedIso: updatedRow.lastModifiedIso,
-        ...(selected.isPrimaryContact
-          ? {
-              primaryContactId: updatedRow.primaryContactId,
-              primaryContactName: updatedRow.primaryContactName,
-              primaryContactPhone: updatedRow.primaryContactPhone,
-              primaryContactEmail: updatedRow.primaryContactEmail,
-              notes: updatedRow.notes,
-            }
-          : {}),
-      };
+      const selectedMatchesSource =
+        selected && getRowKey(selected) === sourceRowKey;
+      if (selectedMatchesSource) {
+        const selectedAfterSave: BusinessAccountRow = {
+          ...sourceRow,
+          accountRecordId: updatedAccountRecordId,
+          contactId: updatedContactId,
+          primaryContactId: updatedPrimaryContactId,
+          isPrimaryContact:
+            updatedPrimaryContactId !== null && updatedContactId !== null
+              ? updatedPrimaryContactId === updatedContactId
+              : sourceRow.isPrimaryContact,
+          companyName: updatedRow.companyName,
+          salesRepId: updatedRow.salesRepId,
+          salesRepName: updatedRow.salesRepName,
+          industryType: updatedRow.industryType,
+          subCategory: updatedRow.subCategory,
+          companyRegion: updatedRow.companyRegion,
+          week: updatedRow.week,
+          address: updatedRow.address,
+          addressLine1: updatedRow.addressLine1,
+          addressLine2: updatedRow.addressLine2,
+          city: updatedRow.city,
+          state: updatedRow.state,
+          postalCode: updatedRow.postalCode,
+          country: updatedRow.country,
+          category: updatedRow.category,
+          lastModifiedIso: updatedRow.lastModifiedIso,
+          primaryContactName: updatedRow.primaryContactName,
+          primaryContactPhone: updatedRow.primaryContactPhone,
+          primaryContactEmail: updatedRow.primaryContactEmail,
+          notes: updatedRow.notes,
+        };
 
-      setSelected(selectedAfterSave);
-      setAddressLookupArmed(false);
-      setDraft(buildDraft(selectedAfterSave));
-      setSaveNotice("Saved to Acumatica.");
+        setSelected(selectedAfterSave);
+        setAddressLookupArmed(false);
+        setDraft(buildDraft(selectedAfterSave));
+      }
+
+      if (!isInline) {
+        setSaveNotice("Saved to Acumatica.");
+      }
+      saved = true;
     } catch (saveRequestError) {
-      setSaveError(
+      const message =
         saveRequestError instanceof Error
           ? saveRequestError.message
-          : "Failed to save changes.",
+          : "Failed to save changes.";
+      if (isInline) {
+        setInlineError(message);
+      } else {
+        setSaveError(message);
+      }
+    } finally {
+      if (isInline) {
+        setInlineSavingRowKey((current) => (current === sourceRowKey ? null : current));
+      } else {
+        setIsSaving(false);
+      }
+    }
+
+    return saved;
+  }
+
+  async function handleInlineSelectChange(
+    row: BusinessAccountRow,
+    columnId: InlineEditableColumn,
+    rawValue: string,
+  ) {
+    const normalizedValue = rawValue.trim();
+    const baseDraft = buildDraft(row);
+    let patch: Partial<BusinessAccountUpdateRequest> = {};
+
+    if (columnId === "industryType") {
+      patch = {
+        industryType:
+          normalizedValue.length > 0
+            ? normalizeOptionValue(INDUSTRY_TYPE_OPTIONS, normalizedValue)
+            : null,
+      };
+    } else if (columnId === "subCategory") {
+      patch = {
+        subCategory:
+          normalizedValue.length > 0
+            ? normalizeOptionValue(SUB_CATEGORY_OPTIONS, normalizedValue)
+            : null,
+      };
+    } else if (columnId === "companyRegion") {
+      patch = {
+        companyRegion:
+          normalizedValue.length > 0 ? normalizeRegionValue(normalizedValue) : null,
+      };
+    } else if (columnId === "week") {
+      patch = {
+        week: normalizedValue.length > 0 ? normalizeWeekValue(normalizedValue) : null,
+      };
+    } else if (columnId === "category") {
+      patch = {
+        category: (normalizedValue || null) as Category | null,
+      };
+    }
+
+    const nextDraft: BusinessAccountUpdateRequest = {
+      ...baseDraft,
+      ...patch,
+      expectedLastModified: row.lastModifiedIso,
+    };
+
+    await saveRowDraft(row, nextDraft, "inline");
+  }
+
+  async function handleInlineMakePrimary(row: BusinessAccountRow) {
+    const targetContactId = row.contactId ?? row.primaryContactId ?? null;
+    if (targetContactId === null) {
+      setInlineError("Contact must have ContactID to set as primary.");
+      return;
+    }
+
+    const nextDraft: BusinessAccountUpdateRequest = {
+      ...buildDraft(row),
+      targetContactId,
+      setAsPrimaryContact: true,
+      expectedLastModified: row.lastModifiedIso,
+    };
+
+    await saveRowDraft(row, nextDraft, "inline");
+  }
+
+  function handleInlinePhoneChange(rowKey: string, value: string) {
+    setInlinePhoneDrafts((current) => ({
+      ...current,
+      [rowKey]: formatPhoneDraftValue(value),
+    }));
+  }
+
+  async function handleInlinePhoneCommit(row: BusinessAccountRow, rowKey: string) {
+    const draftValue = inlinePhoneDrafts[rowKey];
+    if (draftValue === undefined) {
+      return;
+    }
+
+    const currentValue = row.primaryContactPhone ?? row.phoneNumber ?? "";
+    if (draftValue === currentValue) {
+      setInlinePhoneDrafts((current) => {
+        const next = { ...current };
+        delete next[rowKey];
+        return next;
+      });
+      return;
+    }
+
+    const targetContactId = row.contactId ?? row.primaryContactId ?? null;
+    if (targetContactId === null) {
+      setInlineError("Contact ID is missing on this row. Phone cannot be saved.");
+      return;
+    }
+
+    if (draftValue.trim().length > 0 && normalizePhoneForSave(draftValue) === null) {
+      setInlineError("Phone number must use the format ###-###-####.");
+      return;
+    }
+
+    const nextDraft: BusinessAccountUpdateRequest = {
+      ...buildDraft(row),
+      targetContactId,
+      primaryContactPhone: draftValue,
+      expectedLastModified: row.lastModifiedIso,
+    };
+    const saved = await saveRowDraft(row, nextDraft, "inline");
+    if (!saved) {
+      return;
+    }
+
+    setInlinePhoneDrafts((current) => {
+      const next = { ...current };
+      delete next[rowKey];
+      return next;
+    });
+  }
+
+  function handleInlineNotesChange(rowKey: string, value: string) {
+    setInlineNotesDrafts((current) => ({
+      ...current,
+      [rowKey]: value,
+    }));
+  }
+
+  async function handleInlineNotesCommit(row: BusinessAccountRow, rowKey: string) {
+    const draftValue = inlineNotesDrafts[rowKey];
+    if (draftValue === undefined) {
+      return;
+    }
+
+    const currentValue = row.notes ?? "";
+    if (draftValue === currentValue) {
+      setInlineNotesDrafts((current) => {
+        const next = { ...current };
+        delete next[rowKey];
+        return next;
+      });
+      return;
+    }
+
+    const nextDraft: BusinessAccountUpdateRequest = {
+      ...buildDraft(row),
+      notes: draftValue,
+      expectedLastModified: row.lastModifiedIso,
+    };
+    const saved = await saveRowDraft(row, nextDraft, "inline");
+    if (!saved) {
+      return;
+    }
+
+    setInlineNotesDrafts((current) => {
+      const next = { ...current };
+      delete next[rowKey];
+      return next;
+    });
+  }
+
+  async function handleSave() {
+    if (!selected || !draft) {
+      return;
+    }
+
+    if (
+      draft.primaryContactPhone !== null &&
+      draft.primaryContactPhone.trim().length > 0 &&
+      normalizePhoneForSave(draft.primaryContactPhone) === null
+    ) {
+      setSaveError("Phone number must use the format ###-###-####.");
+      return;
+    }
+
+    await saveRowDraft(selected, draft, "drawer");
+  }
+
+  async function handleDeleteSelectedContact() {
+    if (!selected) {
+      return;
+    }
+
+    const contactId = selected.contactId ?? selected.primaryContactId ?? null;
+    if (contactId === null) {
+      setSaveError("This row has no contact ID, so it cannot be deleted.");
+      return;
+    }
+
+    const contactLabel = selected.primaryContactName?.trim() || `Contact ${contactId}`;
+    const confirmed = window.confirm(
+      `Delete ${contactLabel} from Acumatica? This permanently removes the contact.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsDeletingContact(true);
+    setSaveError(null);
+    setSaveNotice(null);
+
+    try {
+      const deleteResponse = await fetch(`/api/contacts/${contactId}`, {
+        method: "DELETE",
+      });
+      const deletePayload = await readJsonResponse<{ error?: string }>(deleteResponse);
+      if (!deleteResponse.ok) {
+        throw new Error(parseError(deletePayload));
+      }
+
+      const accountRecordId = selected.accountRecordId ?? selected.id;
+      let nextAccountRows: BusinessAccountRow[] | null = null;
+      let deleteNotice = "Contact deleted from Acumatica.";
+
+      try {
+        const refreshResponse = await fetch(`/api/business-accounts/${accountRecordId}`, {
+          cache: "no-store",
+        });
+        const refreshPayload = await readJsonResponse<
+          BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
+        >(refreshResponse);
+        if (!refreshResponse.ok) {
+          throw new Error(parseError(refreshPayload));
+        }
+
+        nextAccountRows =
+          readDetailResponseRows(refreshPayload) ??
+          (() => {
+            const refreshedRow = readDetailResponseRow(refreshPayload);
+            return refreshedRow ? [refreshedRow] : null;
+          })();
+      } catch {
+        const currentAccountRows = allRowsRef.current.filter((row) => {
+          const rowAccountRecordId = row.accountRecordId ?? row.id;
+          return (
+            rowAccountRecordId === accountRecordId ||
+            row.businessAccountId === selected.businessAccountId
+          );
+        });
+        nextAccountRows = removeDeletedContactFromAccountRows(
+          currentAccountRows,
+          contactId,
+          selected.rowKey ?? null,
+        );
+        deleteNotice =
+          "Contact deleted from Acumatica. The account refresh failed, so the local view was updated conservatively.";
+      }
+
+      setAllRows((currentRows) =>
+        replaceRowsForAccount(
+          currentRows,
+          nextAccountRows ?? [],
+          accountRecordId,
+          selected.businessAccountId,
+        ),
+      );
+      setLastSyncedAt(new Date().toISOString());
+      clearCachedMapData();
+
+      const nextSelected =
+        (nextAccountRows && findMatchingAccountRow(nextAccountRows, selected)) ??
+        nextAccountRows?.[0] ??
+        null;
+
+      if (!nextSelected) {
+        closeDrawer();
+      } else {
+        setSelected(nextSelected);
+        setDraft(buildDraft(nextSelected));
+        setSaveNotice(deleteNotice);
+      }
+    } catch (deleteError) {
+      setSaveError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Failed to delete contact.",
       );
     } finally {
-      setIsSaving(false);
+      setIsDeletingContact(false);
     }
   }
 
@@ -2150,6 +3138,9 @@ export function AccountsClient() {
           <Link className={styles.mapViewButton} href="/map">
             Map view
           </Link>
+          <Link className={styles.mapViewButton} href="/quality">
+            Data quality
+          </Link>
           <span className={styles.userName}>{session?.user?.name ?? "Signed in"}</span>
           <button className={styles.logoutButton} onClick={handleLogout} type="button">
             Sign out
@@ -2166,12 +3157,22 @@ export function AccountsClient() {
               setPage(1);
               setQ(event.target.value);
             }}
-            placeholder="Company, sales rep, industry, region, address, contact, email"
+            placeholder="Company, sales rep, industry, region, address, contact, email, notes"
             value={q}
           />
         </label>
 
         <div className={styles.controlActions}>
+          <button className={styles.newAccountButton} onClick={openCreateDrawer} type="button">
+            New account
+          </button>
+          <button
+            className={styles.newContactButton}
+            onClick={openCreateContactDrawer}
+            type="button"
+          >
+            New contact
+          </button>
           <details className={styles.columnPicker}>
             <summary className={styles.columnPickerSummary}>Columns</summary>
             <div className={styles.columnPickerMenu}>
@@ -2252,6 +3253,7 @@ export function AccountsClient() {
 
       <section className={styles.tableWrap}>
         {error ? <p className={styles.tableError}>{error}</p> : null}
+        {inlineError ? <p className={styles.tableError}>{inlineError}</p> : null}
         <table className={styles.table}>
           <thead>
             <tr>
@@ -2363,16 +3365,190 @@ export function AccountsClient() {
                     }}
                   >
                     {visibleColumnOrder.map((columnId) => {
+                      if (columnId === "primaryContactPhone") {
+                        const inlinePhoneValue =
+                          inlinePhoneDrafts[rowKey] ??
+                          row.primaryContactPhone ??
+                          row.phoneNumber ??
+                          "";
+                        const canEditPhone =
+                          (row.contactId ?? row.primaryContactId ?? null) !== null;
+                        return (
+                          <td
+                            key={`${rowKey}-${columnId}`}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <div className={styles.inlineSelectWrap}>
+                              <input
+                                className={styles.inlineTextInput}
+                                disabled={inlineSaveInProgress || !canEditPhone}
+                                inputMode="numeric"
+                                maxLength={12}
+                                onBlur={() => {
+                                  void handleInlinePhoneCommit(row, rowKey);
+                                }}
+                                onChange={(event) => {
+                                  event.stopPropagation();
+                                  handleInlinePhoneChange(rowKey, event.target.value);
+                                }}
+                                onClick={(event) => event.stopPropagation()}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    void handleInlinePhoneCommit(row, rowKey);
+                                  }
+                                }}
+                                placeholder={
+                                  canEditPhone ? "123-456-7890" : "No contact ID"
+                                }
+                                title="Phone number must use the format ###-###-####."
+                                type="text"
+                                value={inlinePhoneValue}
+                              />
+                              {inlineSavingRowKey === rowKey ? (
+                                <span className={styles.inlineSavingText}>Saving...</span>
+                              ) : null}
+                            </div>
+                          </td>
+                        );
+                      }
+
+                      if (columnId === "notes") {
+                        const inlineNotesValue = inlineNotesDrafts[rowKey] ?? (row.notes ?? "");
+                        return (
+                          <td
+                            key={`${rowKey}-${columnId}`}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <div className={styles.inlineSelectWrap}>
+                              <input
+                                className={styles.inlineTextInput}
+                                disabled={inlineSaveInProgress}
+                                onBlur={() => {
+                                  void handleInlineNotesCommit(row, rowKey);
+                                }}
+                                onChange={(event) => {
+                                  event.stopPropagation();
+                                  handleInlineNotesChange(rowKey, event.target.value);
+                                }}
+                                onClick={(event) => event.stopPropagation()}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    void handleInlineNotesCommit(row, rowKey);
+                                  }
+                                }}
+                                placeholder="Add note and press Enter"
+                                type="text"
+                                value={inlineNotesValue}
+                              />
+                              {inlineSavingRowKey === rowKey ? (
+                                <span className={styles.inlineSavingText}>Saving...</span>
+                              ) : null}
+                            </div>
+                          </td>
+                        );
+                      }
+
+                      if (isInlineEditableColumn(columnId)) {
+                        let inlineOptions: AttributeOption[] = [];
+                        let inlineValue = "";
+
+                        if (columnId === "industryType") {
+                          inlineOptions = withCurrentOption(
+                            INDUSTRY_TYPE_OPTIONS,
+                            row.industryType,
+                          );
+                          inlineValue =
+                            normalizeOptionValue(INDUSTRY_TYPE_OPTIONS, row.industryType) ?? "";
+                        } else if (columnId === "subCategory") {
+                          inlineOptions = withCurrentOption(
+                            SUB_CATEGORY_OPTIONS,
+                            row.subCategory,
+                          );
+                          inlineValue =
+                            normalizeOptionValue(SUB_CATEGORY_OPTIONS, row.subCategory) ?? "";
+                        } else if (columnId === "companyRegion") {
+                          inlineOptions = withCurrentOption(
+                            companyRegionOptions,
+                            row.companyRegion,
+                          );
+                          inlineValue = normalizeRegionValue(row.companyRegion) ?? "";
+                        } else if (columnId === "week") {
+                          inlineOptions = withCurrentOption(WEEK_OPTIONS, row.week);
+                          inlineValue = normalizeWeekValue(row.week) ?? "";
+                        } else if (columnId === "category") {
+                          inlineOptions = CATEGORY_OPTIONS;
+                          inlineValue = row.category ?? "";
+                        }
+
+                        return (
+                          <td key={`${rowKey}-${columnId}`} onClick={(event) => event.stopPropagation()}>
+                            <div className={styles.inlineSelectWrap}>
+                              <select
+                                className={styles.inlineSelect}
+                                disabled={inlineSaveInProgress}
+                                onChange={(event) => {
+                                  event.stopPropagation();
+                                  void handleInlineSelectChange(
+                                    row,
+                                    columnId,
+                                    event.target.value,
+                                  );
+                                }}
+                                onClick={(event) => event.stopPropagation()}
+                                onMouseDown={(event) => event.stopPropagation()}
+                                value={inlineValue}
+                              >
+                                <option value="">Unassigned</option>
+                                {inlineOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                              {inlineSavingRowKey === rowKey ? (
+                                <span className={styles.inlineSavingText}>Saving...</span>
+                              ) : null}
+                            </div>
+                          </td>
+                        );
+                      }
+
                       if (columnId === "primaryContactName") {
                         const nameValue = row.primaryContactName?.trim() ?? "";
+                        const canMakePrimary =
+                          row.isPrimaryContact !== true &&
+                          row.contactId !== null &&
+                          row.contactId !== undefined;
                         return (
-                          <td key={`${rowKey}-${columnId}`}>
-                            <span className={styles.contactNameCell}>
-                              {nameValue}
-                              {row.isPrimaryContact ? (
-                                <span className={styles.primaryBadge}>(Primary)</span>
+                          <td
+                            key={`${rowKey}-${columnId}`}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <div className={styles.contactCellWrap}>
+                              <span className={styles.contactNameCell}>
+                                {nameValue}
+                                {row.isPrimaryContact ? (
+                                  <span className={styles.primaryBadge}>(Primary)</span>
+                                ) : null}
+                              </span>
+                              {canMakePrimary ? (
+                                <button
+                                  className={styles.makePrimaryButton}
+                                  disabled={inlineSaveInProgress}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void handleInlineMakePrimary(row);
+                                  }}
+                                  type="button"
+                                >
+                                  {inlineSavingRowKey === rowKey ? "Saving..." : "Make Primary"}
+                                </button>
                               ) : null}
-                            </span>
+                            </div>
                           </td>
                         );
                       }
@@ -2465,6 +3641,20 @@ export function AccountsClient() {
         </div>
       </footer>
 
+      <CreateBusinessAccountDrawer
+        employeeOptions={sortedEmployeeOptions}
+        isOpen={isCreateDrawerOpen}
+        onAccountCreated={handleAccountCreated}
+        onClose={closeCreateDrawer}
+        onContactCreated={handleContactCreated}
+      />
+      <CreateContactDrawer
+        accountOptions={createContactAccountOptions}
+        isOpen={isCreateContactDrawerOpen}
+        onClose={closeCreateContactDrawer}
+        onContactCreated={handleContactCreated}
+      />
+
       <aside className={`${styles.drawer} ${selected ? styles.drawerOpen : ""}`}>
         <div className={styles.drawerHeader}>
           <h2>{selected ? selected.companyName : "Account details"}</h2>
@@ -2494,38 +3684,39 @@ export function AccountsClient() {
             <h3>Sales Rep</h3>
             <label>
               Sales Rep
-              <input
-                list="sales-rep-options"
+              <select
                 onChange={(event) =>
                   setDraft((current) => {
                     if (!current) {
                       return current;
                     }
 
-                    const nextName = event.target.value;
-                    const matchedEmployee = matchEmployeeByName(employeeOptions, nextName);
-                    const selectedMatchesInput =
-                      normalizeComparable(nextName) ===
-                      normalizeComparable(selected?.salesRepName);
+                    const nextSalesRepId = event.target.value.trim();
+                    const matchedEmployee = findEmployeeById(
+                      sortedEmployeeOptions,
+                      nextSalesRepId,
+                    );
+
                     return {
                       ...current,
-                      salesRepName: nextName.trim().length > 0 ? nextName : null,
-                      salesRepId: matchedEmployee
-                        ? matchedEmployee.id
-                        : selectedMatchesInput
-                          ? selected?.salesRepId ?? null
-                          : null,
+                      salesRepId: matchedEmployee?.id ?? null,
+                      salesRepName: matchedEmployee?.name ?? null,
                     };
                   })
                 }
-                placeholder="Type and choose sales rep"
-                value={draft.salesRepName ?? ""}
-              />
-              <datalist id="sales-rep-options">
-                {employeeOptions.map((employee) => (
-                  <option key={employee.id} label={employee.id} value={employee.name} />
+                value={draft.salesRepId ?? ""}
+              >
+                <option value="">Unassigned</option>
+                {selectedSalesRepOption &&
+                !findEmployeeById(sortedEmployeeOptions, selectedSalesRepOption.id) ? (
+                  <option value={selectedSalesRepOption.id}>{selectedSalesRepOption.name}</option>
+                ) : null}
+                {sortedEmployeeOptions.map((employee) => (
+                  <option key={employee.id} value={employee.id}>
+                    {employee.name}
+                  </option>
                 ))}
-              </datalist>
+              </select>
               {isEmployeesLoading ? (
                 <span className={styles.lookupLoading}>Loading sales reps...</span>
               ) : null}
@@ -2533,12 +3724,9 @@ export function AccountsClient() {
               {draft.salesRepId ? (
                 <span className={styles.lookupHint}>Employee ID: {draft.salesRepId}</span>
               ) : null}
-              {!isEmployeesLoading &&
-              !employeesError &&
-              draft.salesRepName &&
-              !draft.salesRepId ? (
+              {!isEmployeesLoading && !employeesError ? (
                 <span className={styles.lookupHint}>
-                  Pick a value from the list to map the correct employee ID.
+                  Choose a Sales Rep from the employee list to update Acumatica owner.
                 </span>
               ) : null}
             </label>
@@ -2585,7 +3773,7 @@ export function AccountsClient() {
               ) : null}
             </label>
             <label>
-              Address Line 2
+              Unit Number
               <input
                 onChange={(event) =>
                   setDraft((current) =>
@@ -2628,37 +3816,16 @@ export function AccountsClient() {
                 value={draft.postalCode}
               />
             </label>
-            <label>
-              Country
-              <input
-                maxLength={3}
-                onChange={(event) =>
-                  setDraft((current) =>
-                    current
-                      ? { ...current, country: event.target.value.toUpperCase() }
-                      : current,
-                  )
-                }
-                value={draft.country}
-              />
-            </label>
-
-            <h3>Primary Contact</h3>
-            {!selected.primaryContactId ? (
+            <h3>Contact</h3>
+            {!selected.contactId ? (
               <p className={styles.readOnlyNotice}>
-                This account does not have a primary contact in Acumatica. Contact fields are
-                read-only.
-              </p>
-            ) : selected.isPrimaryContact === false ? (
-              <p className={styles.readOnlyNotice}>
-                This row is not the primary contact. Contact fields are read-only here; use the
-                row marked Primary.
+                This row is not linked to a contact ID yet, so contact fields cannot be saved.
               </p>
             ) : null}
             <label>
               Name
               <input
-                disabled={!selected.primaryContactId || selected.isPrimaryContact === false}
+                disabled={!selected.contactId}
                 onChange={(event) =>
                   setDraft((current) =>
                     current
@@ -2672,21 +3839,28 @@ export function AccountsClient() {
             <label>
               Phone
               <input
-                disabled={!selected.primaryContactId || selected.isPrimaryContact === false}
+                disabled={!selected.contactId}
+                inputMode="numeric"
+                maxLength={12}
                 onChange={(event) =>
                   setDraft((current) =>
                     current
-                      ? { ...current, primaryContactPhone: event.target.value }
+                      ? {
+                          ...current,
+                          primaryContactPhone: formatPhoneDraftValue(event.target.value),
+                        }
                       : current,
                   )
                 }
+                placeholder="123-456-7890"
+                title="Phone number must use the format ###-###-####."
                 value={draft.primaryContactPhone ?? ""}
               />
             </label>
             <label>
               Email
               <input
-                disabled={!selected.primaryContactId || selected.isPrimaryContact === false}
+                disabled={!selected.contactId}
                 onChange={(event) =>
                   setDraft((current) =>
                     current
@@ -2696,6 +3870,127 @@ export function AccountsClient() {
                 }
                 value={draft.primaryContactEmail ?? ""}
               />
+            </label>
+            <label className={styles.inlineCheckbox}>
+              <input
+                checked={
+                  selected.isPrimaryContact === true
+                    ? true
+                    : Boolean(draft.setAsPrimaryContact)
+                }
+                disabled={!selected.contactId || selected.isPrimaryContact === true}
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          setAsPrimaryContact: event.target.checked,
+                        }
+                      : current,
+                  )
+                }
+                type="checkbox"
+              />
+              {selected.isPrimaryContact
+                ? "This contact is currently the primary technician."
+                : "Set this contact as primary technician"}
+            </label>
+
+            <h3>Attributes</h3>
+            <label>
+              Industry Type
+              <select
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          industryType: event.target.value || null,
+                        }
+                      : current,
+                  )
+                }
+                value={draft.industryType ?? ""}
+              >
+                <option value="">Unassigned</option>
+                {industryTypeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              Sub-Category
+              <select
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          subCategory: event.target.value || null,
+                        }
+                      : current,
+                  )
+                }
+                value={draft.subCategory ?? ""}
+              >
+                <option value="">Unassigned</option>
+                {subCategoryOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              Company Region
+              <select
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          companyRegion: event.target.value || null,
+                        }
+                      : current,
+                  )
+                }
+                value={draft.companyRegion ?? ""}
+              >
+                <option value="">Unassigned</option>
+                {companyRegionOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              Week
+              <select
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          week: event.target.value || null,
+                        }
+                      : current,
+                  )
+                }
+                value={draft.week ?? ""}
+              >
+                <option value="">Unassigned</option>
+                {weekOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </label>
 
             <label>
@@ -2714,17 +4009,18 @@ export function AccountsClient() {
                 value={draft.category ?? ""}
               >
                 <option value="">Unassigned</option>
-                <option value="A">A</option>
-                <option value="B">B</option>
-                <option value="C">C</option>
-                <option value="D">D</option>
+                {CATEGORY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </label>
 
             <label>
-              Primary Contact Notes
+              Contact Notes
               <textarea
-                disabled={!selected.primaryContactId || selected.isPrimaryContact === false}
+                disabled={!selected.contactId}
                 onChange={(event) =>
                   setDraft((current) =>
                     current ? { ...current, notes: event.target.value } : current,
@@ -2740,9 +4036,28 @@ export function AccountsClient() {
             {saveError ? <p className={styles.saveError}>{saveError}</p> : null}
             {saveNotice ? <p className={styles.saveNotice}>{saveNotice}</p> : null}
 
-            <button className={styles.saveButton} disabled={isSaving} onClick={handleSave} type="button">
-              {isSaving ? "Saving..." : "Save changes"}
-            </button>
+            <div className={styles.drawerActions}>
+              <button
+                className={styles.saveButton}
+                disabled={isSaving || isDeletingContact}
+                onClick={handleSave}
+                type="button"
+              >
+                {isSaving ? "Saving..." : "Save changes"}
+              </button>
+              <button
+                className={styles.deleteContactButton}
+                disabled={
+                  isSaving ||
+                  isDeletingContact ||
+                  (selected.contactId ?? selected.primaryContactId ?? null) === null
+                }
+                onClick={handleDeleteSelectedContact}
+                type="button"
+              >
+                {isDeletingContact ? "Deleting..." : "Delete contact"}
+              </button>
+            </div>
           </div>
         ) : (
           <div className={styles.drawerBody}>

@@ -1,9 +1,13 @@
 import {
+  buildBusinessAccountUpdateIdentifiers,
+  buildPrimaryContactFallbackPayloads,
+  enforceSinglePrimaryPerAccountRows,
   hasAddressChanges,
   hasPrimaryContactChanges,
   normalizeBusinessAccount,
   normalizeBusinessAccountRows,
   queryBusinessAccounts,
+  selectPrimaryContactIndex,
 } from "@/lib/business-accounts";
 import type { BusinessAccountRow } from "@/types/business-account";
 
@@ -202,6 +206,31 @@ describe("normalizeBusinessAccountRows", () => {
     expect(secondaryRow?.contactId).toBe(158410);
   });
 
+  it("returns a single account row when the business account has no contacts", () => {
+    const rows = normalizeBusinessAccountRows(
+      makePayload({
+        id: "contactless-account",
+        BusinessAccountID: { value: "AC-404" },
+        Name: { value: "No Contact Co" },
+        PrimaryContact: {},
+        Contacts: [],
+      }),
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      accountRecordId: "contactless-account",
+      rowKey: "contactless-account:primary",
+      businessAccountId: "AC-404",
+      companyName: "No Contact Co",
+      contactId: null,
+      primaryContactId: null,
+      primaryContactName: null,
+      primaryContactEmail: null,
+      primaryContactPhone: null,
+    });
+  });
+
   it("supports wrapped Contacts and Attributes collections", () => {
     const rows = normalizeBusinessAccountRows(
       makePayload({
@@ -319,6 +348,95 @@ describe("normalizeBusinessAccountRows", () => {
   });
 });
 
+describe("primary-contact helpers", () => {
+  it("selects a single primary candidate by ContactID when duplicates share name/email", () => {
+    const selectedIndex = selectPrimaryContactIndex(
+      [
+        {
+          contactId: 157497,
+          recordId: "contact-a",
+          email: "carleen.newland@hccontario.ca",
+          name: "Carleen Newland",
+          rowNumber: 2,
+          index: 0,
+        },
+        {
+          contactId: 157497,
+          recordId: "contact-b",
+          email: "carleen.newland@hccontario.ca",
+          name: "Carleen Newland",
+          rowNumber: 1,
+          index: 1,
+        },
+      ],
+      {
+        contactId: 157497,
+        recordId: null,
+        email: null,
+        name: null,
+      },
+    );
+
+    expect(selectedIndex).toBe(1);
+  });
+
+  it("uses deterministic fallback ordering when matching by email/name", () => {
+    const selectedIndex = selectPrimaryContactIndex(
+      [
+        {
+          contactId: 300,
+          recordId: "contact-c",
+          email: "primary@example.com",
+          name: "Primary Person",
+          rowNumber: null,
+          index: 0,
+        },
+        {
+          contactId: 200,
+          recordId: "contact-b",
+          email: "primary@example.com",
+          name: "Primary Person",
+          rowNumber: null,
+          index: 1,
+        },
+      ],
+      {
+        contactId: null,
+        recordId: null,
+        email: "primary@example.com",
+        name: "Primary Person",
+      },
+    );
+
+    expect(selectedIndex).toBe(1);
+  });
+
+  it("enforces max one primary per account row group", () => {
+    const normalized = enforceSinglePrimaryPerAccountRows([
+      {
+        ...normalizeBusinessAccount(makePayload()),
+        rowKey: "a1:contact:157497",
+        contactId: 157497,
+        primaryContactId: 157497,
+        primaryContactName: "Jorge Serrano",
+        isPrimaryContact: true,
+      },
+      {
+        ...normalizeBusinessAccount(makePayload()),
+        rowKey: "a1:contact:157498",
+        contactId: 157498,
+        primaryContactId: 157497,
+        primaryContactName: "Duplicate Jorge",
+        isPrimaryContact: true,
+      },
+    ]);
+
+    expect(normalized.filter((row) => row.isPrimaryContact)).toHaveLength(1);
+    expect(normalized.find((row) => row.contactId === 157497)?.isPrimaryContact).toBe(true);
+    expect(normalized.find((row) => row.contactId === 157498)?.isPrimaryContact).toBe(false);
+  });
+});
+
 describe("queryBusinessAccounts", () => {
   const rows: BusinessAccountRow[] = [
     normalizeBusinessAccount(makePayload()),
@@ -421,8 +539,14 @@ describe("change detection helpers", () => {
         state: existing.state,
         postalCode: existing.postalCode,
         country: existing.country,
+        targetContactId: existing.contactId ?? existing.primaryContactId ?? null,
+        setAsPrimaryContact: false,
         salesRepId: existing.salesRepId,
         salesRepName: existing.salesRepName,
+        industryType: existing.industryType,
+        subCategory: existing.subCategory,
+        companyRegion: existing.companyRegion,
+        week: existing.week,
         primaryContactName: "Changed",
         primaryContactPhone: existing.primaryContactPhone,
         primaryContactEmail: existing.primaryContactEmail,
@@ -443,8 +567,14 @@ describe("change detection helpers", () => {
         state: existing.state,
         postalCode: existing.postalCode,
         country: existing.country,
+        targetContactId: existing.contactId ?? existing.primaryContactId ?? null,
+        setAsPrimaryContact: false,
         salesRepId: existing.salesRepId,
         salesRepName: existing.salesRepName,
+        industryType: existing.industryType,
+        subCategory: existing.subCategory,
+        companyRegion: existing.companyRegion,
+        week: existing.week,
         primaryContactName: existing.primaryContactName,
         primaryContactPhone: existing.primaryContactPhone,
         primaryContactEmail: existing.primaryContactEmail,
@@ -453,5 +583,28 @@ describe("change detection helpers", () => {
         expectedLastModified: existing.lastModifiedIso,
       }),
     ).toBe(true);
+  });
+});
+
+describe("business account merge helpers", () => {
+  it("builds stable update identifiers", () => {
+    expect(buildBusinessAccountUpdateIdentifiers(makePayload(), "fallback-id")).toEqual([
+      "AC-100",
+      "a1",
+      "fallback-id",
+    ]);
+  });
+
+  it("builds primary contact fallback payloads", () => {
+    const payloads = buildPrimaryContactFallbackPayloads(makePayload(), 158410);
+
+    expect(payloads[0]).toEqual({
+      PrimaryContact: {
+        ContactID: {
+          value: 158410,
+        },
+      },
+    });
+    expect(payloads).toHaveLength(6);
   });
 });

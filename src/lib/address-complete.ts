@@ -145,6 +145,13 @@ function buildSearchTerm(input: AddressInput): string {
     .join(" ");
 }
 
+function isFallbackSuggestionId(id: string): boolean {
+  return (
+    id.startsWith(NOMINATIM_SUGGESTION_PREFIX) ||
+    id.startsWith(PHOTON_SUGGESTION_PREFIX)
+  );
+}
+
 function isValidFindItem(item: FindResultItem): boolean {
   return !item.Error || item.Error === "0";
 }
@@ -480,15 +487,67 @@ export async function findAddressCompleteSuggestions(input: {
   });
 }
 
+export async function findCanadaPostAddressCompleteSuggestions(input: {
+  searchTerm: string;
+  country: string;
+  limit?: number;
+}): Promise<AddressCompleteSuggestion[]> {
+  const query = clean(input.searchTerm);
+  if (query.length < 3) {
+    return [];
+  }
+
+  const limit = Math.max(1, Math.min(input.limit ?? 8, 20));
+  const env = getEnv();
+
+  if (!env.ADDRESS_COMPLETE_API_KEY) {
+    throw new HttpError(
+      500,
+      "ADDRESS_COMPLETE_API_KEY is required for Canada Post address lookup.",
+    );
+  }
+
+  const findParams = new URLSearchParams({
+    Key: env.ADDRESS_COMPLETE_API_KEY,
+    SearchTerm: query,
+    Country: toCountryCode3(input.country),
+    LanguagePreference: "EN",
+    Limit: String(limit),
+  });
+
+  const response = await fetch(`${env.ADDRESS_COMPLETE_FIND_URL}?${findParams.toString()}`, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new HttpError(502, "AddressComplete find request failed. Please retry.");
+  }
+
+  const payload = await response.json().catch(() => null);
+  const rawItems = parseFindItems(payload);
+  assertAddressCompleteSuccess(rawItems);
+
+  return rawItems
+    .filter(isValidFindItem)
+    .filter((item) => typeof item.Id === "string" && item.Id.trim().length > 0)
+    .map((item) => ({
+      id: String(item.Id),
+      type: item.Type?.trim() || "Address",
+      text: item.Text?.trim() || "Address",
+      description: item.Description?.trim() || "",
+    }));
+}
+
 export async function retrieveAddressCompleteAddress(input: {
   id: string;
   fallback: AddressInput;
 }): Promise<AddressOutput> {
   const id = clean(input.id);
-  if (
-    id.startsWith(NOMINATIM_SUGGESTION_PREFIX) ||
-    id.startsWith(PHOTON_SUGGESTION_PREFIX)
-  ) {
+  if (isFallbackSuggestionId(id)) {
     const encoded = id.startsWith(NOMINATIM_SUGGESTION_PREFIX)
       ? id.slice(NOMINATIM_SUGGESTION_PREFIX.length)
       : id.slice(PHOTON_SUGGESTION_PREFIX.length);
@@ -514,6 +573,61 @@ export async function retrieveAddressCompleteAddress(input: {
 
   if (!id) {
     throw new HttpError(400, "Address suggestion id is required.");
+  }
+
+  const retrieveParams = new URLSearchParams({
+    Key: env.ADDRESS_COMPLETE_API_KEY,
+    Id: id,
+  });
+
+  const response = await fetch(
+    `${env.ADDRESS_COMPLETE_RETRIEVE_URL}?${retrieveParams.toString()}`,
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+      },
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    throw new HttpError(502, "AddressComplete retrieve request failed. Please retry.");
+  }
+
+  const payload = await response.json().catch(() => null);
+  const rawItems = parseRetrieveItems(payload);
+  assertAddressCompleteSuccess(rawItems);
+  const items = rawItems.filter(isValidRetrieveItem);
+  if (!items.length) {
+    throw new HttpError(422, "AddressComplete did not return a normalized address.");
+  }
+
+  return normalizeAddressFromRetrieve(items[0], input.fallback);
+}
+
+export async function retrieveCanadaPostAddressCompleteAddress(input: {
+  id: string;
+  fallback: AddressInput;
+}): Promise<AddressOutput> {
+  const id = clean(input.id);
+  if (!id) {
+    throw new HttpError(400, "Address suggestion id is required.");
+  }
+
+  if (isFallbackSuggestionId(id)) {
+    throw new HttpError(
+      422,
+      "Only Canada Post address suggestions can be used for new account creation.",
+    );
+  }
+
+  const env = getEnv();
+  if (!env.ADDRESS_COMPLETE_API_KEY) {
+    throw new HttpError(
+      500,
+      "ADDRESS_COMPLETE_API_KEY is required for Canada Post address lookup.",
+    );
   }
 
   const retrieveParams = new URLSearchParams({

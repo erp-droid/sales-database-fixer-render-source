@@ -110,6 +110,105 @@
   padding: 12px;
 }
 
+.panelToolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.panelModeText {
+  display: grid;
+  gap: 2px;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.panelModeText strong {
+  color: var(--ink-strong);
+}
+
+.viewOptionsMenu {
+  position: relative;
+}
+
+.viewOptionsSummary {
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #f4f8fd;
+  color: var(--ink-strong);
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.viewOptionsSummary::-webkit-details-marker {
+  display: none;
+}
+
+.viewOptionsMenu[open] .viewOptionsSummary {
+  border-color: #8cbbe8;
+  background: #e9f4ff;
+  color: #1f5f9f;
+}
+
+.viewOptionsPanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(260px, 70vw);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 14px 24px rgba(19, 35, 63, 0.18);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  z-index: 2;
+}
+
+.viewOptionsActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.viewOptionsActions button {
+  border: 1px solid #b9c8dc;
+  border-radius: 8px;
+  background: #f3f7fc;
+  color: #274765;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.viewOptionsActions button:hover {
+  border-color: #8ea8c6;
+  background: #eaf1f8;
+}
+
+.viewOptionsList {
+  display: grid;
+  gap: 6px;
+}
+
+.viewOptionItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.viewOptionItem input {
+  margin: 0;
+}
+
 .stats {
   display: flex;
   flex-wrap: wrap;
@@ -144,6 +243,17 @@
   font-size: 24px;
 }
 
+.cardTitleBlock {
+  display: grid;
+  gap: 4px;
+}
+
+.cardSubtitle {
+  margin: 0 0 8px;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
 .details {
   margin: 0;
   display: grid;
@@ -168,6 +278,177 @@
   word-break: break-word;
 }
 
+.hiddenDetailsNotice {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.contactsSection {
+  margin-top: 12px;
+  border-top: 1px solid #dae4f2;
+  padding-top: 10px;
+}
+
+.contactsSection h3 {
+  margin: 0 0 8px;
+  color: var(--ink-strong);
+  font-size: 16px;
+}
+
+.noContacts {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.contactList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.contactItem {
+  border: 1px solid #dae4f2;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.contactHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.contactItem p {
+  margin: 0;
+  color: #2f3f59;
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.contactEditor {
+  display: grid;
+  gap: 8px;
+}
+
+.contactField {
+  display: grid;
+  gap: 4px;
+  color: #23405d;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.contactField input,
+.contactField textarea {
+  border: 1px solid #c8d6e9;
+  border-radius: 8px;
+  background: #fff;
+  color: #23364d;
+  font-size: 13px;
+  padding: 8px 9px;
+}
+
+.contactField input:disabled,
+.contactField textarea:disabled {
+  background: #eff4fa;
+  color: #6e8098;
+}
+
+.contactActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.primaryBadge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid #3e91db;
+  color: #1f5f9f;
+  background: #e9f4ff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 1px 8px;
+}
+
+.makePrimaryButton,
+.contactSaveButton,
+.contactSecondaryButton,
+.contactDeleteButton {
+  justify-self: flex-start;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1;
+  padding: 6px 9px;
+  cursor: pointer;
+}
+
+.makePrimaryButton {
+  justify-self: flex-start;
+  border: 1px solid #8ce8c5;
+  background: #e9f4ff;
+  color: #1f9f61;
+}
+
+.contactSaveButton {
+  border: 1px solid #7db889;
+  background: #ebf8ee;
+  color: #1f6c39;
+}
+
+.contactSecondaryButton {
+  border: 1px solid #b9c8dc;
+  background: #f3f7fc;
+  color: #274765;
+}
+
+.contactDeleteButton {
+  border: 1px solid #e4b7b2;
+  background: #fff3f2;
+  color: #a23e37;
+}
+
+.makePrimaryButton:hover:not(:disabled) {
+  border-color: #1f9f61;
+  background: #dff0ff;
+}
+
+.contactSaveButton:hover:not(:disabled) {
+  border-color: #1f6c39;
+  background: #dff4e6;
+}
+
+.contactSecondaryButton:hover:not(:disabled) {
+  border-color: #8ea8c6;
+  background: #eaf1f8;
+}
+
+.contactDeleteButton:hover:not(:disabled) {
+  border-color: #c8645d;
+  background: #ffe8e5;
+}
+
+.makePrimaryButton:disabled,
+.contactSaveButton:disabled,
+.contactSecondaryButton:disabled,
+.contactDeleteButton:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
 @media (max-width: 980px) {
   .topbar {
     flex-direction: column;
@@ -190,6 +471,16 @@
     bottom: 10px;
     width: auto;
     max-height: min(52vh, 420px);
+  }
+
+  .panelToolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .viewOptionsPanel {
+    position: static;
+    width: 100%;
   }
 
   .details div {

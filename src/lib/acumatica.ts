@@ -319,7 +319,7 @@ type FetchContactsOptions = {
   filter?: string;
 };
 
-function readWrappedString(record: unknown, key: string): string {
+export function readWrappedString(record: unknown, key: string): string {
   if (!record || typeof record !== "object") {
     return "";
   }
@@ -333,7 +333,7 @@ function readWrappedString(record: unknown, key: string): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function readWrappedScalarString(record: unknown, key: string): string {
+export function readWrappedScalarString(record: unknown, key: string): string {
   if (!record || typeof record !== "object") {
     return "";
   }
@@ -353,6 +353,21 @@ function readWrappedScalarString(record: unknown, key: string): string {
   }
 
   return "";
+}
+
+export function readWrappedNumber(record: unknown, key: string): number | null {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  const field = (record as Record<string, unknown>)[key];
+  if (!field || typeof field !== "object") {
+    return null;
+  }
+
+  const value = (field as Record<string, unknown>).value;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function unwrapCollection<T>(payload: unknown): T[] {
@@ -1064,9 +1079,9 @@ export async function fetchEmployees(
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<EmployeeDirectoryItem[]> {
   const endpointCandidates = ["/Employee", "/EPEmployee"] as const;
+  const collectedRows: RawEmployee[] = [];
 
   for (const endpoint of endpointCandidates) {
-    const allRows: RawEmployee[] = [];
     const batchSize = 200;
 
     try {
@@ -1086,15 +1101,10 @@ export async function fetchEmployees(
           break;
         }
 
-        allRows.push(...rows);
+        collectedRows.push(...rows);
         if (rows.length < batchSize) {
           break;
         }
-      }
-
-      const employees = collectUniqueEmployees(allRows);
-      if (employees.length > 0) {
-        return employees;
       }
     } catch (error) {
       if (
@@ -1106,21 +1116,32 @@ export async function fetchEmployees(
     }
   }
 
-  // Fallback: derive known sales reps from business accounts when Employee endpoints are unavailable.
-  const rawAccounts = await fetchBusinessAccounts(
-    cookieValue,
-    {
-      maxRecords: 1200,
-      batchSize: 200,
-    },
-    authCookieRefresh,
-  );
-  const derivedRows: RawEmployee[] = rawAccounts.map((account) => ({
-    Owner: { value: readWrappedScalarString(account, "Owner") },
-    DisplayName: { value: readWrappedString(account, "OwnerEmployeeName") },
-  }));
+  // Always merge known sales reps from business accounts so partial employee endpoints
+  // do not collapse the dropdown to one user.
+  try {
+    const rawAccounts = await fetchBusinessAccounts(
+      cookieValue,
+      {
+        maxRecords: 5000,
+        batchSize: 200,
+      },
+      authCookieRefresh,
+    );
+    const derivedRows: RawEmployee[] = rawAccounts.map((account) => ({
+      Owner: { value: readWrappedScalarString(account, "Owner") },
+      DisplayName: { value: readWrappedString(account, "OwnerEmployeeName") },
+    }));
+    collectedRows.push(...derivedRows);
+  } catch (error) {
+    if (
+      error instanceof HttpError &&
+      (error.status === 401 || error.status === 403)
+    ) {
+      throw error;
+    }
+  }
 
-  return collectUniqueEmployees(derivedRows);
+  return collectUniqueEmployees(collectedRows);
 }
 
 export async function updateBusinessAccount(
@@ -1240,6 +1261,22 @@ export async function updateBusinessAccount(
   throw new HttpError(500, "Failed to update business account.");
 }
 
+export async function createBusinessAccount(
+  cookieValue: string,
+  payload: Record<string, unknown>,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawBusinessAccount> {
+  return requestAcumatica<RawBusinessAccount>(
+    getActiveCookieValue(cookieValue, authCookieRefresh),
+    "/BusinessAccount",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      authCookieRefresh,
+    },
+  );
+}
+
 export async function updateContact(
   cookieValue: string,
   contactId: number,
@@ -1255,6 +1292,93 @@ export async function updateContact(
       authCookieRefresh,
     },
   );
+}
+
+export async function createContact(
+  cookieValue: string,
+  payload: Record<string, unknown>,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawContact> {
+  return requestAcumatica<RawContact>(
+    getActiveCookieValue(cookieValue, authCookieRefresh),
+    "/Contact",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      authCookieRefresh,
+    },
+  );
+}
+
+export async function deleteContact(
+  cookieValue: string,
+  contactId: number,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<void> {
+  const maxRateLimitRetries = 3;
+  const resourcePath = `/Contact/${encodeURIComponent(String(contactId))}`;
+
+  for (let attempt = 0; ; attempt += 1) {
+    const activeCookieValue = getActiveCookieValue(cookieValue, authCookieRefresh);
+    const response = await fetch(buildAcumaticaUrl(resourcePath), {
+      method: "DELETE",
+      headers: {
+        Accept: "application/json",
+        Cookie: buildCookieHeader(activeCookieValue),
+      },
+      cache: "no-store",
+    });
+
+    if (authCookieRefresh) {
+      const refreshedCookie = extractAuthCookieFromResponseHeaders(
+        response.headers,
+        activeCookieValue,
+      );
+      if (refreshedCookie) {
+        authCookieRefresh.value = refreshedCookie;
+      }
+    }
+
+    if (response.status === 429 && attempt < maxRateLimitRetries) {
+      const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+      const backoffMs = Math.min(6000, 700 * 2 ** attempt);
+      await sleep(retryAfterMs ?? backoffMs);
+      continue;
+    }
+
+    if (!response.ok) {
+      const errorResponse = await parseErrorResponse(response);
+      throw new HttpError(
+        response.status,
+        errorResponse.message,
+        errorResponse.details,
+      );
+    }
+
+    if (response.status === 204) {
+      return;
+    }
+
+    const responseText = await response.text();
+    if (!responseText.trim()) {
+      return;
+    }
+
+    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+    if (!contentType.includes("application/json")) {
+      return;
+    }
+
+    try {
+      JSON.parse(responseText);
+      return;
+    } catch {
+      throw new HttpError(
+        502,
+        `Acumatica returned invalid JSON while deleting contact '${contactId}'.`,
+      );
+    }
+  }
 }
 
 export async function validateSessionWithAcumatica(

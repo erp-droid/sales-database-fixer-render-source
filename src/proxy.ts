@@ -8,7 +8,12 @@ export function proxy(request: NextRequest) {
   const hasSessionCookie = Boolean(request.cookies.get(authCookieName)?.value);
   const { pathname, search } = request.nextUrl;
 
-  if ((pathname.startsWith("/accounts") || pathname.startsWith("/map")) && !hasSessionCookie) {
+  if (
+    (pathname.startsWith("/accounts") ||
+      pathname.startsWith("/map") ||
+      pathname.startsWith("/quality")) &&
+    !hasSessionCookie
+  ) {
     const signInUrl = new URL("/signin", request.url);
     signInUrl.searchParams.set("next", `${pathname}${search}`);
     return NextResponse.redirect(signInUrl);
@@ -18,5 +23,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/accounts/:path*", "/map/:path*", "/signin"],
+  matcher: ["/accounts/:path*", "/map/:path*", "/quality/:path*", "/signin"],
 };

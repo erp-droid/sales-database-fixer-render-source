@@ -15,6 +15,8 @@ import {
   hasAddressChanges,
   hasPrimaryContactChanges,
   normalizeBusinessAccount,
+  normalizeBusinessAccountRows,
+  sanitizeNullableInput,
   withPrimaryContact,
 } from "@/lib/business-accounts";
 import {
@@ -22,6 +24,7 @@ import {
   validateCanadianAddress,
 } from "@/lib/address-complete";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { normalizePhoneForSave } from "@/lib/phone";
 import { parseUpdatePayload } from "@/lib/validation";
 
 type RouteContext = {
@@ -42,6 +45,89 @@ function readWrappedString(record: unknown, key: string): string | null {
 
   const value = (field as Record<string, unknown>).value;
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readWrappedNumber(record: unknown, key: string): number | null {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  const field = (record as Record<string, unknown>)[key];
+  if (!field || typeof field !== "object") {
+    return null;
+  }
+
+  const value = (field as Record<string, unknown>).value;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function readPrimaryContactIdFromRawAccount(rawAccount: unknown): number | null {
+  if (!rawAccount || typeof rawAccount !== "object") {
+    return null;
+  }
+
+  const primary = (rawAccount as Record<string, unknown>).PrimaryContact;
+  return (
+    readWrappedNumber(primary, "ContactID") ??
+    readWrappedNumber(rawAccount, "PrimaryContactID") ??
+    readWrappedNumber(rawAccount, "MainContactID")
+  );
+}
+
+function buildPrimaryContactFallbackPayloads(
+  rawAccount: unknown,
+  targetContactId: number,
+): Array<Record<string, unknown>> {
+  const primaryRecordId =
+    rawAccount && typeof rawAccount === "object"
+      ? (() => {
+          const primary = (rawAccount as Record<string, unknown>).PrimaryContact;
+          if (!primary || typeof primary !== "object") {
+            return null;
+          }
+          const rawId = (primary as Record<string, unknown>).id;
+          return typeof rawId === "string" && rawId.trim() ? rawId.trim() : null;
+        })()
+      : null;
+
+  return [
+    {
+      PrimaryContact: {
+        ...(primaryRecordId ? { id: primaryRecordId } : {}),
+        ContactID: {
+          value: targetContactId,
+        },
+      },
+    },
+    {
+      PrimaryContact: {
+        value: String(targetContactId),
+      },
+    },
+    {
+      MainContact: {
+        value: String(targetContactId),
+      },
+    },
+    {
+      MainContact: {
+        ContactID: {
+          value: targetContactId,
+        },
+      },
+    },
+    {
+      PrimaryContactID: {
+        value: targetContactId,
+      },
+    },
+    {
+      MainContactID: {
+        value: targetContactId,
+      },
+    },
+  ];
 }
 
 function resolveBusinessAccountRecordId(rawAccount: unknown, fallbackId: string): string {
@@ -166,8 +252,9 @@ export async function GET(
       rawAccount,
       authCookieRefresh,
     );
+    const normalizedRows = normalizeBusinessAccountRows(rawAccount);
 
-    const response = NextResponse.json({ row: normalized });
+    const response = NextResponse.json({ row: normalized, rows: normalizedRows });
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
     }
@@ -197,8 +284,9 @@ export async function GET(
           rawAccount,
           retryAuthCookieRefresh,
         );
+        const normalizedRows = normalizeBusinessAccountRows(rawAccount);
 
-        const response = NextResponse.json({ row: normalized });
+        const response = NextResponse.json({ row: normalized, rows: normalizedRows });
         if (retryAuthCookieRefresh.value) {
           setAuthCookie(response, retryAuthCookieRefresh.value);
         } else if (authCookieRefresh.value) {
@@ -260,12 +348,51 @@ export async function PUT(
       currentRaw,
       authCookieRefresh,
     );
-    const currentRow = current;
+    const currentAccountRow = current;
+
+    const requestedTargetContactId = updateRequest.targetContactId;
+    const effectiveTargetContactId =
+      requestedTargetContactId ??
+      currentAccountRow.contactId ??
+      currentAccountRow.primaryContactId;
+
+    let currentRowForContactComparison = currentAccountRow;
+    if (effectiveTargetContactId !== null) {
+      try {
+        const currentTargetContact = await fetchContactById(
+          cookieValue,
+          effectiveTargetContactId,
+          authCookieRefresh,
+        );
+        const normalizedTargetRow = normalizeBusinessAccount(
+          withPrimaryContact(currentRaw, currentTargetContact),
+        );
+        currentRowForContactComparison = {
+          ...currentAccountRow,
+          ...normalizedTargetRow,
+          id: currentAccountRow.id,
+          accountRecordId: currentAccountRow.accountRecordId ?? currentAccountRow.id,
+          rowKey: `${currentAccountRow.accountRecordId ?? currentAccountRow.id}:contact:${effectiveTargetContactId}`,
+          contactId: effectiveTargetContactId,
+          isPrimaryContact:
+            currentAccountRow.primaryContactId !== null &&
+            currentAccountRow.primaryContactId === effectiveTargetContactId,
+          primaryContactId: currentAccountRow.primaryContactId,
+        };
+      } catch (contactError) {
+        if (
+          contactError instanceof HttpError &&
+          (contactError.status === 401 || contactError.status === 403)
+        ) {
+          throw contactError;
+        }
+      }
+    }
 
     if (
       updateRequest.expectedLastModified &&
-      currentRow.lastModifiedIso &&
-      updateRequest.expectedLastModified !== currentRow.lastModifiedIso
+      currentAccountRow.lastModifiedIso &&
+      updateRequest.expectedLastModified !== currentAccountRow.lastModifiedIso
     ) {
       return NextResponse.json(
         {
@@ -276,14 +403,39 @@ export async function PUT(
       );
     }
 
-    const contactWasEdited = hasPrimaryContactChanges(currentRow, updateRequest);
-    const addressWasEdited = hasAddressChanges(currentRow, updateRequest);
+    const contactWasEdited = hasPrimaryContactChanges(
+      currentRowForContactComparison,
+      updateRequest,
+    );
+    const addressWasEdited = hasAddressChanges(currentAccountRow, updateRequest);
 
     let effectiveUpdateRequest = updateRequest;
+    const submittedPhoneChanged =
+      sanitizeNullableInput(updateRequest.primaryContactPhone) !==
+      sanitizeNullableInput(currentRowForContactComparison.primaryContactPhone);
+
+    if (submittedPhoneChanged) {
+      const normalizedPhone = normalizePhoneForSave(updateRequest.primaryContactPhone);
+      if (updateRequest.primaryContactPhone !== null && normalizedPhone === null) {
+        return NextResponse.json(
+          {
+            error: "Primary contact phone must use the format ###-###-####.",
+          },
+          { status: 422 },
+        );
+      }
+
+      effectiveUpdateRequest = {
+        ...effectiveUpdateRequest,
+        primaryContactPhone: normalizedPhone,
+      };
+    }
+
     if (addressWasEdited && shouldValidateWithAddressComplete(updateRequest)) {
       const normalizedAddress = await validateCanadianAddress(updateRequest);
       effectiveUpdateRequest = {
         ...updateRequest,
+        primaryContactPhone: effectiveUpdateRequest.primaryContactPhone,
         ...normalizedAddress,
       };
     }
@@ -301,16 +453,26 @@ export async function PUT(
     if (!effectiveUpdateRequest.salesRepId && !effectiveUpdateRequest.salesRepName) {
       effectiveUpdateRequest = {
         ...effectiveUpdateRequest,
-        salesRepId: currentRow.salesRepId,
-        salesRepName: currentRow.salesRepName,
+        salesRepId: currentAccountRow.salesRepId,
+        salesRepName: currentAccountRow.salesRepName,
       };
     }
 
-    if (contactWasEdited && !currentRow.primaryContactId) {
+    if (effectiveUpdateRequest.setAsPrimaryContact && effectiveTargetContactId === null) {
       return NextResponse.json(
         {
           error:
-            "Primary contact is missing on this account. Contact fields are read-only until a primary contact exists in Acumatica.",
+            "This row has no contact ID, so it cannot be set as primary.",
+        },
+        { status: 422 },
+      );
+    }
+
+    if (contactWasEdited && effectiveTargetContactId === null) {
+      return NextResponse.json(
+        {
+          error:
+            "Contact ID is missing on this row. Contact fields cannot be saved until the contact exists in Acumatica.",
         },
         { status: 422 },
       );
@@ -318,7 +480,10 @@ export async function PUT(
 
     const accountPayload = buildBusinessAccountUpdatePayload(
       currentRaw,
-      effectiveUpdateRequest,
+      {
+        ...effectiveUpdateRequest,
+        targetContactId: effectiveTargetContactId,
+      },
     );
     const identityPayload = buildBusinessAccountIdentityPayload(currentRaw);
     await updateBusinessAccount(
@@ -331,11 +496,60 @@ export async function PUT(
       authCookieRefresh,
     );
 
-    if (contactWasEdited && currentRow.primaryContactId) {
+    if (effectiveUpdateRequest.setAsPrimaryContact && effectiveTargetContactId !== null) {
+      let primaryVerificationRaw = await fetchBusinessAccountById(
+        cookieValue,
+        resolvedRecordId,
+        authCookieRefresh,
+      );
+      let verifiedPrimaryContactId = readPrimaryContactIdFromRawAccount(primaryVerificationRaw);
+
+      if (verifiedPrimaryContactId !== effectiveTargetContactId) {
+        const fallbackPayloads = buildPrimaryContactFallbackPayloads(
+          primaryVerificationRaw,
+          effectiveTargetContactId,
+        );
+
+        for (const fallbackPayload of fallbackPayloads) {
+          await updateBusinessAccount(
+            cookieValue,
+            updateIdentifiers,
+            {
+              ...identityPayload,
+              ...fallbackPayload,
+            },
+            authCookieRefresh,
+          );
+
+          primaryVerificationRaw = await fetchBusinessAccountById(
+            cookieValue,
+            resolvedRecordId,
+            authCookieRefresh,
+          );
+          verifiedPrimaryContactId = readPrimaryContactIdFromRawAccount(primaryVerificationRaw);
+
+          if (verifiedPrimaryContactId === effectiveTargetContactId) {
+            break;
+          }
+        }
+      }
+
+      if (verifiedPrimaryContactId !== effectiveTargetContactId) {
+        return NextResponse.json(
+          {
+            error:
+              "Acumatica accepted the update but did not switch the primary contact. Please sync records and try again.",
+          },
+          { status: 422 },
+        );
+      }
+    }
+
+    if (contactWasEdited && effectiveTargetContactId !== null) {
       const contactPayload = buildPrimaryContactUpdatePayload(effectiveUpdateRequest);
       await updateContact(
         cookieValue,
-        currentRow.primaryContactId,
+        effectiveTargetContactId,
         contactPayload,
         authCookieRefresh,
       );
@@ -346,13 +560,48 @@ export async function PUT(
       resolvedRecordId,
       authCookieRefresh,
     );
-    const refreshed = await normalizeWithContactNotes(
+    const refreshedAccountRow = await normalizeWithContactNotes(
       cookieValue,
       refreshedRaw,
       authCookieRefresh,
     );
 
-    const response = NextResponse.json(refreshed);
+    let responseRow = refreshedAccountRow;
+    const responseTargetContactId =
+      effectiveTargetContactId ?? refreshedAccountRow.primaryContactId;
+    if (responseTargetContactId !== null) {
+      try {
+        const refreshedTargetContact = await fetchContactById(
+          cookieValue,
+          responseTargetContactId,
+          authCookieRefresh,
+        );
+        const normalizedTargetRow = normalizeBusinessAccount(
+          withPrimaryContact(refreshedRaw, refreshedTargetContact),
+        );
+        responseRow = {
+          ...refreshedAccountRow,
+          ...normalizedTargetRow,
+          id: refreshedAccountRow.id,
+          accountRecordId: refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id,
+          rowKey: `${refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id}:contact:${responseTargetContactId}`,
+          contactId: responseTargetContactId,
+          isPrimaryContact:
+            refreshedAccountRow.primaryContactId !== null &&
+            refreshedAccountRow.primaryContactId === responseTargetContactId,
+          primaryContactId: refreshedAccountRow.primaryContactId,
+        };
+      } catch (contactError) {
+        if (
+          contactError instanceof HttpError &&
+          (contactError.status === 401 || contactError.status === 403)
+        ) {
+          throw contactError;
+        }
+      }
+    }
+
+    const response = NextResponse.json(responseRow);
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
     }

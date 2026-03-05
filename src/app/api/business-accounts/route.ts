@@ -3,20 +3,33 @@ import { ZodError } from "zod";
 
 import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
 import {
+  createBusinessAccount,
   fetchBusinessAccountById,
   fetchBusinessAccounts,
   fetchBusinessAccountsByBusinessAccountIds,
   fetchContactById,
   fetchContacts,
+  readWrappedScalarString,
 } from "@/lib/acumatica";
+import {
+  retrieveCanadaPostAddressCompleteAddress,
+  type AddressInput,
+} from "@/lib/address-complete";
+import {
+  buildBusinessAccountCreatePayload,
+  normalizeCreatedBusinessAccountRows,
+} from "@/lib/business-account-create";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import {
+  enforceSinglePrimaryPerAccountRows,
   normalizeBusinessAccount,
   normalizeBusinessAccountRows,
   queryBusinessAccounts,
+  selectPrimaryContactIndex,
 } from "@/lib/business-accounts";
 import type { BusinessAccountRow } from "@/types/business-account";
-import { parseListQuery } from "@/lib/validation";
+import type { BusinessAccountCreateResponse } from "@/types/business-account-create";
+import { parseBusinessAccountCreatePayload, parseListQuery } from "@/lib/validation";
 
 type AuthCookieRefresh = {
   value: string | null;
@@ -63,6 +76,79 @@ function readWrappedString(record: unknown, key: string): string | null {
 
   const value = (field as RawRecord).value;
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function hasStandaloneApToken(value: string | null | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+
+  return /(?:^|[^a-z0-9])ap(?:$|[^a-z0-9])/i.test(value);
+}
+
+function shouldExcludeContactByApToken(contact: unknown): boolean {
+  const candidates = [
+    readWrappedString(contact, "DisplayName"),
+    readWrappedString(contact, "FullName"),
+    readWrappedString(contact, "ContactName"),
+    readWrappedString(contact, "Attention"),
+    readWrappedString(contact, "FirstName"),
+    readWrappedString(contact, "MiddleName"),
+    readWrappedString(contact, "LastName"),
+    readWrappedString(contact, "JobTitle"),
+    readWrappedString(contact, "Title"),
+  ];
+
+  return candidates.some((value) => hasStandaloneApToken(value));
+}
+
+function normalizeAccountType(value: string | null): string {
+  if (!value) {
+    return "";
+  }
+
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
+function isLikelyVendorClassId(value: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+
+  return (
+    normalized.includes("vendor") ||
+    normalized.includes("supplier") ||
+    normalized.includes("suppl") ||
+    normalized.startsWith("ven")
+  );
+}
+
+function isAllowedBusinessAccountType(record: unknown): boolean {
+  const normalizedType = normalizeAccountType(
+    readWrappedString(record, "Type") ??
+      readWrappedString(record, "TypeDescription"),
+  );
+  if (normalizedType) {
+    return normalizedType === "customer" || normalizedType === "businessaccount";
+  }
+
+  const classId =
+    readWrappedString(record, "ClassID") ??
+    readWrappedString(record, "BusinessAccountClass");
+  if (isLikelyVendorClassId(classId)) {
+    return false;
+  }
+
+  // Keep records when type is absent so we don't drop the entire dataset.
+  return true;
 }
 
 function readContactDisplayName(record: unknown): string | null {
@@ -182,6 +268,14 @@ function pickFirstText(values: Array<string | null | undefined>): string | null 
   return null;
 }
 
+function normalizeBusinessAccountCode(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+
+  return value.trim().toUpperCase();
+}
+
 function readBusinessAccountCode(record: unknown): string | null {
   return (
     readWrappedString(record, "BusinessAccountID") ??
@@ -196,6 +290,39 @@ function readContactPhone(record: unknown): string | null {
     readWrappedString(record, "Phone2") ??
     readWrappedString(record, "Phone3")
   );
+}
+
+function readCreatedBusinessAccountIdentifiers(rawAccount: unknown): {
+  businessAccountRecordId: string | null;
+  businessAccountId: string | null;
+} {
+  const businessAccountRecordId = readRecordIdentity(rawAccount);
+  const businessAccountId =
+    readWrappedString(rawAccount, "BusinessAccountID") ??
+    readWrappedString(rawAccount, "BAccountID") ??
+    readWrappedString(rawAccount, "AccountCD") ??
+    readWrappedScalarString(rawAccount, "BusinessAccountID") ??
+    readWrappedScalarString(rawAccount, "BAccountID") ??
+    readWrappedScalarString(rawAccount, "AccountCD") ??
+    null;
+
+  return {
+    businessAccountRecordId,
+    businessAccountId: businessAccountId?.trim() || null,
+  };
+}
+
+function buildAccountCreateFallbackAddress(
+  payload: ReturnType<typeof parseBusinessAccountCreatePayload>,
+): AddressInput {
+  return {
+    addressLine1: payload.addressLine1,
+    addressLine2: payload.addressLine2,
+    city: payload.city,
+    state: payload.state,
+    postalCode: payload.postalCode,
+    country: "CA",
+  };
 }
 
 function buildFallbackRowFromContact(contact: unknown, index: number): BusinessAccountRow {
@@ -250,15 +377,43 @@ function buildSyncRowsFromContacts(
   const accountByBusinessId = new Map<string, unknown>();
   rawAccounts.forEach((account) => {
     const businessId = readBusinessAccountCode(account);
-    if (businessId) {
-      accountByBusinessId.set(businessId, account);
+    const normalizedBusinessId = normalizeBusinessAccountCode(businessId);
+    if (normalizedBusinessId) {
+      accountByBusinessId.set(normalizedBusinessId, account);
     }
   });
 
-  const rows: BusinessAccountRow[] = rawContacts.map((contact, index) => {
+  type PreparedSyncRow = {
+    row: BusinessAccountRow;
+    accountKey: string;
+    hint: {
+      contactId: number | null;
+      recordId: string | null;
+      email: string | null;
+      name: string | null;
+    };
+    candidate: {
+      contactId: number | null;
+      recordId: string | null;
+      email: string | null;
+      name: string | null;
+      rowNumber: number | null;
+    };
+    basePrimary: {
+      name: string | null;
+      phone: string | null;
+      email: string | null;
+      notes: string | null;
+    };
+  };
+
+  const preparedRows: PreparedSyncRow[] = rawContacts.map((contact, index) => {
     const businessAccountCode = readWrappedString(contact, "BusinessAccount");
+    const normalizedBusinessAccountCode = normalizeBusinessAccountCode(
+      businessAccountCode,
+    );
     const rawAccount = businessAccountCode
-      ? accountByBusinessId.get(businessAccountCode)
+      ? accountByBusinessId.get(normalizedBusinessAccountCode)
       : undefined;
 
     const base = rawAccount
@@ -280,34 +435,10 @@ function buildSyncRowsFromContacts(
     const contactEmail = readContactEmail(contact);
     const contactNotes = readWrappedString(contact, "note");
     const contactRecordId = readRecordIdentity(contact);
-    const isPrimaryById =
-      primaryContactId !== null &&
-      contactId !== null &&
-      primaryContactId === contactId;
-    const isPrimaryByRecordId =
-      !isPrimaryById &&
-      hasText(primaryRecordId) &&
-      hasText(contactRecordId) &&
-      normalizeComparable(primaryRecordId) === normalizeComparable(contactRecordId);
-    const isPrimaryByEmail =
-      !isPrimaryById &&
-      !isPrimaryByRecordId &&
-      hasText(primaryContactEmail) &&
-      hasText(contactEmail) &&
-      normalizeComparable(primaryContactEmail) === normalizeComparable(contactEmail);
-    const isPrimaryByName =
-      !isPrimaryById &&
-      !isPrimaryByRecordId &&
-      !isPrimaryByEmail &&
-      hasText(primaryContactName) &&
-      hasText(contactName) &&
-      normalizeComparable(primaryContactName) === normalizeComparable(contactName);
-    const isPrimaryContact =
-      isPrimaryById || isPrimaryByRecordId || isPrimaryByEmail || isPrimaryByName;
 
-    return {
+    const row: BusinessAccountRow = {
       ...base,
-      rowKey: `${base.accountRecordId ?? base.id}:contact:${contactId ?? index}`,
+      rowKey: `${base.accountRecordId ?? base.id}:contact:${contactId ?? contactRecordId ?? index}`,
       accountRecordId: base.accountRecordId ?? base.id,
       businessAccountId: businessAccountCode ?? base.businessAccountId,
       companyName:
@@ -318,25 +449,123 @@ function buildSyncRowsFromContacts(
           contactName,
         ]) ?? "Unknown company",
       contactId,
-      isPrimaryContact,
-      primaryContactName: pickFirstText([
-        contactName,
-        isPrimaryContact ? base.primaryContactName : null,
-      ]),
-      primaryContactPhone: pickFirstText([
-        contactPhone,
-        isPrimaryContact ? base.primaryContactPhone : null,
-      ]),
-      primaryContactEmail: pickFirstText([
-        contactEmail,
-        isPrimaryContact ? base.primaryContactEmail : null,
-      ]),
-      notes: pickFirstText([contactNotes, isPrimaryContact ? base.notes : null]),
+      isPrimaryContact: false,
+      primaryContactName: pickFirstText([contactName]),
+      primaryContactPhone: pickFirstText([contactPhone]),
+      primaryContactEmail: pickFirstText([contactEmail]),
+      notes: pickFirstText([contactNotes]),
       phoneNumber: pickFirstText([base.phoneNumber, contactPhone, base.primaryContactPhone]),
+      primaryContactId: primaryContactId ?? base.primaryContactId,
+    };
+
+    return {
+      row,
+      accountKey:
+        (base.accountRecordId ?? "").trim() ||
+        base.id.trim() ||
+        (businessAccountCode ?? "").trim() ||
+        base.businessAccountId.trim() ||
+        base.companyName.trim() ||
+        `row-${index}`,
+      hint: {
+        contactId: primaryContactId,
+        recordId: primaryRecordId,
+        email: primaryContactEmail,
+        name: primaryContactName,
+      },
+      candidate: {
+        contactId,
+        recordId: contactRecordId,
+        email: contactEmail,
+        name: contactName,
+        rowNumber: readWrappedNumber(contact, "rowNumber"),
+      },
+      basePrimary: {
+        name: base.primaryContactName,
+        phone: base.primaryContactPhone,
+        email: base.primaryContactEmail,
+        notes: base.notes,
+      },
     };
   });
 
-  return rows.filter(
+  const rowsByAccount = new Map<string, number[]>();
+  preparedRows.forEach((preparedRow, index) => {
+    const key = preparedRow.accountKey;
+    const existing = rowsByAccount.get(key);
+    if (existing) {
+      existing.push(index);
+    } else {
+      rowsByAccount.set(key, [index]);
+    }
+  });
+
+  rowsByAccount.forEach((rowIndexes) => {
+    if (rowIndexes.length === 0) {
+      return;
+    }
+
+    const hint = preparedRows[rowIndexes[0]]?.hint ?? {
+      contactId: null,
+      recordId: null,
+      email: null,
+      name: null,
+    };
+
+    const candidates = rowIndexes.map((rowIndex, candidateIndex) => {
+      const candidate = preparedRows[rowIndex]?.candidate ?? {
+        contactId: null,
+        recordId: null,
+        email: null,
+        name: null,
+        rowNumber: null,
+      };
+      return {
+        contactId: candidate.contactId,
+        recordId: candidate.recordId,
+        email: candidate.email,
+        name: candidate.name,
+        rowNumber: candidate.rowNumber,
+        index: candidateIndex,
+      };
+    });
+
+    const selectedLocalIndex = selectPrimaryContactIndex(candidates, hint);
+    if (selectedLocalIndex === null) {
+      return;
+    }
+
+    const selectedRowIndex = rowIndexes[selectedLocalIndex];
+    const selectedPrepared = preparedRows[selectedRowIndex];
+    if (!selectedPrepared) {
+      return;
+    }
+
+    preparedRows[selectedRowIndex] = {
+      ...selectedPrepared,
+      row: {
+        ...selectedPrepared.row,
+      isPrimaryContact: true,
+      primaryContactName: pickFirstText([
+          selectedPrepared.row.primaryContactName,
+          selectedPrepared.basePrimary.name,
+      ]),
+      primaryContactPhone: pickFirstText([
+          selectedPrepared.row.primaryContactPhone,
+          selectedPrepared.basePrimary.phone,
+      ]),
+      primaryContactEmail: pickFirstText([
+          selectedPrepared.row.primaryContactEmail,
+          selectedPrepared.basePrimary.email,
+      ]),
+        notes: pickFirstText([selectedPrepared.row.notes, selectedPrepared.basePrimary.notes]),
+      },
+    };
+  });
+
+  const cleanedRows = preparedRows.map((prepared) => prepared.row);
+
+  return enforceSinglePrimaryPerAccountRows(cleanedRows).filter(
     (row) =>
       Boolean(
         row.id ||
@@ -521,7 +750,11 @@ async function queryAccountsWithCookie(
     authCookieRefresh,
   );
 
-  const normalizedRows = rawAccounts
+  const allowedRawAccounts = rawAccounts.filter((account) =>
+    isAllowedBusinessAccountType(account),
+  );
+
+  const normalizedRows = allowedRawAccounts
     .flatMap((item) => normalizeBusinessAccountRows(item))
     .filter((item) => Boolean(item.id || item.businessAccountId || item.companyName));
   const queried = queryBusinessAccounts(normalizedRows, {
@@ -558,7 +791,7 @@ async function querySyncBatchWithCookie(
   const pageSize = Math.max(1, params.pageSize);
   const skip = (page - 1) * pageSize;
 
-  const rawContacts = await fetchContacts(
+  const rawContactsPage = await fetchContacts(
     cookieValue,
     {
       batchSize: pageSize,
@@ -566,6 +799,9 @@ async function querySyncBatchWithCookie(
       initialSkip: skip,
     },
     authCookieRefresh,
+  );
+  const rawContacts = rawContactsPage.filter(
+    (contact) => !shouldExcludeContactByApToken(contact),
   );
 
   const businessAccountIds = rawContacts
@@ -578,16 +814,37 @@ async function querySyncBatchWithCookie(
     authCookieRefresh,
   );
 
-  const normalizedRows = buildSyncRowsFromContacts(rawContacts, rawAccounts);
+  const accountTypeByBusinessId = new Map<string, "allowed" | "blocked">();
+  rawAccounts.forEach((account) => {
+    const businessId = readBusinessAccountCode(account);
+    const normalizedBusinessId = normalizeBusinessAccountCode(businessId);
+    if (!normalizedBusinessId) {
+      return;
+    }
+
+    accountTypeByBusinessId.set(
+      normalizedBusinessId,
+      isAllowedBusinessAccountType(account) ? "allowed" : "blocked",
+    );
+  });
+
+  const normalizedRows = buildSyncRowsFromContacts(rawContacts, rawAccounts).filter((row) => {
+    const normalizedBusinessId = normalizeBusinessAccountCode(row.businessAccountId);
+    if (!normalizedBusinessId) {
+      return false;
+    }
+
+    return accountTypeByBusinessId.get(normalizedBusinessId) === "allowed";
+  });
   const queried = queryBusinessAccounts(normalizedRows, {
     ...params,
     page: 1,
     pageSize: Math.max(1, normalizedRows.length),
   });
-  const hasMore = rawContacts.length === pageSize;
+  const hasMore = rawContactsPage.length === pageSize;
   const estimatedTotal = hasMore
-    ? skip + rawContacts.length + pageSize
-    : skip + rawContacts.length;
+    ? skip + rawContactsPage.length + pageSize
+    : skip + rawContactsPage.length;
 
   return {
     items: queried.items,
@@ -596,6 +853,131 @@ async function querySyncBatchWithCookie(
     pageSize,
     hasMore,
   };
+}
+
+export async function POST(request: NextRequest): Promise<NextResponse> {
+  const authCookieRefresh: AuthCookieRefresh = { value: null };
+
+  try {
+    const cookieValue = requireAuthCookieValue(request);
+    const body = await request.json().catch(() => {
+      throw new HttpError(400, "Request body must be valid JSON.");
+    });
+    const createRequest = parseBusinessAccountCreatePayload(body);
+
+    const normalizedAddress = await retrieveCanadaPostAddressCompleteAddress({
+      id: createRequest.addressLookupId,
+      fallback: buildAccountCreateFallbackAddress(createRequest),
+    });
+
+    const effectiveRequest = {
+      ...createRequest,
+      addressLine1: normalizedAddress.addressLine1,
+      addressLine2: createRequest.addressLine2,
+      city: normalizedAddress.city,
+      state: normalizedAddress.state,
+      postalCode: normalizedAddress.postalCode,
+      country: "CA" as const,
+    };
+
+    const createdRaw = await createBusinessAccount(
+      cookieValue,
+      buildBusinessAccountCreatePayload(effectiveRequest),
+      authCookieRefresh,
+    );
+
+    let identifiers = readCreatedBusinessAccountIdentifiers(createdRaw);
+    const warnings: string[] = [];
+    let accountSource = createdRaw;
+    if (identifiers.businessAccountRecordId || identifiers.businessAccountId) {
+      try {
+        const refetchIdentifier =
+          identifiers.businessAccountRecordId || identifiers.businessAccountId;
+        if (!refetchIdentifier) {
+          throw new HttpError(500, "Created account identifier is missing.");
+        }
+        accountSource = await fetchBusinessAccountById(
+          cookieValue,
+          refetchIdentifier,
+          authCookieRefresh,
+        );
+        const refreshedIdentifiers = readCreatedBusinessAccountIdentifiers(accountSource);
+        identifiers = {
+          businessAccountRecordId:
+            refreshedIdentifiers.businessAccountRecordId ?? identifiers.businessAccountRecordId,
+          businessAccountId:
+            refreshedIdentifiers.businessAccountId ?? identifiers.businessAccountId,
+        };
+      } catch {
+        warnings.push(
+          "Business account was created, but the app could not refresh the full record. Sync records if details look incomplete.",
+        );
+      }
+    }
+
+    if (!identifiers.businessAccountId) {
+      throw new HttpError(
+        502,
+        "Acumatica created the account but did not return a Business Account ID.",
+      );
+    }
+
+    const accountRows = normalizeCreatedBusinessAccountRows(accountSource);
+    const createdRow =
+      accountRows.find((row) => (row.accountRecordId ?? row.id) === identifiers.businessAccountRecordId) ??
+      accountRows[0];
+
+    if (!createdRow) {
+      throw new HttpError(
+        502,
+        "Acumatica created the account but the app could not normalize the created record.",
+      );
+    }
+
+    const responseBody: BusinessAccountCreateResponse = {
+      created: true,
+      businessAccountRecordId:
+        identifiers.businessAccountRecordId ?? createdRow.accountRecordId ?? createdRow.id,
+      businessAccountId: identifiers.businessAccountId,
+      accountRows,
+      createdRow,
+      warnings,
+    };
+
+    const response = NextResponse.json(responseBody, { status: 201 });
+    if (authCookieRefresh.value) {
+      setAuthCookie(response, authCookieRefresh.value);
+    }
+
+    return response;
+  } catch (error) {
+    let response: NextResponse;
+    if (error instanceof ZodError) {
+      response = NextResponse.json(
+        {
+          error: "Invalid create payload",
+          details: error.flatten(),
+        },
+        { status: 400 },
+      );
+    } else if (error instanceof HttpError) {
+      response = NextResponse.json(
+        {
+          error: error.message,
+          details: error.details,
+        },
+        { status: error.status },
+      );
+    } else {
+      response = NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+    }
+
+    if (authCookieRefresh.value) {
+      setAuthCookie(response, authCookieRefresh.value);
+    }
+
+    return response;
+  }
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {

@@ -29,6 +29,77 @@ function normalizeText(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function normalizeAccountType(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const wrappedValue = (value as Record<string, unknown>).value;
+  if (typeof wrappedValue !== "string") {
+    return "";
+  }
+
+  return wrappedValue
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
+function readWrappedString(record: unknown, key: string): string | null {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  const field = (record as Record<string, unknown>)[key];
+  if (!field || typeof field !== "object") {
+    return null;
+  }
+
+  const value = (field as Record<string, unknown>).value;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function isLikelyVendorClassId(value: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+
+  return (
+    normalized.includes("vendor") ||
+    normalized.includes("supplier") ||
+    normalized.includes("suppl") ||
+    normalized.startsWith("ven")
+  );
+}
+
+function isAllowedBusinessAccountType(record: unknown): boolean {
+  if (!record || typeof record !== "object") {
+    return false;
+  }
+
+  const typeField = (record as Record<string, unknown>).Type;
+  const normalizedType =
+    normalizeAccountType(typeField) ||
+    normalizeAccountType((record as Record<string, unknown>).TypeDescription);
+  if (normalizedType) {
+    return normalizedType === "customer" || normalizedType === "businessaccount";
+  }
+
+  const classId =
+    readWrappedString(record, "ClassID") ??
+    readWrappedString(record, "BusinessAccountClass");
+  if (isLikelyVendorClassId(classId)) {
+    return false;
+  }
+
+  return true;
+}
+
 function buildAddressKey(parts: {
   addressLine1: string;
   addressLine2: string;
@@ -99,9 +170,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const syncedAt = request.nextUrl.searchParams.get("syncedAt")?.trim() ?? "";
     const normalizedSearch = normalizeText(q);
     const limit = clamp(
-      Number(request.nextUrl.searchParams.get("limit") ?? "350"),
+      Number(request.nextUrl.searchParams.get("limit") ?? "600"),
       1,
-      1500,
+      5000,
     );
     const cacheKey = `${limit}|${normalizedSearch}|${syncedAt}`;
 
@@ -122,7 +193,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           const rawAccounts = await fetchBusinessAccounts(
             cookieValue,
             {
-              maxRecords: Math.max(limit, Math.min(limit * 2, 2200)),
+              maxRecords: Math.max(limit, Math.min(limit * 4, 10000)),
               batchSize: 150,
               ensureMainAddress: true,
               ensurePrimaryContact: true,
@@ -133,6 +204,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           );
 
           const normalizedRows = rawAccounts
+            .filter((account) => isAllowedBusinessAccountType(account))
             .map((item) => normalizeBusinessAccount(item))
             .filter((row) => Boolean(row.id && row.addressLine1 && row.city));
 

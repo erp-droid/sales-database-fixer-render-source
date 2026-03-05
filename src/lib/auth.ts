@@ -320,11 +320,24 @@ export function normalizeSessionUser(payload: unknown): {
     record.employeeId;
 
   const nameCandidate =
-    record.name ??
-    (record.user as Record<string, unknown> | undefined)?.name ??
-    (record.User as Record<string, unknown> | undefined)?.name ??
     record.displayName ??
-    record.username;
+    record.DisplayName ??
+    record.fullName ??
+    record.FullName ??
+    record.name ??
+    (record.user as Record<string, unknown> | undefined)?.displayName ??
+    (record.user as Record<string, unknown> | undefined)?.DisplayName ??
+    (record.user as Record<string, unknown> | undefined)?.fullName ??
+    (record.user as Record<string, unknown> | undefined)?.FullName ??
+    (record.user as Record<string, unknown> | undefined)?.name ??
+    (record.User as Record<string, unknown> | undefined)?.displayName ??
+    (record.User as Record<string, unknown> | undefined)?.DisplayName ??
+    (record.User as Record<string, unknown> | undefined)?.fullName ??
+    (record.User as Record<string, unknown> | undefined)?.FullName ??
+    (record.User as Record<string, unknown> | undefined)?.name ??
+    record.username ??
+    record.UserName ??
+    record.login;
 
   if (idCandidate == null && nameCandidate == null) {
     return null;
