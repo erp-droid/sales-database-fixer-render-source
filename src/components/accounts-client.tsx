@@ -148,6 +148,7 @@ const COLUMN_VISIBILITY_STORAGE_KEY = "businessAccounts.visibleColumns.v2";
 const LEGACY_COLUMN_VISIBILITY_STORAGE_KEYS = [
   "businessAccounts.visibleColumns.v1",
 ] as const;
+const COLUMN_PREF_RESET_STORAGE_KEY = "businessAccounts.resetColumnsOnNextLoad.v1";
 
 type AttributeOption = {
   value: string;
@@ -256,7 +257,23 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
   },
 ];
 
-const DEFAULT_COLUMN_ORDER = COLUMN_CONFIGS.map((column) => column.id);
+const DEFAULT_VISIBLE_COLUMNS: SortBy[] = [
+  "companyName",
+  "address",
+  "companyPhone",
+  "primaryContactName",
+  "primaryContactPhone",
+  "primaryContactEmail",
+  "notes",
+  "category",
+];
+
+const DEFAULT_COLUMN_ORDER: SortBy[] = [
+  ...DEFAULT_VISIBLE_COLUMNS,
+  ...COLUMN_CONFIGS.map((column) => column.id).filter(
+    (columnId) => !DEFAULT_VISIBLE_COLUMNS.includes(columnId),
+  ),
+];
 
 const CATEGORY_OPTIONS: AttributeOption[] = [
   { value: "A", label: "A - Type Customers", aliases: ["A - Type Clients"] },
@@ -1283,7 +1300,7 @@ export function AccountsClient({
     DEFAULT_HEADER_FILTERS,
   );
   const [columnOrder, setColumnOrder] = useState<SortBy[]>(DEFAULT_COLUMN_ORDER);
-  const [visibleColumns, setVisibleColumns] = useState<SortBy[]>(DEFAULT_COLUMN_ORDER);
+  const [visibleColumns, setVisibleColumns] = useState<SortBy[]>(DEFAULT_VISIBLE_COLUMNS);
   const [columnPrefsHydrated, setColumnPrefsHydrated] = useState(false);
   const [draggedColumn, setDraggedColumn] = useState<SortBy | null>(null);
   const [sortBy, setSortBy] = useState<SortBy>("companyName");
@@ -1556,6 +1573,29 @@ export function AccountsClient({
   }, [isSyncing, syncStartedAt]);
 
   useEffect(() => {
+    const shouldResetColumnPrefs =
+      window.sessionStorage.getItem(COLUMN_PREF_RESET_STORAGE_KEY) === "1";
+    if (shouldResetColumnPrefs) {
+      const columnStorageCandidates = [COLUMN_STORAGE_KEY, ...LEGACY_COLUMN_STORAGE_KEYS];
+      for (const key of columnStorageCandidates) {
+        window.localStorage.removeItem(key);
+      }
+
+      const columnVisibilityCandidates = [
+        COLUMN_VISIBILITY_STORAGE_KEY,
+        ...LEGACY_COLUMN_VISIBILITY_STORAGE_KEYS,
+      ];
+      for (const key of columnVisibilityCandidates) {
+        window.localStorage.removeItem(key);
+      }
+
+      setColumnOrder(DEFAULT_COLUMN_ORDER);
+      setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
+      window.sessionStorage.removeItem(COLUMN_PREF_RESET_STORAGE_KEY);
+      setColumnPrefsHydrated(true);
+      return;
+    }
+
     const columnStorageCandidates = [COLUMN_STORAGE_KEY, ...LEGACY_COLUMN_STORAGE_KEYS];
     for (const key of columnStorageCandidates) {
       try {

@@ -94,6 +94,17 @@ For the current architecture, the simplest production setup is a single Dockeriz
 - Also works: Render or Fly.io with the same volume pattern
 - Poor fit right now: Vercel, because this app writes server state to local files (`SQLite` plus data-quality history)
 
+### Team Use
+
+The app can be shared with a team and support concurrent use, but with one important constraint:
+
+- Run a single application instance with one attached persistent volume
+- Do not scale to multiple replicas while the app uses local SQLite and local history files
+- Each user can sign in separately and use the existing API routes
+- Concurrent edits to the same record are guarded by stale-write protection; conflicting updates return `409` and require a reload
+
+For an internal team of roughly 20 users, the current architecture is a single-instance deployment problem, not a multi-replica deployment problem.
+
 Recommended production environment values:
 
 ```bash
@@ -109,6 +120,8 @@ RAILWAY_RUN_UID=0
 ```
 
 Railway mounts volumes as `root`, and their docs note that non-root Docker images need this override to write to the attached volume.
+
+You can use `/api/health` as a basic healthcheck endpoint after deployment.
 
 Build and run locally with Docker:
 

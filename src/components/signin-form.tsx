@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import styles from "@/app/signin/signin.module.css";
 
 const REMEMBER_PASSWORD_STORAGE_KEY = "businessAccounts.rememberPassword.v1";
+const COLUMN_PREF_RESET_STORAGE_KEY = "businessAccounts.resetColumnsOnNextLoad.v1";
 const SESSION_CHECK_TIMEOUT_MS = 6000;
 const LOGIN_TIMEOUT_MS = 20000;
 
@@ -174,6 +175,7 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
         window.localStorage.removeItem(REMEMBER_PASSWORD_STORAGE_KEY);
       }
 
+      window.sessionStorage.setItem(COLUMN_PREF_RESET_STORAGE_KEY, "1");
       router.replace(nextPath);
       router.refresh();
     } catch (submitError) {
