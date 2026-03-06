@@ -282,6 +282,16 @@
   font-weight: 700;
 }
 
+.recordLink {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.recordLink:hover {
+  color: var(--accent-strong);
+}
+
 .netNegative {
   color: var(--danger);
   font-weight: 700;

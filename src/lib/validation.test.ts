@@ -113,6 +113,28 @@ describe("parseUpdatePayload", () => {
     expect(parsed.country).toBe("CA");
   });
 
+  it("defaults primaryOnlyIntent to false", () => {
+    const parsed = parseUpdatePayload(validPayload);
+    expect(parsed.primaryOnlyIntent).toBe(false);
+  });
+
+  it("parses primaryOnlyIntent when provided", () => {
+    const parsed = parseUpdatePayload({
+      ...validPayload,
+      primaryOnlyIntent: true,
+      setAsPrimaryContact: true,
+      targetContactId: 157315,
+      assignedBusinessAccountRecordId: "account-1",
+      assignedBusinessAccountId: "B20266",
+    });
+
+    expect(parsed.primaryOnlyIntent).toBe(true);
+    expect(parsed.setAsPrimaryContact).toBe(true);
+    expect(parsed.targetContactId).toBe(157315);
+    expect(parsed.assignedBusinessAccountRecordId).toBe("account-1");
+    expect(parsed.assignedBusinessAccountId).toBe("B20266");
+  });
+
   it("rejects invalid category", () => {
     expect(() =>
       parseUpdatePayload({

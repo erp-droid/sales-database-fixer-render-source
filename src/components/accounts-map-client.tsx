@@ -15,7 +15,17 @@ import type {
   PostalRegion,
   PostalRegionsResponse,
 } from "@/types/business-account";
+import {
+  buildAcumaticaBusinessAccountUrl,
+  buildAcumaticaContactUrl,
+} from "@/lib/acumatica-links";
 import { enforceSinglePrimaryPerAccountRows } from "@/lib/business-accounts";
+import {
+  emitDatasetUpdated,
+  getMemoryCachedDataset,
+  readCachedSyncMeta,
+  setMemoryCachedDataset,
+} from "@/lib/client-dataset-cache";
 import { formatPhoneDraftValue, normalizePhoneForSave } from "@/lib/phone";
 
 import styles from "./accounts-map-client.module.css";
@@ -32,18 +42,8 @@ type SessionResponse = {
 
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
 const DEFAULT_LIMIT = 600;
-const MAX_LIMIT = 5000;
-const DATASET_STORAGE_KEYS = [
-  "businessAccounts.dataset.v3",
-  "businessAccounts.dataset.v2",
-  "businessAccounts.dataset.v1",
-] as const;
 const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v3";
 const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
-const GEOCODE_CACHE_STORAGE_KEY = "businessAccounts.geocodeCache.v1";
-const GEOCODE_TIMEOUT_MS = 3500;
-const GEOCODE_CONCURRENCY = 8;
-const GEOCODE_CACHE_MAX_ENTRIES = 20000;
 
 const MAP_DETAIL_FIELD_KEYS = [
   "fullAddress",
@@ -86,16 +86,6 @@ type CachedMapResponse = {
   payload: BusinessAccountMapResponse;
 };
 
-type GeocodeProvider = "nominatim" | "arcgis";
-
-type CachedGeocodeEntry = {
-  latitude: number;
-  longitude: number;
-  provider: GeocodeProvider;
-};
-
-type CachedGeocodeStore = Record<string, CachedGeocodeEntry>;
-
 type MapContactSummary = {
   rowKey: string;
   contactId: number | null;
@@ -111,12 +101,6 @@ type MapContactDraft = {
   phone: string;
   email: string;
   notes: string;
-};
-
-type AccountGroupCandidate = {
-  accountKey: string;
-  representativeRow: BusinessAccountRow;
-  contacts: MapContactSummary[];
 };
 
 type DetailFieldDefinition = {
@@ -283,62 +267,6 @@ function pickRepresentativeRow(rows: BusinessAccountRow[]): BusinessAccountRow {
   return withAddress ?? rows[0];
 }
 
-function matchesCandidateQuery(
-  candidate: AccountGroupCandidate,
-  normalizedQuery: string,
-): boolean {
-  if (!normalizedQuery) {
-    return true;
-  }
-
-  const contactSearchText = candidate.contacts
-    .map((contact) => [contact.name, contact.email, contact.phone].filter(Boolean).join(" "))
-    .join(" ");
-  const haystack = [
-    candidate.representativeRow.companyName,
-    candidate.representativeRow.businessAccountId,
-    candidate.representativeRow.address,
-    contactSearchText,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  return haystack.includes(normalizedQuery);
-}
-
-function buildAccountCandidates(rows: BusinessAccountRow[]): AccountGroupCandidate[] {
-  const grouped = new Map<string, BusinessAccountRow[]>();
-
-  rows.forEach((row) => {
-    const key = readRowAccountKey(row);
-    if (!key) {
-      return;
-    }
-    const existing = grouped.get(key);
-    if (existing) {
-      existing.push(row);
-    } else {
-      grouped.set(key, [row]);
-    }
-  });
-
-  const candidates: AccountGroupCandidate[] = [];
-
-  grouped.forEach((accountRows, accountKey) => {
-    const representativeRow = pickRepresentativeRow(accountRows);
-    const contacts = buildContactsFromRows(accountRows);
-
-    candidates.push({
-      accountKey,
-      representativeRow,
-      contacts,
-    });
-  });
-
-  return candidates;
-}
-
 function rowBelongsToPoint(row: BusinessAccountRow, point: BusinessAccountMapPoint): boolean {
   const rowAccountRecordId = row.accountRecordId ?? row.id;
   if (
@@ -399,6 +327,7 @@ function updateRowsAfterContactSave(
       postalCode: updatedRow.postalCode || row.postalCode,
       country: updatedRow.country || row.country,
       category: updatedRow.category ?? row.category,
+      companyPhone: updatedRow.companyPhone ?? row.companyPhone,
       phoneNumber: updatedRow.phoneNumber ?? row.phoneNumber,
       primaryContactId: updatedPrimaryContactId ?? row.primaryContactId,
       isPrimaryContact:
@@ -687,6 +616,11 @@ function buildMapContactUpdateRequest(
 
   return {
     companyName: targetRow.companyName,
+    assignedBusinessAccountRecordId:
+      targetRow.businessAccountId.trim().length > 0
+        ? (targetRow.accountRecordId ?? targetRow.id)
+        : null,
+    assignedBusinessAccountId: targetRow.businessAccountId.trim() || null,
     addressLine1: targetRow.addressLine1,
     addressLine2: targetRow.addressLine2,
     city: targetRow.city,
@@ -695,6 +629,7 @@ function buildMapContactUpdateRequest(
     country: targetRow.country,
     targetContactId,
     setAsPrimaryContact: false,
+    primaryOnlyIntent: false,
     salesRepId: targetRow.salesRepId,
     salesRepName: targetRow.salesRepName,
     industryType: targetRow.industryType,
@@ -764,26 +699,7 @@ function isPostalRegionsResponse(payload: unknown): payload is PostalRegionsResp
 }
 
 function readDatasetSyncStamp(): string | null {
-  for (const key of DATASET_STORAGE_KEYS) {
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) {
-        continue;
-      }
-
-      const parsed = JSON.parse(raw) as CachedDataset;
-      if (typeof parsed.lastSyncedAt === "string") {
-        return parsed.lastSyncedAt;
-      }
-      if (parsed.lastSyncedAt === null) {
-        return null;
-      }
-    } catch {
-      // Ignore malformed cache.
-    }
-  }
-
-  return null;
+  return readCachedSyncMeta().lastSyncedAt;
 }
 
 function hasString(value: unknown): value is string {
@@ -830,75 +746,24 @@ function isBusinessAccountRow(value: unknown): value is BusinessAccountRow {
   );
 }
 
-function readDatasetRows(): BusinessAccountRow[] {
-  for (const key of DATASET_STORAGE_KEYS) {
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) {
-        continue;
-      }
-
-      const parsed = JSON.parse(raw) as CachedDataset;
-      if (!Array.isArray(parsed.rows)) {
-        continue;
-      }
-
-      const rows = parsed.rows.filter((row): row is BusinessAccountRow =>
-        isBusinessAccountRow(row),
-      );
-      if (rows.length > 0) {
-        return rows;
-      }
-    } catch {
-      // Ignore malformed cache.
-    }
-  }
-
-  return [];
-}
-
 function readDatasetEntry(): { storageKey: string; dataset: CachedDataset } | null {
-  for (const key of DATASET_STORAGE_KEYS) {
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) {
-        continue;
-      }
-
-      const parsed = JSON.parse(raw) as CachedDataset;
-      if (!Array.isArray(parsed.rows)) {
-        continue;
-      }
-
-      const rows = parsed.rows.filter((row): row is BusinessAccountRow =>
-        isBusinessAccountRow(row),
-      );
-      return {
-        storageKey: key,
-        dataset: {
-          rows,
-          lastSyncedAt: typeof parsed.lastSyncedAt === "string" ? parsed.lastSyncedAt : null,
-        },
-      };
-    } catch {
-      // Ignore malformed cache.
-    }
+  const dataset = getMemoryCachedDataset();
+  if (!dataset) {
+    return null;
   }
 
-  return null;
+  return {
+    storageKey: "memory",
+    dataset,
+  };
 }
 
 function writeDatasetRows(rows: BusinessAccountRow[], lastSyncedAt: string | null) {
-  try {
-    const payload: CachedDataset = {
-      rows,
-      lastSyncedAt,
-    };
-    window.localStorage.setItem(DATASET_STORAGE_KEYS[0], JSON.stringify(payload));
-    window.dispatchEvent(new CustomEvent("businessAccounts:dataset-updated"));
-  } catch {
-    // Ignore storage failures.
-  }
+  setMemoryCachedDataset({
+    rows,
+    lastSyncedAt,
+  });
+  emitDatasetUpdated();
 }
 
 function readMapCache(expectedCacheKey: string): BusinessAccountMapResponse | null {
@@ -942,213 +807,13 @@ function writeMapCache(cacheKey: string, payload: BusinessAccountMapResponse) {
   }
 }
 
-function normalizeText(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function buildAddressKeyFromRow(row: BusinessAccountRow): string {
-  return [
-    row.addressLine1,
-    row.addressLine2,
-    row.city,
-    row.state,
-    row.postalCode,
-    row.country,
-  ]
-    .map((part) => normalizeText(part))
-    .join("|");
-}
-
-function buildFullAddressFromRow(row: BusinessAccountRow): string {
-  if (row.address.trim()) {
-    return row.address;
-  }
-
-  const street = [row.addressLine1, row.addressLine2].filter(Boolean).join(" ");
-  const cityLine = [row.city, row.state, row.postalCode].filter(Boolean).join(" ");
-  return [street, cityLine, row.country].filter(Boolean).join(", ");
-}
-
-function readGeocodeStore(): CachedGeocodeStore {
-  try {
-    const raw = window.localStorage.getItem(GEOCODE_CACHE_STORAGE_KEY);
-    if (!raw) {
-      return {};
-    }
-
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const next: CachedGeocodeStore = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      if (!value || typeof value !== "object") {
-        continue;
-      }
-      const record = value as Record<string, unknown>;
-      const latitude = record.latitude;
-      const longitude = record.longitude;
-      const provider = record.provider;
-      if (
-        typeof latitude === "number" &&
-        Number.isFinite(latitude) &&
-        typeof longitude === "number" &&
-        Number.isFinite(longitude) &&
-        (provider === "nominatim" || provider === "arcgis")
-      ) {
-        next[key] = {
-          latitude,
-          longitude,
-          provider,
-        };
-      }
-    }
-
-    return next;
-  } catch {
-    return {};
-  }
-}
-
-function writeGeocodeStore(store: CachedGeocodeStore) {
-  try {
-    const entries = Object.entries(store);
-    if (entries.length > GEOCODE_CACHE_MAX_ENTRIES) {
-      const trimmed = Object.fromEntries(entries.slice(entries.length - GEOCODE_CACHE_MAX_ENTRIES));
-      window.localStorage.setItem(GEOCODE_CACHE_STORAGE_KEY, JSON.stringify(trimmed));
-      return;
-    }
-
-    window.localStorage.setItem(GEOCODE_CACHE_STORAGE_KEY, JSON.stringify(store));
-  } catch {
-    // Ignore storage failures.
-  }
-}
-
-function buildGeocodeSearchTerm(row: BusinessAccountRow): string {
-  return [
-    row.addressLine1,
-    row.addressLine2,
-    row.city,
-    row.state,
-    row.postalCode,
-    row.country,
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .join(" ");
-}
-
-async function fetchWithTimeout(
-  input: string,
-  signal: AbortSignal,
-  init?: RequestInit,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), GEOCODE_TIMEOUT_MS);
-  const onAbort = () => controller.abort();
-  signal.addEventListener("abort", onAbort, { once: true });
-
-  try {
-    return await fetch(input, {
-      ...init,
-      signal: controller.signal,
-      cache: "no-store",
-    });
-  } finally {
-    window.clearTimeout(timeout);
-    signal.removeEventListener("abort", onAbort);
-  }
-}
-
-async function geocodeWithArcGis(
-  searchTerm: string,
-  signal: AbortSignal,
-): Promise<CachedGeocodeEntry | null> {
-  const url =
-    "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates" +
-    `?f=json&maxLocations=1&singleLine=${encodeURIComponent(searchTerm)}`;
-  const response = await fetchWithTimeout(url, signal, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-    },
-  });
-  if (!response.ok) {
-    return null;
-  }
-
-  const payload = (await response.json().catch(() => null)) as
-    | { candidates?: Array<{ location?: { x?: number; y?: number } }> }
-    | null;
-  const location = payload?.candidates?.[0]?.location;
-  const latitude = location?.y;
-  const longitude = location?.x;
-  if (
-    typeof latitude !== "number" ||
-    !Number.isFinite(latitude) ||
-    typeof longitude !== "number" ||
-    !Number.isFinite(longitude)
-  ) {
-    return null;
-  }
-
-  return {
-    latitude,
-    longitude,
-    provider: "arcgis",
-  };
-}
-
-async function geocodeWithNominatim(
-  searchTerm: string,
-  signal: AbortSignal,
-): Promise<CachedGeocodeEntry | null> {
-  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(
-    searchTerm,
-  )}`;
-  const response = await fetchWithTimeout(url, signal, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-    },
-  });
-  if (!response.ok) {
-    return null;
-  }
-
-  const payload = (await response.json().catch(() => null)) as
-    | Array<{ lat?: string; lon?: string }>
-    | null;
-  const first = payload?.[0];
-  const latitude = first?.lat ? Number(first.lat) : NaN;
-  const longitude = first?.lon ? Number(first.lon) : NaN;
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-    return null;
-  }
-
-  return {
-    latitude,
-    longitude,
-    provider: "nominatim",
-  };
-}
-
-async function geocodeRowAddress(
-  row: BusinessAccountRow,
-  signal: AbortSignal,
-): Promise<CachedGeocodeEntry | null> {
-  const searchTerm = buildGeocodeSearchTerm(row);
-  if (!searchTerm || !row.addressLine1.trim() || !row.city.trim()) {
-    return null;
-  }
-
-  const arcgis = await geocodeWithArcGis(searchTerm, signal).catch(() => null);
-  if (arcgis) {
-    return arcgis;
-  }
-
-  return geocodeWithNominatim(searchTerm, signal).catch(() => null);
-}
-
-export function AccountsMapClient() {
+export function AccountsMapClient({
+  acumaticaBaseUrl,
+  acumaticaCompanyId,
+}: {
+  acumaticaBaseUrl: string;
+  acumaticaCompanyId: string;
+}) {
   const router = useRouter();
 
   const [session, setSession] = useState<SessionResponse | null>(null);
@@ -1322,12 +987,13 @@ export function AccountsMapClient() {
       if (payload && "authenticated" in payload) {
         if (payload.authenticated) {
           setSession(payload);
+          setError(null);
           return;
         }
 
-        setSession({ authenticated: true, user: null });
+        setSession(payload);
         setError(
-          "Acumatica session check is temporarily unavailable. You are still signed in with your existing cookie. Refresh map data first; only sign in again if this keeps failing for a few minutes.",
+          "Your Acumatica session has expired. Sign in again to refresh map data.",
         );
         return;
       }
@@ -1358,15 +1024,10 @@ export function AccountsMapClient() {
       setError(null);
 
       try {
-        const datasetRows = readDatasetRows();
-        const allAccountCandidates = buildAccountCandidates(datasetRows);
-        const datasetAccountCount = allAccountCandidates.length;
-        const effectiveLimit = datasetAccountCount
-          ? Math.max(DEFAULT_LIMIT, Math.min(datasetAccountCount, MAX_LIMIT))
-          : DEFAULT_LIMIT;
         const normalizedQuery = q.trim().toLowerCase();
         const lastSyncedAt = readDatasetSyncStamp() ?? "unsynced";
-        const cacheKey = `${lastSyncedAt}|accounts:${datasetAccountCount}|limit:${effectiveLimit}|${normalizedQuery}`;
+        const effectiveLimit = DEFAULT_LIMIT;
+        const cacheKey = `${lastSyncedAt}|limit:${effectiveLimit}|${normalizedQuery}`;
         const cached = readMapCache(cacheKey);
         if (cached) {
           setPoints(cached.items);
@@ -1382,136 +1043,29 @@ export function AccountsMapClient() {
           return;
         }
 
-        if (datasetRows.length === 0) {
-          setPoints([]);
-          setSelectedId(null);
-          setTotalCandidates(0);
-          setGeocodedCount(0);
-          setUnmappedCount(0);
-          setActiveLimit(effectiveLimit);
-          setError(
-            "No cached Accounts dataset found. Open Accounts and click Sync records first.",
-          );
-          return;
-        }
-
-        const filteredCandidates = normalizedQuery
-          ? allAccountCandidates.filter((candidate) =>
-              matchesCandidateQuery(candidate, normalizedQuery),
-            )
-          : allAccountCandidates;
-        const candidates = filteredCandidates
-          .filter((candidate) =>
-            Boolean(
-              candidate.representativeRow.id &&
-                candidate.representativeRow.addressLine1.trim() &&
-                candidate.representativeRow.city.trim(),
-            ),
-          )
-          .slice(0, effectiveLimit);
-        const geocodeStore = readGeocodeStore();
-        const geocodeKeysMissing = [
-          ...new Set(
-            candidates
-              .map((candidate) => buildAddressKeyFromRow(candidate.representativeRow))
-              .filter((key) => key && !geocodeStore[key]),
-          ),
-        ];
-
-        if (geocodeKeysMissing.length > 0) {
-          const rowByAddressKey = new Map<string, BusinessAccountRow>();
-          for (const candidate of candidates) {
-            const key = buildAddressKeyFromRow(candidate.representativeRow);
-            if (key && !rowByAddressKey.has(key)) {
-              rowByAddressKey.set(key, candidate.representativeRow);
-            }
-          }
-
-          const queue = [...geocodeKeysMissing];
-          let storeChanged = false;
-
-          async function worker() {
-            while (queue.length > 0) {
-              const key = queue.shift();
-              if (!key || controller.signal.aborted) {
-                return;
-              }
-
-              const row = rowByAddressKey.get(key);
-              if (!row) {
-                continue;
-              }
-
-              const geocode = await geocodeRowAddress(row, controller.signal).catch(
-                () => null,
-              );
-              if (geocode && !controller.signal.aborted) {
-                geocodeStore[key] = geocode;
-                storeChanged = true;
-              }
-            }
-          }
-
-          await Promise.all(
-            Array.from(
-              { length: Math.min(GEOCODE_CONCURRENCY, queue.length) },
-              () => worker(),
-            ),
-          );
-
-          if (storeChanged && !controller.signal.aborted) {
-            writeGeocodeStore(geocodeStore);
-          }
-        }
-
-        if (controller.signal.aborted) {
-          return;
-        }
-
-        const items: BusinessAccountMapPoint[] = [];
-        candidates.forEach((candidate, index) => {
-          const row = candidate.representativeRow;
-          const key = buildAddressKeyFromRow(row);
-          if (!key) {
-            return;
-          }
-
-          const geocode = geocodeStore[key];
-          if (!geocode) {
-            return;
-          }
-
-          items.push({
-            id: candidate.accountKey || row.accountRecordId || row.id || `account-${index}`,
-            accountRecordId: row.accountRecordId ?? row.id,
-            businessAccountId: row.businessAccountId,
-            companyName: row.companyName,
-            fullAddress: buildFullAddressFromRow(row),
-            addressLine1: row.addressLine1,
-            addressLine2: row.addressLine2,
-            city: row.city,
-            state: row.state,
-            postalCode: row.postalCode,
-            country: row.country,
-            primaryContactName: row.primaryContactName,
-            primaryContactPhone: row.primaryContactPhone,
-            primaryContactEmail: row.primaryContactEmail,
-            category: row.category,
-            notes: row.notes,
-            lastModifiedIso: row.lastModifiedIso,
-            latitude: geocode.latitude,
-            longitude: geocode.longitude,
-            geocodeProvider: geocode.provider,
-            contacts: candidate.contacts,
-          });
+        const params = new URLSearchParams({
+          limit: String(effectiveLimit),
         });
+        if (normalizedQuery) {
+          params.set("q", normalizedQuery);
+        }
+        if (lastSyncedAt !== "unsynced") {
+          params.set("syncedAt", lastSyncedAt);
+        }
 
-        const payload: BusinessAccountMapResponse = {
-          items,
-          totalCandidates: candidates.length,
-          geocodedCount: items.length,
-          unmappedCount: candidates.length - items.length,
-        };
+        const response = await fetch(`/api/business-accounts/map?${params.toString()}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = await readJsonResponse<BusinessAccountMapResponse | { error?: string }>(
+          response,
+        );
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+        if (!isMapResponse(payload)) {
+          throw new Error("Unexpected response while loading map data.");
+        }
 
         setPoints(payload.items);
         setTotalCandidates(payload.totalCandidates);
@@ -2230,14 +1784,37 @@ export function AccountsMapClient() {
 
           {selectedPoint ? (
             <div className={styles.card}>
+              {(() => {
+                const companyUrl = buildAcumaticaBusinessAccountUrl(
+                  acumaticaBaseUrl,
+                  selectedPoint.businessAccountId,
+                  acumaticaCompanyId,
+                );
+
+                return (
               <div className={styles.cardHeader}>
                 <div className={styles.cardTitleBlock}>
-                  <h2>{selectedPoint.companyName || selectedPoint.businessAccountId}</h2>
+                  <h2>
+                    {companyUrl ? (
+                      <a
+                        className={styles.recordLink}
+                        href={companyUrl}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        {selectedPoint.companyName || selectedPoint.businessAccountId}
+                      </a>
+                    ) : (
+                      selectedPoint.companyName || selectedPoint.businessAccountId
+                    )}
+                  </h2>
                   <p className={styles.cardSubtitle}>
                     Focus this panel on the fields you need for contact cleanup.
                   </p>
                 </div>
               </div>
+                );
+              })()}
 
               {selectedDetailItems.length > 0 ? (
                 <dl className={styles.details}>
@@ -2266,6 +1843,11 @@ export function AccountsMapClient() {
                       const draft = contactDrafts[contact.rowKey] ?? buildContactDraft(contact);
                       const canMutateContact =
                         contact.contactId !== null && contact.contactId !== undefined;
+                      const contactUrl = buildAcumaticaContactUrl(
+                        acumaticaBaseUrl,
+                        contact.contactId,
+                        acumaticaCompanyId,
+                      );
 
                       return (
                         <li
@@ -2273,7 +1855,20 @@ export function AccountsMapClient() {
                           key={contact.rowKey || `${contact.contactId ?? "row"}-${index}`}
                         >
                           <div className={styles.contactHeader}>
-                            <strong>{renderText(contact.name)}</strong>
+                            <strong>
+                              {contactUrl && renderText(contact.name) !== "-" ? (
+                                <a
+                                  className={styles.recordLink}
+                                  href={contactUrl}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  {renderText(contact.name)}
+                                </a>
+                              ) : (
+                                renderText(contact.name)
+                              )}
+                            </strong>
                             {contact.isPrimary ? (
                               <span className={styles.primaryBadge}>PRIMARY</span>
                             ) : null}

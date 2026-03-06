@@ -1,3 +1,5 @@
+export const runtime = "nodejs";
+
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
@@ -5,7 +7,9 @@ import {
   type AuthCookieRefreshState,
   fetchEmployees,
 } from "@/lib/acumatica";
+import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { readReadModelEmployeesOrFallback, maybeTriggerReadModelSync } from "@/lib/read-model/sync";
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh: AuthCookieRefreshState = {
@@ -14,7 +18,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   try {
     const cookieValue = requireAuthCookieValue(request);
-    const items = await fetchEmployees(cookieValue, authCookieRefresh);
+    const { READ_MODEL_ENABLED } = getEnv();
+    let items;
+    if (READ_MODEL_ENABLED) {
+      maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+      items = readReadModelEmployeesOrFallback();
+    } else {
+      items = await fetchEmployees(cookieValue, authCookieRefresh);
+    }
 
     const response = NextResponse.json({ items });
     if (authCookieRefresh.value) {

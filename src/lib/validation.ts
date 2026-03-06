@@ -94,6 +94,8 @@ const nullableEmailSchema = nullableStringSchema
 
 export const updateRequestSchema = z.object({
   companyName: z.string().trim().min(1, "Company name is required").max(255),
+  assignedBusinessAccountRecordId: nullableStringSchema.default(null),
+  assignedBusinessAccountId: nullableStringSchema.default(null),
   addressLine1: z.string().trim().min(1, "Address line 1 is required").max(255),
   addressLine2: z.string().trim().max(255).default(""),
   city: z.string().trim().min(1, "City is required").max(100),
@@ -116,6 +118,7 @@ export const updateRequestSchema = z.object({
     })
     .default(null),
   setAsPrimaryContact: z.boolean().default(false),
+  primaryOnlyIntent: z.boolean().default(false),
   salesRepId: nullableStringSchema.default(null),
   salesRepName: nullableStringSchema.default(null),
   industryType: nullableStringSchema.default(null),

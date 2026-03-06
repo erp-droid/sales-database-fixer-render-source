@@ -1,12 +1,20 @@
+export const runtime = "nodejs";
+
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
 import { type AuthCookieRefreshState, fetchBusinessAccounts } from "@/lib/acumatica";
 import { normalizeBusinessAccount } from "@/lib/business-accounts";
+import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { geocodeAddress, type GeocodeResult } from "@/lib/geocode";
+import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
+import { registerReadModelCacheClearer } from "@/lib/read-model/cache";
+import { buildAddressKeyFromRow, readReadyGeocodeMap } from "@/lib/read-model/geocodes";
+import { maybeTriggerReadModelSync } from "@/lib/read-model/sync";
 import type {
   BusinessAccountMapPoint,
+  BusinessAccountRow,
   BusinessAccountMapResponse,
 } from "@/types/business-account";
 
@@ -17,6 +25,11 @@ const mapPayloadCache = new Map<
 >();
 const mapPayloadInFlight = new Map<string, Promise<BusinessAccountMapResponse>>();
 const MAP_PAYLOAD_CACHE_TTL_MS = 10 * 60 * 1000;
+
+registerReadModelCacheClearer(() => {
+  mapPayloadCache.clear();
+  mapPayloadInFlight.clear();
+});
 
 function clamp(value: number, min: number, max: number): number {
   if (Number.isNaN(value)) {
@@ -133,6 +146,49 @@ function toFullAddress(parts: {
   return [street, cityLine, parts.country].filter(Boolean).join(", ");
 }
 
+function hasText(value: string | null | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function readRowAccountKey(row: BusinessAccountRow): string {
+  return (
+    row.accountRecordId?.trim() ||
+    row.id.trim() ||
+    row.businessAccountId.trim() ||
+    row.companyName.trim()
+  );
+}
+
+function buildContactsFromRows(rows: BusinessAccountRow[]) {
+  return rows
+    .map((row, index) => ({
+      rowKey: row.rowKey ?? `${readRowAccountKey(row)}:contact:${row.contactId ?? index}`,
+      contactId: row.contactId ?? null,
+      name: row.primaryContactName,
+      phone: row.primaryContactPhone,
+      email: row.primaryContactEmail,
+      isPrimary: Boolean(row.isPrimaryContact),
+      notes: row.notes ?? null,
+    }))
+    .filter(
+      (contact) =>
+        hasText(contact.name) || hasText(contact.phone) || hasText(contact.email),
+    )
+    .sort((left, right) => {
+      if (left.isPrimary !== right.isPrimary) {
+        return left.isPrimary ? -1 : 1;
+      }
+
+      return (left.name ?? "").localeCompare(right.name ?? "", undefined, {
+        sensitivity: "base",
+      });
+    });
+}
+
+function pickRepresentativeRow(rows: BusinessAccountRow[]): BusinessAccountRow {
+  return rows.find((row) => hasText(row.addressLine1) && hasText(row.city)) ?? rows[0];
+}
+
 async function mapLimit<T, R>(
   items: T[],
   concurrency: number,
@@ -190,6 +246,112 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       inFlight ??
       (async (): Promise<BusinessAccountMapResponse> => {
         try {
+          if (getEnv().READ_MODEL_ENABLED) {
+            maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+            const grouped = new Map<string, BusinessAccountRow[]>();
+            readAllAccountRowsFromReadModel().forEach((row) => {
+              const key = readRowAccountKey(row);
+              if (!key) {
+                return;
+              }
+              const existing = grouped.get(key);
+              if (existing) {
+                existing.push(row);
+              } else {
+                grouped.set(key, [row]);
+              }
+            });
+
+            const candidates = [...grouped.entries()]
+              .map(([accountKey, rows]) => {
+                const representativeRow = pickRepresentativeRow(rows);
+                const contacts = buildContactsFromRows(rows);
+                const haystack = [
+                  representativeRow.companyName,
+                  representativeRow.businessAccountId,
+                  representativeRow.address,
+                  contacts
+                    .map((contact) =>
+                      [contact.name, contact.email, contact.phone].filter(Boolean).join(" "),
+                    )
+                    .join(" "),
+                ]
+                  .filter(Boolean)
+                  .join(" ")
+                  .toLowerCase();
+
+                return {
+                  accountKey,
+                  representativeRow,
+                  contacts,
+                  haystack,
+                };
+              })
+              .filter((candidate) =>
+                normalizedSearch ? candidate.haystack.includes(normalizedSearch) : true,
+              )
+              .filter((candidate) =>
+                Boolean(
+                  candidate.representativeRow.id &&
+                    candidate.representativeRow.addressLine1 &&
+                    candidate.representativeRow.city,
+                ),
+              )
+              .slice(0, limit);
+            const geocodeMap = readReadyGeocodeMap(
+              candidates.map((candidate) => buildAddressKeyFromRow(candidate.representativeRow)),
+            );
+            const items = candidates.flatMap((candidate) => {
+              const row = candidate.representativeRow;
+              const geocode = geocodeMap.get(buildAddressKeyFromRow(row));
+              if (!geocode) {
+                return [];
+              }
+
+              const point: BusinessAccountMapPoint = {
+                id: row.id,
+                accountRecordId: row.accountRecordId,
+                businessAccountId: row.businessAccountId,
+                companyName: row.companyName,
+                fullAddress:
+                  row.address ||
+                  toFullAddress({
+                    addressLine1: row.addressLine1,
+                    addressLine2: row.addressLine2,
+                    city: row.city,
+                    state: row.state,
+                    postalCode: row.postalCode,
+                    country: row.country,
+                  }),
+                addressLine1: row.addressLine1,
+                addressLine2: row.addressLine2,
+                city: row.city,
+                state: row.state,
+                postalCode: row.postalCode,
+                country: row.country,
+                primaryContactName: row.primaryContactName,
+                primaryContactPhone: row.primaryContactPhone,
+                primaryContactEmail: row.primaryContactEmail,
+                category: row.category,
+                notes: row.notes,
+                lastModifiedIso: row.lastModifiedIso,
+                latitude: geocode.latitude,
+                longitude: geocode.longitude,
+                geocodeProvider: geocode.provider,
+                contacts: candidate.contacts,
+              };
+
+              return [point];
+            });
+
+            return {
+              items,
+              totalCandidates: candidates.length,
+              geocodedCount: items.length,
+              unmappedCount: Math.max(0, candidates.length - items.length),
+            };
+          }
+
           const rawAccounts = await fetchBusinessAccounts(
             cookieValue,
             {

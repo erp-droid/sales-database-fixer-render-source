@@ -107,6 +107,25 @@ export const WEEK_OPTIONS: AttributeOption[] = Array.from({ length: 15 }, (_, in
   };
 });
 
+function splitContactName(displayName: string): {
+  firstName: string | null;
+  lastName: string;
+} {
+  const trimmed = displayName.trim();
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) {
+    return {
+      firstName: null,
+      lastName: trimmed,
+    };
+  }
+
+  return {
+    firstName: parts.slice(0, -1).join(" "),
+    lastName: parts[parts.length - 1] ?? trimmed,
+  };
+}
+
 function normalizeAttributeCandidate(value: string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -336,9 +355,20 @@ export function buildContactCreatePayload(input: {
   businessAccountId: string;
   companyName: string;
 }): Record<string, unknown> {
+  const name = splitContactName(input.request.displayName);
   return {
     DisplayName: {
       value: input.request.displayName,
+    },
+    ...(name.firstName
+      ? {
+          FirstName: {
+            value: name.firstName,
+          },
+        }
+      : {}),
+    LastName: {
+      value: name.lastName,
     },
     JobTitle: {
       value: input.request.jobTitle,

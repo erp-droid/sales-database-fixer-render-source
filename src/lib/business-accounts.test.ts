@@ -1,6 +1,8 @@
 import {
+  buildBusinessAccountUpdatePayload,
   buildBusinessAccountUpdateIdentifiers,
   buildPrimaryContactFallbackPayloads,
+  dedupeBusinessAccountRows,
   enforceSinglePrimaryPerAccountRows,
   hasAddressChanges,
   hasPrimaryContactChanges,
@@ -16,6 +18,7 @@ function makePayload(overrides?: Record<string, unknown>): Record<string, unknow
     id: "a1",
     BusinessAccountID: { value: "AC-100" },
     Name: { value: "Alpha Inc" },
+    Business1: { value: "905-555-0100" },
     note: { value: "Important account" },
     LastModifiedDateTime: { value: "2026-03-04T16:39:08.13+00:00" },
     Owner: { value: "109343" },
@@ -86,6 +89,7 @@ describe("normalizeBusinessAccount", () => {
       subCategory: "Pharmaceuticals",
       companyRegion: "Region 1",
       week: "Week 1",
+      companyPhone: "905-555-0100",
       primaryContactId: 157497,
       primaryContactName: "Jorge Serrano",
       primaryContactPhone: "4162304681",
@@ -156,6 +160,57 @@ describe("normalizeBusinessAccount", () => {
     expect(row.primaryContactPhone).toBe("4162304681");
     expect(row.primaryContactEmail).toBe("jserrano@meadowb.com");
   });
+
+  it("derives company phone from hidden blank-name contacts when account phone is missing", () => {
+    const row = normalizeBusinessAccount(
+      makePayload({
+        Business1: {},
+        Contacts: [
+          {
+            ContactID: { value: 157497 },
+            DisplayName: { value: "Jorge Serrano" },
+            Email: { value: "jserrano@meadowb.com" },
+            Phone1: { value: "4162304681" },
+          },
+          {
+            ContactID: { value: 157498 },
+            DisplayName: {},
+            Email: {},
+            Phone1: { value: "905-555-2222" },
+          },
+        ],
+      }),
+    );
+
+    expect(row.companyPhone).toBe("905-555-2222");
+  });
+
+  it("resolves a visible primary contact from a semicolon-delimited primary email payload", () => {
+    const row = normalizeBusinessAccount(
+      makePayload({
+        id: "641760f6-7eed-f011-8370-025dbe72350a",
+        BusinessAccountID: { value: "B200000854" },
+        Name: { value: "Shipmaster Containers Ltd" },
+        PrimaryContact: {
+          ContactID: { value: 155050 },
+          DisplayName: {},
+          Email: { value: "ap@shipmaster.com; anandakumar@shipmaster.com" },
+          Phone1: { value: "4164939193" },
+        },
+        Contacts: [
+          {
+            ContactID: { value: 159185 },
+            DisplayName: { value: "Arun Nandakumar" },
+            Email: { value: "anandakumar@shipmaster.com" },
+            Phone1: { value: "4164939193" },
+          },
+        ],
+      }),
+    );
+
+    expect(row.primaryContactId).toBe(159185);
+    expect(row.primaryContactName).toBe("Arun Nandakumar");
+  });
 });
 
 describe("normalizeBusinessAccountRows", () => {
@@ -199,11 +254,13 @@ describe("normalizeBusinessAccountRows", () => {
     expect(primaryRow?.primaryContactName).toBe("Jorge Serrano");
     expect(primaryRow?.primaryContactEmail).toBe("jserrano@meadowb.com");
     expect(primaryRow?.contactId).toBe(157497);
+    expect(primaryRow?.companyPhone).toBe("905-555-0100");
 
     expect(secondaryRow).toBeDefined();
     expect(secondaryRow?.primaryContactName).toBe("Derek Cowell");
     expect(secondaryRow?.primaryContactEmail).toBe("dcowell@meadowb.com");
     expect(secondaryRow?.contactId).toBe(158410);
+    expect(secondaryRow?.companyPhone).toBe("905-555-0100");
   });
 
   it("returns a single account row when the business account has no contacts", () => {
@@ -286,6 +343,39 @@ describe("normalizeBusinessAccountRows", () => {
     ).toBe(false);
   });
 
+  it("marks the matching visible contact as primary when the raw primary email contains multiple addresses", () => {
+    const rows = normalizeBusinessAccountRows(
+      makePayload({
+        id: "641760f6-7eed-f011-8370-025dbe72350a",
+        BusinessAccountID: { value: "B200000854" },
+        Name: { value: "Shipmaster Containers Ltd" },
+        PrimaryContact: {
+          ContactID: { value: 155050 },
+          DisplayName: {},
+          Email: { value: "ap@shipmaster.com; anandakumar@shipmaster.com" },
+          Phone1: { value: "4164939193" },
+        },
+        Contacts: [
+          {
+            ContactID: { value: 159185 },
+            DisplayName: { value: "Arun Nandakumar" },
+            Email: { value: "anandakumar@shipmaster.com" },
+            Phone1: { value: "4164939193" },
+          },
+          {
+            ContactID: { value: 159266 },
+            DisplayName: { value: "Christina Tang" },
+            Email: { value: "ctang@shipmaster.com" },
+            Phone1: { value: "4164939193" },
+          },
+        ],
+      }),
+    );
+
+    expect(rows.find((row) => row.contactId === 159185)?.isPrimaryContact).toBe(true);
+    expect(rows.find((row) => row.contactId === 159266)?.isPrimaryContact).toBe(false);
+  });
+
   it("marks primary by NoteID/id fallback when PrimaryContact.ContactID is missing", () => {
     const rows = normalizeBusinessAccountRows(
       makePayload({
@@ -346,9 +436,62 @@ describe("normalizeBusinessAccountRows", () => {
     expect(rows.find((row) => row.contactId === 157497)?.isPrimaryContact).toBe(true);
     expect(rows.find((row) => row.contactId === 158410)?.isPrimaryContact).toBe(false);
   });
+
+  it("dedupes repeated contact rows that share the same generated row key", () => {
+    const rows = normalizeBusinessAccountRows(
+      makePayload({
+        Contacts: [
+          {
+            ContactID: { value: 157497 },
+            DisplayName: { value: "Jorge Serrano" },
+            Email: { value: "jserrano@meadowb.com" },
+            Phone1: { value: "4162304681" },
+          },
+          {
+            ContactID: { value: 157497 },
+            DisplayName: { value: "Jorge Serrano" },
+            Email: { value: "jserrano@meadowb.com" },
+            Phone1: { value: "4162304681" },
+          },
+        ],
+      }),
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.rowKey).toBe("a1:contact:157497");
+  });
 });
 
 describe("primary-contact helpers", () => {
+  it("dedupes account rows by row key before rendering logic runs", () => {
+    const deduped = dedupeBusinessAccountRows([
+      {
+        ...normalizeBusinessAccount(makePayload()),
+        rowKey: "a1:contact:157497",
+        contactId: 157497,
+        primaryContactId: 157497,
+        primaryContactName: null,
+        primaryContactEmail: null,
+        notes: null,
+      },
+      {
+        ...normalizeBusinessAccount(makePayload()),
+        rowKey: "a1:contact:157497",
+        contactId: 157497,
+        primaryContactId: 157497,
+        primaryContactName: "Jorge Serrano",
+        primaryContactEmail: "jserrano@meadowb.com",
+        notes: "Contact-level note",
+      },
+    ]);
+
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0]?.rowKey).toBe("a1:contact:157497");
+    expect(deduped[0]?.primaryContactName).toBe("Jorge Serrano");
+    expect(deduped[0]?.primaryContactEmail).toBe("jserrano@meadowb.com");
+    expect(deduped[0]?.notes).toBe("Contact-level note");
+  });
+
   it("selects a single primary candidate by ContactID when duplicates share name/email", () => {
     const selectedIndex = selectPrimaryContactIndex(
       [
@@ -485,6 +628,7 @@ describe("queryBusinessAccounts", () => {
       filterCompanyRegion: "region 1",
       filterWeek: "week 1",
       filterAddress: "mississauga",
+      filterCompanyPhone: "905-555",
       filterPrimaryContactName: "jorge",
       filterPrimaryContactPhone: "416230",
       filterPrimaryContactEmail: "meadowb.com",
@@ -498,6 +642,90 @@ describe("queryBusinessAccounts", () => {
 
     expect(result.total).toBe(1);
     expect(result.items[0]?.businessAccountId).toBe("AC-100");
+  });
+
+  it("supports company phone filtering and sorting", () => {
+    const result = queryBusinessAccounts(rows, {
+      filterCompanyPhone: "905-555",
+      page: 1,
+      pageSize: 25,
+      sortBy: "companyPhone",
+      sortDir: "asc",
+    });
+
+    expect(result.total).toBe(2);
+    expect(result.items[0]?.companyPhone).toBe("905-555-0100");
+  });
+
+  it("suppresses AP-mailbox rows from results", () => {
+    const result = queryBusinessAccounts(
+      [
+        {
+          ...rows[0],
+          accountRecordId: "ap-row",
+          id: "ap-row",
+          rowKey: "ap-row:contact:1",
+          businessAccountId: "AP-100",
+          companyName: "Triovest",
+          primaryContactName: "Inquiry",
+          primaryContactEmail: "ontarioap@triovest.com",
+        },
+        rows[1],
+      ],
+      {
+        page: 1,
+        pageSize: 25,
+        sortBy: "companyName",
+        sortDir: "asc",
+      },
+    );
+
+    expect(result.total).toBe(1);
+    expect(result.items[0]?.companyName).toBe("Beta Ltd");
+  });
+
+  it("suppresses contact rows with unusable blank names from results", () => {
+    const result = queryBusinessAccounts(
+      [
+        {
+          ...rows[0],
+          accountRecordId: "blank-contact",
+          id: "blank-contact",
+          rowKey: "blank-contact:contact:1",
+          businessAccountId: "BLANK-100",
+          companyName: "Blank Contact Co",
+          primaryContactName: ". .",
+          primaryContactEmail: "blank@example.com",
+        },
+        rows[1],
+      ],
+      {
+        page: 1,
+        pageSize: 25,
+        sortBy: "companyName",
+        sortDir: "asc",
+      },
+    );
+
+    expect(result.total).toBe(1);
+    expect(result.items[0]?.companyName).toBe("Beta Ltd");
+  });
+
+  it("removes duplicate row identities before pagination and render ordering", () => {
+    const duplicate = {
+      ...rows[0],
+      rowKey: "a1:contact:157497",
+      contactId: 157497,
+    };
+    const result = queryBusinessAccounts([duplicate, duplicate, rows[1]], {
+      page: 1,
+      pageSize: 25,
+      sortBy: "companyName",
+      sortDir: "asc",
+    });
+
+    expect(result.total).toBe(2);
+    expect(result.items.filter((row) => row.rowKey === "a1:contact:157497")).toHaveLength(1);
   });
 
   it("sorts by any table header", () => {
@@ -533,6 +761,8 @@ describe("change detection helpers", () => {
     expect(
       hasPrimaryContactChanges(existing, {
         companyName: existing.companyName,
+        assignedBusinessAccountRecordId: existing.accountRecordId ?? existing.id,
+        assignedBusinessAccountId: existing.businessAccountId,
         addressLine1: existing.addressLine1,
         addressLine2: existing.addressLine2,
         city: existing.city,
@@ -541,6 +771,7 @@ describe("change detection helpers", () => {
         country: existing.country,
         targetContactId: existing.contactId ?? existing.primaryContactId ?? null,
         setAsPrimaryContact: false,
+        primaryOnlyIntent: false,
         salesRepId: existing.salesRepId,
         salesRepName: existing.salesRepName,
         industryType: existing.industryType,
@@ -561,6 +792,8 @@ describe("change detection helpers", () => {
     expect(
       hasAddressChanges(existing, {
         companyName: existing.companyName,
+        assignedBusinessAccountRecordId: existing.accountRecordId ?? existing.id,
+        assignedBusinessAccountId: existing.businessAccountId,
         addressLine1: "100 New Street",
         addressLine2: existing.addressLine2,
         city: existing.city,
@@ -569,6 +802,7 @@ describe("change detection helpers", () => {
         country: existing.country,
         targetContactId: existing.contactId ?? existing.primaryContactId ?? null,
         setAsPrimaryContact: false,
+        primaryOnlyIntent: false,
         salesRepId: existing.salesRepId,
         salesRepName: existing.salesRepName,
         industryType: existing.industryType,
@@ -587,6 +821,49 @@ describe("change detection helpers", () => {
 });
 
 describe("business account merge helpers", () => {
+  it("builds initial primary-contact updates with top-level numeric contact fields", () => {
+    const payload = buildBusinessAccountUpdatePayload(makePayload(), {
+      companyName: "Alpha Inc",
+      assignedBusinessAccountRecordId: "a1",
+      assignedBusinessAccountId: "AC-100",
+      addressLine1: "5579 McAdam Road",
+      addressLine2: "",
+      city: "Mississauga",
+      state: "ON",
+      postalCode: "L4Z 1N4",
+      country: "CA",
+      targetContactId: 158410,
+      setAsPrimaryContact: true,
+      primaryOnlyIntent: true,
+      salesRepId: "109343",
+      salesRepName: "Jorge Serrano",
+      industryType: "Distribution",
+      subCategory: "Pharmaceuticals",
+      companyRegion: "Region 1",
+      week: "Week 1",
+      primaryContactName: "Derek Cowell",
+      primaryContactPhone: "4164520752",
+      primaryContactEmail: "dcowell@meadowb.com",
+      category: "A",
+      notes: "Contact-level note",
+      expectedLastModified: "2026-03-04T16:39:08.13+00:00",
+    });
+
+    expect(payload).toMatchObject({
+      ContactID: {
+        value: 158410,
+      },
+      PrimaryContactID: {
+        value: 158410,
+      },
+      PrimaryContact: {
+        ContactID: {
+          value: 158410,
+        },
+      },
+    });
+  });
+
   it("builds stable update identifiers", () => {
     expect(buildBusinessAccountUpdateIdentifiers(makePayload(), "fallback-id")).toEqual([
       "AC-100",
@@ -599,12 +876,38 @@ describe("business account merge helpers", () => {
     const payloads = buildPrimaryContactFallbackPayloads(makePayload(), 158410);
 
     expect(payloads[0]).toEqual({
+      ContactID: {
+        value: 158410,
+      },
+    });
+    expect(payloads[1]).toEqual({
       PrimaryContact: {
         ContactID: {
           value: 158410,
         },
       },
     });
-    expect(payloads).toHaveLength(6);
+    expect(payloads).toHaveLength(7);
+  });
+
+  it("includes target contact record-id variants for primary contact fallback payloads", () => {
+    const payloads = buildPrimaryContactFallbackPayloads(makePayload(), 158410, {
+      id: "80b4ba86-a8ef-f011-8370-025dbe72350a",
+      NoteID: { value: "80b4ba86-a8ef-f011-8370-025dbe72350a" },
+      ContactID: { value: 158410 },
+    });
+
+    expect(payloads).toContainEqual({
+      PrimaryContact: {
+        value: "80b4ba86-a8ef-f011-8370-025dbe72350a",
+      },
+    });
+    expect(payloads).toContainEqual({
+      PrimaryContact: {
+        NoteID: {
+          value: "80b4ba86-a8ef-f011-8370-025dbe72350a",
+        },
+      },
+    });
   });
 });

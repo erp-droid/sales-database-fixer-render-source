@@ -1,6 +1,8 @@
 export const DATA_QUALITY_METRIC_KEYS = [
   "missingCompany",
   "missingContact",
+  "invalidPhone",
+  "missingContactEmail",
   "missingSalesRep",
   "missingCategory",
   "missingRegion",

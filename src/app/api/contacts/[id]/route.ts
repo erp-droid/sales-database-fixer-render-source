@@ -1,8 +1,12 @@
+export const runtime = "nodejs";
+
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
 import { deleteContact } from "@/lib/acumatica";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { getEnv } from "@/lib/env";
+import { removeReadModelRowsByContactId } from "@/lib/read-model/accounts";
 
 type RouteContext = {
   params: Promise<{
@@ -32,6 +36,9 @@ export async function DELETE(
     const contactId = parseContactId(id);
     const cookieValue = requireAuthCookieValue(request);
     await deleteContact(cookieValue, contactId, authCookieRefresh);
+    if (getEnv().READ_MODEL_ENABLED) {
+      removeReadModelRowsByContactId(contactId);
+    }
 
     const response = NextResponse.json({ deleted: true, contactId });
     if (authCookieRefresh.value) {

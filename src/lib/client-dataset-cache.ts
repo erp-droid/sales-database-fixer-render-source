@@ -8,14 +8,15 @@ export const DATASET_STORAGE_KEYS = [
   "businessAccounts.dataset.v1",
 ] as const;
 
+const SYNC_META_STORAGE_KEY = "businessAccounts.syncMeta.v1";
+
 export type CachedDataset = {
   rows: BusinessAccountRow[];
   lastSyncedAt: string | null;
 };
 
-type CachedDatasetPayload = {
-  rows?: unknown;
-  lastSyncedAt?: unknown;
+export type CachedSyncMeta = {
+  lastSyncedAt: string | null;
 };
 
 let memoryDataset: CachedDataset | null = null;
@@ -64,16 +65,14 @@ export function isBusinessAccountRow(value: unknown): value is BusinessAccountRo
   );
 }
 
-function normalizeCachedDatasetPayload(payload: CachedDatasetPayload): CachedDataset | null {
-  if (!Array.isArray(payload.rows)) {
-    return null;
+function clearLegacyDatasetStorage(): void {
+  for (const key of DATASET_STORAGE_KEYS) {
+    window.localStorage.removeItem(key);
   }
+}
 
-  const rows = payload.rows.filter((row): row is BusinessAccountRow => isBusinessAccountRow(row));
-  return {
-    rows,
-    lastSyncedAt: typeof payload.lastSyncedAt === "string" ? payload.lastSyncedAt : null,
-  };
+export function emitDatasetUpdated(): void {
+  window.dispatchEvent(new CustomEvent("businessAccounts:dataset-updated"));
 }
 
 export function getMemoryCachedDataset(): CachedDataset | null {
@@ -85,40 +84,38 @@ export function setMemoryCachedDataset(dataset: CachedDataset): void {
 }
 
 export function readCachedDatasetFromStorage(): CachedDataset | null {
-  if (memoryDataset) {
-    return memoryDataset;
-  }
+  return memoryDataset;
+}
 
-  for (const key of DATASET_STORAGE_KEYS) {
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) {
-        continue;
-      }
-
-      const parsed = JSON.parse(raw) as CachedDatasetPayload;
-      const normalized = normalizeCachedDatasetPayload(parsed);
-      if (!normalized) {
-        continue;
-      }
-
-      memoryDataset = normalized;
-      return normalized;
-    } catch {
-      // Ignore malformed cached dataset and try next key.
+export function readCachedSyncMeta(): CachedSyncMeta {
+  try {
+    const raw = window.localStorage.getItem(SYNC_META_STORAGE_KEY);
+    if (!raw) {
+      return { lastSyncedAt: null };
     }
-  }
 
-  return null;
+    const parsed = JSON.parse(raw) as { lastSyncedAt?: unknown };
+    return {
+      lastSyncedAt: typeof parsed.lastSyncedAt === "string" ? parsed.lastSyncedAt : null,
+    };
+  } catch {
+    return { lastSyncedAt: null };
+  }
+}
+
+export function writeCachedSyncMeta(meta: CachedSyncMeta): void {
+  try {
+    clearLegacyDatasetStorage();
+    window.localStorage.setItem(SYNC_META_STORAGE_KEY, JSON.stringify(meta));
+  } catch {
+    // Ignore storage failures.
+  }
 }
 
 export function writeCachedDatasetToStorage(dataset: CachedDataset): void {
   memoryDataset = dataset;
-
-  try {
-    window.localStorage.setItem(DATASET_STORAGE_KEYS[0], JSON.stringify(dataset));
-    window.dispatchEvent(new CustomEvent("businessAccounts:dataset-updated"));
-  } catch {
-    // Ignore cache write failures (e.g. quota exceeded).
-  }
+  writeCachedSyncMeta({
+    lastSyncedAt: dataset.lastSyncedAt,
+  });
+  emitDatasetUpdated();
 }

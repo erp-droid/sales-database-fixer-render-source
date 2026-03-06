@@ -1,3 +1,4 @@
+import { filterSuppressedBusinessAccountRows } from "@/lib/business-accounts";
 import type { BusinessAccountRow } from "@/types/business-account";
 import {
   DATA_QUALITY_METRIC_KEYS,
@@ -41,8 +42,10 @@ export type DataQualitySnapshot = {
 };
 
 const METRIC_LABELS: Record<DataQualityMetricKey, string> = {
-  missingCompany: "Company Assignment Issues",
-  missingContact: "Contact Assignment Issues",
+  missingCompany: "Contact Assignment Issues",
+  missingContact: "Primary Contact Issues",
+  invalidPhone: "Phone Number Issues",
+  missingContactEmail: "Email Address Issues",
   missingSalesRep: "Sales Representative Issues",
   missingCategory: "Category Issues",
   missingRegion: "Company Region Issues",
@@ -94,22 +97,76 @@ function toAccountKey(row: BusinessAccountRow, index: number): string {
   );
 }
 
+function hasUsableIssueContactName(value: string | null | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 2;
+}
+
+function resolveIssueDisplayRow(
+  row: BusinessAccountRow,
+  siblingRows?: BusinessAccountRow[],
+): BusinessAccountRow {
+  if (hasUsableIssueContactName(row.primaryContactName) || !siblingRows?.length) {
+    return row;
+  }
+
+  const matchingContactRow =
+    row.contactId !== null && row.contactId !== undefined
+      ? siblingRows.find(
+          (candidate) =>
+            candidate !== row &&
+            candidate.contactId === row.contactId &&
+            hasUsableIssueContactName(candidate.primaryContactName),
+        )
+      : null;
+  if (matchingContactRow) {
+    return matchingContactRow;
+  }
+
+  const namedPrimaryRow = siblingRows.find(
+    (candidate) =>
+      candidate !== row &&
+      candidate.isPrimaryContact &&
+      hasUsableIssueContactName(candidate.primaryContactName),
+  );
+  if (namedPrimaryRow) {
+    return namedPrimaryRow;
+  }
+
+  return (
+    siblingRows.find(
+      (candidate) =>
+        candidate !== row &&
+        candidate.contactId !== null &&
+        candidate.contactId !== undefined &&
+        hasUsableIssueContactName(candidate.primaryContactName),
+    ) ?? row
+  );
+}
+
 function buildIssueRow(
   accountKey: string,
   row: BusinessAccountRow,
+  siblingRows?: BusinessAccountRow[],
   duplicateGroupKey?: string | null,
 ): DataQualityIssueRow {
+  const displayRow = resolveIssueDisplayRow(row, siblingRows);
+  const isResolvedFromSameContact =
+    displayRow === row ||
+    (displayRow.contactId !== null &&
+      displayRow.contactId !== undefined &&
+      displayRow.contactId === row.contactId);
+
   return {
     accountKey,
     accountRecordId: row.accountRecordId ?? null,
     businessAccountId: row.businessAccountId,
     companyName: row.companyName,
     rowKey: row.rowKey ?? null,
-    contactId: row.contactId ?? null,
-    contactName: row.primaryContactName,
-    contactPhone: row.primaryContactPhone,
-    contactEmail: row.primaryContactEmail,
-    isPrimaryContact: Boolean(row.isPrimaryContact),
+    contactId: displayRow.contactId ?? null,
+    contactName: displayRow.primaryContactName,
+    contactPhone: displayRow.primaryContactPhone,
+    contactEmail: displayRow.primaryContactEmail,
+    isPrimaryContact: isResolvedFromSameContact ? Boolean(row.isPrimaryContact) : false,
     salesRepName: row.salesRepName,
     address: row.address,
     category: row.category,
@@ -253,6 +310,9 @@ function normalizeContactNameForDuplicate(value: string | null | undefined): str
 }
 
 function isSalesRepMissing(row: BusinessAccountRow): boolean {
+  if (isCompanyAssignmentMissing(row)) {
+    return false;
+  }
   const hasRepId = typeof row.salesRepId === "string" && row.salesRepId.trim().length > 0;
   const hasRepName = !isShortTextMissing(row.salesRepName, 2);
   return !hasRepId && !hasRepName;
@@ -262,6 +322,32 @@ function isCompanyAssignmentMissing(row: BusinessAccountRow): boolean {
   const businessAccountId =
     typeof row.businessAccountId === "string" ? row.businessAccountId.trim() : "";
   return businessAccountId.length === 0 || isShortTextMissing(row.companyName, 2);
+}
+
+function isAssociatedContactRow(row: BusinessAccountRow): boolean {
+  return typeof row.rowKey === "string" && row.rowKey.includes(":contact:");
+}
+
+function isPhoneNumberIssue(value: string | null | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.startsWith("111")) {
+    return true;
+  }
+
+  return !/^\d{3}-\d{3}-\d{4}$/.test(trimmed);
+}
+
+function isContactEmailMissing(value: string | null | undefined): boolean {
+  return !value || value.trim().length === 0;
 }
 
 function findDuplicateCompanyAccountGroups(groups: AccountGroup[]): Map<string, string> {
@@ -402,6 +488,8 @@ function createEmptyIssueSets(): MetricIssueSets {
   return {
     missingCompany: { account: [], row: [] },
     missingContact: { account: [], row: [] },
+    invalidPhone: { account: [], row: [] },
+    missingContactEmail: { account: [], row: [] },
     missingSalesRep: { account: [], row: [] },
     missingCategory: { account: [], row: [] },
     missingRegion: { account: [], row: [] },
@@ -416,10 +504,11 @@ export function buildDataQualitySnapshot(
   rows: BusinessAccountRow[],
   computedAtIso = new Date().toISOString(),
 ): DataQualitySnapshot {
-  const groups = groupRowsByAccount(rows);
+  const filteredRows = filterSuppressedBusinessAccountRows(rows);
+  const groups = groupRowsByAccount(filteredRows);
   const totals = {
     accounts: groups.length,
-    rows: rows.length,
+    rows: filteredRows.length,
   };
 
   const duplicateCompanyAccountGroups = findDuplicateCompanyAccountGroups(groups);
@@ -429,6 +518,8 @@ export function buildDataQualitySnapshot(
   const missingAccountSets: Record<DataQualityMetricKey, Set<string>> = {
     missingCompany: new Set<string>(),
     missingContact: new Set<string>(),
+    invalidPhone: new Set<string>(),
+    missingContactEmail: new Set<string>(),
     missingSalesRep: new Set<string>(),
     missingCategory: new Set<string>(),
     missingRegion: new Set<string>(),
@@ -441,12 +532,24 @@ export function buildDataQualitySnapshot(
   const rowsWithAnyIssues = new Set<string>();
 
   groups.forEach((group) => {
-    const accountIssueRow = buildIssueRow(group.accountKey, group.representativeRow);
+    const accountIssueRow = buildIssueRow(
+      group.accountKey,
+      group.representativeRow,
+      group.rows,
+    );
 
     const missingCompanyAccount = isCompanyAssignmentMissing(group.representativeRow);
     const missingContactAccount =
       group.rows.length === 0 ||
-      group.rows.every((row) => isShortTextMissing(row.primaryContactName, 2));
+      !group.rows.some((row) => isAssociatedContactRow(row));
+    const invalidPhoneRows = group.rows.filter(
+      (row) => isAssociatedContactRow(row) && isPhoneNumberIssue(row.primaryContactPhone),
+    );
+    const invalidPhoneAccount = invalidPhoneRows.length > 0;
+    const missingContactEmailRows = group.rows.filter(
+      (row) => isAssociatedContactRow(row) && isContactEmailMissing(row.primaryContactEmail),
+    );
+    const missingContactEmailAccount = missingContactEmailRows.length > 0;
     const missingSalesRepAccount = isSalesRepMissing(group.representativeRow);
     const missingCategoryAccount = isAttributeMissing(group.representativeRow.category);
     const missingRegionAccount = isAttributeMissing(group.representativeRow.companyRegion);
@@ -460,6 +563,8 @@ export function buildDataQualitySnapshot(
     const accountHasAnyIssue =
       missingCompanyAccount ||
       missingContactAccount ||
+      invalidPhoneAccount ||
+      missingContactEmailAccount ||
       missingSalesRepAccount ||
       missingCategoryAccount ||
       missingRegionAccount ||
@@ -478,6 +583,18 @@ export function buildDataQualitySnapshot(
     if (missingContactAccount) {
       missingAccountSets.missingContact.add(group.accountKey);
       issues.missingContact.account.push(accountIssueRow);
+    }
+    if (invalidPhoneAccount) {
+      missingAccountSets.invalidPhone.add(group.accountKey);
+      issues.invalidPhone.account.push(
+        buildIssueRow(group.accountKey, invalidPhoneRows[0], group.rows),
+      );
+    }
+    if (missingContactEmailAccount) {
+      missingAccountSets.missingContactEmail.add(group.accountKey);
+      issues.missingContactEmail.account.push(
+        buildIssueRow(group.accountKey, missingContactEmailRows[0], group.rows),
+      );
     }
     if (missingSalesRepAccount) {
       missingAccountSets.missingSalesRep.add(group.accountKey);
@@ -502,24 +619,39 @@ export function buildDataQualitySnapshot(
     if (duplicateBusinessAccount) {
       missingAccountSets.duplicateBusinessAccount.add(group.accountKey);
       issues.duplicateBusinessAccount.account.push(
-        buildIssueRow(group.accountKey, group.representativeRow, duplicateCompanyGroupKey),
+        buildIssueRow(
+          group.accountKey,
+          group.representativeRow,
+          group.rows,
+          duplicateCompanyGroupKey,
+        ),
       );
       // Count duplicate business accounts once per account even on row basis.
       // This avoids inflating duplicate-account issues by contact count.
       issues.duplicateBusinessAccount.row.push(
-        buildIssueRow(group.accountKey, group.representativeRow, duplicateCompanyGroupKey),
+        buildIssueRow(
+          group.accountKey,
+          group.representativeRow,
+          group.rows,
+          duplicateCompanyGroupKey,
+        ),
       );
     }
     if (duplicateContactAccount) {
       missingAccountSets.duplicateContact.add(group.accountKey);
       issues.duplicateContact.account.push(
-        buildIssueRow(group.accountKey, group.representativeRow, `${group.accountKey}|duplicate-contact`),
+        buildIssueRow(
+          group.accountKey,
+          group.representativeRow,
+          group.rows,
+          `${group.accountKey}|duplicate-contact`,
+        ),
       );
     }
 
     group.rows.forEach((row, rowIndex) => {
       const rowIssueIdentity = buildRowIssueIdentity(group.accountKey, row, rowIndex);
-      const rowIssue = buildIssueRow(group.accountKey, row);
+      const rowIssue = buildIssueRow(group.accountKey, row, group.rows);
       const contactDuplicateKey = normalizeContactNameForDuplicate(row.primaryContactName);
       let rowHasIssue = false;
 
@@ -527,8 +659,16 @@ export function buildDataQualitySnapshot(
         issues.missingCompany.row.push(rowIssue);
         rowHasIssue = true;
       }
-      if (isShortTextMissing(row.primaryContactName, 2)) {
+      if (missingContactAccount && rowIndex === 0) {
         issues.missingContact.row.push(rowIssue);
+        rowHasIssue = true;
+      }
+      if (isAssociatedContactRow(row) && isPhoneNumberIssue(row.primaryContactPhone)) {
+        issues.invalidPhone.row.push(rowIssue);
+        rowHasIssue = true;
+      }
+      if (isAssociatedContactRow(row) && isContactEmailMissing(row.primaryContactEmail)) {
+        issues.missingContactEmail.row.push(rowIssue);
         rowHasIssue = true;
       }
       if (isSalesRepMissing(row)) {
@@ -560,7 +700,12 @@ export function buildDataQualitySnapshot(
         duplicateContactNames.has(contactDuplicateKey)
       ) {
         issues.duplicateContact.row.push(
-          buildIssueRow(group.accountKey, row, `${group.accountKey}|${contactDuplicateKey}`),
+          buildIssueRow(
+            group.accountKey,
+            row,
+            group.rows,
+            `${group.accountKey}|${contactDuplicateKey}`,
+          ),
         );
         rowHasIssue = true;
       }

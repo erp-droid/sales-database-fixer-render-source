@@ -1,3 +1,5 @@
+export const runtime = "nodejs";
+
 import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
@@ -22,7 +24,9 @@ import {
   optimisticTimestampMatches,
 } from "@/lib/contact-merge";
 import { buildPrimaryContactFallbackPayloads } from "@/lib/business-accounts";
+import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { replaceReadModelAccountRows } from "@/lib/read-model/accounts";
 import { parseContactMergePayload } from "@/lib/validation";
 import type { ContactMergeResponse } from "@/types/contact-merge";
 
@@ -119,6 +123,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         const primaryPayload = buildPrimaryContactFallbackPayloads(
           context.rawAccount,
           payload.keepContactId,
+          keepRawContact,
         )[0];
         await updateBusinessAccount(
           cookieValue,
@@ -134,6 +139,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           context,
           payload.keepContactId,
           authCookieRefresh,
+          keepRawContact,
         );
       } catch (error) {
         if (error instanceof HttpError) {
@@ -206,6 +212,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       accountRows,
       warnings: scope.warnings,
     };
+
+    if (getEnv().READ_MODEL_ENABLED) {
+      replaceReadModelAccountRows(
+        refreshedContext.resolvedRecordId,
+        responsePayload.accountRows,
+      );
+    }
 
     const response = NextResponse.json(responsePayload);
     if (authCookieRefresh.value) {

@@ -23,6 +23,8 @@
 # misc
 .DS_Store
 *.pem
+/data/
+/.data-quality-history.json
 
 # debug
 npm-debug.log*

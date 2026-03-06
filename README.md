@@ -35,16 +35,24 @@ AUTH_COOKIE_SECURE=false
 
 ACUMATICA_BASE_URL=https://meadowbrook.acumatica.com
 ACUMATICA_ENTITY_PATH=/entity/lightspeed/24.200.001
-ACUMATICA_COMPANY=
+ACUMATICA_COMPANY=MeadowBrook Live
 ACUMATICA_BRANCH=
 ACUMATICA_LOCALE=en-US
 
 ADDRESS_COMPLETE_API_KEY=AA11-AA11-AA11-AA11
 ADDRESS_COMPLETE_FIND_URL=https://ws1.postescanada-canadapost.ca/AddressComplete/Interactive/Find/v2.10/json3.ws
 ADDRESS_COMPLETE_RETRIEVE_URL=https://ws1.postescanada-canadapost.ca/AddressComplete/Interactive/Retrieve/v2.10/json3.ws
+DATA_QUALITY_HISTORY_PATH=./data/data-quality-history.json
 ```
 
 A template is included in `env.example`.
+
+For this environment:
+
+- `ACUMATICA_COMPANY` should be `MeadowBrook Live`
+- the app prefers `/entity/lightspeed/24.200.001`
+- if that custom endpoint is unavailable, the app will fall back to `/entity/eCommerce/24.200.001`
+- if `eCommerce` is unavailable or unusable for `BusinessAccount` reads, the app will fall back to `/entity/Default/24.200.001`
 
 If you want to mirror Jeff's custom auth gateway instead of direct Acumatica login, set:
 - `AUTH_PROVIDER=custom`
@@ -76,6 +84,42 @@ Open `http://localhost:3000`.
 
 ```bash
 npm test
+```
+
+## Deployment
+
+For the current architecture, the simplest production setup is a single Dockerized service with a persistent disk.
+
+- Best fit: Railway with a mounted volume at `/app/data`
+- Also works: Render or Fly.io with the same volume pattern
+- Poor fit right now: Vercel, because this app writes server state to local files (`SQLite` plus data-quality history)
+
+Recommended production environment values:
+
+```bash
+READ_MODEL_SQLITE_PATH=/app/data/read-model.sqlite
+DATA_QUALITY_HISTORY_PATH=/app/data/data-quality-history.json
+AUTH_COOKIE_SECURE=true
+```
+
+If you deploy this Docker image on Railway with a mounted volume, also set:
+
+```bash
+RAILWAY_RUN_UID=0
+```
+
+Railway mounts volumes as `root`, and their docs note that non-root Docker images need this override to write to the attached volume.
+
+Build and run locally with Docker:
+
+```bash
+docker build -t business-accounts-app .
+docker run --rm -p 3000:3000 \
+  -e ACUMATICA_BASE_URL=... \
+  -e ACUMATICA_COMPANY=... \
+  -e READ_MODEL_SQLITE_PATH=/app/data/read-model.sqlite \
+  -e DATA_QUALITY_HISTORY_PATH=/app/data/data-quality-history.json \
+  business-accounts-app
 ```
 
 ## Notes

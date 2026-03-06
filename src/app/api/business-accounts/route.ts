@@ -1,3 +1,5 @@
+export const runtime = "nodejs";
+
 import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
@@ -19,6 +21,7 @@ import {
   buildBusinessAccountCreatePayload,
   normalizeCreatedBusinessAccountRows,
 } from "@/lib/business-account-create";
+import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import {
   enforceSinglePrimaryPerAccountRows,
@@ -27,6 +30,11 @@ import {
   queryBusinessAccounts,
   selectPrimaryContactIndex,
 } from "@/lib/business-accounts";
+import {
+  queryReadModelBusinessAccounts,
+  replaceReadModelAccountRows,
+} from "@/lib/read-model/accounts";
+import { maybeTriggerReadModelSync, readSyncStatus } from "@/lib/read-model/sync";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type { BusinessAccountCreateResponse } from "@/types/business-account-create";
 import { parseBusinessAccountCreatePayload, parseListQuery } from "@/lib/validation";
@@ -331,12 +339,6 @@ function buildFallbackRowFromContact(contact: unknown, index: number): BusinessA
   const contactName = readContactDisplayName(contact);
   const contactEmail = readContactEmail(contact);
   const contactPhone = readContactPhone(contact);
-  const companyName =
-    pickFirstText([
-      readWrappedString(contact, "CompanyName"),
-      readWrappedString(contact, "BusinessAccount"),
-      contactName,
-    ]) ?? "Unknown company";
 
   return {
     id: contactRecordId,
@@ -352,7 +354,7 @@ function buildFallbackRowFromContact(contact: unknown, index: number): BusinessA
     companyRegion: null,
     week: null,
     businessAccountId: readWrappedString(contact, "BusinessAccount") ?? "",
-    companyName,
+    companyName: "",
     address: "",
     addressLine1: "",
     addressLine2: "",
@@ -441,13 +443,14 @@ function buildSyncRowsFromContacts(
       rowKey: `${base.accountRecordId ?? base.id}:contact:${contactId ?? contactRecordId ?? index}`,
       accountRecordId: base.accountRecordId ?? base.id,
       businessAccountId: businessAccountCode ?? base.businessAccountId,
-      companyName:
-        pickFirstText([
-          base.companyName,
-          readWrappedString(contact, "CompanyName"),
-          businessAccountCode,
-          contactName,
-        ]) ?? "Unknown company",
+      companyName: hasText(businessAccountCode)
+        ? pickFirstText([
+            base.companyName,
+            readWrappedString(contact, "CompanyName"),
+            businessAccountCode,
+            contactName,
+          ]) ?? ""
+        : base.companyName,
       contactId,
       isPrimaryContact: false,
       primaryContactName: pickFirstText([contactName]),
@@ -737,6 +740,25 @@ async function queryAccountsWithCookie(
     full?: boolean;
   },
 ) {
+  const { READ_MODEL_ENABLED } = getEnv();
+  if (READ_MODEL_ENABLED) {
+    maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+    const total = options?.full
+      ? queryReadModelBusinessAccounts({
+          ...params,
+          page: 1,
+          pageSize: 1,
+        }).total
+      : null;
+    const result = queryReadModelBusinessAccounts({
+      ...params,
+      page: options?.full ? 1 : params.page,
+      pageSize: options?.full ? Math.max(1, total ?? 1) : params.pageSize,
+    });
+
+    return result;
+  }
+
   const isFullDatasetRequest = Boolean(options?.full);
   const rawAccounts = await fetchBusinessAccounts(
     cookieValue,
@@ -787,6 +809,16 @@ async function querySyncBatchWithCookie(
   params: ReturnType<typeof parseListQuery>,
   authCookieRefresh: AuthCookieRefresh,
 ) {
+  const { READ_MODEL_ENABLED } = getEnv();
+  if (READ_MODEL_ENABLED) {
+    maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+    const result = queryReadModelBusinessAccounts(params);
+    return {
+      ...result,
+      hasMore: params.page * params.pageSize < result.total,
+    };
+  }
+
   const page = Math.max(1, params.page);
   const pageSize = Math.max(1, params.pageSize);
   const skip = (page - 1) * pageSize;
@@ -944,6 +976,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       warnings,
     };
 
+    if (getEnv().READ_MODEL_ENABLED) {
+      replaceReadModelAccountRows(
+        responseBody.businessAccountRecordId,
+        responseBody.accountRows,
+      );
+    }
+
     const response = NextResponse.json(responseBody, { status: 201 });
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
@@ -994,6 +1033,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     cookieValue = requireAuthCookieValue(request);
     params = parseListQuery(request.nextUrl.searchParams);
+    if (getEnv().READ_MODEL_ENABLED && syncBatch && readSyncStatus().rowsCount === 0) {
+      maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+    }
     const result = syncBatch
       ? await querySyncBatchWithCookie(cookieValue, params, authCookieRefresh)
       : await queryAccountsWithCookie(

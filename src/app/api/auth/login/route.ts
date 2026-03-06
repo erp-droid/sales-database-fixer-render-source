@@ -126,7 +126,7 @@ function normalizeUpstreamError(status: number, message: string): NextResponse {
     return NextResponse.json(
       {
         error:
-          "Acumatica company is required. Set ACUMATICA_COMPANY in .env.local to the same company used in Jeff's app.",
+          'Acumatica company is required. Set ACUMATICA_COMPANY in .env.local to "MeadowBrook Live".',
       },
       { status: 401 },
     );
@@ -248,7 +248,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     : {
         name: username,
         password,
-        ...(env.ACUMATICA_COMPANY ? { company: env.ACUMATICA_COMPANY } : {}),
+        company: env.ACUMATICA_COMPANY ?? "MeadowBrook Live",
         ...(env.ACUMATICA_BRANCH ? { branch: env.ACUMATICA_BRANCH } : {}),
         ...(env.ACUMATICA_LOCALE ? { locale: env.ACUMATICA_LOCALE } : {}),
       };

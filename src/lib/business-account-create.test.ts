@@ -120,6 +120,8 @@ describe("buildContactCreatePayload", () => {
 
     expect(payload).toMatchObject({
       DisplayName: { value: "Jorge Serrano" },
+      FirstName: { value: "Jorge" },
+      LastName: { value: "Serrano" },
       JobTitle: { value: "Sales" },
       Email: { value: "jserrano@meadowb.com" },
       Phone1: { value: "416-230-4681" },
@@ -127,6 +129,26 @@ describe("buildContactCreatePayload", () => {
       CompanyName: { value: "Alpha Inc" },
       Type: { value: "Contact" },
     });
+  });
+
+  it("falls back to a last-name-only payload for single-word names", () => {
+    const payload = buildContactCreatePayload({
+      request: {
+        displayName: "Prince",
+        jobTitle: "Sales",
+        email: "prince@example.com",
+        phone1: "416-230-4681",
+        contactClass: "sales",
+      },
+      businessAccountId: "B200000003",
+      companyName: "Alpha Inc",
+    });
+
+    expect(payload).toMatchObject({
+      DisplayName: { value: "Prince" },
+      LastName: { value: "Prince" },
+    });
+    expect(payload).not.toHaveProperty("FirstName");
   });
 
   it("uses the centralized contact class mapping", () => {

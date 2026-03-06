@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.env
+.env.*
+data
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.data-quality-history.json
+npm-debug.log*

@@ -10,6 +10,7 @@ export type SortBy =
   | "companyRegion"
   | "week"
   | "address"
+  | "companyPhone"
   | "primaryContactName"
   | "primaryContactPhone"
   | "primaryContactEmail"
@@ -25,6 +26,7 @@ export type BusinessAccountRow = {
   rowKey?: string;
   contactId?: number | null;
   isPrimaryContact?: boolean;
+  companyPhone?: string | null;
   phoneNumber?: string | null;
   salesRepId: string | null;
   salesRepName: string | null;
@@ -52,6 +54,8 @@ export type BusinessAccountRow = {
 
 export type BusinessAccountUpdateRequest = {
   companyName: string;
+  assignedBusinessAccountRecordId: string | null;
+  assignedBusinessAccountId: string | null;
   addressLine1: string;
   addressLine2: string;
   city: string;
@@ -60,6 +64,7 @@ export type BusinessAccountUpdateRequest = {
   country: string;
   targetContactId: number | null;
   setAsPrimaryContact: boolean;
+  primaryOnlyIntent: boolean;
   salesRepId: string | null;
   salesRepName: string | null;
   industryType: string | null;

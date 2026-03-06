@@ -1,3 +1,5 @@
+export const runtime = "nodejs";
+
 import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
@@ -15,6 +17,8 @@ import {
   setBusinessAccountPrimaryContact,
 } from "@/lib/contact-merge-server";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { getEnv } from "@/lib/env";
+import { replaceReadModelAccountRows } from "@/lib/read-model/accounts";
 import type {
   BusinessAccountContactCreatePartialResponse,
   BusinessAccountContactCreateResponse,
@@ -98,6 +102,7 @@ export async function POST(
         serverContext,
         contactId,
         authCookieRefresh,
+        createdContact,
       );
     } catch (error) {
       let refreshedRawAccount = currentRawAccount;
@@ -124,6 +129,9 @@ export async function POST(
             ? error.message
             : "Contact was created, but the primary contact switch failed.",
       };
+      if (getEnv().READ_MODEL_ENABLED) {
+        replaceReadModelAccountRows(serverContext.resolvedRecordId, refreshedRows);
+      }
       const response = NextResponse.json(responseBody, { status: 409 });
       if (authCookieRefresh.value) {
         setAuthCookie(response, authCookieRefresh.value);
@@ -157,6 +165,10 @@ export async function POST(
       setAsPrimary: true,
       warnings: [],
     };
+
+    if (getEnv().READ_MODEL_ENABLED) {
+      replaceReadModelAccountRows(serverContext.resolvedRecordId, accountRows);
+    }
 
     const response = NextResponse.json(responseBody, { status: 201 });
     if (authCookieRefresh.value) {

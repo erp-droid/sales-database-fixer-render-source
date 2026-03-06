@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -22,23 +22,25 @@ import {
   type DataQualityLeaderboardResponse,
   type DataQualityMetric,
   type DataQualityMetricKey,
-  type DataQualityMetricScoreRow,
   type DataQualityThroughputResponse,
   type DataQualityTrendsResponse,
 } from "@/types/data-quality";
 import {
   buildDataQualityIssueKey,
-  buildDataQualitySnapshot,
-  paginateDataQualityIssues,
-  toDataQualitySummaryResponse,
 } from "@/lib/data-quality";
+import {
+  buildAcumaticaBusinessAccountUrl,
+  buildAcumaticaContactUrl,
+} from "@/lib/acumatica-links";
 import { enforceSinglePrimaryPerAccountRows } from "@/lib/business-accounts";
+import { formatPhoneDraftValue, normalizePhoneForSave } from "@/lib/phone";
 import {
   type CachedDataset,
   DATASET_STORAGE_KEYS,
   getMemoryCachedDataset,
   isBusinessAccountRow,
   readCachedDatasetFromStorage,
+  readCachedSyncMeta,
   writeCachedDatasetToStorage,
 } from "@/lib/client-dataset-cache";
 import { prefetchContactMergePreview } from "@/lib/contact-merge-preview-client";
@@ -89,6 +91,8 @@ type RowFixDraft = {
   companyRegion: string;
   subCategory: string;
   industryType: string;
+  primaryContactPhone: string;
+  primaryContactEmail: string;
 };
 
 type MergeGroupState = {
@@ -203,12 +207,20 @@ function isEmployeeLookupResponse(value: unknown): value is EmployeeLookupRespon
   return Array.isArray(record.items) && record.items.every((item) => isEmployeeOption(item));
 }
 
+function parseRequestError(error: unknown, fallbackMessage: string): string {
+  return error instanceof Error ? error.message : fallbackMessage;
+}
+
 function readCachedRows(): BusinessAccountRow[] {
   return readCachedDatasetFromStorage()?.rows ?? [];
 }
 
 function readCachedLastSyncedAt(): string | null {
-  return getMemoryCachedDataset()?.lastSyncedAt ?? readCachedDatasetFromStorage()?.lastSyncedAt ?? null;
+  return (
+    getMemoryCachedDataset()?.lastSyncedAt ??
+    readCachedDatasetFromStorage()?.lastSyncedAt ??
+    readCachedSyncMeta().lastSyncedAt
+  );
 }
 
 function normalizeIssueIdentity(
@@ -436,73 +448,51 @@ function formatSigned(value: number): string {
   return `${value}`;
 }
 
-function toPercent(part: number, total: number): number {
-  if (total <= 0) {
-    return 0;
-  }
-  return Math.round((part / total) * 1000) / 10;
-}
-
-function buildLocalExpandedSummary(
-  rows: BusinessAccountRow[],
-  basis: DataQualityBasis,
-): DataQualityExpandedSummaryResponse | null {
-  if (!rows.length) {
-    return null;
-  }
-
-  const snapshot = buildDataQualitySnapshot(rows);
-  const base = toDataQualitySummaryResponse(snapshot);
-  const totalChecked = basis === "account" ? snapshot.totals.accounts : snapshot.totals.rows;
-  const affectedRecords =
-    basis === "account"
-      ? snapshot.issueTotals.accountsWithIssues
-      : snapshot.issueTotals.rowsWithIssues;
-  const openIssues = snapshot.metrics.reduce((sum, metric) => {
-    return sum + (basis === "account" ? metric.missingAccounts : metric.missingRows);
-  }, 0);
-  const cleanRecords = Math.max(0, totalChecked - affectedRecords);
-  const percentComplete = toPercent(cleanRecords, totalChecked);
-
-  const scoreboard: DataQualityMetricScoreRow[] = snapshot.metrics.map((metric) => {
-    const open = basis === "account" ? metric.missingAccounts : metric.missingRows;
-    const total = totalChecked;
-    const complete = Math.max(0, total - open);
-    return {
-      key: metric.key,
-      label: metric.label,
-      open,
-      reviewed: 0,
-      totalChecked: total,
-      percentComplete: toPercent(complete, total),
-      fixedToday: 0,
-      fixedWeek: 0,
-      fixedMonth: 0,
-      delta7d: 0,
-    };
-  });
-
-  return {
-    ...base,
-    kpis: {
-      timezone: "America/Toronto",
-      basis,
-      openIssues,
-      affectedRecords,
-      reviewedExceptions: 0,
-      cleanRecords,
-      totalChecked,
-      percentComplete,
-    },
-    scoreboard,
-  };
-}
-
 function renderText(value: string | null | undefined): string {
   if (!value || !value.trim()) {
     return "-";
   }
   return value;
+}
+
+function renderRecordLink(
+  label: string | null | undefined,
+  url: string | null,
+  className: string,
+): ReactNode {
+  const text = renderText(label);
+  if (!url || text === "-") {
+    return text;
+  }
+
+  return (
+    <a className={className} href={url} rel="noreferrer" target="_blank">
+      {text}
+    </a>
+  );
+}
+
+function hasUsableContactLabel(value: string | null | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0 && !/^[.\s]+$/.test(value);
+}
+
+function getIssueContactLabel(
+  metric: DataQualityMetricKey,
+  item: DataQualityIssueRow,
+): string | null {
+  if (hasUsableContactLabel(item.contactName)) {
+    return item.contactName;
+  }
+
+  if (metric === "missingContact") {
+    return "No associated contact";
+  }
+
+  if (item.contactId !== null) {
+    return `Unresolved contact ${item.contactId}`;
+  }
+
+  return null;
 }
 
 function metricBarValue(metric: DataQualityMetric, basis: DataQualityBasis): number {
@@ -550,7 +540,13 @@ function describeActivityTrend(created: number, fixed: number): string {
   return "Backlog was flat over this 14-day window because fixes matched new issues.";
 }
 
-export function DataQualityClient() {
+export function DataQualityClient({
+  acumaticaBaseUrl,
+  acumaticaCompanyId,
+}: {
+  acumaticaBaseUrl: string;
+  acumaticaCompanyId: string;
+}) {
   const router = useRouter();
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [sessionWarning, setSessionWarning] = useState<string | null>(null);
@@ -594,40 +590,23 @@ export function DataQualityClient() {
   const reviewedItemKeySet = useMemo(() => new Set(reviewedItemKeys), [reviewedItemKeys]);
   const reviewedGroupKeySet = useMemo(() => new Set(reviewedGroupKeys), [reviewedGroupKeys]);
 
-  const localIssues = useMemo(() => {
-    if (!cachedRows.length) {
-      return null;
-    }
-    const snapshot = buildDataQualitySnapshot(cachedRows);
-    return paginateDataQualityIssues(
-      snapshot,
-      selectedMetric,
-      selectedBasis,
-      issuesPage,
-      issuesPageSize,
-    );
-  }, [cachedRows, issuesPage, issuesPageSize, selectedBasis, selectedMetric]);
-
-  const localSummary = useMemo(
-    () => buildLocalExpandedSummary(cachedRows, selectedBasis),
-    [cachedRows, selectedBasis],
-  );
-  const activeSummary = liveSummary ?? localSummary;
+  const activeSummary = liveSummary;
   const liveSummaryComputedAtIso = liveSummary?.computedAtIso ?? null;
   const liveIssuesMatchSelection =
     liveIssuesKey === currentIssuesKey && liveIssues !== null;
+  const hasLiveIssuesForSelection = liveIssuesMatchSelection && liveIssues !== null;
   const liveIssuesMatchSummary =
     !liveSummaryComputedAtIso ||
-    (liveIssuesMatchSelection && liveIssues?.computedAtIso === liveSummaryComputedAtIso);
-  const shouldUseLiveIssues =
-    liveIssuesMatchSelection && liveIssuesMatchSummary && liveIssues !== null;
+    (hasLiveIssuesForSelection && liveIssues?.computedAtIso === liveSummaryComputedAtIso);
   const drilldownWaitingForFreshLiveIssues =
-    Boolean(liveSummaryComputedAtIso) && !shouldUseLiveIssues && !issuesError;
-  const rawDisplayedIssues = shouldUseLiveIssues
+    Boolean(liveSummaryComputedAtIso) &&
+    hasLiveIssuesForSelection &&
+    !liveIssuesMatchSummary &&
+    !issuesError;
+  const rawDisplayedIssues = hasLiveIssuesForSelection
     ? liveIssues
-    : liveSummaryComputedAtIso
-      ? null
-      : localIssues;
+    : null;
+  const isIssueTableLoading = !rawDisplayedIssues && (isLoadingIssues || drilldownWaitingForFreshLiveIssues);
   const displayedIssues = useMemo(() => {
     if (!rawDisplayedIssues) {
       return rawDisplayedIssues;
@@ -655,7 +634,6 @@ export function DataQualityClient() {
     selectedBasis,
     selectedMetric,
   ]);
-  const usingLiveSummary = Boolean(liveSummary);
 
   const summaryMetricMap = useMemo(() => {
     const next = new Map<DataQualityMetricKey, DataQualityMetric>();
@@ -674,6 +652,113 @@ export function DataQualityClient() {
   const totalChecked = activeKpis?.totalChecked ?? 0;
   const percentComplete = activeKpis?.percentComplete ?? 0;
   const completionDegrees = Math.max(0, Math.min(360, (percentComplete / 100) * 360));
+
+  async function loadSupplementalAnalytics(
+    query: string,
+    options?: {
+      cancelled?: () => boolean;
+      errorTarget?: "summary" | "issues";
+    },
+  ) {
+    const results = await Promise.allSettled([
+      (async () => {
+        const response = await fetch(`/api/data-quality/trends?${query}`, { cache: "no-store" });
+        const payload = await readJsonResponse<DataQualityTrendsResponse | { error?: string }>(
+          response,
+        );
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+        if (!isDataQualityTrendsResponse(payload)) {
+          throw new Error("Unexpected response while loading data quality trends.");
+        }
+        return { key: "trends" as const, payload };
+      })(),
+      (async () => {
+        const response = await fetch(`/api/data-quality/throughput?${query}`, {
+          cache: "no-store",
+        });
+        const payload = await readJsonResponse<DataQualityThroughputResponse | { error?: string }>(
+          response,
+        );
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+        if (!isDataQualityThroughputResponse(payload)) {
+          throw new Error("Unexpected response while loading quality throughput.");
+        }
+        return { key: "throughput" as const, payload };
+      })(),
+      (async () => {
+        const response = await fetch(`/api/data-quality/leaderboard?${query}`, {
+          cache: "no-store",
+        });
+        const payload = await readJsonResponse<DataQualityLeaderboardResponse | { error?: string }>(
+          response,
+        );
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+        if (!isDataQualityLeaderboardResponse(payload)) {
+          throw new Error("Unexpected response while loading leaderboard.");
+        }
+        return { key: "leaderboard" as const, payload };
+      })(),
+      (async () => {
+        const response = await fetch(`/api/data-quality/contributors?${query}`, {
+          cache: "no-store",
+        });
+        const payload = await readJsonResponse<
+          DataQualityContributorsResponse | { error?: string }
+        >(response);
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+        if (!isDataQualityContributorsResponse(payload)) {
+          throw new Error("Unexpected response while loading contributor leaderboard.");
+        }
+        return { key: "contributors" as const, payload };
+      })(),
+    ]);
+
+    if (options?.cancelled?.()) {
+      return;
+    }
+
+    let firstError: string | null = null;
+    for (const result of results) {
+      if (result.status === "rejected") {
+        firstError ??=
+          result.reason instanceof Error
+            ? result.reason.message
+            : "Some data quality analytics failed to load.";
+        continue;
+      }
+
+      switch (result.value.key) {
+        case "trends":
+          setLiveTrends(result.value.payload);
+          break;
+        case "throughput":
+          setLiveThroughput(result.value.payload);
+          break;
+        case "leaderboard":
+          setLiveLeaderboard(result.value.payload);
+          break;
+        case "contributors":
+          setLiveContributors(result.value.payload);
+          break;
+      }
+    }
+
+    if (firstError) {
+      if (options?.errorTarget === "issues") {
+        setIssuesError(firstError);
+      } else {
+        setSummaryError(firstError);
+      }
+    }
+  }
 
   const throughput = liveThroughput ?? {
     timezone: "America/Toronto",
@@ -819,35 +904,6 @@ export function DataQualityClient() {
     });
   }, [duplicateIssueGroups, selectedMetric]);
 
-  const localVisibleIssueTotal = useMemo(() => {
-    if (!cachedRows.length) {
-      return 0;
-    }
-
-    const snapshot = buildDataQualitySnapshot(cachedRows);
-    const sourceRows =
-      selectedBasis === "account"
-        ? snapshot.issues[selectedMetric].account
-        : snapshot.issues[selectedMetric].row;
-
-    return sourceRows.filter((item, index) => {
-      return !isIssueReviewed(
-        selectedMetric,
-        selectedBasis,
-        item,
-        reviewedItemKeySet,
-        reviewedGroupKeySet,
-        `row-${index}`,
-      );
-    }).length;
-  }, [
-    cachedRows,
-    reviewedGroupKeySet,
-    reviewedItemKeySet,
-    selectedBasis,
-    selectedMetric,
-  ]);
-
   const categoryOptionsForSelect = useMemo(
     () => withCurrentOption(CATEGORY_OPTIONS, null),
     [],
@@ -923,6 +979,8 @@ export function DataQualityClient() {
       companyRegion: normalizeOptionValue(COMPANY_REGION_OPTIONS, item.companyRegion),
       subCategory: normalizeOptionValue(SUB_CATEGORY_OPTIONS, item.subCategory),
       industryType: normalizeOptionValue(INDUSTRY_TYPE_OPTIONS, item.industryType),
+      primaryContactPhone: item.contactPhone ?? "",
+      primaryContactEmail: item.contactEmail ?? "",
     };
   }
 
@@ -950,7 +1008,9 @@ export function DataQualityClient() {
       }
 
       if (!event.key || !DATASET_STORAGE_KEYS.includes(event.key as (typeof DATASET_STORAGE_KEYS)[number])) {
-        return;
+        if (event.key !== "businessAccounts.syncMeta.v1") {
+          return;
+        }
       }
       hydrateFromCache();
     }
@@ -986,9 +1046,9 @@ export function DataQualityClient() {
           return;
         }
 
-        setSession({ authenticated: true, user: null });
+        setSession(payload);
         setSessionWarning(
-          "Acumatica session validation is temporarily unavailable. You can still use cached data and retry refresh.",
+          "Your Acumatica session has expired. Sign in again to refresh quality data.",
         );
         return;
       }
@@ -1088,83 +1148,34 @@ export function DataQualityClient() {
         }
 
         const query = params.toString();
-        const [
-          summaryResponse,
-          trendsResponse,
-          throughputResponse,
-          leaderboardResponse,
-          contributorsResponse,
-        ] =
-          await Promise.all([
-            fetch(`/api/data-quality/summary?${query}`, { cache: "no-store" }),
-            fetch(`/api/data-quality/trends?${query}`, { cache: "no-store" }),
-            fetch(`/api/data-quality/throughput?${query}`, { cache: "no-store" }),
-            fetch(`/api/data-quality/leaderboard?${query}`, { cache: "no-store" }),
-            fetch(`/api/data-quality/contributors?${query}`, { cache: "no-store" }),
-          ]);
-
+        const summaryResponse = await fetch(`/api/data-quality/summary?${query}`, {
+          cache: "no-store",
+        });
         const summaryPayload = await readJsonResponse<
           DataQualityExpandedSummaryResponse | { error?: string }
         >(summaryResponse);
-        const trendsPayload = await readJsonResponse<
-          DataQualityTrendsResponse | { error?: string }
-        >(trendsResponse);
-        const throughputPayload = await readJsonResponse<
-          DataQualityThroughputResponse | { error?: string }
-        >(throughputResponse);
-        const leaderboardPayload = await readJsonResponse<
-          DataQualityLeaderboardResponse | { error?: string }
-        >(leaderboardResponse);
-        const contributorsPayload = await readJsonResponse<
-          DataQualityContributorsResponse | { error?: string }
-        >(contributorsResponse);
 
         if (!summaryResponse.ok) {
           throw new Error(parseError(summaryPayload));
         }
-        if (!trendsResponse.ok) {
-          throw new Error(parseError(trendsPayload));
-        }
-        if (!throughputResponse.ok) {
-          throw new Error(parseError(throughputPayload));
-        }
-        if (!leaderboardResponse.ok) {
-          throw new Error(parseError(leaderboardPayload));
-        }
-        if (!contributorsResponse.ok) {
-          throw new Error(parseError(contributorsPayload));
-        }
-
         if (!isDataQualityExpandedSummaryResponse(summaryPayload)) {
           throw new Error("Unexpected response while loading data quality summary.");
-        }
-        if (!isDataQualityTrendsResponse(trendsPayload)) {
-          throw new Error("Unexpected response while loading data quality trends.");
-        }
-        if (!isDataQualityThroughputResponse(throughputPayload)) {
-          throw new Error("Unexpected response while loading quality throughput.");
-        }
-        if (!isDataQualityLeaderboardResponse(leaderboardPayload)) {
-          throw new Error("Unexpected response while loading leaderboard.");
-        }
-        if (!isDataQualityContributorsResponse(contributorsPayload)) {
-          throw new Error("Unexpected response while loading contributor leaderboard.");
         }
 
         if (cancelled) {
           return;
         }
         setLiveSummary(summaryPayload);
-        setLiveTrends(trendsPayload);
-        setLiveThroughput(throughputPayload);
-        setLiveLeaderboard(leaderboardPayload);
-        setLiveContributors(contributorsPayload);
         setSummaryError(null);
+        void loadSupplementalAnalytics(query, {
+          cancelled: () => cancelled,
+          errorTarget: "summary",
+        });
       } catch (error) {
         if (cancelled) {
           return;
         }
-        setSummaryError(error instanceof Error ? error.message : "Failed to load live data quality.");
+        setSummaryError(parseRequestError(error, "Failed to load live data quality."));
       } finally {
         if (!cancelled) {
           setIsRefreshingSummary(false);
@@ -1422,6 +1433,11 @@ export function DataQualityClient() {
   ): BusinessAccountUpdateRequest {
     return {
       companyName: sourceRow.companyName,
+      assignedBusinessAccountRecordId:
+        sourceRow.businessAccountId.trim().length > 0
+          ? (sourceRow.accountRecordId ?? sourceRow.id)
+          : null,
+      assignedBusinessAccountId: sourceRow.businessAccountId.trim() || null,
       addressLine1: sourceRow.addressLine1,
       addressLine2: sourceRow.addressLine2,
       city: sourceRow.city,
@@ -1430,6 +1446,7 @@ export function DataQualityClient() {
       country: sourceRow.country,
       targetContactId: sourceRow.contactId ?? sourceRow.primaryContactId ?? null,
       setAsPrimaryContact: false,
+      primaryOnlyIntent: false,
       salesRepId: sourceRow.salesRepId ?? null,
       salesRepName: sourceRow.salesRepName ?? null,
       industryType: sourceRow.industryType ?? null,
@@ -1529,6 +1546,10 @@ export function DataQualityClient() {
 
   function getSaveButtonLabel(metric: DataQualityMetricKey): string {
     switch (metric) {
+      case "invalidPhone":
+        return "Save phone";
+      case "missingContactEmail":
+        return "Save email";
       case "missingSalesRep":
         return "Save sales rep";
       case "missingCategory":
@@ -1576,6 +1597,39 @@ export function DataQualityClient() {
       payloadOverrides.subCategory = draft.subCategory || null;
     } else if (metric === "missingIndustry") {
       payloadOverrides.industryType = draft.industryType || null;
+    } else if (metric === "invalidPhone") {
+      if (item.contactId === null || item.businessAccountId.trim().length === 0) {
+        setIssuesError("This phone number must be fixed from the contact record in Acumatica.");
+        return;
+      }
+
+      const trimmedPhone = draft.primaryContactPhone.trim();
+      if (trimmedPhone.length === 0) {
+        payloadOverrides.primaryContactPhone = null;
+      } else {
+        const normalizedPhone = normalizePhoneForSave(trimmedPhone);
+        if (normalizedPhone === null) {
+          setIssuesError("Phone number must use the format ###-###-####.");
+          return;
+        }
+        if (normalizedPhone.startsWith("111-")) {
+          setIssuesError("Phone numbers starting with 111 are not allowed.");
+          return;
+        }
+        payloadOverrides.primaryContactPhone = normalizedPhone;
+      }
+    } else if (metric === "missingContactEmail") {
+      if (item.contactId === null || item.businessAccountId.trim().length === 0) {
+        setIssuesError("This email must be fixed from the contact record in Acumatica.");
+        return;
+      }
+
+      const email = draft.primaryContactEmail.trim();
+      if (!email) {
+        setIssuesError("Email address is required.");
+        return;
+      }
+      payloadOverrides.primaryContactEmail = email;
     } else if (metric === "missingCompany" || metric === "duplicateBusinessAccount") {
       const companyName = draft.companyName.trim();
       if (companyName.length <= 2) {
@@ -1731,85 +1785,39 @@ export function DataQualityClient() {
     setIssuesError(null);
 
     try {
-      const baseParams = new URLSearchParams({
+      const refreshedSummaryParams = new URLSearchParams({
         basis: selectedBasis,
         refresh: "1",
       });
-      const baseQuery = baseParams.toString();
-      const [
-        summaryResponse,
-        trendsResponse,
-        throughputResponse,
-        leaderboardResponse,
-        contributorsResponse,
-      ] =
-        await Promise.all([
-          fetch(`/api/data-quality/summary?${baseQuery}`, { cache: "no-store" }),
-          fetch(`/api/data-quality/trends?${baseQuery}`, { cache: "no-store" }),
-          fetch(`/api/data-quality/throughput?${baseQuery}`, { cache: "no-store" }),
-          fetch(`/api/data-quality/leaderboard?${baseQuery}`, { cache: "no-store" }),
-          fetch(`/api/data-quality/contributors?${baseQuery}`, { cache: "no-store" }),
-        ]);
-
+      const refreshedSummaryQuery = refreshedSummaryParams.toString();
+      const sharedSnapshotQuery = new URLSearchParams({
+        basis: selectedBasis,
+      }).toString();
+      const summaryResponse = await fetch(`/api/data-quality/summary?${refreshedSummaryQuery}`, {
+        cache: "no-store",
+      });
       const summaryPayload = await readJsonResponse<
         DataQualityExpandedSummaryResponse | { error?: string }
       >(summaryResponse);
-      const trendsPayload = await readJsonResponse<
-        DataQualityTrendsResponse | { error?: string }
-      >(trendsResponse);
-      const throughputPayload = await readJsonResponse<
-        DataQualityThroughputResponse | { error?: string }
-      >(throughputResponse);
-      const leaderboardPayload = await readJsonResponse<
-        DataQualityLeaderboardResponse | { error?: string }
-      >(leaderboardResponse);
-      const contributorsPayload = await readJsonResponse<
-        DataQualityContributorsResponse | { error?: string }
-      >(contributorsResponse);
 
       if (!summaryResponse.ok) {
         throw new Error(parseError(summaryPayload));
       }
-      if (!trendsResponse.ok) {
-        throw new Error(parseError(trendsPayload));
-      }
-      if (!throughputResponse.ok) {
-        throw new Error(parseError(throughputPayload));
-      }
-      if (!leaderboardResponse.ok) {
-        throw new Error(parseError(leaderboardPayload));
-      }
-      if (!contributorsResponse.ok) {
-        throw new Error(parseError(contributorsPayload));
-      }
       if (!isDataQualityExpandedSummaryResponse(summaryPayload)) {
         throw new Error("Unexpected response while refreshing data quality summary.");
       }
-      if (!isDataQualityTrendsResponse(trendsPayload)) {
-        throw new Error("Unexpected response while refreshing trends.");
-      }
-      if (!isDataQualityThroughputResponse(throughputPayload)) {
-        throw new Error("Unexpected response while refreshing throughput.");
-      }
-      if (!isDataQualityLeaderboardResponse(leaderboardPayload)) {
-        throw new Error("Unexpected response while refreshing leaderboard.");
-      }
-      if (!isDataQualityContributorsResponse(contributorsPayload)) {
-        throw new Error("Unexpected response while refreshing contributor leaderboard.");
-      }
 
       setLiveSummary(summaryPayload);
-      setLiveTrends(trendsPayload);
-      setLiveThroughput(throughputPayload);
-      setLiveLeaderboard(leaderboardPayload);
-      setLiveContributors(contributorsPayload);
+      setSummaryError(null);
+      void loadSupplementalAnalytics(sharedSnapshotQuery, {
+        errorTarget: "summary",
+      });
 
       const issuesParams = new URLSearchParams({
         metric: selectedMetric,
         basis: selectedBasis,
         page: String(issuesPage),
         pageSize: String(issuesPageSize),
-        refresh: "1",
       });
       const issuesResponse = await fetch(`/api/data-quality/issues?${issuesParams.toString()}`, {
         cache: "no-store",
@@ -1826,7 +1834,7 @@ export function DataQualityClient() {
       setLiveIssues(issuesPayload);
       setLiveIssuesKey(currentIssuesKey);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Refresh failed.";
+      const message = parseRequestError(error, "Refresh failed.");
       setSummaryError(message);
       setIssuesError(message);
     } finally {
@@ -1897,17 +1905,13 @@ export function DataQualityClient() {
       ? Math.max(
           summaryIssuesTotal,
           displayedIssues?.total ?? 0,
-          !liveSummaryComputedAtIso && cachedRows.length > 0 ? localVisibleIssueTotal : 0,
         )
       : displayedIssues
         ? Math.max(
             displayedIssues.items.length,
             displayedIssues.total,
-            cachedRows.length > 0 ? localVisibleIssueTotal : 0,
           )
-        : cachedRows.length > 0
-          ? localVisibleIssueTotal
-          : 0;
+        : 0;
   const issuesTotalPages = Math.max(1, Math.ceil(derivedIssuesTotal / issuesPageSize));
 
   useEffect(() => {
@@ -1958,7 +1962,7 @@ export function DataQualityClient() {
       {mergeSuccessMessage ? <p className={styles.success}>{mergeSuccessMessage}</p> : null}
 
       <section className={styles.statusBar}>
-        <span className={styles.stateTag}>{usingLiveSummary ? "Live verified" : "Cached snapshot"}</span>
+        <span className={styles.stateTag}>{activeSummary ? "SQLite snapshot" : "Loading snapshot"}</span>
         <span>Last computed: {formatDateTime(activeSummary?.computedAtIso)}</span>
         <span>Rows cached: {cachedRows.length.toLocaleString()}</span>
       </section>
@@ -1986,7 +1990,7 @@ export function DataQualityClient() {
               <strong>{affectedRecords.toLocaleString()}</strong>
             </div>
             <div className={styles.kpiTile}>
-              <small>Total Checked</small>
+              <small>Total Records</small>
               <strong>{totalChecked.toLocaleString()}</strong>
             </div>
             <div className={styles.kpiTile}>
@@ -2370,13 +2374,13 @@ export function DataQualityClient() {
           </p>
         ) : null}
 
-        {isLoadingIssues || drilldownWaitingForFreshLiveIssues ? (
+        {isIssueTableLoading ? (
           <p className={styles.loading}>Loading issue details...</p>
         ) : null}
 
         {isDuplicateMetric(selectedMetric) ? (
           <div className={styles.duplicateGroups}>
-            {drilldownWaitingForFreshLiveIssues ? null : duplicateIssueGroups.length ? (
+            {isIssueTableLoading ? null : duplicateIssueGroups.length ? (
               duplicateIssueGroups.map((group) => (
                 <article className={styles.duplicateGroup} key={group.key}>
                   <header className={styles.duplicateGroupHeader}>
@@ -2435,13 +2439,35 @@ export function DataQualityClient() {
                       const savingFix = Boolean(savingFixKeys[fixKey]);
                       const canEditDuplicateBusiness =
                         selectedMetric === "duplicateBusinessAccount";
-                      return (
-                        <article
-                          className={styles.duplicateCard}
-                          key={`${group.key}:${item.rowKey ?? index}`}
-                        >
-                          <p className={styles.duplicateCardTitle}>{renderText(item.companyName)}</p>
-                          <p>{renderText(item.contactName)}</p>
+                    return (
+                      <article
+                        className={styles.duplicateCard}
+                        key={`${group.key}:${item.rowKey ?? index}`}
+                      >
+                          <p className={styles.duplicateCardTitle}>
+                            {renderRecordLink(
+                              item.companyName,
+                              buildAcumaticaBusinessAccountUrl(
+                                acumaticaBaseUrl,
+                                item.businessAccountId,
+                                acumaticaCompanyId,
+                              ),
+                              styles.recordLink,
+                            )}
+                          </p>
+                          <p>
+                            {renderRecordLink(
+                              getIssueContactLabel(selectedMetric, item),
+                              hasUsableContactLabel(item.contactName)
+                                ? buildAcumaticaContactUrl(
+                                    acumaticaBaseUrl,
+                                    item.contactId,
+                                    acumaticaCompanyId,
+                                  )
+                                : null,
+                              styles.recordLink,
+                            )}
+                          </p>
                           <p>{renderText(item.contactPhone)}</p>
                           <p>{renderText(item.contactEmail)}</p>
                           <p>{renderText(item.address)}</p>
@@ -2523,7 +2549,7 @@ export function DataQualityClient() {
                 </tr>
               </thead>
               <tbody>
-                {drilldownWaitingForFreshLiveIssues ? (
+                {isIssueTableLoading ? (
                   <tr>
                     <td className={styles.emptyRow} colSpan={9}>
                       Loading live issue details...
@@ -2550,9 +2576,29 @@ export function DataQualityClient() {
                     );
                     return (
                       <tr key={`${item.accountKey}:${item.rowKey ?? index}`}>
-                        <td>{renderText(item.companyName)}</td>
                         <td>
-                          {renderText(item.contactName)}
+                          {renderRecordLink(
+                            item.companyName,
+                            buildAcumaticaBusinessAccountUrl(
+                              acumaticaBaseUrl,
+                              item.businessAccountId,
+                              acumaticaCompanyId,
+                            ),
+                            styles.recordLink,
+                          )}
+                        </td>
+                        <td>
+                          {renderRecordLink(
+                            getIssueContactLabel(selectedMetric, item),
+                            hasUsableContactLabel(item.contactName)
+                              ? buildAcumaticaContactUrl(
+                                  acumaticaBaseUrl,
+                                  item.contactId,
+                                  acumaticaCompanyId,
+                                )
+                              : null,
+                            styles.recordLink,
+                          )}
                           {item.isPrimaryContact ? <span className={styles.primaryBadge}>PRIMARY</span> : null}
                         </td>
                         <td>{renderText(item.salesRepName)}</td>
@@ -2760,6 +2806,70 @@ export function DataQualityClient() {
                               <button
                                 className={styles.inlineSaveButton}
                                 disabled={savingFix}
+                                onClick={() => {
+                                  void handleSaveIssueFix(item);
+                                }}
+                                type="button"
+                              >
+                                {savingFix ? "Saving..." : getSaveButtonLabel(selectedMetric)}
+                              </button>
+                            </div>
+                          ) : null}
+                          {selectedMetric === "invalidPhone" ? (
+                            <div className={styles.inlineFixBlock}>
+                              <input
+                                className={styles.inlineFixInput}
+                                onChange={(event) => {
+                                  updateRowFixDraft(
+                                    fixKey,
+                                    (current) => ({
+                                      ...current,
+                                      primaryContactPhone: formatPhoneDraftValue(event.target.value),
+                                    }),
+                                    draft,
+                                  );
+                                }}
+                                placeholder="###-###-####"
+                                value={draft.primaryContactPhone}
+                              />
+                              <button
+                                className={styles.inlineSaveButton}
+                                disabled={savingFix || item.contactId === null || !item.businessAccountId.trim()}
+                                onClick={() => {
+                                  void handleSaveIssueFix(item);
+                                }}
+                                type="button"
+                              >
+                                {savingFix ? "Saving..." : getSaveButtonLabel(selectedMetric)}
+                              </button>
+                            </div>
+                          ) : null}
+                          {selectedMetric === "missingContactEmail" ? (
+                            <div className={styles.inlineFixBlock}>
+                              <input
+                                className={styles.inlineFixInput}
+                                onChange={(event) => {
+                                  updateRowFixDraft(
+                                    fixKey,
+                                    (current) => ({
+                                      ...current,
+                                      primaryContactEmail: event.target.value,
+                                    }),
+                                    draft,
+                                  );
+                                }}
+                                placeholder="Email address"
+                                type="email"
+                                value={draft.primaryContactEmail}
+                              />
+                              <button
+                                className={styles.inlineSaveButton}
+                                disabled={
+                                  savingFix ||
+                                  item.contactId === null ||
+                                  !item.businessAccountId.trim() ||
+                                  !draft.primaryContactEmail.trim()
+                                }
                                 onClick={() => {
                                   void handleSaveIssueFix(item);
                                 }}

@@ -1,8 +1,10 @@
 import type { AuthCookieRefreshState } from "@/lib/acumatica";
 import {
   fetchBusinessAccounts,
+  fetchBusinessAccountsByBusinessAccountIds,
   fetchContacts,
 } from "@/lib/acumatica";
+import { getEnv } from "@/lib/env";
 import {
   buildDataQualitySnapshot,
   paginateDataQualityIssues,
@@ -23,6 +25,9 @@ import {
   enforceSinglePrimaryPerAccountRows,
   selectPrimaryContactIndex,
 } from "@/lib/business-accounts";
+import { registerReadModelCacheClearer } from "@/lib/read-model/cache";
+import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
+import { maybeTriggerReadModelSync } from "@/lib/read-model/sync";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type {
   DataQualityBasis,
@@ -47,6 +52,11 @@ type SnapshotCacheEntry = {
 
 let snapshotCache: SnapshotCacheEntry | null = null;
 let snapshotInFlight: Promise<DataQualitySnapshot> | null = null;
+
+registerReadModelCacheClearer(() => {
+  snapshotCache = null;
+  snapshotInFlight = null;
+});
 
 function readWrappedString(record: unknown, key: string): string | null {
   if (!record || typeof record !== "object") {
@@ -229,12 +239,6 @@ function buildFallbackRowFromContact(contact: unknown, index: number): BusinessA
   const contactName = readContactDisplayName(contact);
   const contactEmail = readContactEmail(contact);
   const contactPhone = readContactPhone(contact);
-  const companyName =
-    pickFirstText([
-      readWrappedString(contact, "CompanyName"),
-      readWrappedString(contact, "BusinessAccount"),
-      contactName,
-    ]) ?? "Unknown company";
 
   return {
     id: contactRecordId,
@@ -250,7 +254,7 @@ function buildFallbackRowFromContact(contact: unknown, index: number): BusinessA
     companyRegion: null,
     week: null,
     businessAccountId: readWrappedString(contact, "BusinessAccount") ?? "",
-    companyName,
+    companyName: "",
     address: "",
     addressLine1: "",
     addressLine2: "",
@@ -339,13 +343,14 @@ function buildSyncRowsFromContacts(
       rowKey: `${base.accountRecordId ?? base.id}:contact:${contactId ?? contactRecordId ?? index}`,
       accountRecordId: base.accountRecordId ?? base.id,
       businessAccountId: businessAccountCode ?? base.businessAccountId,
-      companyName:
-        pickFirstText([
-          base.companyName,
-          readWrappedString(contact, "CompanyName"),
-          businessAccountCode,
-          contactName,
-        ]) ?? "Unknown company",
+      companyName: hasText(businessAccountCode)
+        ? pickFirstText([
+            base.companyName,
+            readWrappedString(contact, "CompanyName"),
+            businessAccountCode,
+            contactName,
+          ]) ?? ""
+        : base.companyName,
       contactId,
       isPrimaryContact: false,
       primaryContactName: pickFirstText([contactName]),
@@ -486,19 +491,21 @@ function dedupeRows(rows: BusinessAccountRow[]): BusinessAccountRow[] {
   return [...deduped.values()];
 }
 
-async function fetchAllSyncRows(
+export async function fetchAllSyncRows(
   cookieValue: string,
   authCookieRefresh: AuthCookieRefreshState,
 ): Promise<BusinessAccountRow[]> {
-  const [rawContacts, rawAccounts] = await Promise.all([
-    fetchContacts(
-      cookieValue,
-      {
-        batchSize: 250,
-      },
-      authCookieRefresh,
-    ),
-    fetchBusinessAccounts(
+  const rawContacts = await fetchContacts(
+    cookieValue,
+    {
+      batchSize: 250,
+    },
+    authCookieRefresh,
+  );
+  let rawAccounts: unknown[] = [];
+
+  try {
+    rawAccounts = await fetchBusinessAccounts(
       cookieValue,
       {
         batchSize: 250,
@@ -508,8 +515,18 @@ async function fetchAllSyncRows(
         ensureContacts: true,
       },
       authCookieRefresh,
-    ),
-  ]);
+    );
+  } catch {
+    const contactBusinessIds = rawContacts
+      .map((contact) => readWrappedString(contact, "BusinessAccount"))
+      .filter((value): value is string => Boolean(value));
+
+    rawAccounts = await fetchBusinessAccountsByBusinessAccountIds(
+      cookieValue,
+      contactBusinessIds,
+      authCookieRefresh,
+    );
+  }
   const filteredContacts = rawContacts.filter(
     (contact) => !shouldExcludeContactByApToken(contact),
   );
@@ -552,7 +569,16 @@ async function computeLiveSnapshot(
   cookieValue: string,
   authCookieRefresh: AuthCookieRefreshState,
 ): Promise<DataQualitySnapshot> {
-  const rows = await fetchAllSyncRows(cookieValue, authCookieRefresh);
+  const { READ_MODEL_ENABLED } = getEnv();
+  let rows: BusinessAccountRow[];
+
+  if (READ_MODEL_ENABLED) {
+    maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+    rows = readAllAccountRowsFromReadModel();
+  } else {
+    rows = await fetchAllSyncRows(cookieValue, authCookieRefresh);
+  }
+
   return buildDataQualitySnapshot(rows);
 }
 

@@ -6,6 +6,17 @@ export type AuthCookieRefreshState = {
   value: string | null;
 };
 
+type RequestAcumaticaInit = RequestInit & {
+  authCookieRefresh?: AuthCookieRefreshState;
+};
+
+type ResolvedAcumaticaEndpoint = {
+  entityPath: string;
+  source: "configured" | "fallback-ecommerce" | "fallback-default";
+};
+
+const resolvedAcumaticaEndpointCache = new Map<string, ResolvedAcumaticaEndpoint>();
+
 function getActiveCookieValue(
   cookieValue: string,
   authCookieRefresh?: AuthCookieRefreshState,
@@ -13,14 +24,133 @@ function getActiveCookieValue(
   return authCookieRefresh?.value ?? cookieValue;
 }
 
-function buildAcumaticaUrl(resourcePath: string): string {
+function buildAcumaticaUrl(resourcePath: string, entityPath?: string): string {
   const { ACUMATICA_BASE_URL, ACUMATICA_ENTITY_PATH } = getEnv();
 
   const normalizedResource = resourcePath.startsWith("/")
     ? resourcePath
     : `/${resourcePath}`;
 
-  return `${ACUMATICA_BASE_URL}${ACUMATICA_ENTITY_PATH}${normalizedResource}`;
+  return `${ACUMATICA_BASE_URL}${entityPath ?? ACUMATICA_ENTITY_PATH}${normalizedResource}`;
+}
+
+function readAcumaticaResourceScope(resourcePath: string): string {
+  const normalized = resourcePath.startsWith("/") ? resourcePath.slice(1) : resourcePath;
+  const withoutQuery = normalized.split("?")[0] ?? normalized;
+  const scope = withoutQuery.split("/")[0] ?? "";
+  return scope || "*";
+}
+
+function buildResolvedEndpointCacheKey(resourcePath: string): string {
+  const env = getEnv();
+  return [
+    env.ACUMATICA_BASE_URL,
+    env.ACUMATICA_COMPANY ?? "",
+    env.ACUMATICA_ENTITY_PATH,
+    readAcumaticaResourceScope(resourcePath),
+  ].join("|");
+}
+
+function shouldLogAcumaticaRequest(
+  status: number | null,
+  attempts: number,
+  durationMs: number,
+): boolean {
+  if (status === null) {
+    return true;
+  }
+
+  if (status >= 400) {
+    return true;
+  }
+
+  return attempts > 1 || durationMs >= 1000;
+}
+
+export function deriveFallbackAcumaticaEntityPath(
+  configuredEntityPath: string,
+): string | null {
+  const match = configuredEntityPath.match(/^\/entity\/([^/]+)\/([^/]+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const [, endpointName, version] = match;
+  if (endpointName.toLowerCase() === "ecommerce") {
+    return null;
+  }
+
+  return `/entity/eCommerce/${version}`;
+}
+
+export function deriveDefaultAcumaticaEntityPath(
+  configuredEntityPath: string,
+): string | null {
+  const match = configuredEntityPath.match(/^\/entity\/([^/]+)\/([^/]+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const [, endpointName, version] = match;
+  if (endpointName.toLowerCase() === "default") {
+    return null;
+  }
+
+  return `/entity/Default/${version}`;
+}
+
+function isEndpointNotFoundMessage(message: string | null | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+
+  const normalized = message.trim().toLowerCase();
+  return (
+    (normalized.includes("endpoint [") && normalized.includes("not found")) ||
+    normalized.includes("endpoint not found")
+  );
+}
+
+function buildEndpointDiagnosticMessage(
+  configuredEntityPath: string,
+  fallbackEntityPaths: string[],
+  failures?: Array<{
+    entityPath: string;
+    message: string | null;
+    status: number | null;
+  }>,
+): string {
+  const companyName = getEnv().ACUMATICA_COMPANY ?? "unknown";
+  const includeReasons = (failures ?? []).some((failure) =>
+    hasText(failure.message) && !isEndpointNotFoundMessage(failure.message),
+  );
+
+  const testedPaths = includeReasons && failures && failures.length > 0
+    ? failures
+        .map((failure) => {
+          const suffix = hasText(failure.message)
+            ? ` -> ${failure.message}`
+            : failure.status
+              ? ` -> status ${failure.status}`
+              : "";
+          return `${failure.entityPath}${suffix}`;
+        })
+        .join("\n")
+    : [configuredEntityPath, ...fallbackEntityPaths]
+        .filter((value): value is string => Boolean(value))
+        .join("\n");
+
+  return `Acumatica REST endpoint was not found for company "${companyName}". Tested:\n${testedPaths}`;
+}
+
+function isCustomerManagementPreferencesError(
+  message: string | null | undefined,
+): boolean {
+  if (!message) {
+    return false;
+  }
+
+  return message.toLowerCase().includes("customer management preferences form");
 }
 
 function hasText(value: unknown): value is string {
@@ -243,16 +373,15 @@ async function parseJsonPayload<T>(response: Response, context: string): Promise
   }
 }
 
-async function requestAcumatica<T>(
+async function performAcumaticaFetchAtEntityPath(
   cookieValue: string,
+  entityPath: string,
   resourcePath: string,
-  init?: RequestInit & { authCookieRefresh?: AuthCookieRefreshState },
-): Promise<T> {
+  init?: RequestAcumaticaInit,
+): Promise<Response> {
   const headers = new Headers(init?.headers);
   const authCookieRefresh = init?.authCookieRefresh;
-  const requestInit: RequestInit & { authCookieRefresh?: AuthCookieRefreshState } = init
-    ? { ...init }
-    : {};
+  const requestInit: RequestAcumaticaInit = init ? { ...init } : {};
   delete requestInit.authCookieRefresh;
   headers.set("Accept", "application/json");
   headers.set("Cookie", buildCookieHeader(cookieValue));
@@ -262,33 +391,174 @@ async function requestAcumatica<T>(
   }
 
   const maxRateLimitRetries = 3;
+  const startedAt = Date.now();
+  let finalStatus: number | null = null;
+  let attempts = 0;
 
-  for (let attempt = 0; ; attempt += 1) {
-    const response = await fetch(buildAcumaticaUrl(resourcePath), {
-      ...requestInit,
-      headers,
-      cache: "no-store",
-    });
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      attempts = attempt + 1;
+      const response = await fetch(buildAcumaticaUrl(resourcePath, entityPath), {
+        ...requestInit,
+        headers,
+        cache: "no-store",
+      });
+      finalStatus = response.status;
 
-    if (authCookieRefresh) {
-      const refreshedCookie = extractAuthCookieFromResponseHeaders(
-        response.headers,
-        cookieValue,
-      );
-      if (refreshedCookie) {
-        authCookieRefresh.value = refreshedCookie;
+      if (authCookieRefresh) {
+        const refreshedCookie = extractAuthCookieFromResponseHeaders(
+          response.headers,
+          cookieValue,
+        );
+        if (refreshedCookie) {
+          authCookieRefresh.value = refreshedCookie;
+        }
+      }
+
+      if (response.status === 429 && attempt < maxRateLimitRetries) {
+        const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+        const backoffMs = Math.min(6000, 700 * 2 ** attempt);
+        await sleep(retryAfterMs ?? backoffMs);
+        continue;
+      }
+
+      return response;
+    }
+  } finally {
+    const durationMs = Date.now() - startedAt;
+    if (shouldLogAcumaticaRequest(finalStatus, attempts, durationMs)) {
+      const logPayload = {
+        resourcePath,
+        method: requestInit.method ?? "GET",
+        status: finalStatus,
+        attempts,
+        durationMs,
+        entityPath,
+      };
+
+      if (finalStatus !== null && finalStatus >= 400) {
+        console.warn("[acumatica]", logPayload);
+      } else {
+        console.info("[acumatica]", logPayload);
       }
     }
+  }
+}
 
-    if (response.status === 429 && attempt < maxRateLimitRetries) {
-      const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
-      const backoffMs = Math.min(6000, 700 * 2 ** attempt);
-      await sleep(retryAfterMs ?? backoffMs);
+function buildEndpointCandidates(resourcePath: string): ResolvedAcumaticaEndpoint[] {
+  const env = getEnv();
+  const configuredEntityPath = env.ACUMATICA_ENTITY_PATH;
+  const fallbackEntityPath = deriveFallbackAcumaticaEntityPath(configuredEntityPath);
+  const defaultEntityPath = deriveDefaultAcumaticaEntityPath(configuredEntityPath);
+  const cacheKey = buildResolvedEndpointCacheKey(resourcePath);
+  const cached = resolvedAcumaticaEndpointCache.get(cacheKey);
+
+  const ordered = [
+    cached,
+    {
+      entityPath: configuredEntityPath,
+      source: "configured" as const,
+    },
+    ...(fallbackEntityPath && fallbackEntityPath !== configuredEntityPath
+      ? [
+          {
+            entityPath: fallbackEntityPath,
+            source: "fallback-ecommerce" as const,
+          },
+        ]
+      : []),
+    ...(defaultEntityPath &&
+    defaultEntityPath !== configuredEntityPath &&
+    defaultEntityPath !== fallbackEntityPath
+      ? [
+          {
+            entityPath: defaultEntityPath,
+            source: "fallback-default" as const,
+          },
+        ]
+      : []),
+  ].filter((candidate): candidate is ResolvedAcumaticaEndpoint => Boolean(candidate));
+
+  const deduped: ResolvedAcumaticaEndpoint[] = [];
+  const seen = new Set<string>();
+  for (const candidate of ordered) {
+    if (seen.has(candidate.entityPath)) {
       continue;
     }
+    seen.add(candidate.entityPath);
+    deduped.push(candidate);
+  }
 
-    if (!response.ok) {
-      const errorResponse = await parseErrorResponse(response);
+  return deduped;
+}
+
+function cacheResolvedAcumaticaEndpoint(
+  resourcePath: string,
+  resolved: ResolvedAcumaticaEndpoint,
+): void {
+  const env = getEnv();
+  const cacheKey = buildResolvedEndpointCacheKey(resourcePath);
+  const previous = resolvedAcumaticaEndpointCache.get(cacheKey);
+  resolvedAcumaticaEndpointCache.set(cacheKey, resolved);
+  if (
+    !previous ||
+    previous.entityPath !== resolved.entityPath ||
+    previous.source !== resolved.source
+  ) {
+    console.info("[acumatica-endpoint]", {
+      company: env.ACUMATICA_COMPANY ?? null,
+      configured: env.ACUMATICA_ENTITY_PATH,
+      resourceScope: readAcumaticaResourceScope(resourcePath),
+      selected: resolved.entityPath,
+      source: resolved.source,
+    });
+  }
+}
+
+async function performAcumaticaRequestWithEndpointFallback(
+  cookieValue: string,
+  resourcePath: string,
+  init?: RequestAcumaticaInit,
+): Promise<{
+  response: Response;
+  resolved: ResolvedAcumaticaEndpoint;
+}> {
+  const env = getEnv();
+  const configuredEntityPath = env.ACUMATICA_ENTITY_PATH;
+  const fallbackEntityPath = deriveFallbackAcumaticaEntityPath(configuredEntityPath);
+  const defaultEntityPath = deriveDefaultAcumaticaEntityPath(configuredEntityPath);
+  const candidates = buildEndpointCandidates(resourcePath);
+  const failures: Array<{
+    entityPath: string;
+    message: string | null;
+    status: number | null;
+  }> = [];
+
+  for (const candidate of candidates) {
+    const activeCookieValue = getActiveCookieValue(cookieValue, init?.authCookieRefresh);
+    const response = await performAcumaticaFetchAtEntityPath(
+      activeCookieValue,
+      candidate.entityPath,
+      resourcePath,
+      init,
+    );
+
+    if (response.ok) {
+      cacheResolvedAcumaticaEndpoint(resourcePath, candidate);
+      return {
+        response,
+        resolved: candidate,
+      };
+    }
+
+    const errorResponse = await parseErrorResponse(response.clone());
+    failures.push({
+      entityPath: candidate.entityPath,
+      message: errorResponse.message,
+      status: response.status,
+    });
+
+    if (response.status === 401 || response.status === 403) {
       throw new HttpError(
         response.status,
         errorResponse.message,
@@ -296,12 +566,62 @@ async function requestAcumatica<T>(
       );
     }
 
-    if (response.status === 204) {
-      return null as T;
+    if (
+      isEndpointNotFoundMessage(errorResponse.message) ||
+      isCustomerManagementPreferencesError(errorResponse.message)
+    ) {
+      continue;
     }
 
-    return parseJsonPayload<T>(response, `requesting '${resourcePath}'`);
+    throw new HttpError(
+      response.status,
+      errorResponse.message,
+      errorResponse.details,
+    );
   }
+
+  const diagnostic = buildEndpointDiagnosticMessage(
+    configuredEntityPath,
+    [fallbackEntityPath, defaultEntityPath].filter(
+      (value): value is string => Boolean(value),
+    ),
+    failures,
+  );
+  console.warn("[acumatica-endpoint]", {
+    company: env.ACUMATICA_COMPANY ?? null,
+    configured: configuredEntityPath,
+    resourceScope: readAcumaticaResourceScope(resourcePath),
+    tested: failures,
+    error: diagnostic,
+  });
+  throw new HttpError(502, diagnostic, failures);
+}
+
+async function requestAcumatica<T>(
+  cookieValue: string,
+  resourcePath: string,
+  init?: RequestAcumaticaInit,
+): Promise<T> {
+  const { response } = await performAcumaticaRequestWithEndpointFallback(
+    cookieValue,
+    resourcePath,
+    init,
+  );
+
+  if (!response.ok) {
+    const errorResponse = await parseErrorResponse(response);
+    throw new HttpError(
+      response.status,
+      errorResponse.message,
+      errorResponse.details,
+    );
+  }
+
+  if (response.status === 204) {
+    return null as T;
+  }
+
+  return parseJsonPayload<T>(response, `requesting '${resourcePath}'`);
 }
 
 export type RawBusinessAccount = Record<string, unknown>;
@@ -311,6 +631,7 @@ export type EmployeeDirectoryItem = {
   id: string;
   name: string;
 };
+export type BusinessAccountProfile = "sync" | "detail" | "list" | "map" | "quality";
 
 type FetchContactsOptions = {
   maxRecords?: number;
@@ -402,6 +723,7 @@ type FetchBusinessAccountsOptions = {
   ensureAttributes?: boolean;
   ensureContacts?: boolean;
   ensureMainAddress?: boolean;
+  profile?: BusinessAccountProfile;
 };
 
 const BUSINESS_ACCOUNT_EXPAND_CANDIDATES = [
@@ -414,6 +736,52 @@ const BUSINESS_ACCOUNT_EXPAND_CANDIDATES = [
   "",
 ] as const;
 
+const BUSINESS_ACCOUNT_PROFILE_SELECTS: Record<
+  BusinessAccountProfile,
+  string[] | undefined
+> = {
+  sync: undefined,
+  detail: undefined,
+  list: [
+    "id",
+    "BusinessAccountID",
+    "NoteID",
+    "Owner",
+    "OwnerEmployeeName",
+    "LastModifiedDateTime",
+  ],
+  map: [
+    "id",
+    "BusinessAccountID",
+    "NoteID",
+    "Owner",
+    "OwnerEmployeeName",
+    "LastModifiedDateTime",
+  ],
+  quality: [
+    "id",
+    "BusinessAccountID",
+    "NoteID",
+    "Owner",
+    "OwnerEmployeeName",
+    "LastModifiedDateTime",
+  ],
+};
+
+const BUSINESS_ACCOUNT_PROFILE_EXPANDS: Record<
+  BusinessAccountProfile,
+  string[]
+> = {
+  sync: ["Attributes", "Contacts", "MainAddress", "PrimaryContact"],
+  detail: ["Attributes", "Contacts", "MainAddress", "PrimaryContact"],
+  list: ["MainAddress", "PrimaryContact"],
+  map: ["MainAddress", "PrimaryContact"],
+  quality: ["Attributes", "MainAddress", "PrimaryContact"],
+};
+
+const resolvedExpandByProfile = new Map<BusinessAccountProfile, string>();
+const resolvingExpandByProfile = new Map<BusinessAccountProfile, Promise<string>>();
+
 function shouldRetryWithLighterBusinessAccountExpand(error: unknown): boolean {
   return (
     error instanceof HttpError &&
@@ -423,10 +791,98 @@ function shouldRetryWithLighterBusinessAccountExpand(error: unknown): boolean {
   );
 }
 
+function buildExpandCandidatesForProfile(
+  profile: BusinessAccountProfile,
+): readonly string[] {
+  const requested = BUSINESS_ACCOUNT_PROFILE_EXPANDS[profile];
+  const requestedValue = requested.join(",");
+  const candidates = new Set<string>();
+
+  if (requestedValue) {
+    candidates.add(requestedValue);
+  }
+
+  for (const candidate of BUSINESS_ACCOUNT_EXPAND_CANDIDATES) {
+    if (!candidate) {
+      candidates.add(candidate);
+      continue;
+    }
+
+    const parts = candidate.split(",").filter(Boolean);
+    if (parts.every((part) => requested.includes(part))) {
+      candidates.add(candidate);
+    }
+  }
+
+  return [...candidates];
+}
+
+async function resolveBusinessAccountExpand(
+  cookieValue: string,
+  profile: BusinessAccountProfile,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<string> {
+  const cached = resolvedExpandByProfile.get(profile);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const inFlight = resolvingExpandByProfile.get(profile);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const resolutionPromise = (async () => {
+    const candidates = buildExpandCandidatesForProfile(profile);
+    let lastError: unknown = null;
+
+    for (const expand of candidates) {
+      try {
+        await requestAcumatica<unknown>(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          buildBusinessAccountCollectionPath({
+            top: 1,
+            skip: 0,
+            expand,
+            select: BUSINESS_ACCOUNT_PROFILE_SELECTS[profile],
+          }),
+          {
+            authCookieRefresh,
+          },
+        );
+        resolvedExpandByProfile.set(profile, expand);
+        return expand;
+      } catch (error) {
+        lastError = error;
+        if (!shouldRetryWithLighterBusinessAccountExpand(error)) {
+          throw error;
+        }
+      }
+    }
+
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+
+    return "";
+  })();
+
+  resolvingExpandByProfile.set(profile, resolutionPromise);
+
+  try {
+    return await resolutionPromise;
+  } finally {
+    if (resolvingExpandByProfile.get(profile) === resolutionPromise) {
+      resolvingExpandByProfile.delete(profile);
+    }
+  }
+}
+
 function buildBusinessAccountCollectionPath(options: {
   top: number;
   skip: number;
   expand: string;
+  select?: string[];
   filter?: string;
 }): string {
   const query = new URLSearchParams({
@@ -438,6 +894,10 @@ function buildBusinessAccountCollectionPath(options: {
     query.set("$expand", options.expand);
   }
 
+  if (options.select && options.select.length > 0) {
+    query.set("$select", options.select.join(","));
+  }
+
   if (options.filter) {
     query.set("$filter", options.filter);
   }
@@ -445,13 +905,21 @@ function buildBusinessAccountCollectionPath(options: {
   return `/BusinessAccount?${query.toString()}`;
 }
 
-function buildBusinessAccountByIdPath(id: string, expand: string): string {
+function buildBusinessAccountByIdPath(id: string, expand: string, select?: string[]): string {
   const encodedId = encodeURIComponent(id);
-  if (!expand) {
+  const query = new URLSearchParams();
+  if (expand) {
+    query.set("$expand", expand);
+  }
+  if (select && select.length > 0) {
+    query.set("$select", select.join(","));
+  }
+
+  if (query.size === 0) {
     return `/BusinessAccount/${encodedId}`;
   }
 
-  return `/BusinessAccount/${encodedId}?$expand=${encodeURIComponent(expand)}`;
+  return `/BusinessAccount/${encodedId}?${query.toString()}`;
 }
 
 function buildContactCollectionPath(options: {
@@ -628,7 +1096,14 @@ export async function fetchBusinessAccounts(
   const initialSkip = Math.max(0, Math.trunc(options?.initialSkip ?? 0));
   const batchSize = Math.max(1, Math.min(options?.batchSize ?? 100, 500));
   const filter = options?.filter;
+  const profile = options?.profile ?? "sync";
+  const select = BUSINESS_ACCOUNT_PROFILE_SELECTS[profile];
   const allRows: RawBusinessAccount[] = [];
+  const selectedExpand = await resolveBusinessAccountExpand(
+    cookieValue,
+    profile,
+    authCookieRefresh,
+  );
 
   for (let skip = initialSkip; ; skip += batchSize) {
     if (maxRecords !== null && allRows.length >= maxRecords) {
@@ -644,40 +1119,19 @@ export async function fetchBusinessAccounts(
     }
 
     const activeCookieValue = getActiveCookieValue(cookieValue, authCookieRefresh);
-    let payload: unknown | null = null;
-    let lastError: unknown = null;
-    let selectedExpand = "";
-
-    for (const expand of BUSINESS_ACCOUNT_EXPAND_CANDIDATES) {
-      try {
-        payload = await requestAcumatica<unknown>(
-          activeCookieValue,
-          buildBusinessAccountCollectionPath({
-            top,
-            skip,
-            expand,
-            filter,
-          }),
-          {
-            authCookieRefresh,
-          },
-        );
-        selectedExpand = expand;
-        break;
-      } catch (error) {
-        lastError = error;
-        if (!shouldRetryWithLighterBusinessAccountExpand(error)) {
-          throw error;
-        }
-      }
-    }
-
-    if (payload === null) {
-      if (lastError instanceof Error) {
-        throw lastError;
-      }
-      throw new HttpError(500, "Failed to fetch business accounts.");
-    }
+    const payload = await requestAcumatica<unknown>(
+      activeCookieValue,
+      buildBusinessAccountCollectionPath({
+        top,
+        skip,
+        expand: selectedExpand,
+        select,
+        filter,
+      }),
+      {
+        authCookieRefresh,
+      },
+    );
 
     const rows = unwrapCollection<RawBusinessAccount>(payload);
     let effectiveRows = rows;
@@ -709,6 +1163,7 @@ export async function fetchBusinessAccounts(
             top,
             skip,
             expand: supplementExpandParts.join(","),
+            select,
             filter,
           }),
           {
@@ -755,34 +1210,63 @@ export async function fetchBusinessAccounts(
   return allRows;
 }
 
+export async function fetchBusinessAccountsPage(
+  cookieValue: string,
+  options: {
+    page: number;
+    pageSize: number;
+    filter?: string;
+    profile: BusinessAccountProfile;
+  },
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawBusinessAccount[]> {
+  const page = Math.max(1, Math.trunc(options.page));
+  const pageSize = Math.max(1, Math.min(Math.trunc(options.pageSize), 500));
+  const expand = await resolveBusinessAccountExpand(
+    cookieValue,
+    options.profile,
+    authCookieRefresh,
+  );
+
+  const payload = await requestAcumatica<unknown>(
+    getActiveCookieValue(cookieValue, authCookieRefresh),
+    buildBusinessAccountCollectionPath({
+      top: pageSize,
+      skip: (page - 1) * pageSize,
+      expand,
+      select: BUSINESS_ACCOUNT_PROFILE_SELECTS[options.profile],
+      filter: options.filter,
+    }),
+    {
+      authCookieRefresh,
+    },
+  );
+
+  return unwrapCollection<RawBusinessAccount>(payload);
+}
+
 export async function fetchBusinessAccountById(
   cookieValue: string,
   id: string,
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<RawBusinessAccount> {
   try {
-    let directError: unknown = null;
-    for (const expand of BUSINESS_ACCOUNT_EXPAND_CANDIDATES) {
-      try {
-        return await requestAcumatica<RawBusinessAccount>(
-          getActiveCookieValue(cookieValue, authCookieRefresh),
-          buildBusinessAccountByIdPath(id, expand),
-          {
-            authCookieRefresh,
-          },
-        );
-      } catch (error) {
-        directError = error;
-        if (!shouldRetryWithLighterBusinessAccountExpand(error)) {
-          throw error;
-        }
-      }
-    }
-
-    if (directError instanceof Error) {
-      throw directError;
-    }
-    throw new HttpError(500, "Failed to fetch business account.");
+    const expand = await resolveBusinessAccountExpand(
+      cookieValue,
+      "detail",
+      authCookieRefresh,
+    );
+    return await requestAcumatica<RawBusinessAccount>(
+      getActiveCookieValue(cookieValue, authCookieRefresh),
+      buildBusinessAccountByIdPath(
+        id,
+        expand,
+        BUSINESS_ACCOUNT_PROFILE_SELECTS.detail,
+      ),
+      {
+        authCookieRefresh,
+      },
+    );
   } catch (directError) {
     if (!(directError instanceof HttpError)) {
       throw directError;
@@ -795,50 +1279,33 @@ export async function fetchBusinessAccountById(
     ];
 
     for (const filter of filterCandidates) {
-      for (const expand of BUSINESS_ACCOUNT_EXPAND_CANDIDATES) {
-        try {
-          const payload = await requestAcumatica<unknown>(
-            getActiveCookieValue(cookieValue, authCookieRefresh),
-            buildBusinessAccountCollectionPath({
-              top: 1,
-              skip: 0,
-              expand,
-              filter,
-            }),
-            {
+      try {
+        const payload = await requestAcumatica<unknown>(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          buildBusinessAccountCollectionPath({
+            top: 1,
+            skip: 0,
+            expand: await resolveBusinessAccountExpand(
+              cookieValue,
+              "detail",
               authCookieRefresh,
-            },
-          );
-          const rows = unwrapCollection<RawBusinessAccount>(payload);
-          if (rows[0]) {
-            return rows[0];
-          }
-          break;
-        } catch (error) {
-          if (!shouldRetryWithLighterBusinessAccountExpand(error)) {
-            break;
-          }
+            ),
+            select: BUSINESS_ACCOUNT_PROFILE_SELECTS.detail,
+            filter,
+          }),
+          {
+            authCookieRefresh,
+          },
+        );
+        const rows = unwrapCollection<RawBusinessAccount>(payload);
+        if (rows[0]) {
+          return rows[0];
+        }
+      } catch (error) {
+        if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
+          throw error;
         }
       }
-    }
-
-    try {
-      const rows = await fetchBusinessAccounts(cookieValue, {
-        maxRecords: 2000,
-        batchSize: 200,
-      }, authCookieRefresh);
-      const match = rows.find((row) => {
-        const rawId = typeof row.id === "string" ? row.id : "";
-        const rawBusinessAccountId = readWrappedString(row, "BusinessAccountID");
-        const rawNoteId = readWrappedString(row, "NoteID");
-        return [rawId, rawBusinessAccountId, rawNoteId].includes(id);
-      });
-
-      if (match) {
-        return match;
-      }
-    } catch {
-      // Preserve original direct lookup error below.
     }
 
     throw directError;
@@ -1051,19 +1518,43 @@ export async function fetchBusinessAccountsByBusinessAccountIds(
 
   for (const chunk of chunks) {
     const filter = buildBusinessAccountIdFilter(chunk);
-    const rows = await fetchBusinessAccounts(
-      cookieValue,
-      {
-        batchSize: 200,
-        filter,
-        ensureMainAddress: true,
-        ensurePrimaryContact: true,
-        ensureAttributes: true,
-        ensureContacts: false,
-      },
-      authCookieRefresh,
-    );
-    allAccounts.push(...rows);
+    try {
+      const rows = await fetchBusinessAccounts(
+        cookieValue,
+        {
+          batchSize: 200,
+          filter,
+          ensureMainAddress: true,
+          ensurePrimaryContact: true,
+          ensureAttributes: true,
+          ensureContacts: false,
+        },
+        authCookieRefresh,
+      );
+      allAccounts.push(...rows);
+    } catch (error) {
+      if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
+        throw error;
+      }
+
+      for (const detailChunk of chunkArray(chunk, 4)) {
+        const accountResults = await Promise.allSettled(
+          detailChunk.map((accountId) =>
+            fetchBusinessAccountById(
+              cookieValue,
+              accountId,
+              authCookieRefresh,
+            ),
+          ),
+        );
+
+        accountResults.forEach((result) => {
+          if (result.status === "fulfilled") {
+            allAccounts.push(result.value);
+          }
+        });
+      }
+    }
   }
 
   const deduped = new Map<string, RawBusinessAccount>();
@@ -1270,7 +1761,7 @@ export async function createBusinessAccount(
     getActiveCookieValue(cookieValue, authCookieRefresh),
     "/BusinessAccount",
     {
-      method: "POST",
+      method: "PUT",
       body: JSON.stringify(payload),
       authCookieRefresh,
     },
@@ -1285,10 +1776,15 @@ export async function updateContact(
 ): Promise<void> {
   await requestAcumatica(
     getActiveCookieValue(cookieValue, authCookieRefresh),
-    `/Contact/${encodeURIComponent(String(contactId))}`,
+    "/Contact",
     {
       method: "PUT",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ContactID: {
+          value: contactId,
+        },
+        ...payload,
+      }),
       authCookieRefresh,
     },
   );
@@ -1303,8 +1799,45 @@ export async function createContact(
     getActiveCookieValue(cookieValue, authCookieRefresh),
     "/Contact",
     {
-      method: "POST",
+      method: "PUT",
       body: JSON.stringify(payload),
+      authCookieRefresh,
+    },
+  );
+}
+
+export async function updateCustomer(
+  cookieValue: string,
+  payload: Record<string, unknown>,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<Record<string, unknown>> {
+  return requestAcumatica<Record<string, unknown>>(
+    getActiveCookieValue(cookieValue, authCookieRefresh),
+    "/Customer",
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+      authCookieRefresh,
+    },
+  );
+}
+
+export async function invokeBusinessAccountAction(
+  cookieValue: string,
+  actionName: string,
+  entity: Record<string, unknown>,
+  parameters: Record<string, unknown> = {},
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<void> {
+  await requestAcumatica<unknown>(
+    getActiveCookieValue(cookieValue, authCookieRefresh),
+    `/BusinessAccount/${encodeURIComponent(actionName)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        entity,
+        parameters,
+      }),
       authCookieRefresh,
     },
   );
@@ -1315,69 +1848,46 @@ export async function deleteContact(
   contactId: number,
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<void> {
-  const maxRateLimitRetries = 3;
   const resourcePath = `/Contact/${encodeURIComponent(String(contactId))}`;
-
-  for (let attempt = 0; ; attempt += 1) {
-    const activeCookieValue = getActiveCookieValue(cookieValue, authCookieRefresh);
-    const response = await fetch(buildAcumaticaUrl(resourcePath), {
+  const { response } = await performAcumaticaRequestWithEndpointFallback(
+    cookieValue,
+    resourcePath,
+    {
       method: "DELETE",
-      headers: {
-        Accept: "application/json",
-        Cookie: buildCookieHeader(activeCookieValue),
-      },
-      cache: "no-store",
-    });
+      authCookieRefresh,
+    },
+  );
 
-    if (authCookieRefresh) {
-      const refreshedCookie = extractAuthCookieFromResponseHeaders(
-        response.headers,
-        activeCookieValue,
-      );
-      if (refreshedCookie) {
-        authCookieRefresh.value = refreshedCookie;
-      }
-    }
+  if (!response.ok) {
+    const errorResponse = await parseErrorResponse(response);
+    throw new HttpError(
+      response.status,
+      errorResponse.message,
+      errorResponse.details,
+    );
+  }
 
-    if (response.status === 429 && attempt < maxRateLimitRetries) {
-      const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
-      const backoffMs = Math.min(6000, 700 * 2 ** attempt);
-      await sleep(retryAfterMs ?? backoffMs);
-      continue;
-    }
+  if (response.status === 204) {
+    return;
+  }
 
-    if (!response.ok) {
-      const errorResponse = await parseErrorResponse(response);
-      throw new HttpError(
-        response.status,
-        errorResponse.message,
-        errorResponse.details,
-      );
-    }
+  const responseText = await response.text();
+  if (!responseText.trim()) {
+    return;
+  }
 
-    if (response.status === 204) {
-      return;
-    }
+  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (!contentType.includes("application/json")) {
+    return;
+  }
 
-    const responseText = await response.text();
-    if (!responseText.trim()) {
-      return;
-    }
-
-    const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
-    if (!contentType.includes("application/json")) {
-      return;
-    }
-
-    try {
-      JSON.parse(responseText);
-      return;
-    } catch {
-      throw new HttpError(
-        502,
-        `Acumatica returned invalid JSON while deleting contact '${contactId}'.`,
-      );
-    }
+  try {
+    JSON.parse(responseText);
+  } catch {
+    throw new HttpError(
+      502,
+      `Acumatica returned invalid JSON while deleting contact '${contactId}'.`,
+    );
   }
 }
 
@@ -1386,21 +1896,65 @@ export async function validateSessionWithAcumatica(
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<unknown> {
   const env = getEnv();
-  const sessionProbeUrl =
-    env.AUTH_PROVIDER === "custom"
-      ? env.AUTH_ME_URL
-      : env.AUTH_ME_URL ??
-        `${env.ACUMATICA_BASE_URL}${env.ACUMATICA_ENTITY_PATH}/BusinessAccount?$top=1`;
+  if (env.AUTH_PROVIDER === "custom") {
+    if (!env.AUTH_ME_URL) {
+      throw new HttpError(500, "AUTH_ME_URL is required when AUTH_PROVIDER=custom.");
+    }
 
-  if (!sessionProbeUrl) {
-    throw new HttpError(500, "AUTH_ME_URL is required when AUTH_PROVIDER=custom.");
+    const maxRateLimitRetries = 2;
+
+    for (let attempt = 0; ; attempt += 1) {
+      const activeCookieValue = getActiveCookieValue(cookieValue, authCookieRefresh);
+      const response = await fetch(env.AUTH_ME_URL, {
+        method: "GET",
+        headers: {
+          Cookie: buildCookieHeader(activeCookieValue),
+          Accept: "application/json",
+        },
+        cache: "no-store",
+      });
+
+      if (authCookieRefresh) {
+        const refreshedCookie = extractAuthCookieFromResponseHeaders(
+          response.headers,
+          activeCookieValue,
+        );
+        if (refreshedCookie) {
+          authCookieRefresh.value = refreshedCookie;
+        }
+      }
+
+      if (response.status === 429 && attempt < maxRateLimitRetries) {
+        const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+        const backoffMs = Math.min(4000, 500 * 2 ** attempt);
+        await sleep(retryAfterMs ?? backoffMs);
+        continue;
+      }
+
+      if (response.status === 401 || response.status === 403) {
+        throw new HttpError(401, "Session is invalid or expired");
+      }
+
+      if (!response.ok) {
+        const errorResponse = await parseErrorResponse(response);
+        throw new HttpError(
+          response.status,
+          errorResponse.message,
+          errorResponse.details,
+        );
+      }
+
+      if (response.status === 204) {
+        return null;
+      }
+
+      return parseJsonPayload(response, "validating session");
+    }
   }
 
-  const maxRateLimitRetries = 2;
-
-  for (let attempt = 0; ; attempt += 1) {
+  if (env.AUTH_ME_URL) {
     const activeCookieValue = getActiveCookieValue(cookieValue, authCookieRefresh);
-    const response = await fetch(sessionProbeUrl, {
+    const response = await fetch(env.AUTH_ME_URL, {
       method: "GET",
       headers: {
         Cookie: buildCookieHeader(activeCookieValue),
@@ -1417,13 +1971,6 @@ export async function validateSessionWithAcumatica(
       if (refreshedCookie) {
         authCookieRefresh.value = refreshedCookie;
       }
-    }
-
-    if (response.status === 429 && attempt < maxRateLimitRetries) {
-      const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
-      const backoffMs = Math.min(4000, 500 * 2 ** attempt);
-      await sleep(retryAfterMs ?? backoffMs);
-      continue;
     }
 
     if (response.status === 401 || response.status === 403) {
@@ -1445,4 +1992,12 @@ export async function validateSessionWithAcumatica(
 
     return parseJsonPayload(response, "validating session");
   }
+
+  return requestAcumatica<unknown>(
+    getActiveCookieValue(cookieValue, authCookieRefresh),
+    "/Contact?$top=1",
+    {
+      authCookieRefresh,
+    },
+  );
 }

@@ -22,10 +22,16 @@ import type {
 import {
   enforceSinglePrimaryPerAccountRows,
   queryBusinessAccounts,
+  resolveCompanyPhone,
 } from "@/lib/business-accounts";
+import {
+  buildAcumaticaBusinessAccountUrl,
+  buildAcumaticaContactUrl,
+} from "@/lib/acumatica-links";
 import {
   type CachedDataset,
   readCachedDatasetFromStorage,
+  readCachedSyncMeta,
   writeCachedDatasetToStorage,
 } from "@/lib/client-dataset-cache";
 import { formatPhoneDraftValue, normalizePhoneForSave } from "@/lib/phone";
@@ -36,6 +42,7 @@ import {
 } from "@/components/create-contact-drawer";
 
 import styles from "./accounts-client.module.css";
+import type { SyncStatusResponse } from "@/types/sync";
 
 const PAGE_SIZE = 25;
 
@@ -45,10 +52,6 @@ type SessionResponse = {
     id: string;
     name: string;
   } | null;
-};
-
-type SyncBatchResponse = BusinessAccountsResponse & {
-  hasMore?: boolean;
 };
 
 type AddressLookupSuggestion = {
@@ -89,6 +92,22 @@ type SyncProgress = {
   totalRows: number | null;
 };
 
+function isSyncStatusResponse(value: unknown): value is SyncStatusResponse {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    (record.status === "idle" ||
+      record.status === "running" ||
+      record.status === "failed") &&
+    (record.phase === null || typeof record.phase === "string") &&
+    (record.lastSuccessfulSyncAt === null ||
+      typeof record.lastSuccessfulSyncAt === "string")
+  );
+}
+
 type HeaderFilters = {
   companyName: string;
   salesRepName: string;
@@ -97,6 +116,7 @@ type HeaderFilters = {
   companyRegion: string;
   week: string;
   address: string;
+  companyPhone: string;
   primaryContactName: string;
   primaryContactPhone: string;
   primaryContactEmail: string;
@@ -113,6 +133,7 @@ const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   companyRegion: "",
   week: "",
   address: "",
+  companyPhone: "",
   primaryContactName: "",
   primaryContactPhone: "",
   primaryContactEmail: "",
@@ -190,6 +211,12 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
     label: "Address",
     filterKey: "address",
     filterPlaceholder: "Filter address",
+  },
+  {
+    id: "companyPhone",
+    label: "Company Phone",
+    filterKey: "companyPhone",
+    filterPlaceholder: "Filter company phone",
   },
   {
     id: "primaryContactName",
@@ -390,10 +417,6 @@ function isKnownColumnList(value: unknown): value is SortBy[] {
   return value.every((column) => DEFAULT_COLUMN_ORDER.includes(column));
 }
 
-function isValidVisibleColumns(value: unknown): value is SortBy[] {
-  return isKnownColumnList(value);
-}
-
 function getColumnConfig(columnId: SortBy): ColumnConfig {
   const config = COLUMN_CONFIGS.find((item) => item.id === columnId);
   if (!config) {
@@ -471,6 +494,11 @@ function normalizeCountryDraftValue(value: string | null | undefined): string {
 function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
   return {
     companyName: row.companyName,
+    assignedBusinessAccountRecordId:
+      row.businessAccountId.trim().length > 0
+        ? (row.accountRecordId ?? row.id)
+        : null,
+    assignedBusinessAccountId: row.businessAccountId.trim() || null,
     addressLine1: row.addressLine1,
     addressLine2: row.addressLine2,
     city: row.city,
@@ -479,6 +507,7 @@ function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
     country: normalizeCountryDraftValue(row.country),
     targetContactId: row.contactId ?? row.primaryContactId ?? null,
     setAsPrimaryContact: false,
+    primaryOnlyIntent: false,
     salesRepId: row.salesRepId ?? null,
     salesRepName: row.salesRepName ?? null,
     industryType: normalizeOptionValue(INDUSTRY_TYPE_OPTIONS, row.industryType),
@@ -591,6 +620,7 @@ function mergeSyncedRows(
       existing.primaryContactEmail,
       incoming.primaryContactEmail,
     ),
+    companyPhone: pickPreferredText(existing.companyPhone, incoming.companyPhone),
     phoneNumber: pickPreferredText(existing.phoneNumber, incoming.phoneNumber),
     notes: pickPreferredText(existing.notes, incoming.notes),
     category: incoming.category ?? existing.category,
@@ -913,6 +943,35 @@ function buildCreateContactAccountOptions(
   });
 }
 
+function findCreateContactAccountOption(
+  options: CreateContactAccountOption[],
+  draft: BusinessAccountUpdateRequest | null,
+): CreateContactAccountOption | null {
+  if (!draft) {
+    return null;
+  }
+
+  const assignedRecordId = draft.assignedBusinessAccountRecordId?.trim() ?? "";
+  if (assignedRecordId) {
+    const byRecordId =
+      options.find((option) => option.businessAccountRecordId === assignedRecordId) ?? null;
+    if (byRecordId) {
+      return byRecordId;
+    }
+  }
+
+  const assignedBusinessAccountId = draft.assignedBusinessAccountId?.trim() ?? "";
+  if (assignedBusinessAccountId) {
+    const byBusinessAccountId =
+      options.find((option) => option.businessAccountId === assignedBusinessAccountId) ?? null;
+    if (byBusinessAccountId) {
+      return byBusinessAccountId;
+    }
+  }
+
+  return null;
+}
+
 function isBusinessAccountDetailResponse(
   payload: unknown,
 ): payload is BusinessAccountDetailResponse {
@@ -1080,10 +1139,12 @@ function renderColumnValue(row: BusinessAccountRow, columnId: SortBy): string {
       return renderCell(row.week);
     case "address":
       return renderCell(row.address);
+    case "companyPhone":
+      return renderCell(resolveCompanyPhone(row));
     case "primaryContactName":
       return row.primaryContactName?.trim() ?? "";
     case "primaryContactPhone":
-      return renderCell(row.phoneNumber ?? row.primaryContactPhone);
+      return renderCell(row.primaryContactPhone);
     case "primaryContactEmail":
       return renderCell(row.primaryContactEmail);
     case "notes":
@@ -1112,25 +1173,6 @@ function getRowKey(row: BusinessAccountRow, index = 0): string {
     row.rowKey ??
     `${row.accountRecordId ?? row.id}:${row.contactId ?? "contact"}:${index}`
   );
-}
-
-function mergeRowsByKey(
-  currentRows: BusinessAccountRow[],
-  incomingRows: BusinessAccountRow[],
-): BusinessAccountRow[] {
-  const mergedByKey = new Map<string, BusinessAccountRow>();
-
-  currentRows.forEach((row, index) => {
-    mergedByKey.set(getRowKey(row, index), row);
-  });
-
-  incomingRows.forEach((row, index) => {
-    const key = getRowKey(row, index);
-    const existing = mergedByKey.get(key);
-    mergedByKey.set(key, existing ? mergeSyncedRows(existing, row) : row);
-  });
-
-  return enforceSinglePrimaryPerAccountRows(Array.from(mergedByKey.values()));
 }
 
 function clearCachedMapData() {
@@ -1223,7 +1265,13 @@ function SortHeader({
   );
 }
 
-export function AccountsClient() {
+export function AccountsClient({
+  acumaticaBaseUrl,
+  acumaticaCompanyId,
+}: {
+  acumaticaBaseUrl: string;
+  acumaticaCompanyId: string;
+}) {
   const router = useRouter();
 
   const [session, setSession] = useState<SessionResponse | null>(null);
@@ -1292,6 +1340,50 @@ export function AccountsClient() {
   const addressLookupCountry = normalizeCountryDraftValue(draft?.country);
   const allRowsCountRef = useRef(0);
 
+  async function loadSnapshotRows(signal?: AbortSignal) {
+    const params = new URLSearchParams({
+      sortBy: "companyName",
+      sortDir: "asc",
+      page: "1",
+      pageSize: String(PAGE_SIZE),
+      full: "1",
+    });
+
+    const [rowsResponse, statusResponse] = await Promise.all([
+      fetch(`/api/business-accounts?${params.toString()}`, {
+        cache: "no-store",
+        signal,
+      }),
+      fetch("/api/sync/status", {
+        cache: "no-store",
+        signal,
+      }),
+    ]);
+
+    const rowsPayload = await readJsonResponse<BusinessAccountsResponse | { error?: string }>(
+      rowsResponse,
+    );
+    const statusPayload = await readJsonResponse<SyncStatusResponse | { error?: string }>(
+      statusResponse,
+    );
+
+    if (!rowsResponse.ok) {
+      throw new Error(parseError(rowsPayload));
+    }
+    if (!isBusinessAccountsResponse(rowsPayload)) {
+      throw new Error("Unexpected response while loading account snapshot.");
+    }
+
+    if (statusResponse.ok && isSyncStatusResponse(statusPayload)) {
+      setLastSyncedAt(statusPayload.lastSuccessfulSyncAt);
+      if (!statusPayload.lastSuccessfulSyncAt && rowsPayload.items.length === 0) {
+        setError("No local snapshot yet. Click Sync records to build the first snapshot.");
+      }
+    }
+
+    return rowsPayload.items;
+  }
+
   useEffect(() => {
     allRowsRef.current = allRows;
     allRowsCountRef.current = allRows.length;
@@ -1310,6 +1402,7 @@ export function AccountsClient() {
         filterCompanyRegion: debouncedHeaderFilters.companyRegion,
         filterWeek: debouncedHeaderFilters.week,
         filterAddress: debouncedHeaderFilters.address,
+        filterCompanyPhone: debouncedHeaderFilters.companyPhone,
         filterPrimaryContactName: debouncedHeaderFilters.primaryContactName,
         filterPrimaryContactPhone: debouncedHeaderFilters.primaryContactPhone,
         filterPrimaryContactEmail: debouncedHeaderFilters.primaryContactEmail,
@@ -1385,6 +1478,30 @@ export function AccountsClient() {
     () => buildCreateContactAccountOptions(allRows),
     [allRows],
   );
+  const selectedDrawerCompanyOption = useMemo(
+    () => findCreateContactAccountOption(createContactAccountOptions, draft),
+    [createContactAccountOptions, draft],
+  );
+  const filteredDrawerCompanyOptions = useMemo(() => {
+    if (selectedDrawerCompanyOption) {
+      return [];
+    }
+
+    const normalizedQuery = draft?.companyName.trim().toLowerCase() ?? "";
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    return createContactAccountOptions
+      .filter((option) =>
+        [option.companyName, option.businessAccountId, option.address]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedQuery),
+      )
+      .slice(0, 12);
+  }, [createContactAccountOptions, draft?.companyName, selectedDrawerCompanyOption]);
   const selectedSalesRepOption = useMemo(() => {
     if (!draft?.salesRepId) {
       return null;
@@ -1401,6 +1518,12 @@ export function AccountsClient() {
   const totalPages = useMemo(() => {
     return Math.max(1, Math.ceil(total / PAGE_SIZE));
   }, [total]);
+  const drawerNeedsCompanyAssignment = Boolean(
+    selected &&
+      !selected.businessAccountId.trim() &&
+      (selected.contactId !== null ||
+        (selected.primaryContactId !== null && selected.primaryContactId !== undefined)),
+  );
 
   const paginationNumbers = useMemo(
     () => buildPaginationNumbers(page, totalPages),
@@ -1446,7 +1569,7 @@ export function AccountsClient() {
           break;
         }
 
-        if (key === COLUMN_STORAGE_KEY || !isKnownColumnList(parsedColumnOrder)) {
+        if (!isKnownColumnList(parsedColumnOrder)) {
           continue;
         }
 
@@ -1472,11 +1595,6 @@ export function AccountsClient() {
           continue;
         }
         const parsedVisibleColumns = JSON.parse(storedVisibleColumns) as unknown;
-        if (isValidVisibleColumns(parsedVisibleColumns) && key === COLUMN_VISIBILITY_STORAGE_KEY) {
-          setVisibleColumns(parsedVisibleColumns);
-          break;
-        }
-
         if (!isKnownColumnList(parsedVisibleColumns)) {
           continue;
         }
@@ -1527,6 +1645,8 @@ export function AccountsClient() {
       allRowsCountRef.current = cachedDataset.rows.length;
       setAllRows(enforceSinglePrimaryPerAccountRows(cachedDataset.rows));
       setLastSyncedAt(cachedDataset.lastSyncedAt);
+    } else {
+      setLastSyncedAt(readCachedSyncMeta().lastSyncedAt);
     }
 
     setCacheHydrated(true);
@@ -1557,12 +1677,13 @@ export function AccountsClient() {
       if (payload && "authenticated" in payload) {
         if (payload.authenticated) {
           setSession(payload);
+          setError(null);
           return;
         }
 
-        setSession({ authenticated: true, user: null });
+        setSession(payload);
         setError(
-          "Acumatica session check is temporarily unavailable. You are still signed in with your existing cookie. Click 'Sync records' to retry; only sign in again if this keeps failing for a few minutes.",
+          "Your Acumatica session has expired. Sign in again to refresh data or run sync.",
         );
         return;
       }
@@ -1669,134 +1790,40 @@ export function AccountsClient() {
       return;
     }
 
-    const isInitialSync = syncVersion === 0;
-    if (isInitialSync) {
-      setLoading(false);
-      return;
-    }
-
     const controller = new AbortController();
 
-    async function syncRows() {
+    async function loadRows() {
       const startedAt = Date.now();
-      const previousRowsSnapshot = allRowsRef.current;
-      if (isInitialSync) {
-        setLoading(true);
-      }
-      setIsSyncing(true);
-      setSyncStartedAt(startedAt);
-      setSyncElapsedMs(0);
-      setSyncProgress({
-        fetchedPages: 0,
-        totalPages: null,
-        fetchedRows: 0,
-        totalRows: null,
-      });
-      setError(null);
+      setLoading(true);
 
       try {
-        const deduped = new Map<string, BusinessAccountRow>();
-        const pageSize = 120;
-        const pageDelayMs = 120;
-        let currentPage = 1;
-        let hasMore = true;
-        const maxSyncPages = 1200;
-
-        while (hasMore) {
-          const params = new URLSearchParams({
-            sortBy: "companyName",
-            sortDir: "asc",
-            page: String(currentPage),
-            pageSize: String(pageSize),
-            sync: "1",
-          });
-
-          const response = await fetch(`/api/business-accounts?${params.toString()}`, {
-            cache: "no-store",
-            signal: controller.signal,
-          });
-
-          const payload = await readJsonResponse<SyncBatchResponse | { error?: string }>(
-            response,
-          );
-
-          if (response.status === 401) {
-            throw new Error(
-              "Acumatica rejected the sync request. Click Sync records to try again.",
-            );
-          }
-
-          if (!response.ok) {
-            throw new Error(parseError(payload));
-          }
-
-          if (!isBusinessAccountsResponse(payload)) {
-            throw new Error("Unexpected response while syncing records.");
-          }
-
-          const syncPayload = payload as SyncBatchResponse;
-          syncPayload.items.forEach((row, index) => {
-            const rowKey = getRowKey(row, index);
-            const existing = deduped.get(rowKey);
-            deduped.set(rowKey, existing ? mergeSyncedRows(existing, row) : row);
-          });
-
-          if (!controller.signal.aborted) {
-            const nextRows = Array.from(deduped.values());
-            setAllRows((currentRows) => mergeRowsByKey(currentRows, nextRows));
-            setLoading(false);
-            setSyncProgress({
-              fetchedPages: currentPage,
-              totalPages: syncPayload.hasMore ? null : currentPage,
-              fetchedRows: deduped.size,
-              totalRows: syncPayload.hasMore ? null : deduped.size,
-            });
-          }
-
-          const hasMoreFlag =
-            typeof syncPayload.hasMore === "boolean"
-              ? syncPayload.hasMore
-              : syncPayload.items.length >= pageSize;
-          hasMore = hasMoreFlag && currentPage < maxSyncPages;
-          if (hasMore) {
-            await new Promise((resolve) => {
-              window.setTimeout(resolve, pageDelayMs);
-            });
-          }
-          currentPage += 1;
+        const nextRows = await loadSnapshotRows(controller.signal);
+        if (controller.signal.aborted) {
+          return;
         }
 
-        if (!controller.signal.aborted) {
-          const nextRows = Array.from(deduped.values());
-          setAllRows(enforceSinglePrimaryPerAccountRows(nextRows));
-          setLastSyncedAt(new Date().toISOString());
-          setLastSyncDurationMs(Date.now() - startedAt);
-        }
+        setAllRows(enforceSinglePrimaryPerAccountRows(nextRows));
+        setLastSyncDurationMs(Date.now() - startedAt);
       } catch (fetchError) {
         if (controller.signal.aborted) {
           return;
         }
 
-        setAllRows(enforceSinglePrimaryPerAccountRows(previousRowsSnapshot));
-        setError(fetchError instanceof Error ? fetchError.message : "Failed to sync data.");
+        setError(
+          fetchError instanceof Error
+            ? fetchError.message
+            : "Failed to load account snapshot.",
+        );
       } finally {
         if (!controller.signal.aborted) {
           setLoading(false);
-          setIsSyncing(false);
-          setSyncProgress(null);
-          setSyncStartedAt(null);
-          setSyncElapsedMs(0);
         }
       }
     }
 
-    syncRows().catch(() => {
-      setError("Failed to sync data.");
+    loadRows().catch(() => {
+      setError("Failed to load account snapshot.");
       setLoading(false);
-      setIsSyncing(false);
-      setSyncProgress(null);
-      setSyncStartedAt(null);
-      setSyncElapsedMs(0);
     });
 
     return () => controller.abort();
@@ -2331,7 +2358,7 @@ export function AccountsClient() {
     setHeaderFilters(DEFAULT_HEADER_FILTERS);
   }
 
-  function handleSyncRecords() {
+  async function handleSyncRecords() {
     hydratingContactRowKeysRef.current.clear();
     hydratedContactRowKeysRef.current.clear();
     resolvingPrimaryAccountIdsRef.current.clear();
@@ -2339,7 +2366,74 @@ export function AccountsClient() {
     resolvingSalesRepAccountIdsRef.current.clear();
     resolvedSalesRepAccountIdsRef.current.clear();
     setInlineNotesDrafts({});
-    setSyncVersion((current) => current + 1);
+
+    const startedAt = Date.now();
+    setError(null);
+    setIsSyncing(true);
+    setSyncStartedAt(startedAt);
+    setSyncElapsedMs(0);
+    setSyncProgress({
+      fetchedPages: 0,
+      totalPages: null,
+      fetchedRows: 0,
+      totalRows: null,
+    });
+
+    try {
+      const runResponse = await fetch("/api/sync/run", {
+        method: "POST",
+        cache: "no-store",
+      });
+      const runPayload = await readJsonResponse<{ error?: string }>(runResponse);
+      if (!runResponse.ok) {
+        throw new Error(parseError(runPayload));
+      }
+
+      while (true) {
+        const statusResponse = await fetch("/api/sync/status", {
+          cache: "no-store",
+        });
+        const statusPayload = await readJsonResponse<SyncStatusResponse | { error?: string }>(
+          statusResponse,
+        );
+
+        if (!statusResponse.ok) {
+          throw new Error(parseError(statusPayload));
+        }
+        if (!isSyncStatusResponse(statusPayload)) {
+          throw new Error("Unexpected sync status response.");
+        }
+
+        setSyncProgress({
+          fetchedPages: statusPayload.progress?.fetchedAccounts ?? 0,
+          totalPages: statusPayload.progress?.totalAccounts ?? null,
+          fetchedRows: statusPayload.rowsCount,
+          totalRows: statusPayload.progress?.totalContacts ?? statusPayload.contactsCount,
+        });
+
+        if (statusPayload.status !== "running") {
+          if (statusPayload.status === "failed") {
+            throw new Error(statusPayload.lastError ?? "Sync failed.");
+          }
+          setLastSyncedAt(statusPayload.lastSuccessfulSyncAt);
+          break;
+        }
+
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, 1000);
+        });
+      }
+
+      setLastSyncDurationMs(Date.now() - startedAt);
+      setSyncVersion((current) => current + 1);
+    } catch (syncError) {
+      setError(syncError instanceof Error ? syncError.message : "Failed to sync records.");
+    } finally {
+      setIsSyncing(false);
+      setSyncProgress(null);
+      setSyncStartedAt(null);
+      setSyncElapsedMs(0);
+    }
   }
 
   function jumpToPage(nextPage: number) {
@@ -2497,7 +2591,7 @@ export function AccountsClient() {
 
       if (response.status === 401) {
         setSaveError(
-          "Acumatica rejected this request. Your session cookie is still kept; please retry.",
+          "Your Acumatica session expired while loading this record. Sign in again and retry.",
         );
         return;
       }
@@ -2532,6 +2626,7 @@ export function AccountsClient() {
               contactId: refreshedRow.contactId ?? row.contactId,
               isPrimaryContact:
                 refreshedRow.isPrimaryContact ?? row.isPrimaryContact,
+              companyPhone: refreshedRow.companyPhone ?? row.companyPhone,
               phoneNumber: refreshedRow.phoneNumber ?? row.phoneNumber,
             }
           : {
@@ -2562,6 +2657,36 @@ export function AccountsClient() {
     } catch {
       // Keep base row loaded in drawer if detail fetch fails.
     }
+  }
+
+  function handleSelectDrawerCompany(option: CreateContactAccountOption) {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            companyName: option.companyName,
+            assignedBusinessAccountRecordId: option.businessAccountRecordId,
+            assignedBusinessAccountId: option.businessAccountId,
+          }
+        : current,
+    );
+    setSaveError(null);
+    setSaveNotice(null);
+  }
+
+  function handleClearDrawerCompanySelection() {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            companyName: "",
+            assignedBusinessAccountRecordId: null,
+            assignedBusinessAccountId: null,
+          }
+        : current,
+    );
+    setSaveError(null);
+    setSaveNotice(null);
   }
 
   async function applyAddressSuggestion(suggestionId: string) {
@@ -2696,7 +2821,7 @@ export function AccountsClient() {
 
       if (response.status === 401) {
         throw new Error(
-          "Acumatica rejected save due session state. Please retry without signing in again.",
+          "Your Acumatica session expired while saving. Sign in again, then retry the save.",
         );
       }
 
@@ -2713,6 +2838,93 @@ export function AccountsClient() {
         updatedRow.accountRecordId ?? updatedRow.id ?? accountRecordId;
       const updatedContactId = updatedRow.contactId ?? selectedContactId;
       const updatedPrimaryContactId = updatedRow.primaryContactId;
+      const accountWasReassigned = updatedAccountRecordId !== accountRecordId;
+      let reassignedAccountRows: BusinessAccountRow[] | null = null;
+
+      if (accountWasReassigned) {
+        try {
+          const refreshResponse = await fetch(
+            `/api/business-accounts/${encodeURIComponent(updatedAccountRecordId)}`,
+            {
+              cache: "no-store",
+            },
+          );
+          const refreshPayload = await readJsonResponse<
+            BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
+          >(refreshResponse);
+
+          if (!refreshResponse.ok) {
+            throw new Error(parseError(refreshPayload));
+          }
+
+          reassignedAccountRows =
+            readDetailResponseRows(refreshPayload) ??
+            (() => {
+              const refreshedRow = readDetailResponseRow(refreshPayload);
+              return refreshedRow ? [refreshedRow] : null;
+            })();
+        } catch {
+          reassignedAccountRows = null;
+        }
+      }
+
+      if (accountWasReassigned) {
+        setAllRows((currentRows) => {
+          const withoutSourceAccount = currentRows.filter((row) => {
+            const rowAccountRecordId = row.accountRecordId ?? row.id;
+            if (rowAccountRecordId === accountRecordId) {
+              return false;
+            }
+
+            return getRowKey(row) !== sourceRowKey;
+          });
+
+          if (reassignedAccountRows && reassignedAccountRows.length > 0) {
+            return replaceRowsForAccount(
+              withoutSourceAccount,
+              reassignedAccountRows,
+              updatedAccountRecordId,
+              updatedRow.businessAccountId,
+            );
+          }
+
+          const withoutTargetAccount = withoutSourceAccount.filter((row) => {
+            const rowAccountRecordId = row.accountRecordId ?? row.id;
+            if (rowAccountRecordId === updatedAccountRecordId) {
+              return false;
+            }
+
+            return row.businessAccountId !== updatedRow.businessAccountId;
+          });
+
+          return enforceSinglePrimaryPerAccountRows([updatedRow, ...withoutTargetAccount]);
+        });
+
+        const selectedAfterSave =
+          (reassignedAccountRows &&
+            findMatchingAccountRow(reassignedAccountRows, {
+              ...sourceRow,
+              accountRecordId: updatedAccountRecordId,
+              businessAccountId: updatedRow.businessAccountId,
+              contactId: updatedContactId,
+              primaryContactId: updatedPrimaryContactId,
+            })) ??
+          updatedRow;
+
+        if (selected && getRowKey(selected) === sourceRowKey) {
+          setSelected(selectedAfterSave);
+          setAddressLookupArmed(false);
+          setDraft(buildDraft(selectedAfterSave));
+        }
+
+        setLastSyncedAt(new Date().toISOString());
+        clearCachedMapData();
+        if (!isInline) {
+          setSaveNotice("Saved to Acumatica.");
+        }
+        saved = true;
+        return saved;
+      }
 
       setAllRows((currentRows) =>
         enforceSinglePrimaryPerAccountRows(
@@ -2745,6 +2957,7 @@ export function AccountsClient() {
             country: updatedRow.country,
             category: updatedRow.category,
             lastModifiedIso: updatedRow.lastModifiedIso,
+            companyPhone: updatedRow.companyPhone ?? row.companyPhone,
             primaryContactId: updatedPrimaryContactId,
             isPrimaryContact:
               updatedPrimaryContactId !== null &&
@@ -2803,6 +3016,7 @@ export function AccountsClient() {
           country: updatedRow.country,
           category: updatedRow.category,
           lastModifiedIso: updatedRow.lastModifiedIso,
+          companyPhone: updatedRow.companyPhone ?? sourceRow.companyPhone,
           primaryContactName: updatedRow.primaryContactName,
           primaryContactPhone: updatedRow.primaryContactPhone,
           primaryContactEmail: updatedRow.primaryContactEmail,
@@ -2817,6 +3031,8 @@ export function AccountsClient() {
       if (!isInline) {
         setSaveNotice("Saved to Acumatica.");
       }
+      setLastSyncedAt(new Date().toISOString());
+      clearCachedMapData();
       saved = true;
     } catch (saveRequestError) {
       const message =
@@ -2897,6 +3113,7 @@ export function AccountsClient() {
       ...buildDraft(row),
       targetContactId,
       setAsPrimaryContact: true,
+      primaryOnlyIntent: true,
       expectedLastModified: row.lastModifiedIso,
     };
 
@@ -2916,7 +3133,7 @@ export function AccountsClient() {
       return;
     }
 
-    const currentValue = row.primaryContactPhone ?? row.phoneNumber ?? "";
+    const currentValue = row.primaryContactPhone ?? "";
     if (draftValue === currentValue) {
       setInlinePhoneDrafts((current) => {
         const next = { ...current };
@@ -2997,6 +3214,15 @@ export function AccountsClient() {
 
   async function handleSave() {
     if (!selected || !draft) {
+      return;
+    }
+
+    if (
+      drawerNeedsCompanyAssignment &&
+      draft.companyName.trim().length > 0 &&
+      !draft.assignedBusinessAccountId
+    ) {
+      setSaveError("Select a business account from the list before saving.");
       return;
     }
 
@@ -3221,8 +3447,8 @@ export function AccountsClient() {
             </strong>
             <span>
               {(syncProgress.totalPages
-                ? `${syncProgress.fetchedPages} / ${syncProgress.totalPages} pages`
-                : "Preparing dataset...") + ` • ${formatElapsedDuration(syncElapsedMs)}`}
+                ? `${syncProgress.fetchedPages} / ${syncProgress.totalPages} accounts`
+                : "Preparing snapshot...") + ` • ${formatElapsedDuration(syncElapsedMs)}`}
             </span>
           </div>
           <div
@@ -3369,7 +3595,6 @@ export function AccountsClient() {
                         const inlinePhoneValue =
                           inlinePhoneDrafts[rowKey] ??
                           row.primaryContactPhone ??
-                          row.phoneNumber ??
                           "";
                         const canEditPhone =
                           (row.contactId ?? row.primaryContactId ?? null) !== null;
@@ -3519,6 +3744,11 @@ export function AccountsClient() {
 
                       if (columnId === "primaryContactName") {
                         const nameValue = row.primaryContactName?.trim() ?? "";
+                        const contactUrl = buildAcumaticaContactUrl(
+                          acumaticaBaseUrl,
+                          row.contactId ?? row.primaryContactId ?? null,
+                          acumaticaCompanyId,
+                        );
                         const canMakePrimary =
                           row.isPrimaryContact !== true &&
                           row.contactId !== null &&
@@ -3530,7 +3760,19 @@ export function AccountsClient() {
                           >
                             <div className={styles.contactCellWrap}>
                               <span className={styles.contactNameCell}>
-                                {nameValue}
+                                {contactUrl && nameValue ? (
+                                  <a
+                                    className={styles.recordLink}
+                                    href={contactUrl}
+                                    onClick={(event) => event.stopPropagation()}
+                                    rel="noreferrer"
+                                    target="_blank"
+                                  >
+                                    {nameValue}
+                                  </a>
+                                ) : (
+                                  nameValue
+                                )}
                                 {row.isPrimaryContact ? (
                                   <span className={styles.primaryBadge}>(Primary)</span>
                                 ) : null}
@@ -3549,6 +3791,36 @@ export function AccountsClient() {
                                 </button>
                               ) : null}
                             </div>
+                          </td>
+                        );
+                      }
+
+                      if (columnId === "companyName") {
+                        const companyUrl = buildAcumaticaBusinessAccountUrl(
+                          acumaticaBaseUrl,
+                          row.businessAccountId,
+                          acumaticaCompanyId,
+                        );
+                        const companyLabel = renderColumnValue(row, columnId);
+
+                        return (
+                          <td
+                            key={`${rowKey}-${columnId}`}
+                            onClick={companyUrl ? (event) => event.stopPropagation() : undefined}
+                          >
+                            {companyUrl ? (
+                              <a
+                                className={styles.recordLink}
+                                href={companyUrl}
+                                onClick={(event) => event.stopPropagation()}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                {companyLabel}
+                              </a>
+                            ) : (
+                              companyLabel
+                            )}
                           </td>
                         );
                       }
@@ -3657,7 +3929,54 @@ export function AccountsClient() {
 
       <aside className={`${styles.drawer} ${selected ? styles.drawerOpen : ""}`}>
         <div className={styles.drawerHeader}>
-          <h2>{selected ? selected.companyName : "Account details"}</h2>
+          <div className={styles.drawerHeaderContent}>
+            <h2>{selected ? selected.companyName : "Account details"}</h2>
+            {selected ? (
+              <p className={styles.drawerRecordLinks}>
+                {(() => {
+                  const companyUrl = buildAcumaticaBusinessAccountUrl(
+                    acumaticaBaseUrl,
+                    selected.businessAccountId,
+                    acumaticaCompanyId,
+                  );
+                  const contactUrl = buildAcumaticaContactUrl(
+                    acumaticaBaseUrl,
+                    selected.contactId ?? selected.primaryContactId ?? null,
+                    acumaticaCompanyId,
+                  );
+                  const contactLabel = selected.primaryContactName?.trim();
+
+                  return (
+                    <>
+                      {companyUrl ? (
+                        <a
+                          className={styles.recordLink}
+                          href={companyUrl}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          Open account in Acumatica
+                        </a>
+                      ) : null}
+                      {contactUrl && contactLabel ? (
+                        <>
+                          {companyUrl ? <span>•</span> : null}
+                          <a
+                            className={styles.recordLink}
+                            href={contactUrl}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            Open contact in Acumatica
+                          </a>
+                        </>
+                      ) : null}
+                    </>
+                  );
+                })()}
+              </p>
+            ) : null}
+          </div>
           <button
             className={styles.closeButton}
             onClick={closeDrawer}
@@ -3671,14 +3990,75 @@ export function AccountsClient() {
           <div className={styles.drawerBody}>
             <label>
               Company Name
-              <input
-                onChange={(event) =>
-                  setDraft((current) =>
-                    current ? { ...current, companyName: event.target.value } : current,
-                  )
-                }
-                value={draft.companyName}
-              />
+              {drawerNeedsCompanyAssignment ? (
+                <>
+                  <input
+                    onChange={(event) =>
+                      setDraft((current) =>
+                        current ? { ...current, companyName: event.target.value } : current,
+                      )
+                    }
+                    placeholder="Search company, account ID, or address"
+                    value={draft.companyName}
+                  />
+                  <span className={styles.lookupHint}>
+                    Choose the business account this contact should belong to before saving.
+                  </span>
+                  {selectedDrawerCompanyOption ? (
+                    <div className={styles.selectedAccountCard}>
+                      <strong>{selectedDrawerCompanyOption.companyName}</strong>
+                      <span>Account ID {selectedDrawerCompanyOption.businessAccountId}</span>
+                      <span>{selectedDrawerCompanyOption.address}</span>
+                      <button
+                        className={styles.secondaryButton}
+                        onClick={handleClearDrawerCompanySelection}
+                        type="button"
+                      >
+                        Change account
+                      </button>
+                    </div>
+                  ) : filteredDrawerCompanyOptions.length > 0 ? (
+                    <div className={styles.lookupSuggestions}>
+                      {filteredDrawerCompanyOptions.map((option) => (
+                        <button
+                          className={styles.lookupSuggestionItem}
+                          key={option.businessAccountRecordId}
+                          onClick={() => {
+                            handleSelectDrawerCompany(option);
+                          }}
+                          type="button"
+                        >
+                          <span className={styles.lookupSuggestionTitle}>
+                            {option.companyName}
+                          </span>
+                          <span className={styles.lookupSuggestionMeta}>
+                            {option.businessAccountId}
+                          </span>
+                          <span className={styles.lookupSuggestionMeta}>{option.address}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : draft.companyName.trim().length > 0 ? (
+                    <span className={styles.lookupHint}>
+                      No matching business accounts were found.
+                    </span>
+                  ) : null}
+                  {createContactAccountOptions.length === 0 ? (
+                    <span className={styles.lookupHint}>
+                      No business accounts are loaded yet. Sync records first.
+                    </span>
+                  ) : null}
+                </>
+              ) : (
+                <input
+                  onChange={(event) =>
+                    setDraft((current) =>
+                      current ? { ...current, companyName: event.target.value } : current,
+                    )
+                  }
+                  value={draft.companyName}
+                />
+              )}
             </label>
 
             <h3>Sales Rep</h3>
@@ -3892,8 +4272,8 @@ export function AccountsClient() {
                 type="checkbox"
               />
               {selected.isPrimaryContact
-                ? "This contact is currently the primary technician."
-                : "Set this contact as primary technician"}
+                ? "This contact is currently the primary contact."
+                : "Set this contact as primary contact"}
             </label>
 
             <h3>Attributes</h3>

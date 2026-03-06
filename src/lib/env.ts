@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { z } from "zod";
 
 function emptyToUndefined(value: string | undefined): string | undefined {
@@ -37,6 +39,11 @@ const schema = z.object({
       "https://ws1.postescanada-canadapost.ca/AddressComplete/Interactive/Retrieve/v2.10/json3.ws",
     ),
   ADDRESS_COMPLETE_GEOCODE_ENABLED: z.enum(["true", "false"]).optional(),
+  READ_MODEL_ENABLED: z.enum(["true", "false"]).optional(),
+  READ_MODEL_SQLITE_PATH: z.string().min(1).optional(),
+  DATA_QUALITY_HISTORY_PATH: z.string().min(1).optional(),
+  READ_MODEL_STALE_AFTER_MS: z.string().optional(),
+  READ_MODEL_SYNC_INTERVAL_MS: z.string().optional(),
 });
 
 export type AppEnv = {
@@ -57,6 +64,11 @@ export type AppEnv = {
   ADDRESS_COMPLETE_FIND_URL: string;
   ADDRESS_COMPLETE_RETRIEVE_URL: string;
   ADDRESS_COMPLETE_GEOCODE_ENABLED: boolean;
+  READ_MODEL_ENABLED: boolean;
+  READ_MODEL_SQLITE_PATH: string;
+  DATA_QUALITY_HISTORY_PATH: string;
+  READ_MODEL_STALE_AFTER_MS: number;
+  READ_MODEL_SYNC_INTERVAL_MS: number;
 };
 
 let cachedEnv: AppEnv | null = null;
@@ -86,6 +98,11 @@ export function getEnv(): AppEnv {
       process.env.ADDRESS_COMPLETE_RETRIEVE_URL,
     ),
     ADDRESS_COMPLETE_GEOCODE_ENABLED: process.env.ADDRESS_COMPLETE_GEOCODE_ENABLED,
+    READ_MODEL_ENABLED: process.env.READ_MODEL_ENABLED,
+    READ_MODEL_SQLITE_PATH: emptyToUndefined(process.env.READ_MODEL_SQLITE_PATH),
+    DATA_QUALITY_HISTORY_PATH: emptyToUndefined(process.env.DATA_QUALITY_HISTORY_PATH),
+    READ_MODEL_STALE_AFTER_MS: emptyToUndefined(process.env.READ_MODEL_STALE_AFTER_MS),
+    READ_MODEL_SYNC_INTERVAL_MS: emptyToUndefined(process.env.READ_MODEL_SYNC_INTERVAL_MS),
   });
 
   if (!parsed.success) {
@@ -112,6 +129,18 @@ export function getEnv(): AppEnv {
     }
   }
 
+  if (parsed.data.AUTH_PROVIDER === "acumatica" && !parsed.data.ACUMATICA_COMPANY) {
+    throw new Error(
+      "Invalid environment configuration for Acumatica auth provider: ACUMATICA_COMPANY",
+    );
+  }
+
+  const readModelSqlitePath =
+    parsed.data.READ_MODEL_SQLITE_PATH?.trim() || "./data/read-model.sqlite";
+  const dataQualityHistoryPath =
+    parsed.data.DATA_QUALITY_HISTORY_PATH?.trim() ||
+    path.join(path.dirname(readModelSqlitePath), "data-quality-history.json");
+
   cachedEnv = {
     ...parsed.data,
     AUTH_COOKIE_SECURE:
@@ -120,6 +149,17 @@ export function getEnv(): AppEnv {
         : process.env.NODE_ENV === "production",
     ADDRESS_COMPLETE_GEOCODE_ENABLED:
       parsed.data.ADDRESS_COMPLETE_GEOCODE_ENABLED === "true",
+    READ_MODEL_ENABLED: parsed.data.READ_MODEL_ENABLED === "true",
+    READ_MODEL_SQLITE_PATH: readModelSqlitePath,
+    DATA_QUALITY_HISTORY_PATH: dataQualityHistoryPath,
+    READ_MODEL_STALE_AFTER_MS: Math.max(
+      60_000,
+      Number(parsed.data.READ_MODEL_STALE_AFTER_MS ?? "300000") || 300_000,
+    ),
+    READ_MODEL_SYNC_INTERVAL_MS: Math.max(
+      60_000,
+      Number(parsed.data.READ_MODEL_SYNC_INTERVAL_MS ?? "900000") || 900_000,
+    ),
   };
 
   return cachedEnv;

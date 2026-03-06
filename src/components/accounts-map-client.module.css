@@ -81,6 +81,16 @@
   font-size: 13px;
 }
 
+.recordLink {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.recordLink:hover {
+  color: var(--accent-strong);
+}
+
 .mapShell {
   position: relative;
   min-height: 0;

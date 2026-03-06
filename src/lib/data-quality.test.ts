@@ -15,7 +15,7 @@ function buildRow(overrides: Partial<BusinessAccountRow>): BusinessAccountRow {
     rowKey: overrides.rowKey ?? "row-key",
     contactId: overrides.contactId !== undefined ? overrides.contactId : 1,
     isPrimaryContact: overrides.isPrimaryContact ?? false,
-    phoneNumber: overrides.phoneNumber !== undefined ? overrides.phoneNumber : "4160000000",
+    phoneNumber: overrides.phoneNumber !== undefined ? overrides.phoneNumber : "416-000-0000",
     salesRepId: overrides.salesRepId !== undefined ? overrides.salesRepId : "109343",
     salesRepName:
       overrides.salesRepName !== undefined ? overrides.salesRepName : "Jorge Serrano",
@@ -40,7 +40,7 @@ function buildRow(overrides: Partial<BusinessAccountRow>): BusinessAccountRow {
     primaryContactPhone:
       overrides.primaryContactPhone !== undefined
         ? overrides.primaryContactPhone
-        : "4162304681",
+        : "416-230-4681",
     primaryContactEmail:
       overrides.primaryContactEmail !== undefined
         ? overrides.primaryContactEmail
@@ -74,14 +74,14 @@ describe("data-quality helpers", () => {
     expect(isAttributeMissing("Region 1")).toBe(false);
   });
 
-  it("treats blank business-account assignment as a company assignment issue", () => {
+  it("treats orphan contacts with blank company name as a company assignment issue", () => {
     const snapshot = buildDataQualitySnapshot([
       buildRow({
         id: "orphan-contact",
         accountRecordId: "orphan-contact",
         rowKey: "orphan-contact:contact:42",
         businessAccountId: "",
-        companyName: "Jane Doe",
+        companyName: "",
         primaryContactName: "Jane Doe",
         primaryContactEmail: "jane@example.com",
         contactId: 42,
@@ -92,6 +92,200 @@ describe("data-quality helpers", () => {
     const metric = snapshot.metrics.find((item) => item.key === "missingCompany");
     expect(metric?.missingAccounts).toBe(1);
     expect(metric?.missingRows).toBe(1);
+  });
+
+  it("does not classify orphan contacts as sales representative issues", () => {
+    const snapshot = buildDataQualitySnapshot([
+      buildRow({
+        id: "orphan-contact",
+        accountRecordId: "orphan-contact",
+        rowKey: "orphan-contact:contact:42",
+        businessAccountId: "",
+        companyName: "",
+        primaryContactName: ". .",
+        primaryContactEmail: "orphan@example.com",
+        contactId: 42,
+        primaryContactId: 42,
+        salesRepId: "",
+        salesRepName: "",
+      }),
+    ]);
+
+    const metric = snapshot.metrics.find((item) => item.key === "missingSalesRep");
+    expect(metric?.missingAccounts).toBe(0);
+    expect(metric?.missingRows).toBe(0);
+  });
+
+  it("excludes AP-mailbox rows from data-quality totals and issue counts", () => {
+    const snapshot = buildDataQualitySnapshot([
+      buildRow({
+        id: "ap-contact",
+        accountRecordId: "ap-contact",
+        rowKey: "ap-contact:contact:1",
+        businessAccountId: "AP-100",
+        companyName: "Triovest",
+        primaryContactName: "Inquiry",
+        primaryContactEmail: "ontarioap@triovest.com",
+      }),
+      buildRow({
+        id: "normal-contact",
+        accountRecordId: "normal-contact",
+        rowKey: "normal-contact:contact:2",
+        businessAccountId: "",
+        companyName: "",
+        primaryContactName: "Jane Doe",
+        primaryContactEmail: "jane@example.com",
+      }),
+    ]);
+
+    expect(snapshot.totals.rows).toBe(1);
+    expect(snapshot.totals.accounts).toBe(1);
+    const missingCompanyMetric = snapshot.metrics.find((item) => item.key === "missingCompany");
+    expect(missingCompanyMetric?.missingRows).toBe(1);
+  });
+
+  it("excludes contact rows with blank names from data-quality totals and issue counts", () => {
+    const snapshot = buildDataQualitySnapshot([
+      buildRow({
+        id: "blank-contact",
+        accountRecordId: "blank-contact",
+        rowKey: "blank-contact:contact:1",
+        businessAccountId: "BLANK-100",
+        companyName: "Blank Contact Co",
+        primaryContactName: "   ",
+        primaryContactEmail: "blank@example.com",
+      }),
+      buildRow({
+        id: "normal-contact",
+        accountRecordId: "normal-contact",
+        rowKey: "normal-contact:contact:2",
+        businessAccountId: "",
+        companyName: "",
+        primaryContactName: "Jane Doe",
+        primaryContactEmail: "jane@example.com",
+      }),
+    ]);
+
+    expect(snapshot.totals.rows).toBe(1);
+    expect(snapshot.totals.accounts).toBe(1);
+    const missingCompanyMetric = snapshot.metrics.find((item) => item.key === "missingCompany");
+    expect(missingCompanyMetric?.missingRows).toBe(1);
+  });
+
+  it("does not flag a synthetic primary row when a sibling row already resolves the same primary contact", () => {
+    const snapshot = buildDataQualitySnapshot([
+      buildRow({
+        id: "acc-640",
+        accountRecordId: "acc-640",
+        rowKey: "acc-640:primary",
+        businessAccountId: "B200000640",
+        companyName: "3M Canada Company",
+        contactId: 154987,
+        isPrimaryContact: true,
+        primaryContactId: 154987,
+        primaryContactName: null,
+        primaryContactEmail: "epreza@mmm.com",
+      }),
+      buildRow({
+        id: "acc-640",
+        accountRecordId: "acc-640",
+        rowKey: "acc-640:contact:157847",
+        businessAccountId: "B200000640",
+        companyName: "3M Canada Company",
+        contactId: 157847,
+        isPrimaryContact: true,
+        primaryContactId: 154987,
+        primaryContactName: "Enrique Preza",
+        primaryContactEmail: "epreza@mmm.com",
+      }),
+    ]);
+
+    const metric = snapshot.metrics.find((item) => item.key === "missingContact");
+    expect(metric?.missingAccounts).toBe(0);
+    expect(metric?.missingRows).toBe(0);
+    expect(snapshot.issues.missingContact.row).toHaveLength(0);
+  });
+
+  it("flags accounts with no associated contact rows as primary contact issues", () => {
+    const snapshot = buildDataQualitySnapshot([
+      buildRow({
+        id: "acc-no-contact",
+        accountRecordId: "acc-no-contact",
+        rowKey: "acc-no-contact:primary",
+        businessAccountId: "ACC-NO-CONTACT",
+        companyName: "Costco Wholesale Burlington #253",
+        contactId: 154517,
+        isPrimaryContact: true,
+        primaryContactId: 154517,
+        primaryContactName: null,
+        primaryContactEmail: "w253mgr2@costco.com",
+      }),
+    ]);
+
+    const metric = snapshot.metrics.find((item) => item.key === "missingContact");
+    expect(metric?.missingAccounts).toBe(1);
+    expect(metric?.missingRows).toBe(1);
+    expect(snapshot.issues.missingContact.row).toHaveLength(1);
+  });
+
+  it("flags invalid contact phone numbers when they are not ###-###-#### or start with 111", () => {
+    const snapshot = buildDataQualitySnapshot([
+      buildRow({
+        id: "phone-1",
+        accountRecordId: "phone-acc-1",
+        rowKey: "phone-acc-1:contact:1",
+        businessAccountId: "PHONE-1",
+        companyName: "Bad Phone Formatting",
+        primaryContactPhone: "4162304681",
+      }),
+      buildRow({
+        id: "phone-2",
+        accountRecordId: "phone-acc-2",
+        rowKey: "phone-acc-2:contact:2",
+        businessAccountId: "PHONE-2",
+        companyName: "Bad Phone Prefix",
+        primaryContactPhone: "111-555-0100",
+      }),
+      buildRow({
+        id: "phone-3",
+        accountRecordId: "phone-acc-3",
+        rowKey: "phone-acc-3:contact:3",
+        businessAccountId: "PHONE-3",
+        companyName: "Valid Phone",
+        primaryContactPhone: "416-555-0101",
+      }),
+    ]);
+
+    const metric = snapshot.metrics.find((item) => item.key === "invalidPhone");
+    expect(metric?.missingAccounts).toBe(2);
+    expect(metric?.missingRows).toBe(2);
+    expect(snapshot.issues.invalidPhone.row).toHaveLength(2);
+  });
+
+  it("flags contact rows with missing email addresses", () => {
+    const snapshot = buildDataQualitySnapshot([
+      buildRow({
+        id: "email-1",
+        accountRecordId: "email-acc-1",
+        rowKey: "email-acc-1:contact:1",
+        businessAccountId: "EMAIL-1",
+        companyName: "Missing Email",
+        primaryContactEmail: null,
+      }),
+      buildRow({
+        id: "email-2",
+        accountRecordId: "email-acc-2",
+        rowKey: "email-acc-2:contact:2",
+        businessAccountId: "EMAIL-2",
+        companyName: "Present Email",
+        primaryContactEmail: "present@example.com",
+      }),
+    ]);
+
+    const metric = snapshot.metrics.find((item) => item.key === "missingContactEmail");
+    expect(metric?.missingAccounts).toBe(1);
+    expect(metric?.missingRows).toBe(1);
+    expect(snapshot.issues.missingContactEmail.row).toHaveLength(1);
   });
 });
 
@@ -181,18 +375,24 @@ describe("buildDataQualitySnapshot", () => {
     const metric = (key: string) => snapshot.metrics.find((item) => item.key === key)!;
 
     expect(snapshot.totals).toEqual({
-      accounts: 3,
-      rows: 5,
+      accounts: 2,
+      rows: 4,
     });
 
-    expect(metric("missingCompany").missingAccounts).toBe(1);
-    expect(metric("missingCompany").missingRows).toBe(1);
+    expect(metric("missingCompany").missingAccounts).toBe(0);
+    expect(metric("missingCompany").missingRows).toBe(0);
 
-    expect(metric("missingContact").missingAccounts).toBe(1);
-    expect(metric("missingContact").missingRows).toBe(2);
+    expect(metric("missingContact").missingAccounts).toBe(0);
+    expect(metric("missingContact").missingRows).toBe(0);
 
-    expect(metric("missingSalesRep").missingAccounts).toBe(2);
-    expect(metric("missingSalesRep").missingRows).toBe(3);
+    expect(metric("invalidPhone").missingAccounts).toBe(0);
+    expect(metric("invalidPhone").missingRows).toBe(0);
+
+    expect(metric("missingContactEmail").missingAccounts).toBe(0);
+    expect(metric("missingContactEmail").missingRows).toBe(0);
+
+    expect(metric("missingSalesRep").missingAccounts).toBe(1);
+    expect(metric("missingSalesRep").missingRows).toBe(2);
 
     expect(metric("duplicateBusinessAccount").missingAccounts).toBe(2);
     expect(metric("duplicateBusinessAccount").missingRows).toBe(2);
@@ -200,20 +400,20 @@ describe("buildDataQualitySnapshot", () => {
     expect(metric("duplicateContact").missingAccounts).toBe(1);
     expect(metric("duplicateContact").missingRows).toBe(2);
 
-    expect(metric("missingCategory").missingAccounts).toBe(1);
-    expect(metric("missingRegion").missingAccounts).toBe(1);
-    expect(metric("missingSubCategory").missingAccounts).toBe(1);
-    expect(metric("missingIndustry").missingAccounts).toBe(1);
+    expect(metric("missingCategory").missingAccounts).toBe(0);
+    expect(metric("missingRegion").missingAccounts).toBe(0);
+    expect(metric("missingSubCategory").missingAccounts).toBe(0);
+    expect(metric("missingIndustry").missingAccounts).toBe(0);
 
-    expect(metric("missingContact").rowMissingPct).toBe(40);
-    expect(metric("missingCompany").accountMissingPct).toBe(33.3);
+    expect(metric("missingContact").rowMissingPct).toBe(0);
+    expect(metric("missingCompany").accountMissingPct).toBe(0);
     expect(snapshot.issueTotals).toEqual({
-      accountsWithIssues: 3,
-      rowsWithIssues: 5,
+      accountsWithIssues: 2,
+      rowsWithIssues: 4,
       accountIssuePct: 100,
       rowIssuePct: 100,
     });
-    expect(snapshot.overallScorePct).toBe(59.3);
+    expect(snapshot.overallScorePct).toBe(81.8);
   });
 
   it("builds summary response schema", () => {
@@ -223,12 +423,12 @@ describe("buildDataQualitySnapshot", () => {
     expect(summary.source).toBe("live");
     expect(summary.computedAtIso).toBe("2026-03-05T15:00:00.000Z");
     expect(summary.issueTotals).toEqual({
-      accountsWithIssues: 3,
-      rowsWithIssues: 5,
+      accountsWithIssues: 2,
+      rowsWithIssues: 4,
       accountIssuePct: 100,
       rowIssuePct: 100,
     });
-    expect(summary.metrics).toHaveLength(9);
+    expect(summary.metrics).toHaveLength(11);
   });
 
   it("paginates issue rows per metric+basis", () => {
@@ -283,5 +483,39 @@ describe("buildDataQualitySnapshot", () => {
     expect(duplicateMetric?.missingRows).toBe(0);
     expect(snapshot.issues.duplicateBusinessAccount.account).toHaveLength(0);
     expect(snapshot.issues.duplicateBusinessAccount.row).toHaveLength(0);
+  });
+
+  it("does not treat a primary placeholder row as a missing-contact issue when a sibling row resolves the same primary contact", () => {
+    const snapshot = buildDataQualitySnapshot([
+      buildRow({
+        id: "primary-only",
+        accountRecordId: "acc-missing-contact",
+        rowKey: "acc-missing-contact:primary",
+        businessAccountId: "ACC-MISSING-CONTACT",
+        companyName: "ABB Inc.",
+        contactId: 154499,
+        isPrimaryContact: true,
+        primaryContactId: 154499,
+        primaryContactName: null,
+        primaryContactPhone: null,
+        primaryContactEmail: null,
+      }),
+      buildRow({
+        id: "secondary-contact",
+        accountRecordId: "acc-missing-contact",
+        rowKey: "acc-missing-contact:contact:156943",
+        businessAccountId: "ACC-MISSING-CONTACT",
+        companyName: "ABB Inc.",
+        contactId: 156943,
+        isPrimaryContact: false,
+        primaryContactId: 154499,
+        primaryContactName: "Satish Dokur",
+        primaryContactPhone: "416-555-0101",
+        primaryContactEmail: "satish@example.com",
+      }),
+    ]);
+
+    expect(snapshot.issues.missingContact.row).toHaveLength(0);
+    expect(snapshot.issues.missingContact.account).toHaveLength(0);
   });
 });

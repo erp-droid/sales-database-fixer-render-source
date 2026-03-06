@@ -24,6 +24,7 @@ import {
   type DataQualitySnapshot,
   toDataQualitySummaryResponse,
 } from "@/lib/data-quality";
+import { getEnv } from "@/lib/env";
 
 type IssueHistoryEntry = {
   issueKey: string;
@@ -71,7 +72,6 @@ export type DataQualityFixActor = {
   userName: string;
 };
 
-const HISTORY_FILE = path.join(process.cwd(), ".data-quality-history.json");
 const TIMEZONE = "America/Toronto";
 const BASIS_VALUES: DataQualityBasis[] = ["account", "row"];
 
@@ -87,9 +87,18 @@ function createEmptyStore(): DataQualityHistoryStore {
   };
 }
 
+function resolveHistoryFilePath(): string {
+  const { DATA_QUALITY_HISTORY_PATH } = getEnv();
+  if (path.isAbsolute(DATA_QUALITY_HISTORY_PATH)) {
+    return DATA_QUALITY_HISTORY_PATH;
+  }
+
+  return path.join(process.cwd(), DATA_QUALITY_HISTORY_PATH);
+}
+
 async function loadStore(): Promise<DataQualityHistoryStore> {
   try {
-    const raw = await fs.readFile(HISTORY_FILE, "utf8");
+    const raw = await fs.readFile(resolveHistoryFilePath(), "utf8");
     const parsed = JSON.parse(raw) as Partial<DataQualityHistoryStore>;
     if (!parsed || typeof parsed !== "object") {
       return createEmptyStore();
@@ -131,7 +140,9 @@ async function loadStore(): Promise<DataQualityHistoryStore> {
 }
 
 async function saveStore(store: DataQualityHistoryStore): Promise<void> {
-  await fs.writeFile(HISTORY_FILE, JSON.stringify(store, null, 2), "utf8");
+  const historyFilePath = resolveHistoryFilePath();
+  await fs.mkdir(path.dirname(historyFilePath), { recursive: true });
+  await fs.writeFile(historyFilePath, JSON.stringify(store, null, 2), "utf8");
 }
 
 function withStore<T>(
@@ -172,8 +183,10 @@ function monthKey(day: string): string {
 function metricLabel(metricKey: DataQualityMetricKey): string {
   return (
     {
-      missingCompany: "Company Assignment Issues",
-      missingContact: "Contact Assignment Issues",
+      missingCompany: "Contact Assignment Issues",
+      missingContact: "Primary Contact Issues",
+      invalidPhone: "Phone Number Issues",
+      missingContactEmail: "Email Address Issues",
       missingSalesRep: "Sales Representative Issues",
       missingCategory: "Category Issues",
       missingRegion: "Company Region Issues",
