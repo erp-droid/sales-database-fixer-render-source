@@ -15,6 +15,10 @@ type MergeErrorPayload = {
 
 const previewCache = new Map<string, ContactMergePreviewResponse>();
 const previewRequestCache = new Map<string, Promise<ContactMergePreviewResponse>>();
+const prefetchQueue: ContactMergePreviewQuery[] = [];
+const MAX_PREFETCH_CONCURRENCY = 2;
+
+let activePrefetchCount = 0;
 
 function buildPreviewCacheKey(query: ContactMergePreviewQuery): string {
   return [
@@ -29,6 +33,28 @@ function reversePreviewCacheKey(query: ContactMergePreviewQuery): string {
     ...query,
     keepContactId: query.deleteContactId,
     deleteContactId: query.keepContactId,
+  });
+}
+
+function hasCachedOrInflightPreview(query: ContactMergePreviewQuery): boolean {
+  const exactKey = buildPreviewCacheKey(query);
+  const reverseKey = reversePreviewCacheKey(query);
+
+  return (
+    previewCache.has(exactKey) ||
+    previewCache.has(reverseKey) ||
+    previewRequestCache.has(exactKey) ||
+    previewRequestCache.has(reverseKey)
+  );
+}
+
+function isQueuedPreview(query: ContactMergePreviewQuery): boolean {
+  const exactKey = buildPreviewCacheKey(query);
+  const reverseKey = reversePreviewCacheKey(query);
+
+  return prefetchQueue.some((queuedQuery) => {
+    const queuedKey = buildPreviewCacheKey(queuedQuery);
+    return queuedKey === exactKey || queuedKey === reverseKey;
   });
 }
 
@@ -213,6 +239,28 @@ export function loadContactMergePreview(
   return request;
 }
 
+function schedulePrefetchQueue(): void {
+  while (activePrefetchCount < MAX_PREFETCH_CONCURRENCY && prefetchQueue.length > 0) {
+    const nextQuery = prefetchQueue.shift();
+    if (!nextQuery || hasCachedOrInflightPreview(nextQuery)) {
+      continue;
+    }
+
+    activePrefetchCount += 1;
+    void loadContactMergePreview(nextQuery)
+      .catch(() => undefined)
+      .finally(() => {
+        activePrefetchCount = Math.max(0, activePrefetchCount - 1);
+        schedulePrefetchQueue();
+      });
+  }
+}
+
 export function prefetchContactMergePreview(query: ContactMergePreviewQuery): void {
-  void loadContactMergePreview(query).catch(() => undefined);
+  if (hasCachedOrInflightPreview(query) || isQueuedPreview(query)) {
+    return;
+  }
+
+  prefetchQueue.push(query);
+  schedulePrefetchQueue();
 }

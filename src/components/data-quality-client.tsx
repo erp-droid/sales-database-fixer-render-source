@@ -894,16 +894,6 @@ export function DataQualityClient({
     return [...grouped.entries()].map(([key, items]) => ({ key, items }));
   }, [displayedIssues, selectedMetric]);
 
-  useEffect(() => {
-    if (selectedMetric !== "duplicateContact" || duplicateIssueGroups.length === 0) {
-      return;
-    }
-
-    duplicateIssueGroups.forEach((group) => {
-      prefetchMergeGroupPreview(group.items);
-    });
-  }, [duplicateIssueGroups, selectedMetric]);
-
   const categoryOptionsForSelect = useMemo(
     () => withCurrentOption(CATEGORY_OPTIONS, null),
     [],
