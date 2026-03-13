@@ -20,10 +20,9 @@ import {
 } from "@/lib/acumatica-links";
 import { enforceSinglePrimaryPerAccountRows } from "@/lib/business-accounts";
 import {
-  emitDatasetUpdated,
-  getMemoryCachedDataset,
+  readCachedDatasetFromStorage,
   readCachedSyncMeta,
-  setMemoryCachedDataset,
+  writeCachedDatasetToStorage,
 } from "@/lib/client-dataset-cache";
 import { formatPhoneDraftValue, normalizePhoneForSave } from "@/lib/phone";
 import { CallPhoneButton } from "@/components/call-phone-button";
@@ -751,7 +750,7 @@ function isBusinessAccountRow(value: unknown): value is BusinessAccountRow {
 }
 
 function readDatasetEntry(): { storageKey: string; dataset: CachedDataset } | null {
-  const dataset = getMemoryCachedDataset();
+  const dataset = readCachedDatasetFromStorage();
   if (!dataset) {
     return null;
   }
@@ -763,11 +762,10 @@ function readDatasetEntry(): { storageKey: string; dataset: CachedDataset } | nu
 }
 
 function writeDatasetRows(rows: BusinessAccountRow[], lastSyncedAt: string | null) {
-  setMemoryCachedDataset({
+  writeCachedDatasetToStorage({
     rows,
     lastSyncedAt,
   });
-  emitDatasetUpdated();
 }
 
 function readMapCache(expectedCacheKey: string): BusinessAccountMapResponse | null {

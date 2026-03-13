@@ -3,11 +3,13 @@
 import type { BusinessAccountRow } from "@/types/business-account";
 
 export const DATASET_STORAGE_KEYS = [
+  "businessAccounts.dataset.v4",
   "businessAccounts.dataset.v3",
   "businessAccounts.dataset.v2",
   "businessAccounts.dataset.v1",
 ] as const;
 
+const CURRENT_DATASET_STORAGE_KEY = DATASET_STORAGE_KEYS[0];
 const SYNC_META_STORAGE_KEY = "businessAccounts.syncMeta.v1";
 
 export type CachedDataset = {
@@ -66,7 +68,7 @@ export function isBusinessAccountRow(value: unknown): value is BusinessAccountRo
 }
 
 function clearLegacyDatasetStorage(): void {
-  for (const key of DATASET_STORAGE_KEYS) {
+  for (const key of DATASET_STORAGE_KEYS.slice(1)) {
     window.localStorage.removeItem(key);
   }
 }
@@ -84,6 +86,46 @@ export function setMemoryCachedDataset(dataset: CachedDataset): void {
 }
 
 export function readCachedDatasetFromStorage(): CachedDataset | null {
+  for (const key of DATASET_STORAGE_KEYS) {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) {
+        continue;
+      }
+
+      const parsed = JSON.parse(raw) as {
+        rows?: unknown;
+        lastSyncedAt?: unknown;
+      };
+      if (!Array.isArray(parsed.rows) || !parsed.rows.every((row) => isBusinessAccountRow(row))) {
+        continue;
+      }
+
+      const dataset: CachedDataset = {
+        rows: parsed.rows,
+        lastSyncedAt:
+          typeof parsed.lastSyncedAt === "string" ? parsed.lastSyncedAt : null,
+      };
+
+      memoryDataset = dataset;
+      if (key !== CURRENT_DATASET_STORAGE_KEY) {
+        try {
+          window.localStorage.setItem(
+            CURRENT_DATASET_STORAGE_KEY,
+            JSON.stringify(dataset),
+          );
+          clearLegacyDatasetStorage();
+        } catch {
+          // Ignore migration failures.
+        }
+      }
+
+      return dataset;
+    } catch {
+      // Ignore malformed storage values.
+    }
+  }
+
   return memoryDataset;
 }
 
@@ -114,8 +156,15 @@ export function writeCachedSyncMeta(meta: CachedSyncMeta): void {
 
 export function writeCachedDatasetToStorage(dataset: CachedDataset): void {
   memoryDataset = dataset;
-  writeCachedSyncMeta({
-    lastSyncedAt: dataset.lastSyncedAt,
-  });
+  try {
+    window.localStorage.setItem(
+      CURRENT_DATASET_STORAGE_KEY,
+      JSON.stringify(dataset),
+    );
+    clearLegacyDatasetStorage();
+  } catch {
+    // Ignore storage failures.
+  }
+  writeCachedSyncMeta({ lastSyncedAt: dataset.lastSyncedAt });
   emitDatasetUpdated();
 }
