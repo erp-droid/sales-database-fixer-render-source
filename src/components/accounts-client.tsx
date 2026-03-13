@@ -1140,6 +1140,32 @@ function isBusinessAccountRows(payload: unknown): payload is BusinessAccountRow[
   return Array.isArray(payload) && payload.every((item) => isBusinessAccountRow(item));
 }
 
+function normalizeCachedSyncTimestamp(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed || null;
+}
+
+function canUseCachedSnapshot(
+  cachedDataset: CachedDataset | null,
+  status: SyncStatusResponse,
+): cachedDataset is CachedDataset {
+  if (!cachedDataset || !isBusinessAccountRows(cachedDataset.rows) || cachedDataset.rows.length === 0) {
+    return false;
+  }
+
+  if (status.status === "running") {
+    return true;
+  }
+
+  const cachedLastSyncedAt = normalizeCachedSyncTimestamp(cachedDataset.lastSyncedAt);
+  const remoteLastSyncedAt = normalizeCachedSyncTimestamp(status.lastSuccessfulSyncAt);
+  if (!remoteLastSyncedAt) {
+    return true;
+  }
+
+  return cachedLastSyncedAt === remoteLastSyncedAt;
+}
+
 function isAddressLookupSuggestion(payload: unknown): payload is AddressLookupSuggestion {
   if (!payload || typeof payload !== "object") {
     return false;
@@ -1877,7 +1903,41 @@ export function AccountsClient({
   const addressLookupCountry = normalizeCountryDraftValue(draft?.country);
   const allRowsCountRef = useRef(0);
 
-  async function loadSnapshotRows(signal?: AbortSignal) {
+  async function loadSnapshotRows(
+    cachedDataset: CachedDataset | null,
+    signal?: AbortSignal,
+  ) {
+    let statusPayload: SyncStatusResponse | null = null;
+
+    try {
+      const statusResponse = await fetch("/api/sync/status", {
+        cache: "no-store",
+        signal,
+      });
+      const nextStatusPayload = await readJsonResponse<SyncStatusResponse | { error?: string }>(
+        statusResponse,
+      );
+
+      if (statusResponse.ok && isSyncStatusResponse(nextStatusPayload)) {
+        statusPayload = nextStatusPayload;
+        setLastSyncedAt(nextStatusPayload.lastSuccessfulSyncAt);
+
+        if (canUseCachedSnapshot(cachedDataset, nextStatusPayload)) {
+          return cachedDataset.rows;
+        }
+
+        if (!nextStatusPayload.lastSuccessfulSyncAt && nextStatusPayload.rowsCount === 0) {
+          setError("No local snapshot yet. Click Sync records to build the first snapshot.");
+          return [];
+        }
+      }
+    } catch {
+      if (cachedDataset && isBusinessAccountRows(cachedDataset.rows) && cachedDataset.rows.length > 0) {
+        setLastSyncedAt(cachedDataset.lastSyncedAt);
+        return cachedDataset.rows;
+      }
+    }
+
     const params = new URLSearchParams({
       sortBy: "companyName",
       sortDir: "asc",
@@ -1887,22 +1947,12 @@ export function AccountsClient({
       includeInternal: "1",
     });
 
-    const [rowsResponse, statusResponse] = await Promise.all([
-      fetch(`/api/business-accounts?${params.toString()}`, {
-        cache: "no-store",
-        signal,
-      }),
-      fetch("/api/sync/status", {
-        cache: "no-store",
-        signal,
-      }),
-    ]);
-
+    const rowsResponse = await fetch(`/api/business-accounts?${params.toString()}`, {
+      cache: "no-store",
+      signal,
+    });
     const rowsPayload = await readJsonResponse<BusinessAccountsResponse | { error?: string }>(
       rowsResponse,
-    );
-    const statusPayload = await readJsonResponse<SyncStatusResponse | { error?: string }>(
-      statusResponse,
     );
 
     if (!rowsResponse.ok) {
@@ -1912,11 +1962,8 @@ export function AccountsClient({
       throw new Error("Unexpected response while loading account snapshot.");
     }
 
-    if (statusResponse.ok && isSyncStatusResponse(statusPayload)) {
-      setLastSyncedAt(statusPayload.lastSuccessfulSyncAt);
-      if (!statusPayload.lastSuccessfulSyncAt && rowsPayload.items.length === 0) {
-        setError("No local snapshot yet. Click Sync records to build the first snapshot.");
-      }
+    if (statusPayload && !statusPayload.lastSuccessfulSyncAt && rowsPayload.items.length === 0) {
+      setError("No local snapshot yet. Click Sync records to build the first snapshot.");
     }
 
     return rowsPayload.items;
@@ -2530,6 +2577,7 @@ export function AccountsClient({
       allRowsCountRef.current = cachedDataset.rows.length;
       setAllRows(enforceSinglePrimaryPerAccountRows(cachedDataset.rows));
       setLastSyncedAt(cachedDataset.lastSyncedAt);
+      setLoading(false);
     } else {
       setLastSyncedAt(readCachedSyncMeta().lastSyncedAt);
     }
@@ -2845,10 +2893,13 @@ export function AccountsClient({
 
     async function loadRows() {
       const startedAt = Date.now();
-      setLoading(true);
+      const cachedDataset = readCachedDatasetFromStorage();
+      if (!cachedDataset || cachedDataset.rows.length === 0) {
+        setLoading(true);
+      }
 
       try {
-        const nextRows = await loadSnapshotRows(controller.signal);
+        const nextRows = await loadSnapshotRows(cachedDataset, controller.signal);
         if (controller.signal.aborted) {
           return;
         }
