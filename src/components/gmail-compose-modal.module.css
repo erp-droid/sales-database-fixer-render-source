@@ -1,0 +1,503 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(circle at top, rgba(47, 143, 99, 0.12), transparent 26%),
+    rgba(10, 18, 31, 0.34);
+  backdrop-filter: blur(5px);
+  z-index: 70;
+}
+
+.composeShell {
+  position: fixed;
+  right: 24px;
+  bottom: 18px;
+  width: min(860px, calc(100vw - 34px));
+  height: min(86vh, 860px);
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fafc 100%);
+  border: 1px solid var(--app-border);
+  border-radius: 22px;
+  box-shadow:
+    0 30px 80px rgba(9, 18, 31, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  z-index: 80;
+  overflow: hidden;
+}
+
+.composeShellMaximized {
+  inset: 20px;
+  width: auto;
+  height: auto;
+  border-radius: 24px;
+}
+
+.composeShellMinimized {
+  height: auto;
+}
+
+.topBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 18px;
+  background: linear-gradient(135deg, #2f8f63 0%, #277953 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f7fbff;
+}
+
+.topBarTitle {
+  display: grid;
+  gap: 3px;
+}
+
+.topBarTitle strong {
+  font-size: 16px;
+  letter-spacing: 0.01em;
+}
+
+.topBarTitle span {
+  font-size: 12px;
+  color: rgba(229, 239, 251, 0.78);
+}
+
+.windowActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.windowActions button {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #edf5ff;
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.windowActions button:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(209, 226, 245, 0.34);
+  transform: translateY(-1px);
+}
+
+.minimizedBar {
+  border: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(245, 249, 253, 0.98) 100%);
+  padding: 16px 18px;
+  text-align: left;
+  font-weight: 700;
+  color: var(--app-text);
+  cursor: pointer;
+}
+
+.headerRow {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--app-border);
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.headerRowPrimary,
+.subjectRow {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(247, 251, 255, 0.94) 100%);
+}
+
+.headerLabel {
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding-top: 12px;
+}
+
+.fromValue {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fromAvatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #d7ebff 0%, #edf6ff 100%);
+  color: #1f5d9a;
+  font-weight: 800;
+  flex: 0 0 auto;
+}
+
+.fromCopy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.fromCopy strong {
+  color: #20324b;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.fromCopy span {
+  color: #64748b;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.recipientComposer {
+  position: relative;
+  min-width: 0;
+}
+
+.recipientChipRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 44px;
+  padding: 6px 0;
+}
+
+.recipientChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: #ebf2fb;
+  color: #223349;
+  font-size: 13px;
+  border: 1px solid rgba(187, 205, 227, 0.8);
+}
+
+.recipientChip button,
+.attachmentChip button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.recipientInput,
+.subjectInput,
+.linkedContactInput {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #1f2937;
+  padding: 8px 0;
+  outline: none;
+  font-size: 15px;
+}
+
+.subjectRow {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.96);
+}
+
+.subjectInput {
+  font-size: 18px;
+}
+
+.ccActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.ccActions button,
+.linkedContactHeader button {
+  border: 1px solid rgba(196, 207, 222, 0.92);
+  background: rgba(245, 248, 252, 0.92);
+  color: #546477;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 7px 10px;
+  border-radius: 999px;
+}
+
+.suggestionsMenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1px solid #dce2ea;
+  border-radius: 16px;
+  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.16);
+  overflow: hidden;
+  z-index: 3;
+}
+
+.suggestionButton,
+.linkedSuggestionButton {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.suggestionButton:hover,
+.linkedSuggestionButton:hover {
+  background: #f5f8fc;
+}
+
+.suggestionButton strong,
+.linkedSuggestionButton strong {
+  color: #1c2f49;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.suggestionButton span,
+.linkedSuggestionButton span {
+  color: #6a7484;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.linkedContactSection {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.96);
+  background:
+    linear-gradient(180deg, rgba(251, 253, 255, 0.98) 0%, rgba(245, 249, 255, 0.98) 100%);
+}
+
+.linkedContactHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+  color: #233247;
+}
+
+.linkedContactTitle {
+  display: grid;
+  gap: 4px;
+}
+
+.linkedContactTitle strong {
+  font-size: 17px;
+}
+
+.linkedContactTitle span {
+  color: #6a7484;
+  font-size: 13px;
+}
+
+.linkedSuggestionList {
+  display: grid;
+  gap: 8px;
+  max-height: 176px;
+  overflow: auto;
+}
+
+.editorWrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 18px;
+  background:
+    linear-gradient(180deg, rgba(246, 249, 252, 0.96) 0%, rgba(241, 246, 251, 0.96) 100%);
+}
+
+.editor {
+  height: 100%;
+  min-height: 280px;
+  padding: 18px 20px 22px;
+  overflow: auto;
+  outline: none;
+  color: #202124;
+  line-height: 1.65;
+  font-size: 15px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(214, 224, 236, 0.96);
+  border-radius: 22px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.74),
+    0 16px 34px rgba(28, 44, 70, 0.06);
+}
+
+.editor:empty::before {
+  content: "Write your message";
+  color: #9aa4b2;
+}
+
+.editor img {
+  max-width: 100%;
+  border-radius: 12px;
+}
+
+.attachmentRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 18px 12px;
+}
+
+.attachmentChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border-radius: 999px;
+  background: #edf1f7;
+  color: #253041;
+  font-size: 13px;
+  border: 1px solid rgba(206, 217, 230, 0.96);
+}
+
+.footer {
+  display: grid;
+  gap: 12px;
+  padding: 14px 18px 18px;
+  border-top: 1px solid rgba(226, 232, 240, 0.96);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(246, 250, 253, 0.98) 100%);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.toolbar button,
+.toolbarSelect {
+  border: 1px solid rgba(205, 215, 228, 0.96);
+  background: #f7f9fc;
+  color: #263243;
+  border-radius: 999px;
+  padding: 9px 12px;
+  font-size: 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.toolbar button {
+  cursor: pointer;
+}
+
+.footerActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.footerPrimaryActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sendButton {
+  border: 0;
+  background: linear-gradient(135deg, #1b66d2 0%, #1558be 100%);
+  color: #fff;
+  border-radius: 999px;
+  padding: 13px 24px;
+  font-weight: 800;
+  font-size: 15px;
+  cursor: pointer;
+  box-shadow: 0 14px 28px rgba(27, 102, 210, 0.24);
+}
+
+.sendButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.connectButton {
+  border: 1px solid #d8c27a;
+  background: #fff7dc;
+  color: #8a5a00;
+  border-radius: 999px;
+  padding: 12px 16px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.statusText {
+  min-height: 18px;
+  color: #6a7484;
+  font-size: 12px;
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .composeShell,
+  .composeShellMaximized {
+    inset: auto 12px 12px;
+    width: calc(100vw - 24px);
+    height: min(88vh, 820px);
+    border-radius: 18px;
+  }
+
+  .topBar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .windowActions {
+    width: 100%;
+  }
+
+  .headerRow {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .subjectRow {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .ccActions {
+    grid-column: 2;
+    justify-content: flex-end;
+    padding-top: 0;
+  }
+
+  .linkedContactHeader,
+  .footerActions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .statusText {
+    text-align: left;
+  }
+}

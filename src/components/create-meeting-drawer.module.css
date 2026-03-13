@@ -1,0 +1,350 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 41;
+  border: 0;
+  background: rgba(23, 32, 51, 0.28);
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: -620px;
+  width: min(620px, 100%);
+  height: 100vh;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  box-shadow: -20px 0 30px rgba(23, 32, 51, 0.18);
+  z-index: 42;
+  transition: right 0.24s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawerOpen {
+  right: 0;
+}
+
+.drawerHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawerHeader h2 {
+  margin: 4px 0 0;
+  font-size: 22px;
+  color: var(--ink-strong);
+}
+
+.kicker {
+  margin: 0;
+  color: var(--accent-strong);
+  font-family: var(--font-mono), "Courier New", monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.headerMeta {
+  margin: 6px 0 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.closeButton {
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.drawerBody {
+  overflow-y: auto;
+  padding: 14px 18px 24px;
+  display: grid;
+  gap: 14px;
+}
+
+.section {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--app-surface);
+}
+
+.sectionHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.section h3 {
+  margin: 0;
+  color: var(--ink-strong);
+}
+
+.section label {
+  display: grid;
+  gap: 6px;
+  color: var(--ink-strong);
+  font-size: 14px;
+}
+
+.section input,
+.section select,
+.textarea {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--app-surface);
+  color: var(--ink);
+  padding: 9px 10px;
+  width: 100%;
+  font: inherit;
+}
+
+.section input:read-only {
+  background: #f7fafc;
+  color: var(--app-text-soft);
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 110px;
+}
+
+.fieldGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lookupHint {
+  margin: -2px 0 0;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.checkboxLabel {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.checkboxLabel input {
+  width: auto;
+  margin-top: 2px;
+}
+
+.checkboxHint {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.lookupSuggestions {
+  border: 1px solid #c8d6e9;
+  border-radius: 9px;
+  background: #fff;
+  display: grid;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.lookupSuggestionItem {
+  border: 0;
+  border-bottom: 1px solid #e5edf6;
+  background: #fff;
+  text-align: left;
+  padding: 8px 10px;
+  display: grid;
+  gap: 2px;
+  cursor: pointer;
+}
+
+.lookupSuggestionItem:last-child {
+  border-bottom: 0;
+}
+
+.lookupSuggestionItem:hover {
+  background: #f5f9ff;
+}
+
+.lookupSuggestionTitle {
+  color: var(--ink-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.lookupSuggestionMeta {
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.selectedCard {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid #c8d6e9;
+  border-radius: 10px;
+  background: #f6fbff;
+  color: var(--ink-strong);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #bed4ea;
+  background: #edf6ff;
+  color: #1f5f9f;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.calendarStatusCard {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--app-border, #d4dde8);
+  border-radius: 10px;
+  background: var(--app-bg, #f6f8fb);
+}
+
+.calendarStatusBadge,
+.calendarStatusBadgeMuted {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.calendarStatusBadge {
+  background: var(--app-green-soft, #eaf6ef);
+  color: var(--app-green, #2f8f63);
+}
+
+.calendarStatusBadgeMuted {
+  background: #eef2f7;
+  color: var(--app-text-secondary, #667085);
+}
+
+.calendarStatusMeta {
+  color: var(--app-text-secondary, #667085);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.calendarStatusCode {
+  display: inline-block;
+  width: fit-content;
+  padding: 6px 8px;
+  border: 1px solid var(--app-border, #d4dde8);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--app-text, #172033);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.attendeeList {
+  display: grid;
+  gap: 8px;
+}
+
+.attendeeCard {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid #d7e3f1;
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.attendeeMeta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.inlineNotice {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.primaryButton,
+.secondaryButton {
+  border-radius: 9px;
+  padding: 11px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primaryButton {
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+}
+
+.primaryButton:disabled {
+  opacity: 0.6;
+}
+
+.secondaryButton {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.secondaryButton:disabled {
+  opacity: 0.6;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 14px;
+}
+
+@media (max-width: 720px) {
+  .fieldGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .attendeeCard {
+    flex-direction: column;
+  }
+}
