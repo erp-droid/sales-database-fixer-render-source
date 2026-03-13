@@ -1,0 +1,128 @@
+services:
+  - type: web
+    name: sales-database-fixer
+    runtime: docker
+    repo: https://github.com/erp-droid/sales-database-fixer-business-accounts
+    branch: main
+    plan: starter
+    region: ohio
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeploy: true
+    numInstances: 1
+    healthCheckPath: /api/health
+    disk:
+      name: sales-database-data
+      mountPath: /app/data
+      sizeGB: 5
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_PROVIDER
+        value: acumatica
+      - key: AUTH_COOKIE_NAME
+        value: .ASPXAUTH
+      - key: AUTH_COOKIE_SECURE
+        value: "true"
+      - key: APP_BASE_URL
+        sync: false
+      - key: USER_CREDENTIALS_SECRET
+        generateValue: true
+      - key: ACUMATICA_BASE_URL
+        value: https://meadowbrook.acumatica.com
+      - key: ACUMATICA_ENTITY_PATH
+        value: /entity/lightspeed/24.200.001
+      - key: ACUMATICA_COMPANY
+        value: MeadowBrook Live
+      - key: ACUMATICA_BRANCH
+        sync: false
+      - key: ACUMATICA_LOCALE
+        value: en-US
+      - key: ACUMATICA_USERNAME
+        sync: false
+      - key: ACUMATICA_PASSWORD
+        sync: false
+      - key: ACUMATICA_SERVICE_USERNAME
+        sync: false
+      - key: ACUMATICA_SERVICE_PASSWORD
+        sync: false
+      - key: ACUMATICA_PHONE_CALL_ACTIVITY_TYPE
+        value: P
+      - key: ACUMATICA_OPPORTUNITY_ENTITY
+        value: Opportunity
+      - key: ACUMATICA_OPPORTUNITY_CLASS_DEFAULT
+        value: PRODUCTION
+      - key: ACUMATICA_OPPORTUNITY_CLASS_SERVICE
+        value: SERVICE
+      - key: ACUMATICA_OPPORTUNITY_CLASS_GLENDALE
+        value: GLENDALE
+      - key: ACUMATICA_OPPORTUNITY_STAGE_DEFAULT
+        value: Awaiting Estimate
+      - key: ACUMATICA_OPPORTUNITY_LOCATION_DEFAULT
+        value: MAIN
+      - key: ACUMATICA_OPPORTUNITY_OWNER_DEFAULT
+        sync: false
+      - key: ACUMATICA_OPPORTUNITY_ESTIMATION_OFFSET_DAYS
+        value: "0"
+      - key: ACUMATICA_OPPORTUNITY_ATTR_WIN_JOB_ID
+        value: Do you think we are going to win this job?
+      - key: ACUMATICA_OPPORTUNITY_ATTR_LINK_TO_DRIVE_ID
+        value: Link to Drive
+      - key: ACUMATICA_OPPORTUNITY_ATTR_PROJECT_TYPE_ID
+        value: Project Type
+      - key: ACUMATICA_OPPORTUNITY_LINK_TO_DRIVE_DEFAULT
+        sync: false
+      - key: MAIL_SERVICE_URL
+        sync: false
+      - key: MAIL_SERVICE_SHARED_SECRET
+        sync: false
+      - key: MAIL_INTERNAL_DOMAIN
+        value: meadowb.com
+      - key: MAIL_CONNECT_RETURN_PATH
+        value: /mail
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_API_KEY_SID
+        sync: false
+      - key: TWILIO_API_KEY_SECRET
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_TWIML_APP_SID
+        sync: false
+      - key: TWILIO_CALLER_ID
+        sync: false
+      - key: TWILIO_EDGE
+        value: ashburn
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_TRANSCRIPTION_MODEL
+        value: gpt-4o-mini-transcribe
+      - key: OPENAI_SUMMARY_MODEL
+        value: gpt-4o-mini
+      - key: CALL_ACTIVITY_BODY_MAX_CHARS
+        value: "25000"
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: ADDRESS_COMPLETE_API_KEY
+        sync: false
+      - key: ADDRESS_COMPLETE_FIND_URL
+        value: https://ws1.postescanada-canadapost.ca/AddressComplete/Interactive/Find/v2.10/json3.ws
+      - key: ADDRESS_COMPLETE_RETRIEVE_URL
+        value: https://ws1.postescanada-canadapost.ca/AddressComplete/Interactive/Retrieve/v2.10/json3.ws
+      - key: READ_MODEL_ENABLED
+        value: "true"
+      - key: READ_MODEL_SQLITE_PATH
+        value: /app/data/read-model.sqlite
+      - key: DATA_QUALITY_HISTORY_PATH
+        value: /app/data/data-quality-history.json
+      - key: READ_MODEL_STALE_AFTER_MS
+        value: "300000"
+      - key: READ_MODEL_SYNC_INTERVAL_MS
+        value: "900000"
+      - key: CALL_ANALYTICS_STALE_AFTER_MS
+        value: "300000"
+      - key: CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS
+        value: "86400000"

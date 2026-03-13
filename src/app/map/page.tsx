@@ -1,6 +1,8 @@
 import { getEnv } from "@/lib/env";
 import { AccountsMapClient } from "@/components/accounts-map-client";
 
+export const dynamic = "force-dynamic";
+
 export default function MapPage() {
   const env = getEnv();
 
