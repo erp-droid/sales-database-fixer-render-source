@@ -4,10 +4,14 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
 import { type AuthCookieRefreshState, fetchBusinessAccounts } from "@/lib/acumatica";
-import { normalizeBusinessAccount } from "@/lib/business-accounts";
+import {
+  filterSuppressedBusinessAccountRows,
+  normalizeBusinessAccount,
+} from "@/lib/business-accounts";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { geocodeAddress, type GeocodeResult } from "@/lib/geocode";
+import { isExcludedInternalCompanyName } from "@/lib/internal-records";
 import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import { registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import { buildAddressKeyFromRow, readReadyGeocodeMap } from "@/lib/read-model/geocodes";
@@ -30,13 +34,6 @@ registerReadModelCacheClearer(() => {
   mapPayloadCache.clear();
   mapPayloadInFlight.clear();
 });
-
-function clamp(value: number, min: number, max: number): number {
-  if (Number.isNaN(value)) {
-    return min;
-  }
-  return Math.min(Math.max(value, min), max);
-}
 
 function normalizeText(value: string): string {
   return value.trim().toLowerCase();
@@ -70,6 +67,15 @@ function readWrappedString(record: unknown, key: string): string | null {
 
   const value = (field as Record<string, unknown>).value;
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readBusinessAccountName(record: unknown): string | null {
+  return (
+    readWrappedString(record, "Name") ??
+    readWrappedString(record, "CompanyName") ??
+    readWrappedString(record, "AcctName") ??
+    readWrappedString(record, "BusinessAccountName")
+  );
 }
 
 function isLikelyVendorClassId(value: string | null): boolean {
@@ -225,12 +231,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const q = request.nextUrl.searchParams.get("q")?.trim() ?? "";
     const syncedAt = request.nextUrl.searchParams.get("syncedAt")?.trim() ?? "";
     const normalizedSearch = normalizeText(q);
-    const limit = clamp(
-      Number(request.nextUrl.searchParams.get("limit") ?? "600"),
-      1,
-      5000,
-    );
-    const cacheKey = `${limit}|${normalizedSearch}|${syncedAt}`;
+    const cacheKey = `all|${normalizedSearch}|${syncedAt}`;
 
     const cachedPayload = mapPayloadCache.get(cacheKey);
     if (cachedPayload && Date.now() - cachedPayload.createdAt <= MAP_PAYLOAD_CACHE_TTL_MS) {
@@ -249,7 +250,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           if (getEnv().READ_MODEL_ENABLED) {
             maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
             const grouped = new Map<string, BusinessAccountRow[]>();
-            readAllAccountRowsFromReadModel().forEach((row) => {
+            filterSuppressedBusinessAccountRows(readAllAccountRowsFromReadModel()).forEach((row) => {
               const key = readRowAccountKey(row);
               if (!key) {
                 return;
@@ -296,8 +297,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                     candidate.representativeRow.addressLine1 &&
                     candidate.representativeRow.city,
                 ),
-              )
-              .slice(0, limit);
+              );
             const geocodeMap = readReadyGeocodeMap(
               candidates.map((candidate) => buildAddressKeyFromRow(candidate.representativeRow)),
             );
@@ -355,7 +355,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           const rawAccounts = await fetchBusinessAccounts(
             cookieValue,
             {
-              maxRecords: Math.max(limit, Math.min(limit * 4, 10000)),
               batchSize: 150,
               ensureMainAddress: true,
               ensurePrimaryContact: true,
@@ -365,10 +364,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             authCookieRefresh,
           );
 
-          const normalizedRows = rawAccounts
-            .filter((account) => isAllowedBusinessAccountType(account))
-            .map((item) => normalizeBusinessAccount(item))
-            .filter((row) => Boolean(row.id && row.addressLine1 && row.city));
+          const normalizedRows = filterSuppressedBusinessAccountRows(
+            rawAccounts
+              .filter(
+                (account) =>
+                  isAllowedBusinessAccountType(account) &&
+                  !isExcludedInternalCompanyName(readBusinessAccountName(account)),
+              )
+              .map((item) => normalizeBusinessAccount(item))
+              .filter((row) => Boolean(row.id && row.addressLine1 && row.city)),
+          );
 
           const filteredRows = normalizedSearch
             ? normalizedRows.filter((row) =>
@@ -386,7 +391,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
               )
             : normalizedRows;
 
-          const candidates = filteredRows.slice(0, limit);
+          const candidates = filteredRows;
           const pointsOrNull = await mapLimit(candidates, 10, async (row) => {
             const key = buildAddressKey(row);
             let geocode = mapGeocodeCache.get(key);
@@ -455,7 +460,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           };
           if (process.env.NODE_ENV !== "production") {
             console.info(
-              `[map] q="${normalizedSearch}" limit=${limit} candidates=${nextPayload.totalCandidates} mapped=${nextPayload.geocodedCount} unmapped=${nextPayload.unmappedCount}`,
+              `[map] q="${normalizedSearch}" scope=all candidates=${nextPayload.totalCandidates} mapped=${nextPayload.geocodedCount} unmapped=${nextPayload.unmappedCount}`,
             );
           }
           mapPayloadCache.set(cacheKey, {

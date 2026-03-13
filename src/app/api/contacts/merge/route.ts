@@ -4,31 +4,55 @@ import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
 import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
+import { applyDeferredMergeContactsToRows } from "@/lib/deferred-contact-operations";
+import { enqueueDeferredMergeContactsAction } from "@/lib/deferred-actions-store";
 import {
-  fetchContactById,
-  updateBusinessAccount,
-  updateContact,
-  deleteContact as deleteAcumaticaContact,
-} from "@/lib/acumatica";
-import {
-  buildDeletedContactRowKey,
   buildAccountRowsFromRawAccount,
+  buildDeletedContactRowKeys,
   fetchContactMergeServerContext,
-  setBusinessAccountPrimaryContact,
+  fetchSelectedContactsForMerge,
   validateContactMergeScope,
 } from "@/lib/contact-merge-server";
 import {
-  buildMergedContactPayload,
+  CONTACT_MERGE_FIELD_LABELS,
+  buildSelectedMergeFieldMap,
   normalizeRawBusinessAccountForMerge,
   normalizeRawContactForMerge,
   optimisticTimestampMatches,
 } from "@/lib/contact-merge";
-import { buildPrimaryContactFallbackPayloads } from "@/lib/business-accounts";
-import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
-import { replaceReadModelAccountRows } from "@/lib/read-model/accounts";
 import { parseContactMergePayload } from "@/lib/validation";
-import type { ContactMergeResponse } from "@/types/contact-merge";
+import type {
+  ContactMergeFieldKey,
+  ContactMergeRequest,
+  ContactMergeResponse,
+} from "@/types/contact-merge";
+
+function readSourceSurface(request: NextRequest): string {
+  const source = request.nextUrl.searchParams.get("source")?.trim();
+  return source || "merge";
+}
+
+function computeUpdatedFieldLabels(
+  selectedContacts: Array<ReturnType<typeof normalizeRawContactForMerge>>,
+  keepContactId: number,
+  payload: ContactMergeRequest,
+): string[] {
+  const mergedFields = buildSelectedMergeFieldMap(
+    selectedContacts,
+    keepContactId,
+    payload.fieldChoices,
+  );
+  const keptContact = selectedContacts.find((contact) => contact.contactId === keepContactId);
+  if (!keptContact) {
+    return [];
+  }
+
+  return (Object.keys(CONTACT_MERGE_FIELD_LABELS) as ContactMergeFieldKey[])
+    .filter((field) => (mergedFields[field] ?? "") !== (keptContact.fields[field] ?? ""))
+    .map((field) => CONTACT_MERGE_FIELD_LABELS[field]);
+}
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh = {
@@ -41,184 +65,145 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       throw new HttpError(400, "Request body must be valid JSON.");
     });
     const payload = parseContactMergePayload(body);
-    const [context, keepRawContact, deleteRawContact] = await Promise.all([
-      fetchContactMergeServerContext(
-        cookieValue,
-        payload.businessAccountRecordId,
-        authCookieRefresh,
-        { includeContacts: false },
-      ),
-      fetchContactById(cookieValue, payload.keepContactId, authCookieRefresh),
-      fetchContactById(cookieValue, payload.deleteContactId, authCookieRefresh),
-    ]);
+    const context = await fetchContactMergeServerContext(
+      cookieValue,
+      payload.businessAccountRecordId,
+      authCookieRefresh,
+    );
+    const account = normalizeRawBusinessAccountForMerge(context.rawAccountWithContacts);
+
+    if (account.businessAccountId !== payload.businessAccountId) {
+      throw new HttpError(
+        409,
+        "This account changed after you opened the merge flow. Reload and try again.",
+      );
+    }
+
+    const selectedRawContacts = await fetchSelectedContactsForMerge(
+      cookieValue,
+      payload.selectedContactIds,
+      authCookieRefresh,
+    );
+    const keepRawContact =
+      selectedRawContacts.find(
+        (contact) =>
+          normalizeRawContactForMerge(contact).contactId === payload.keepContactId,
+      ) ?? null;
+    if (!keepRawContact) {
+      throw new HttpError(422, "Keep contact ID must be included in the selected contacts.");
+    }
 
     const scope = validateContactMergeScope(
       context.rawAccountWithContacts,
       keepRawContact,
-      deleteRawContact,
+      selectedRawContacts,
     );
-    const account = normalizeRawBusinessAccountForMerge(context.rawAccountWithContacts);
-    const keepContact = normalizeRawContactForMerge(keepRawContact);
-    const deleteMergeContact = normalizeRawContactForMerge(deleteRawContact);
-
-    if (account.businessAccountId !== payload.businessAccountId) {
-      const response = NextResponse.json(
-        {
-          error: "This account changed after you opened the merge flow. Reload and try again.",
-        },
-        { status: 409 },
-      );
-      if (authCookieRefresh.value) {
-        setAuthCookie(response, authCookieRefresh.value);
-      }
-      return response;
-    }
+    const normalizedSelectedContacts = selectedRawContacts.map((rawContact) =>
+      normalizeRawContactForMerge(rawContact),
+    );
+    const expectedLastModifiedByContactId = new Map(
+      payload.expectedContactLastModifieds.map((entry) => [entry.contactId, entry.lastModified]),
+    );
 
     if (
       !optimisticTimestampMatches(
         payload.expectedAccountLastModified,
         account.lastModifiedIso,
       ) ||
-      !optimisticTimestampMatches(
-        payload.expectedKeepContactLastModified,
-        keepContact.lastModifiedIso,
-      ) ||
-      !optimisticTimestampMatches(
-        payload.expectedDeleteContactLastModified,
-        deleteMergeContact.lastModifiedIso,
-      )
+      !normalizedSelectedContacts.every((contact) => {
+        if (contact.contactId === null) {
+          return false;
+        }
+
+        return optimisticTimestampMatches(
+          expectedLastModifiedByContactId.get(contact.contactId),
+          contact.lastModifiedIso,
+        );
+      })
     ) {
-      const response = NextResponse.json(
-        {
-          error:
-            "These records were modified in Acumatica after you loaded the merge preview. Reload and try again.",
-        },
-        { status: 409 },
+      throw new HttpError(
+        409,
+        "These records were modified in Acumatica after you loaded the merge preview. Reload and try again.",
       );
-      if (authCookieRefresh.value) {
-        setAuthCookie(response, authCookieRefresh.value);
-      }
-      return response;
     }
 
-    const deletedRowKey = buildDeletedContactRowKey(
-      context.rawAccountWithContacts,
-      payload.deleteContactId,
+    const loserContactIds = payload.selectedContactIds.filter(
+      (contactId) => contactId !== payload.keepContactId,
     );
-    const mergedPayload = buildMergedContactPayload(
-      keepRawContact,
-      deleteRawContact,
+    const deletedRowKeys = buildDeletedContactRowKeys(
+      context.rawAccountWithContacts,
+      loserContactIds,
+    );
+    const accountRows = buildAccountRowsFromRawAccount(context.rawAccountWithContacts);
+    const mergedFields = buildSelectedMergeFieldMap(
+      normalizedSelectedContacts,
+      payload.keepContactId,
       payload.fieldChoices,
     );
-
-    await updateContact(
-      cookieValue,
-      payload.keepContactId,
-      mergedPayload,
-      authCookieRefresh,
-    );
-
-    if (payload.setKeptAsPrimary) {
-      try {
-        const primaryPayload = buildPrimaryContactFallbackPayloads(
-          context.rawAccount,
-          payload.keepContactId,
-          keepRawContact,
-        )[0];
-        await updateBusinessAccount(
-          cookieValue,
-          context.updateIdentifiers,
-          {
-            ...context.identityPayload,
-            ...primaryPayload,
-          },
-          authCookieRefresh,
-        );
-        await setBusinessAccountPrimaryContact(
-          cookieValue,
-          context,
-          payload.keepContactId,
-          authCookieRefresh,
-          keepRawContact,
-        );
-      } catch (error) {
-        if (error instanceof HttpError) {
-          const response = NextResponse.json(
-            {
-              error: `Kept contact updated, but primary switch failed. ${error.message}`,
-              partial: true,
-              stage: "primary",
-            },
-            { status: error.status },
-          );
-          if (authCookieRefresh.value) {
-            setAuthCookie(response, authCookieRefresh.value);
-          }
-          return response;
-        }
-        throw error;
-      }
-    }
-
-    try {
-      await deleteAcumaticaContact(cookieValue, payload.deleteContactId, authCookieRefresh);
-    } catch (error) {
-      if (error instanceof HttpError) {
-        const response = NextResponse.json(
-          {
-            error: `Kept contact updated, but loser contact was not deleted. ${error.message}`,
-            partial: true,
-            stage: "delete",
-          },
-          { status: error.status },
-        );
-        if (authCookieRefresh.value) {
-          setAuthCookie(response, authCookieRefresh.value);
-        }
-        return response;
-      }
-      throw error;
-    }
-
-    const refreshedContext = await fetchContactMergeServerContext(
-      cookieValue,
-      context.resolvedRecordId,
-      authCookieRefresh,
-    );
-    const refreshedAccount = normalizeRawBusinessAccountForMerge(
-      refreshedContext.rawAccountWithContacts,
-    );
-    const accountRows = buildAccountRowsFromRawAccount(refreshedContext.rawAccountWithContacts);
+    const preview = {
+      actionType: "mergeContacts" as const,
+      keepContactId: payload.keepContactId,
+      loserContactIds,
+      setKeptAsPrimary: payload.setKeptAsPrimary,
+      mergedPrimaryContactName: mergedFields.displayName,
+      mergedPrimaryContactPhone: mergedFields.phone1,
+      mergedPrimaryContactEmail: mergedFields.email,
+      mergedNotes: mergedFields.notes,
+    };
+    const previewRows = applyDeferredMergeContactsToRows(accountRows, preview);
     const updatedRow =
-      accountRows.find((row) => row.contactId === payload.keepContactId) ??
-      accountRows[0];
+      previewRows.find((row) => row.contactId === payload.keepContactId) ?? previewRows[0];
 
     if (!updatedRow) {
-      throw new HttpError(
-        500,
-        "Merge completed, but the updated contact could not be reloaded from Acumatica.",
-      );
+      throw new HttpError(500, "Unable to prepare the queued merge preview.");
     }
+
+    const actor = await resolveDeferredActionActor(
+      request,
+      cookieValue,
+      authCookieRefresh,
+    );
+    const queued = enqueueDeferredMergeContactsAction({
+      sourceSurface: readSourceSurface(request),
+      businessAccountRecordId: context.resolvedRecordId,
+      businessAccountId: account.businessAccountId ?? payload.businessAccountId,
+      companyName: account.companyName ?? payload.businessAccountId,
+      keptContactId: payload.keepContactId,
+      keptContactName: updatedRow.primaryContactName ?? null,
+      loserContactIds,
+      loserContactNames: normalizedSelectedContacts
+        .filter(
+          (contact) =>
+            contact.contactId !== null && loserContactIds.includes(contact.contactId),
+        )
+        .map(
+          (contact) =>
+            contact.fields.displayName ?? `Contact ${contact.contactId ?? "unknown"}`,
+        ),
+      affectedFields: computeUpdatedFieldLabels(
+        normalizedSelectedContacts,
+        payload.keepContactId,
+        payload,
+      ),
+      actor,
+      payloadJson: JSON.stringify(payload),
+      preview,
+    });
 
     const responsePayload: ContactMergeResponse = {
-      merged: true,
-      businessAccountRecordId: refreshedContext.resolvedRecordId,
-      businessAccountId: refreshedAccount.businessAccountId ?? payload.businessAccountId,
+      queued: true,
+      actionId: queued.id,
+      businessAccountRecordId: context.resolvedRecordId,
+      businessAccountId: account.businessAccountId ?? payload.businessAccountId,
       keptContactId: payload.keepContactId,
-      deletedContactId: payload.deleteContactId,
+      deletedContactIds: loserContactIds,
       setKeptAsPrimary: payload.setKeptAsPrimary,
       updatedRow,
-      deletedRowKey,
-      accountRows,
+      deletedRowKeys,
+      accountRows: previewRows,
       warnings: scope.warnings,
+      executeAfterAt: queued.executeAfterAt,
     };
-
-    if (getEnv().READ_MODEL_ENABLED) {
-      replaceReadModelAccountRows(
-        refreshedContext.resolvedRecordId,
-        responsePayload.accountRows,
-      );
-    }
 
     const response = NextResponse.json(responsePayload);
     if (authCookieRefresh.value) {

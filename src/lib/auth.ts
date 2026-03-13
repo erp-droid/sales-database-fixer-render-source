@@ -5,6 +5,7 @@ import { getAuthCookieNameForMiddleware, getEnv } from "@/lib/env";
 
 const COMMA_SPLIT_REGEX = /,\s*(?=[^;]+=[^;]+)/g;
 const COOKIE_JAR_PREFIX = "v1.";
+const LOGIN_NAME_COOKIE = "mb_login_name";
 
 type CookieJar = Record<string, string>;
 type ParsedSetCookieEntry = {
@@ -292,6 +293,46 @@ export function clearAuthCookie(response: NextResponse): void {
 
   response.cookies.set({
     name: env.AUTH_COOKIE_NAME,
+    value: "",
+    path: "/",
+    httpOnly: true,
+    sameSite: "lax",
+    secure: env.AUTH_COOKIE_SECURE,
+    domain: env.AUTH_COOKIE_DOMAIN,
+    expires: new Date(0),
+    maxAge: 0,
+  });
+}
+
+export function getStoredLoginName(request: NextRequest): string | null {
+  const value = request.cookies.get(LOGIN_NAME_COOKIE)?.value?.trim() ?? "";
+  return value || null;
+}
+
+export function setStoredLoginName(response: NextResponse, loginName: string): void {
+  const env = getEnv();
+  const trimmed = loginName.trim();
+  if (!trimmed) {
+    clearStoredLoginName(response);
+    return;
+  }
+
+  response.cookies.set({
+    name: LOGIN_NAME_COOKIE,
+    value: trimmed,
+    path: "/",
+    httpOnly: true,
+    sameSite: "lax",
+    secure: env.AUTH_COOKIE_SECURE,
+    domain: env.AUTH_COOKIE_DOMAIN,
+  });
+}
+
+export function clearStoredLoginName(response: NextResponse): void {
+  const env = getEnv();
+
+  response.cookies.set({
+    name: LOGIN_NAME_COOKIE,
     value: "",
     path: "/",
     httpOnly: true,

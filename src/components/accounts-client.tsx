@@ -1,10 +1,19 @@
 "use client";
 
-import { type DragEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import Image from "next/image";
+import {
+  type ComponentProps,
+  type DragEvent as ReactDragEvent,
+  type ReactNode,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import { AppChrome } from "@/components/app-chrome";
 import type {
   BusinessAccountDetailResponse,
   BusinessAccountRow,
@@ -20,6 +29,7 @@ import type {
   BusinessAccountContactCreateResponse,
 } from "@/types/business-account-create";
 import {
+  buildCanonicalCompanyPhoneGroupKey,
   enforceSinglePrimaryPerAccountRows,
   queryBusinessAccounts,
   resolveCompanyPhone,
@@ -29,17 +39,61 @@ import {
   buildAcumaticaContactUrl,
 } from "@/lib/acumatica-links";
 import {
+  BUSINESS_ACCOUNT_REGION_VALUES,
+  normalizeBusinessAccountRegionValue,
+} from "@/lib/business-account-region-values";
+import {
   type CachedDataset,
   readCachedDatasetFromStorage,
   readCachedSyncMeta,
   writeCachedDatasetToStorage,
 } from "@/lib/client-dataset-cache";
-import { formatPhoneDraftValue, normalizePhoneForSave } from "@/lib/phone";
+import {
+  formatPhoneDraftValue,
+  normalizeExtensionForSave,
+  normalizePhoneForSave,
+  parsePhoneWithExtension,
+} from "@/lib/phone";
+import { CallPhoneButton } from "@/components/call-phone-button";
 import { CreateBusinessAccountDrawer } from "@/components/create-business-account-drawer";
 import {
   CreateContactDrawer,
   type CreateContactAccountOption,
 } from "@/components/create-contact-drawer";
+import {
+  GmailComposeModal,
+  type GmailComposeInitialState,
+} from "@/components/gmail-compose-modal";
+import { CreateOpportunityDrawer } from "@/components/create-opportunity-drawer";
+import { CreateMeetingDrawer } from "@/components/create-meeting-drawer";
+import { ContactMergeModal } from "@/components/contact-merge-modal";
+import {
+  QueueDeleteContactsModal,
+  type QueueDeleteContactTarget,
+} from "@/components/queue-delete-contacts-modal";
+import {
+  buildMailContactSuggestions,
+  createLinkedContactFromRow,
+} from "@/lib/mail-ui";
+import type {
+  ContactMergeResponse,
+  MergeableContactCandidate,
+} from "@/types/contact-merge";
+import type { MailSessionResponse } from "@/types/mail";
+import type { MailLastEmailedResponse } from "@/types/mail";
+import type { MailContactSuggestion, MailSendResponse } from "@/types/mail-compose";
+import type { OpportunityCreateResponse } from "@/types/opportunity-create";
+import type {
+  MeetingCreateOptionsResponse,
+  MeetingCreateResponse,
+  MeetingSourceContext,
+} from "@/types/meeting-create";
+import {
+  buildMeetingCreateOptionsFromRows,
+  DEFAULT_MEETING_TIME_ZONE,
+  mergeMeetingCreateOptions,
+} from "@/lib/meeting-create";
+import type { AuditLogResponse, AuditLogRow } from "@/lib/audit-log-types";
 
 import styles from "./accounts-client.module.css";
 import type { SyncStatusResponse } from "@/types/sync";
@@ -92,6 +146,192 @@ type SyncProgress = {
   totalRows: number | null;
 };
 
+type OpportunityDrawerContext = {
+  initialAccountRecordId: string | null;
+  initialContactId: number | null;
+  initialOwnerId: string | null;
+  initialOwnerName: string | null;
+};
+
+type RowMenuPosition = {
+  left: number;
+  top: number;
+};
+
+type EmailComposerState = {
+  initialState: GmailComposeInitialState | null;
+  isOpen: boolean;
+};
+
+type MailLastEmailedLookupAccount = {
+  businessAccountRecordId: string | null;
+  businessAccountId: string | null;
+};
+
+const MAIL_SESSION_FOLDERS: MailSessionResponse["folders"] = [
+  "inbox",
+  "sent",
+  "drafts",
+  "starred",
+];
+
+function NoteIcon({ active }: { active: boolean }) {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 18 18">
+      <path
+        d="M4.25 1.5h6.7L14.5 5.05v11.2a.75.75 0 0 1-.75.75h-9.5a.75.75 0 0 1-.75-.75v-14a.75.75 0 0 1 .75-.75Z"
+        fill={active ? "#fff0b8" : "#ffffff"}
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="1.2"
+      />
+      <path
+        d="M10.9 1.75V5.1h3.35"
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="1.2"
+      />
+      {active ? (
+        <>
+          <path d="M6 8h5.4" stroke="currentColor" strokeLinecap="round" strokeWidth="1.1" />
+          <path d="M6 10.4h5.4" stroke="currentColor" strokeLinecap="round" strokeWidth="1.1" />
+          <path d="M6 12.8h3.8" stroke="currentColor" strokeLinecap="round" strokeWidth="1.1" />
+        </>
+      ) : null}
+    </svg>
+  );
+}
+
+function SyncIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+      <path
+        d="M20 7V2.75h-4.25"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M4 17v4.25h4.25"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M19.3 12a7.3 7.3 0 0 0-12.46-5.16L4.95 8.73"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M4.7 12a7.3 7.3 0 0 0 12.46 5.16l1.89-1.89"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
+function DragHandleIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
+      <circle cx="5" cy="4" fill="currentColor" r="1.1" />
+      <circle cx="5" cy="8" fill="currentColor" r="1.1" />
+      <circle cx="5" cy="12" fill="currentColor" r="1.1" />
+      <circle cx="11" cy="4" fill="currentColor" r="1.1" />
+      <circle cx="11" cy="8" fill="currentColor" r="1.1" />
+      <circle cx="11" cy="12" fill="currentColor" r="1.1" />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
+      <circle cx="8.75" cy="8.75" r="5.75" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="m12.85 12.85 4.15 4.15"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
+      <path
+        d="m4 6 4 4 4-4"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
+function FilterIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
+      <path
+        d="M3 5.25h14M5.5 10h9M8.5 14.75h3"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
+function SortIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
+      <path
+        d="M6 4.25v11.5M6 4.25 3.75 6.5M6 4.25 8.25 6.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M14 15.75V4.25M14 15.75l-2.25-2.25M14 15.75l2.25-2.25"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg aria-hidden="true" fill="currentColor" viewBox="0 0 20 20">
+      <circle cx="4" cy="10" r="1.5" />
+      <circle cx="10" cy="10" r="1.5" />
+      <circle cx="16" cy="10" r="1.5" />
+    </svg>
+  );
+}
+
+function readCompanyNameInitial(value: string | null | undefined): string | null {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const initial = trimmed.charAt(0).toUpperCase();
+  return /^[A-Z]$/.test(initial) ? initial : null;
+}
+
 function isSyncStatusResponse(value: unknown): value is SyncStatusResponse {
   if (!value || typeof value !== "object") {
     return false;
@@ -118,10 +358,13 @@ type HeaderFilters = {
   address: string;
   companyPhone: string;
   primaryContactName: string;
+  primaryContactJobTitle: string;
   primaryContactPhone: string;
+  primaryContactExtension: string;
   primaryContactEmail: string;
   notes: string;
   category: Category | "";
+  lastEmailed: string;
   lastModified: string;
 };
 
@@ -135,10 +378,13 @@ const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   address: "",
   companyPhone: "",
   primaryContactName: "",
+  primaryContactJobTitle: "",
   primaryContactPhone: "",
+  primaryContactExtension: "",
   primaryContactEmail: "",
   notes: "",
   category: "",
+  lastEmailed: "",
   lastModified: "",
 };
 
@@ -163,13 +409,6 @@ type ColumnConfig = {
   filterPlaceholder: string;
 };
 
-type InlineEditableColumn =
-  | "industryType"
-  | "subCategory"
-  | "companyRegion"
-  | "week"
-  | "category";
-
 const COLUMN_CONFIGS: ColumnConfig[] = [
   {
     id: "companyName",
@@ -191,7 +430,7 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
   },
   {
     id: "subCategory",
-    label: "Sub-Category",
+    label: "Subcategory",
     filterKey: "subCategory",
     filterPlaceholder: "Filter sub-category",
   },
@@ -221,27 +460,39 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
   },
   {
     id: "primaryContactName",
-    label: "Contact",
+    label: "Primary Contact",
     filterKey: "primaryContactName",
     filterPlaceholder: "Filter contact",
   },
   {
+    id: "primaryContactJobTitle",
+    label: "Job Title",
+    filterKey: "primaryContactJobTitle",
+    filterPlaceholder: "Filter job title",
+  },
+  {
     id: "primaryContactPhone",
-    label: "Phone Number",
+    label: "Contact Phone",
     filterKey: "primaryContactPhone",
     filterPlaceholder: "Filter phone number",
   },
   {
+    id: "primaryContactExtension",
+    label: "Extension",
+    filterKey: "primaryContactExtension",
+    filterPlaceholder: "Filter extension",
+  },
+  {
     id: "primaryContactEmail",
-    label: "Primary Contact Email",
+    label: "Primary Email",
     filterKey: "primaryContactEmail",
     filterPlaceholder: "Filter email",
   },
   {
-    id: "notes",
-    label: "Notes",
-    filterKey: "notes",
-    filterPlaceholder: "Filter notes",
+    id: "lastEmailedAt",
+    label: "Last Emailed",
+    filterKey: "lastEmailed",
+    filterPlaceholder: "Filter last emailed",
   },
   {
     id: "category",
@@ -251,7 +502,7 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
   },
   {
     id: "lastModifiedIso",
-    label: "Last Modified",
+    label: "Updated",
     filterKey: "lastModified",
     filterPlaceholder: "Filter last modified",
   },
@@ -262,9 +513,11 @@ const DEFAULT_VISIBLE_COLUMNS: SortBy[] = [
   "address",
   "companyPhone",
   "primaryContactName",
+  "primaryContactJobTitle",
   "primaryContactPhone",
+  "primaryContactExtension",
   "primaryContactEmail",
-  "notes",
+  "lastEmailedAt",
   "category",
 ];
 
@@ -303,11 +556,10 @@ const SUB_CATEGORY_OPTIONS: AttributeOption[] = [
 ];
 
 const COMPANY_REGION_DEFAULT_OPTIONS: AttributeOption[] = [
-  { value: "Region 1", label: "Region 1" },
-  { value: "Region 2", label: "Region 2" },
-  { value: "Region 3", label: "Region 3" },
-  { value: "Region 4", label: "Region 4" },
-  { value: "Region 5", label: "Region 5" },
+  ...BUSINESS_ACCOUNT_REGION_VALUES.map((value) => ({
+    value,
+    label: value,
+  })),
 ];
 
 const WEEK_OPTIONS: AttributeOption[] = Array.from({ length: 15 }, (_, index) => {
@@ -352,21 +604,7 @@ function normalizeOptionValue(
 }
 
 function normalizeRegionValue(value: string | null | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const match = trimmed.match(/^region\s*(\d+)$/i);
-  if (match) {
-    return `Region ${match[1]}`;
-  }
-
-  return trimmed;
+  return normalizeBusinessAccountRegionValue(value);
 }
 
 function normalizeWeekValue(value: string | null | undefined): string | null {
@@ -443,6 +681,33 @@ function getColumnConfig(columnId: SortBy): ColumnConfig {
   return config;
 }
 
+function mergeStoredColumnList(
+  storedColumns: SortBy[],
+  requiredColumns: readonly SortBy[],
+): SortBy[] {
+  const next = [...storedColumns.filter((column) => DEFAULT_COLUMN_ORDER.includes(column))];
+
+  for (const column of requiredColumns) {
+    if (next.includes(column)) {
+      continue;
+    }
+
+    const defaultIndex = DEFAULT_COLUMN_ORDER.indexOf(column);
+    const nextKnownColumn = DEFAULT_COLUMN_ORDER.slice(defaultIndex + 1).find((candidate) =>
+      next.includes(candidate),
+    );
+
+    if (!nextKnownColumn) {
+      next.push(column);
+      continue;
+    }
+
+    next.splice(next.indexOf(nextKnownColumn), 0, column);
+  }
+
+  return next;
+}
+
 function reorderColumns(order: SortBy[], source: SortBy, target: SortBy): SortBy[] {
   if (source === target) {
     return order;
@@ -462,15 +727,84 @@ function reorderColumns(order: SortBy[], source: SortBy, target: SortBy): SortBy
 
 function formatLastModified(value: string | null): string {
   if (!value) {
-    return "-";
+    return "";
   }
 
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return "-";
+    return "";
   }
 
   return date.toLocaleString();
+}
+
+function formatLastEmailed(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleDateString();
+}
+
+function formatRelativeTime(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return null;
+  }
+
+  const diffMs = timestamp - Date.now();
+  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+    ["day", 1000 * 60 * 60 * 24],
+    ["hour", 1000 * 60 * 60],
+    ["minute", 1000 * 60],
+    ["second", 1000],
+  ];
+
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  for (const [unit, unitMs] of units) {
+    if (Math.abs(diffMs) >= unitMs || unit === "second") {
+      return formatter.format(Math.round(diffMs / unitMs), unit);
+    }
+  }
+
+  return null;
+}
+
+function buildLastEmailedLookupKey(
+  kind: "record" | "account",
+  value: string | null | undefined,
+): string | null {
+  const normalized = value?.trim() ?? "";
+  return normalized ? `${kind}:${normalized}` : null;
+}
+
+function buildLastEmailedLookupAccounts(
+  rows: BusinessAccountRow[],
+): MailLastEmailedLookupAccount[] {
+  const seen = new Set<string>();
+  return rows
+    .map((row) => ({
+      businessAccountRecordId: resolveRowBusinessAccountRecordId(row),
+      businessAccountId: row.businessAccountId.trim() || null,
+    }))
+    .filter((account) => account.businessAccountRecordId || account.businessAccountId)
+    .filter((account) => {
+      const key = `${account.businessAccountRecordId ?? ""}::${account.businessAccountId ?? ""}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
 }
 
 function formatElapsedDuration(milliseconds: number): string {
@@ -509,6 +843,9 @@ function normalizeCountryDraftValue(value: string | null | undefined): string {
 }
 
 function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
+  const rawPhone = row.primaryContactRawPhone ?? row.primaryContactPhone ?? "";
+  const parsedPhone = parsePhoneWithExtension(rawPhone);
+
   return {
     companyName: row.companyName,
     assignedBusinessAccountRecordId:
@@ -531,8 +868,16 @@ function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
     subCategory: normalizeOptionValue(SUB_CATEGORY_OPTIONS, row.subCategory),
     companyRegion: normalizeRegionValue(row.companyRegion),
     week: normalizeWeekValue(row.week),
+    companyPhone: resolveCompanyPhone(row),
     primaryContactName: row.primaryContactName,
-    primaryContactPhone: row.primaryContactPhone,
+    primaryContactPhone:
+      parsedPhone.kind === "phone_with_extension"
+        ? parsedPhone.phone
+        : row.primaryContactPhone,
+    primaryContactExtension:
+      parsedPhone.kind === "phone_with_extension"
+        ? parsedPhone.extension
+        : row.primaryContactExtension ?? null,
     primaryContactEmail: row.primaryContactEmail,
     category: row.category,
     notes: row.notes,
@@ -540,12 +885,12 @@ function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
   };
 }
 
-function renderCell(value: string | null | undefined): string {
+function readTextValue(value: string | null | undefined): string | null {
   if (!value || value.trim().length === 0) {
-    return "-";
+    return null;
   }
 
-  return value;
+  return value.trim();
 }
 
 function normalizeComparable(value: string | null | undefined): string {
@@ -629,20 +974,39 @@ function mergeSyncedRows(
       incoming.primaryContactName,
       companyName,
     ),
+    primaryContactJobTitle: pickPreferredText(
+      existing.primaryContactJobTitle,
+      incoming.primaryContactJobTitle,
+    ),
     primaryContactPhone: pickPreferredText(
       existing.primaryContactPhone,
       incoming.primaryContactPhone,
+    ),
+    primaryContactExtension: pickPreferredText(
+      existing.primaryContactExtension,
+      incoming.primaryContactExtension,
     ),
     primaryContactEmail: pickPreferredText(
       existing.primaryContactEmail,
       incoming.primaryContactEmail,
     ),
     companyPhone: pickPreferredText(existing.companyPhone, incoming.companyPhone),
+    companyPhoneSource: incoming.companyPhoneSource ?? existing.companyPhoneSource ?? null,
     phoneNumber: pickPreferredText(existing.phoneNumber, incoming.phoneNumber),
     notes: pickPreferredText(existing.notes, incoming.notes),
     category: incoming.category ?? existing.category,
     lastModifiedIso: pickPreferredText(existing.lastModifiedIso, incoming.lastModifiedIso),
   };
+}
+
+function sharesCompanyPhoneGroup(
+  left: BusinessAccountRow,
+  right: BusinessAccountRow,
+): boolean {
+  return (
+    buildCanonicalCompanyPhoneGroupKey(left) ===
+    buildCanonicalCompanyPhoneGroupKey(right)
+  );
 }
 
 function parseError(payload: unknown): string {
@@ -836,6 +1200,71 @@ function isEmployeeLookupResponse(payload: unknown): payload is EmployeeLookupRe
 
   const record = payload as Record<string, unknown>;
   return Array.isArray(record.items) && record.items.every((item) => isEmployeeOption(item));
+}
+
+function isMailSessionResponse(payload: unknown): payload is MailSessionResponse {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const record = payload as Record<string, unknown>;
+  return (
+    (record.status === "connected" ||
+      record.status === "disconnected" ||
+      record.status === "needs_setup") &&
+    Array.isArray(record.folders)
+  );
+}
+
+function isMeetingCreateOptionsResponse(
+  payload: MeetingCreateOptionsResponse | { error?: string } | null,
+): payload is MeetingCreateOptionsResponse {
+  return Boolean(
+    payload &&
+      Array.isArray((payload as MeetingCreateOptionsResponse).contacts) &&
+      Array.isArray((payload as MeetingCreateOptionsResponse).accounts) &&
+      typeof (payload as MeetingCreateOptionsResponse).defaultTimeZone === "string",
+  );
+}
+
+function isMailLastEmailedResponse(payload: unknown): payload is MailLastEmailedResponse {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const record = payload as Record<string, unknown>;
+  return Array.isArray(record.items);
+}
+
+function buildFallbackMailSession(
+  status: MailSessionResponse["status"],
+  connectionError: string,
+): MailSessionResponse {
+  return {
+    status,
+    senderEmail: null,
+    senderDisplayName: null,
+    expectedGoogleEmail: null,
+    connectedGoogleEmail: null,
+    connectionError,
+    folders: MAIL_SESSION_FOLDERS,
+  };
+}
+
+function hasRowContactEmail(row: BusinessAccountRow): boolean {
+  return resolveRowContactEmail(row) !== null;
+}
+
+function hasRowNote(row: BusinessAccountRow): boolean {
+  return Boolean(row.notes?.trim());
+}
+
+function canEditRowNote(row: BusinessAccountRow): boolean {
+  return resolveRowContactId(row) !== null;
+}
+
+function canDeleteRowContact(row: BusinessAccountRow): boolean {
+  return resolveRowContactId(row) !== null;
 }
 
 function matchEmployeeByName(
@@ -1045,13 +1474,6 @@ function findMatchingAccountRow(
     return null;
   }
 
-  if (sourceRow.rowKey) {
-    const byRowKey = rows.find((row) => row.rowKey === sourceRow.rowKey);
-    if (byRowKey) {
-      return byRowKey;
-    }
-  }
-
   if (sourceRow.contactId !== null && sourceRow.contactId !== undefined) {
     const byContactId = rows.find(
       (row) =>
@@ -1061,6 +1483,13 @@ function findMatchingAccountRow(
     );
     if (byContactId) {
       return byContactId;
+    }
+  }
+
+  if (sourceRow.rowKey) {
+    const byRowKey = rows.find((row) => row.rowKey === sourceRow.rowKey);
+    if (byRowKey) {
+      return byRowKey;
     }
   }
 
@@ -1119,7 +1548,10 @@ function removeDeletedContactFromAccountRows(
         isPrimaryContact: false,
         primaryContactId: null,
         primaryContactName: null,
+        primaryContactJobTitle: null,
         primaryContactPhone: null,
+        primaryContactExtension: null,
+        primaryContactRawPhone: null,
         primaryContactEmail: null,
         notes: null,
       },
@@ -1140,56 +1572,102 @@ function removeDeletedContactFromAccountRows(
   );
 }
 
-function renderColumnValue(row: BusinessAccountRow, columnId: SortBy): string {
-  switch (columnId) {
-    case "companyName":
-      return renderCell(row.companyName);
-    case "salesRepName":
-      return renderCell(row.salesRepName);
-    case "industryType":
-      return renderCell(row.industryType);
-    case "subCategory":
-      return renderCell(row.subCategory);
-    case "companyRegion":
-      return renderCell(row.companyRegion);
-    case "week":
-      return renderCell(row.week);
-    case "address":
-      return renderCell(row.address);
-    case "companyPhone":
-      return renderCell(resolveCompanyPhone(row));
-    case "primaryContactName":
-      return row.primaryContactName?.trim() ?? "";
-    case "primaryContactPhone":
-      return renderCell(row.primaryContactPhone);
-    case "primaryContactEmail":
-      return renderCell(row.primaryContactEmail);
-    case "notes":
-      return renderCell(row.notes);
-    case "category":
-      return renderCell(row.category);
-    case "lastModifiedIso":
-      return formatLastModified(row.lastModifiedIso);
-    default:
-      return "-";
-  }
-}
-
-function isInlineEditableColumn(columnId: SortBy): columnId is InlineEditableColumn {
-  return (
-    columnId === "industryType" ||
-    columnId === "subCategory" ||
-    columnId === "companyRegion" ||
-    columnId === "week" ||
-    columnId === "category"
-  );
-}
-
 function getRowKey(row: BusinessAccountRow, index = 0): string {
   return (
     row.rowKey ??
     `${row.accountRecordId ?? row.id}:${row.contactId ?? "contact"}:${index}`
   );
+}
+
+function resolveRowContactId(row: BusinessAccountRow): number | null {
+  return row.contactId ?? row.primaryContactId ?? null;
+}
+
+function resolveRowContactEmail(row: BusinessAccountRow): string | null {
+  const email = row.primaryContactEmail?.trim() ?? "";
+  return email || null;
+}
+
+function buildEmailInitialStateFromRow(
+  row: BusinessAccountRow,
+): GmailComposeInitialState | null {
+  const email = resolveRowContactEmail(row);
+  if (!email) {
+    return null;
+  }
+
+  return {
+    subject: "",
+    htmlBody: "<div><br /></div>",
+    textBody: "",
+    to: [
+      {
+        email,
+        name: row.primaryContactName?.trim() || null,
+        contactId: resolveRowContactId(row),
+        businessAccountRecordId: resolveRowBusinessAccountRecordId(row),
+        businessAccountId: row.businessAccountId.trim() || null,
+      },
+    ],
+    cc: [],
+    bcc: [],
+    linkedContact: createLinkedContactFromRow(row),
+    sourceSurface: "accounts",
+  };
+}
+
+function isContactSelectableRow(row: BusinessAccountRow): boolean {
+  return resolveRowContactId(row) !== null;
+}
+
+function resolveRowBusinessAccountRecordId(row: BusinessAccountRow): string {
+  return row.accountRecordId?.trim() || row.id.trim() || row.businessAccountId.trim();
+}
+
+function buildBusinessAccountDetailUrl(
+  accountRecordId: string,
+  contactId?: number | null,
+): string {
+  const basePath = `/api/business-accounts/${encodeURIComponent(accountRecordId.trim())}`;
+  if (contactId === null || contactId === undefined) {
+    return basePath;
+  }
+
+  const params = new URLSearchParams({
+    contactId: String(contactId),
+  });
+  return `${basePath}?${params.toString()}`;
+}
+
+function buildMeetingSourceFromRow(row: BusinessAccountRow): MeetingSourceContext {
+  const accountRecordId = resolveRowBusinessAccountRecordId(row);
+
+  return {
+    accountKey: accountRecordId,
+    accountRecordId,
+    businessAccountId: row.businessAccountId,
+    companyName: row.companyName,
+    contactId: resolveRowContactId(row),
+    contactName: row.primaryContactName,
+    contactPhone: row.primaryContactPhone,
+    contactEmail: resolveRowContactEmail(row),
+  };
+}
+
+function toMergeableContactCandidate(row: BusinessAccountRow): MergeableContactCandidate {
+  return {
+    contactId: resolveRowContactId(row),
+    rowKey: row.rowKey ?? null,
+    businessAccountRecordId: resolveRowBusinessAccountRecordId(row),
+    businessAccountId: row.businessAccountId,
+    companyName: row.companyName,
+    contactName: row.primaryContactName,
+    contactEmail: row.primaryContactEmail,
+    contactPhone: row.primaryContactPhone,
+    isPrimaryContact: row.isPrimaryContact === true,
+    salesRepName: row.salesRepName,
+    lastModifiedIso: row.lastModifiedIso,
+  };
 }
 
 function clearCachedMapData() {
@@ -1254,34 +1732,6 @@ function buildPaginationNumbers(
   return result;
 }
 
-function SortHeader({
-  label,
-  column,
-  activeSort,
-  onSort,
-}: {
-  label: string;
-  column: SortBy;
-  activeSort: {
-    sortBy: SortBy;
-    sortDir: SortDir;
-  };
-  onSort: (column: SortBy) => void;
-}) {
-  const indicator =
-    activeSort.sortBy === column
-      ? activeSort.sortDir === "asc"
-        ? "↑"
-        : "↓"
-      : "";
-
-  return (
-    <button className={styles.sortButton} onClick={() => onSort(column)} type="button">
-      {label} {indicator}
-    </button>
-  );
-}
-
 export function AccountsClient({
   acumaticaBaseUrl,
   acumaticaCompanyId,
@@ -1292,17 +1742,20 @@ export function AccountsClient({
   const router = useRouter();
 
   const [session, setSession] = useState<SessionResponse | null>(null);
+  const [auditHistory, setAuditHistory] = useState<AuditLogRow[]>([]);
+  const [auditHistoryLoading, setAuditHistoryLoading] = useState(false);
+  const [auditHistoryError, setAuditHistoryError] = useState<string | null>(null);
   const [allRows, setAllRows] = useState<BusinessAccountRow[]>([]);
   const allRowsRef = useRef<BusinessAccountRow[]>([]);
   const [cacheHydrated, setCacheHydrated] = useState(false);
   const [q, setQ] = useState("");
+  const [companyNameInitialFilter, setCompanyNameInitialFilter] = useState<string | null>(null);
   const [headerFilters, setHeaderFilters] = useState<HeaderFilters>(
     DEFAULT_HEADER_FILTERS,
   );
   const [columnOrder, setColumnOrder] = useState<SortBy[]>(DEFAULT_COLUMN_ORDER);
   const [visibleColumns, setVisibleColumns] = useState<SortBy[]>(DEFAULT_VISIBLE_COLUMNS);
   const [columnPrefsHydrated, setColumnPrefsHydrated] = useState(false);
-  const [draggedColumn, setDraggedColumn] = useState<SortBy | null>(null);
   const [sortBy, setSortBy] = useState<SortBy>("companyName");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(1);
@@ -1318,17 +1771,49 @@ export function AccountsClient({
   const [error, setError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<BusinessAccountRow | null>(null);
+  const [selectedContactRowKeys, setSelectedContactRowKeys] = useState<string[]>([]);
+  const [isSelectionMergeOpen, setIsSelectionMergeOpen] = useState(false);
   const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false);
   const [isCreateContactDrawerOpen, setIsCreateContactDrawerOpen] = useState(false);
+  const [createContactDrawerInitialAccountRecordId, setCreateContactDrawerInitialAccountRecordId] =
+    useState<string | null>(null);
+  const [isCreateOpportunityDrawerOpen, setIsCreateOpportunityDrawerOpen] = useState(false);
+  const [isCreateMeetingDrawerOpen, setIsCreateMeetingDrawerOpen] = useState(false);
+  const [meetingSource, setMeetingSource] = useState<MeetingSourceContext | null>(null);
+  const [meetingOptions, setMeetingOptions] = useState<MeetingCreateOptionsResponse | null>(null);
+  const [meetingOptionsError, setMeetingOptionsError] = useState<string | null>(null);
+  const [isLoadingMeetingOptions, setIsLoadingMeetingOptions] = useState(false);
+  const [emailComposerState, setEmailComposerState] = useState<EmailComposerState>({
+    initialState: null,
+    isOpen: false,
+  });
+  const [deleteQueueRows, setDeleteQueueRows] = useState<BusinessAccountRow[]>([]);
+  const [opportunityDrawerContext, setOpportunityDrawerContext] =
+    useState<OpportunityDrawerContext>({
+      initialAccountRecordId: null,
+      initialContactId: null,
+      initialOwnerId: null,
+      initialOwnerName: null,
+    });
+  const [pendingOpportunityResumeAccountRecordId, setPendingOpportunityResumeAccountRecordId] =
+    useState<string | null>(null);
+  const [resumeOpportunityAfterContactCreate, setResumeOpportunityAfterContactCreate] =
+    useState<OpportunityDrawerContext | null>(null);
+  const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
+  const [createMenuPosition, setCreateMenuPosition] = useState<RowMenuPosition | null>(null);
+  const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const [rowMenuRowKey, setRowMenuRowKey] = useState<string | null>(null);
+  const [rowMenuPosition, setRowMenuPosition] = useState<RowMenuPosition | null>(null);
+  const [draggedColumnId, setDraggedColumnId] = useState<SortBy | null>(null);
+  const [columnDropTargetId, setColumnDropTargetId] = useState<SortBy | null>(null);
+  const [drawerFocusTarget, setDrawerFocusTarget] = useState<"notes" | null>(null);
   const [draft, setDraft] = useState<BusinessAccountUpdateRequest | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeletingContact, setIsDeletingContact] = useState(false);
-  const [inlineSavingRowKey, setInlineSavingRowKey] = useState<string | null>(null);
-  const [inlineError, setInlineError] = useState<string | null>(null);
-  const [inlinePhoneDrafts, setInlinePhoneDrafts] = useState<Record<string, string>>({});
-  const [inlineNotesDrafts, setInlineNotesDrafts] = useState<Record<string, string>>({});
+  const [isDeletingSelectedContacts, setIsDeletingSelectedContacts] = useState(false);
   const [employeeOptions, setEmployeeOptions] = useState<EmployeeOption[]>([]);
   const [isEmployeesLoading, setIsEmployeesLoading] = useState(false);
   const [employeesError, setEmployeesError] = useState<string | null>(null);
@@ -1339,6 +1824,12 @@ export function AccountsClient({
   const [addressLookupError, setAddressLookupError] = useState<string | null>(null);
   const [addressLookupArmed, setAddressLookupArmed] = useState(false);
   const [isApplyingAddress, setIsApplyingAddress] = useState(false);
+  const [mailSession, setMailSession] = useState<MailSessionResponse | null>(null);
+  const [isMailSessionLoading, setIsMailSessionLoading] = useState(false);
+  const [lastEmailedByAccountKey, setLastEmailedByAccountKey] = useState<
+    Record<string, string | null>
+  >({});
+  const [lastEmailedRefreshVersion, setLastEmailedRefreshVersion] = useState(0);
   const hydratingContactRowKeysRef = useRef(new Set<string>());
   const hydratedContactRowKeysRef = useRef(new Set<string>());
   const resolvingPrimaryAccountIdsRef = useRef(new Set<string>());
@@ -1346,7 +1837,36 @@ export function AccountsClient({
   const resolvingSalesRepAccountIdsRef = useRef(new Set<string>());
   const resolvedSalesRepAccountIdsRef = useRef(new Set<string>());
   const employeesFetchAttemptedRef = useRef(false);
+  const notesFieldRef = useRef<HTMLTextAreaElement | null>(null);
+  const createMenuButtonRef = useRef<HTMLButtonElement | null>(null);
 
+  const displayRows = useMemo(
+    () =>
+      allRows.map((row) => {
+        const recordKey = buildLastEmailedLookupKey(
+          "record",
+          resolveRowBusinessAccountRecordId(row),
+        );
+        const accountKey = buildLastEmailedLookupKey("account", row.businessAccountId);
+        return {
+          ...row,
+          lastEmailedAt:
+            (recordKey ? lastEmailedByAccountKey[recordKey] : null) ??
+            (accountKey ? lastEmailedByAccountKey[accountKey] : null) ??
+            row.lastEmailedAt ??
+            null,
+        };
+      }),
+    [allRows, lastEmailedByAccountKey],
+  );
+  const lastEmailedLookupAccounts = useMemo(
+    () => buildLastEmailedLookupAccounts(allRows),
+    [allRows],
+  );
+  const lastEmailedLookupSignature = useMemo(
+    () => JSON.stringify(lastEmailedLookupAccounts),
+    [lastEmailedLookupAccounts],
+  );
   const debouncedQ = useDebouncedValue(q, 180);
   const debouncedHeaderFilters = useDebouncedValue(headerFilters, 180);
   const addressLookupSearchTerm = useMemo(
@@ -1364,6 +1884,7 @@ export function AccountsClient({
       page: "1",
       pageSize: String(PAGE_SIZE),
       full: "1",
+      includeInternal: "1",
     });
 
     const [rowsResponse, statusResponse] = await Promise.all([
@@ -1401,17 +1922,249 @@ export function AccountsClient({
     return rowsPayload.items;
   }
 
+  async function loadMailSession(): Promise<MailSessionResponse | null> {
+    setIsMailSessionLoading(true);
+
+    try {
+      const response = await fetch("/api/mail/session", {
+        cache: "no-store",
+      });
+      const payload = await readJsonResponse<MailSessionResponse | { error?: string }>(
+        response,
+      );
+
+      if (!response.ok) {
+        const message = parseError(payload);
+        const nextSession = buildFallbackMailSession(
+          response.status === 422 ? "needs_setup" : "disconnected",
+          message,
+        );
+        setMailSession(nextSession);
+        return nextSession;
+      }
+
+      if (!isMailSessionResponse(payload)) {
+        throw new Error("Unexpected mail session response.");
+      }
+
+      setMailSession(payload);
+      return payload;
+    } catch (mailError) {
+      const message =
+        mailError instanceof Error ? mailError.message : "Unable to load mail session.";
+      const nextSession = buildFallbackMailSession("disconnected", message);
+      setMailSession(nextSession);
+      return nextSession;
+    } finally {
+      setIsMailSessionLoading(false);
+    }
+  }
+
+  async function loadMeetingOptions(force = false) {
+    if (!force && (meetingOptions || isLoadingMeetingOptions)) {
+      return;
+    }
+
+    setIsLoadingMeetingOptions(true);
+    if (force) {
+      setMeetingOptionsError(null);
+    }
+
+    try {
+      const response = await fetch("/api/meetings/options", {
+        cache: "no-store",
+      });
+      const payload = await readJsonResponse<MeetingCreateOptionsResponse | { error?: string }>(
+        response,
+      );
+
+      if (!response.ok) {
+        throw new Error(parseError(payload));
+      }
+
+      if (!isMeetingCreateOptionsResponse(payload)) {
+        throw new Error("Unexpected response while loading meeting options.");
+      }
+
+      setMeetingOptions(payload);
+      setMeetingOptionsError(null);
+    } catch (error) {
+      setMeetingOptionsError(
+        error instanceof Error ? error.message : "Unable to load meeting options.",
+      );
+    } finally {
+      setIsLoadingMeetingOptions(false);
+    }
+  }
+
+  function openMailComposer(initialState: GmailComposeInitialState | null) {
+    closeTransientMenus();
+    setIsCreateDrawerOpen(false);
+    setIsCreateContactDrawerOpen(false);
+    setIsCreateOpportunityDrawerOpen(false);
+    setMeetingSource(null);
+    closeDrawer();
+    setEmailComposerState({
+      initialState,
+      isOpen: true,
+    });
+    void loadMailSession();
+  }
+
+  function closeMailComposer() {
+    setEmailComposerState({
+      initialState: null,
+      isOpen: false,
+    });
+  }
+
+  function handleConnectGmailFromAccounts() {
+    const popup = window.open(
+      "/api/mail/oauth/start?returnTo=/mail/oauth/complete",
+      "mail-oauth",
+      "popup=yes,width=640,height=780",
+    );
+
+    if (!popup) {
+      setSaveError("Popup blocked. Allow popups for this app to connect Gmail.");
+    }
+  }
+
   useEffect(() => {
     allRowsRef.current = allRows;
     allRowsCountRef.current = allRows.length;
   }, [allRows]);
 
-  const deferredAllRows = useDeferredValue(allRows);
+  useEffect(() => {
+    if (!session?.authenticated) {
+      return;
+    }
+
+    if (lastEmailedLookupAccounts.length === 0) {
+      setLastEmailedByAccountKey({});
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function loadLastEmailed() {
+      try {
+        const response = await fetch("/api/mail/last-emailed", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            accounts: lastEmailedLookupAccounts,
+          }),
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = await readJsonResponse<
+          MailLastEmailedResponse | { error?: string }
+        >(response);
+
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+
+        if (!isMailLastEmailedResponse(payload)) {
+          throw new Error("Unexpected last emailed response.");
+        }
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        const next: Record<string, string | null> = {};
+        payload.items.forEach((item) => {
+          const recordKey = buildLastEmailedLookupKey(
+            "record",
+            item.businessAccountRecordId,
+          );
+          const accountKey = buildLastEmailedLookupKey(
+            "account",
+            item.businessAccountId,
+          );
+          if (recordKey) {
+            next[recordKey] = item.lastEmailedAt;
+          }
+          if (accountKey) {
+            next[accountKey] = item.lastEmailedAt;
+          }
+        });
+
+        setLastEmailedByAccountKey(next);
+      } catch {
+        if (!controller.signal.aborted) {
+          setLastEmailedByAccountKey({});
+        }
+      }
+    }
+
+    void loadLastEmailed();
+
+    return () => controller.abort();
+  }, [
+    lastEmailedLookupAccounts,
+    lastEmailedLookupSignature,
+    lastEmailedRefreshVersion,
+    session?.authenticated,
+  ]);
+
+  useEffect(() => {
+    setSelectedContactRowKeys((current) => {
+      const validRowKeys = new Set(
+        allRows.filter((row) => isContactSelectableRow(row)).map((row) => getRowKey(row)),
+      );
+      const next = current.filter((rowKey) => validRowKeys.has(rowKey));
+      return next.length === current.length ? current : next;
+    });
+  }, [allRows]);
+
+  const deferredDisplayRows = useDeferredValue(displayRows);
+  const availableCompanyInitials = useMemo(() => {
+    const filteredRows = queryBusinessAccounts(deferredDisplayRows, {
+      includeInternalRows: true,
+      q: debouncedQ,
+      filterCompanyName: debouncedHeaderFilters.companyName,
+      filterSalesRep: debouncedHeaderFilters.salesRepName,
+      filterIndustryType: debouncedHeaderFilters.industryType,
+      filterSubCategory: debouncedHeaderFilters.subCategory,
+      filterCompanyRegion: debouncedHeaderFilters.companyRegion,
+      filterWeek: debouncedHeaderFilters.week,
+      filterAddress: debouncedHeaderFilters.address,
+      filterCompanyPhone: debouncedHeaderFilters.companyPhone,
+      filterPrimaryContactName: debouncedHeaderFilters.primaryContactName,
+      filterPrimaryContactJobTitle: debouncedHeaderFilters.primaryContactJobTitle,
+      filterPrimaryContactPhone: debouncedHeaderFilters.primaryContactPhone,
+      filterPrimaryContactExtension: debouncedHeaderFilters.primaryContactExtension,
+      filterPrimaryContactEmail: debouncedHeaderFilters.primaryContactEmail,
+      filterNotes: debouncedHeaderFilters.notes,
+      filterCategory: debouncedHeaderFilters.category || undefined,
+      filterLastEmailed: debouncedHeaderFilters.lastEmailed,
+      filterLastModified: debouncedHeaderFilters.lastModified,
+      page: 1,
+      pageSize: Math.max(deferredDisplayRows.length, 1),
+    }).items;
+    const next = new Set<string>();
+
+    filteredRows.forEach((row) => {
+      const initial = readCompanyNameInitial(row.companyName);
+      if (initial) {
+        next.add(initial);
+      }
+    });
+
+    return next;
+  }, [debouncedHeaderFilters, debouncedQ, deferredDisplayRows]);
 
   const queryResult = useMemo(
     () =>
-      queryBusinessAccounts(deferredAllRows, {
+      queryBusinessAccounts(deferredDisplayRows, {
+        includeInternalRows: true,
         q: debouncedQ,
+        filterCompanyInitial: companyNameInitialFilter ?? undefined,
         filterCompanyName: debouncedHeaderFilters.companyName,
         filterSalesRep: debouncedHeaderFilters.salesRepName,
         filterIndustryType: debouncedHeaderFilters.industryType,
@@ -1421,26 +2174,70 @@ export function AccountsClient({
         filterAddress: debouncedHeaderFilters.address,
         filterCompanyPhone: debouncedHeaderFilters.companyPhone,
         filterPrimaryContactName: debouncedHeaderFilters.primaryContactName,
+        filterPrimaryContactJobTitle: debouncedHeaderFilters.primaryContactJobTitle,
         filterPrimaryContactPhone: debouncedHeaderFilters.primaryContactPhone,
+        filterPrimaryContactExtension: debouncedHeaderFilters.primaryContactExtension,
         filterPrimaryContactEmail: debouncedHeaderFilters.primaryContactEmail,
         filterNotes: debouncedHeaderFilters.notes,
         filterCategory: debouncedHeaderFilters.category || undefined,
+        filterLastEmailed: debouncedHeaderFilters.lastEmailed,
         filterLastModified: debouncedHeaderFilters.lastModified,
         sortBy,
         sortDir,
         page,
         pageSize: PAGE_SIZE,
       }),
-    [debouncedHeaderFilters, debouncedQ, deferredAllRows, page, sortBy, sortDir],
+    [
+      companyNameInitialFilter,
+      debouncedHeaderFilters,
+      debouncedQ,
+      deferredDisplayRows,
+      page,
+      sortBy,
+      sortDir,
+    ],
   );
 
   const rows = queryResult.items;
   const total = queryResult.total;
-  const inlineSaveInProgress = inlineSavingRowKey !== null;
+  const selectedContactRows = useMemo(() => {
+    const selectedRowKeySet = new Set(selectedContactRowKeys);
+    return displayRows.filter(
+      (row) => selectedRowKeySet.has(getRowKey(row)) && isContactSelectableRow(row),
+    );
+  }, [displayRows, selectedContactRowKeys]);
   const visibleColumnOrder = useMemo(
     () => columnOrder.filter((columnId) => visibleColumns.includes(columnId)),
     [columnOrder, visibleColumns],
   );
+  const visibleColumnConfigs = useMemo(
+    () =>
+      columnOrder.map((columnId) => ({
+        ...getColumnConfig(columnId),
+        isVisible: visibleColumns.includes(columnId),
+      })),
+    [columnOrder, visibleColumns],
+  );
+  const activeFilterCount = useMemo(
+    () =>
+      Object.values(headerFilters).filter((value) =>
+        typeof value === "string" ? value.trim().length > 0 : Boolean(value),
+      ).length,
+    [headerFilters],
+  );
+  const hasActiveWorkbenchFilters =
+    q.trim().length > 0 || companyNameInitialFilter !== null || activeFilterCount > 0;
+  const availableJumpLetters = useMemo(() => {
+    const next = new Set(availableCompanyInitials);
+    if (companyNameInitialFilter) {
+      next.add(companyNameInitialFilter);
+    }
+
+    return [...next].sort((left, right) => left.localeCompare(right));
+  }, [availableCompanyInitials, companyNameInitialFilter]);
+  const currentSortLabel = useMemo(() => getColumnConfig(sortBy).label, [sortBy]);
+  const syncUpdatedLabel = useMemo(() => formatRelativeTime(lastSyncedAt), [lastSyncedAt]);
+  const hasSnapshot = Boolean(lastSyncedAt) || allRows.length > 0;
   const companyRegionOptions = useMemo(() => {
     const byValue = new Map<string, AttributeOption>();
     COMPANY_REGION_DEFAULT_OPTIONS.forEach((option) => {
@@ -1495,6 +2292,17 @@ export function AccountsClient({
     () => buildCreateContactAccountOptions(allRows),
     [allRows],
   );
+  const fallbackMeetingOptions = useMemo(
+    () =>
+      allRows.length > 0
+        ? buildMeetingCreateOptionsFromRows(allRows, DEFAULT_MEETING_TIME_ZONE)
+        : null,
+    [allRows],
+  );
+  const mailContactSuggestions = useMemo<MailContactSuggestion[]>(
+    () => buildMailContactSuggestions(allRows),
+    [allRows],
+  );
   const selectedDrawerCompanyOption = useMemo(
     () => findCreateContactAccountOption(createContactAccountOptions, draft),
     [createContactAccountOptions, draft],
@@ -1535,6 +2343,50 @@ export function AccountsClient({
   const totalPages = useMemo(() => {
     return Math.max(1, Math.ceil(total / PAGE_SIZE));
   }, [total]);
+  const currentPageSelectableRows = useMemo(
+    () => rows.filter((row) => isContactSelectableRow(row)),
+    [rows],
+  );
+  const currentPageSelectedCount = useMemo(() => {
+    const selectedRowKeySet = new Set(selectedContactRowKeys);
+    return currentPageSelectableRows.filter((row) => selectedRowKeySet.has(getRowKey(row))).length;
+  }, [currentPageSelectableRows, selectedContactRowKeys]);
+  const allCurrentPageSelected =
+    currentPageSelectableRows.length > 0 &&
+    currentPageSelectedCount === currentPageSelectableRows.length;
+  const selectedMergeAccountRecordId = useMemo(() => {
+    if (!selectedContactRows.length) {
+      return null;
+    }
+
+    return resolveRowBusinessAccountRecordId(selectedContactRows[0]);
+  }, [selectedContactRows]);
+  const selectedMergeBusinessAccountId = selectedContactRows[0]?.businessAccountId ?? null;
+  const mergeSelectionEligible = useMemo(() => {
+    if (selectedContactRows.length < 2) {
+      return false;
+    }
+
+    const accountIds = new Set(
+      selectedContactRows.map((row) => row.accountRecordId?.trim() || row.businessAccountId.trim()),
+    );
+    return accountIds.size === 1;
+  }, [selectedContactRows]);
+  const mergeSelectionDisabledReason = useMemo(() => {
+    if (selectedContactRows.length === 0) {
+      return null;
+    }
+
+    if (selectedContactRows.length < 2) {
+      return "Select at least 2 contacts to merge.";
+    }
+
+    if (!mergeSelectionEligible) {
+      return "Merge requires all selected contacts to belong to the same account.";
+    }
+
+    return null;
+  }, [mergeSelectionEligible, selectedContactRows.length]);
   const drawerNeedsCompanyAssignment = Boolean(
     selected &&
       !selected.businessAccountId.trim() &&
@@ -1613,10 +2465,10 @@ export function AccountsClient({
           continue;
         }
 
-        const migratedColumnOrder = [
-          ...parsedColumnOrder,
-          ...DEFAULT_COLUMN_ORDER.filter((column) => !parsedColumnOrder.includes(column)),
-        ];
+        const migratedColumnOrder = mergeStoredColumnList(
+          parsedColumnOrder,
+          DEFAULT_COLUMN_ORDER,
+        );
         setColumnOrder(migratedColumnOrder);
         break;
       } catch {
@@ -1639,10 +2491,10 @@ export function AccountsClient({
           continue;
         }
 
-        const migratedVisibleColumns = [
-          ...parsedVisibleColumns,
-          ...DEFAULT_COLUMN_ORDER.filter((column) => !parsedVisibleColumns.includes(column)),
-        ];
+        const migratedVisibleColumns = mergeStoredColumnList(
+          parsedVisibleColumns,
+          DEFAULT_VISIBLE_COLUMNS,
+        );
         setVisibleColumns(migratedVisibleColumns);
         break;
       } catch {
@@ -1671,13 +2523,6 @@ export function AccountsClient({
       JSON.stringify(visibleColumns),
     );
   }, [columnPrefsHydrated, visibleColumns]);
-
-  useEffect(() => {
-    if (!visibleColumns.includes(sortBy) && visibleColumnOrder.length > 0) {
-      setSortBy(visibleColumnOrder[0]);
-      setSortDir("asc");
-    }
-  }, [sortBy, visibleColumnOrder, visibleColumns]);
 
   useEffect(() => {
     const cachedDataset = readCachedDatasetFromStorage();
@@ -1744,8 +2589,79 @@ export function AccountsClient({
   }, [router]);
 
   useEffect(() => {
+    if (!session?.authenticated || !selected) {
+      setAuditHistory([]);
+      setAuditHistoryLoading(false);
+      setAuditHistoryError(null);
+      return;
+    }
+
+    const businessAccountRecordId =
+      selected.accountRecordId?.trim() || selected.id.trim() || null;
+    if (!businessAccountRecordId) {
+      setAuditHistory([]);
+      setAuditHistoryLoading(false);
+      setAuditHistoryError(null);
+      return;
+    }
+
+    const params = new URLSearchParams({
+      businessAccountRecordId,
+      page: "1",
+      pageSize: "10",
+    });
+    if (selected.contactId) {
+      params.set("contactId", String(selected.contactId));
+    }
+
+    const controller = new AbortController();
+    setAuditHistoryLoading(true);
+    setAuditHistoryError(null);
+
+    async function loadAuditHistory() {
+      try {
+        const response = await fetch(`/api/audit?${params.toString()}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = await readJsonResponse<AuditLogResponse | { error?: string }>(response);
+        if (!response.ok) {
+          throw new Error(
+            payload && "error" in payload && payload.error
+              ? payload.error
+              : "Unable to load audit history.",
+          );
+        }
+        if (!payload || !("items" in payload)) {
+          throw new Error("Unexpected audit history response.");
+        }
+
+        setAuditHistory(payload.items);
+      } catch (auditError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setAuditHistory([]);
+        setAuditHistoryError(
+          auditError instanceof Error ? auditError.message : "Unable to load audit history.",
+        );
+      } finally {
+        if (!controller.signal.aborted) {
+          setAuditHistoryLoading(false);
+        }
+      }
+    }
+
+    void loadAuditHistory();
+
+    return () => {
+      controller.abort();
+    };
+  }, [selected, session?.authenticated]);
+
+  useEffect(() => {
     if (
-      (!selected && !isCreateDrawerOpen) ||
+      (!selected && !isCreateDrawerOpen && !isCreateOpportunityDrawerOpen) ||
       employeeOptions.length > 0 ||
       isEmployeesLoading ||
       employeesFetchAttemptedRef.current
@@ -1802,7 +2718,13 @@ export function AccountsClient({
     void fetchEmployees();
 
     return () => controller.abort();
-  }, [employeeOptions.length, isCreateDrawerOpen, isEmployeesLoading, selected]);
+  }, [
+    employeeOptions.length,
+    isCreateDrawerOpen,
+    isCreateOpportunityDrawerOpen,
+    isEmployeesLoading,
+    selected,
+  ]);
 
   useEffect(() => {
     if (!draft || draft.salesRepId || !draft.salesRepName || sortedEmployeeOptions.length === 0) {
@@ -1824,6 +2746,95 @@ export function AccountsClient({
         : current,
     );
   }, [draft, sortedEmployeeOptions]);
+
+  useEffect(() => {
+    if (!isCreateMenuOpen && !isFiltersOpen && !isSortMenuOpen && !rowMenuRowKey) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!(event.target instanceof HTMLElement)) {
+        closeTransientMenus();
+        return;
+      }
+
+      if (event.target.closest('[data-transient-menu="true"]')) {
+        return;
+      }
+
+      closeTransientMenus();
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        closeTransientMenus();
+      }
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("resize", closeTransientMenus);
+    window.addEventListener("keydown", handleKeyDown);
+    if (rowMenuRowKey) {
+      window.addEventListener("scroll", closeTransientMenus, true);
+    }
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("resize", closeTransientMenus);
+      window.removeEventListener("keydown", handleKeyDown);
+      if (rowMenuRowKey) {
+        window.removeEventListener("scroll", closeTransientMenus, true);
+      }
+    };
+  }, [isCreateMenuOpen, isFiltersOpen, isSortMenuOpen, rowMenuRowKey]);
+
+  useEffect(() => {
+    if (!selected || drawerFocusTarget !== "notes" || !notesFieldRef.current) {
+      return;
+    }
+
+    const target = notesFieldRef.current;
+    target.focus();
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    setDrawerFocusTarget(null);
+  }, [drawerFocusTarget, selected]);
+
+  useEffect(() => {
+    if (!emailComposerState.isOpen || mailSession || isMailSessionLoading) {
+      return;
+    }
+
+    void loadMailSession();
+  }, [emailComposerState.isOpen, isMailSessionLoading, mailSession]);
+
+  useEffect(() => {
+    function handleOauthMessage(event: MessageEvent) {
+      if (!event.data || typeof event.data !== "object") {
+        return;
+      }
+
+      const record = event.data as Record<string, unknown>;
+      if (record.type !== "mbmail.oauth") {
+        return;
+      }
+
+      if (record.success === true) {
+        void loadMailSession();
+        setSaveNotice("Gmail connected. You can send email from the app now.");
+        setSaveError(null);
+        return;
+      }
+
+      if (typeof record.message === "string" && record.message.trim()) {
+        setSaveError(record.message.trim());
+      }
+    }
+
+    window.addEventListener("message", handleOauthMessage);
+    return () => {
+      window.removeEventListener("message", handleOauthMessage);
+    };
+  }, []);
 
   useEffect(() => {
     if (!session?.authenticated || !cacheHydrated) {
@@ -1992,12 +3003,16 @@ export function AccountsClient({
 
           const rowKey = getRowKey(row);
           const accountRecordId = row.accountRecordId ?? row.id;
+          const selectedContactId = resolveRowContactId(row);
 
           try {
-            const response = await fetch(`/api/business-accounts/${accountRecordId}`, {
-              cache: "no-store",
-              signal: controller.signal,
-            });
+            const response = await fetch(
+              buildBusinessAccountDetailUrl(accountRecordId, selectedContactId),
+              {
+                cache: "no-store",
+                signal: controller.signal,
+              },
+            );
             const payload = await readJsonResponse<
               BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
             >(response);
@@ -2005,11 +3020,9 @@ export function AccountsClient({
               continue;
             }
 
-            const refreshedRow = isBusinessAccountDetailResponse(payload)
-              ? payload.row
-              : isBusinessAccountRow(payload)
-                ? payload
-                : null;
+            const refreshedRow =
+              findMatchingAccountRow(readDetailResponseRows(payload) ?? [], row) ??
+              readDetailResponseRow(payload);
             if (!refreshedRow) {
               continue;
             }
@@ -2205,6 +3218,10 @@ export function AccountsClient({
                             refreshedRow.primaryContactName,
                             row.companyName,
                           ),
+                          primaryContactJobTitle: pickPreferredText(
+                            row.primaryContactJobTitle,
+                            refreshedRow.primaryContactJobTitle,
+                          ),
                           primaryContactPhone: pickPreferredText(
                             row.primaryContactPhone,
                             refreshedRow.primaryContactPhone,
@@ -2370,15 +3387,68 @@ export function AccountsClient({
     setPageInput(String(page));
   }, [page]);
 
-  function handleSort(column: SortBy) {
-    setPage(1);
-    if (sortBy === column) {
-      setSortDir((current) => (current === "asc" ? "desc" : "asc"));
+  function closeTransientMenus() {
+    setIsCreateMenuOpen(false);
+    setCreateMenuPosition(null);
+    setIsFiltersOpen(false);
+    setIsSortMenuOpen(false);
+    setRowMenuRowKey(null);
+    setRowMenuPosition(null);
+    setDraggedColumnId(null);
+    setColumnDropTargetId(null);
+  }
+
+  function openCreateMenu() {
+    const trigger = createMenuButtonRef.current;
+    if (!trigger) {
+      setIsCreateMenuOpen(true);
       return;
     }
 
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = Math.min(220, window.innerWidth - 32);
+    const viewportPadding = 16;
+    const left = Math.min(
+      Math.max(viewportPadding, rect.right - menuWidth),
+      window.innerWidth - menuWidth - viewportPadding,
+    );
+
+    setCreateMenuPosition({
+      left,
+      top: rect.bottom + 10,
+    });
+    setIsCreateMenuOpen(true);
+  }
+
+  function openRowMenu(rowKey: string, trigger: HTMLButtonElement) {
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = 196;
+    const menuHeight = 176;
+    const viewportPadding = 12;
+    const left = Math.min(
+      Math.max(viewportPadding, rect.right - menuWidth),
+      window.innerWidth - menuWidth - viewportPadding,
+    );
+    const preferredTop = rect.bottom + 8;
+    const top =
+      preferredTop + menuHeight <= window.innerHeight - viewportPadding
+        ? preferredTop
+        : Math.max(viewportPadding, rect.top - menuHeight - 8);
+
+    setRowMenuRowKey(rowKey);
+    setRowMenuPosition({ left, top });
+  }
+
+  function handleSort(column: SortBy) {
+    setPage(1);
     setSortBy(column);
-    setSortDir("asc");
+    closeTransientMenus();
+  }
+
+  function handleSortDirectionChange(direction: SortDir) {
+    setPage(1);
+    setSortDir(direction);
+    closeTransientMenus();
   }
 
   function updateHeaderFilter<K extends keyof HeaderFilters>(
@@ -2392,9 +3462,15 @@ export function AccountsClient({
     }));
   }
 
+  function handleCompanyInitialFilterChange(letter: string) {
+    setPage(1);
+    setCompanyNameInitialFilter(letter.trim() ? letter : null);
+  }
+
   function clearAllFilters() {
     setPage(1);
     setQ("");
+    setCompanyNameInitialFilter(null);
     setHeaderFilters(DEFAULT_HEADER_FILTERS);
   }
 
@@ -2405,7 +3481,6 @@ export function AccountsClient({
     resolvedPrimaryAccountIdsRef.current.clear();
     resolvingSalesRepAccountIdsRef.current.clear();
     resolvedSalesRepAccountIdsRef.current.clear();
-    setInlineNotesDrafts({});
 
     const startedAt = Date.now();
     setError(null);
@@ -2490,32 +3565,6 @@ export function AccountsClient({
     jumpToPage(Math.trunc(parsed));
   }
 
-  function handleHeaderDragStart(event: DragEvent<HTMLTableCellElement>, column: SortBy) {
-    setDraggedColumn(column);
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", column);
-  }
-
-  function handleHeaderDragOver(event: DragEvent<HTMLTableCellElement>) {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-  }
-
-  function handleHeaderDrop(event: DragEvent<HTMLTableCellElement>, target: SortBy) {
-    event.preventDefault();
-    const sourceFromEvent = event.dataTransfer.getData("text/plain") as SortBy;
-    const source = sourceFromEvent || draggedColumn;
-    if (!source || !DEFAULT_COLUMN_ORDER.includes(source)) {
-      return;
-    }
-
-    setColumnOrder((current) => reorderColumns(current, source, target));
-  }
-
-  function handleHeaderDragEnd() {
-    setDraggedColumn(null);
-  }
-
   function handleToggleColumn(column: SortBy) {
     setVisibleColumns((current) => {
       const isVisible = current.includes(column);
@@ -2535,8 +3584,82 @@ export function AccountsClient({
     setVisibleColumns(DEFAULT_COLUMN_ORDER);
   }
 
+  function handleReorderColumn(source: SortBy, target: SortBy) {
+    if (source === target) {
+      return;
+    }
+
+    setColumnOrder((current) => reorderColumns(current, source, target));
+  }
+
+  function handleMoveColumn(column: SortBy, direction: "up" | "down") {
+    setColumnOrder((current) => {
+      const index = current.indexOf(column);
+      if (index < 0) {
+        return current;
+      }
+
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= current.length) {
+        return current;
+      }
+
+      return reorderColumns(current, column, current[targetIndex]);
+    });
+  }
+
+  function handleColumnDragStart(event: ReactDragEvent<HTMLElement>, columnId: SortBy) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", columnId);
+    setDraggedColumnId(columnId);
+    setColumnDropTargetId(columnId);
+  }
+
+  function handleColumnDragOver(event: ReactDragEvent<HTMLElement>, columnId: SortBy) {
+    if (!draggedColumnId || draggedColumnId === columnId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    if (columnDropTargetId !== columnId) {
+      setColumnDropTargetId(columnId);
+    }
+  }
+
+  function handleColumnDrop(event: ReactDragEvent<HTMLElement>, targetColumnId: SortBy) {
+    event.preventDefault();
+
+    const dataTransferValue = event.dataTransfer.getData("text/plain").trim();
+    const sourceColumnId =
+      draggedColumnId ??
+      (DEFAULT_COLUMN_ORDER.includes(dataTransferValue as SortBy)
+        ? (dataTransferValue as SortBy)
+        : null);
+
+    if (sourceColumnId) {
+      handleReorderColumn(sourceColumnId, targetColumnId);
+    }
+
+    setDraggedColumnId(null);
+    setColumnDropTargetId(null);
+  }
+
+  function handleColumnDragEnd() {
+    setDraggedColumnId(null);
+    setColumnDropTargetId(null);
+  }
+
   function openCreateDrawer() {
+    closeTransientMenus();
+    closeMailComposer();
     setIsCreateContactDrawerOpen(false);
+    setIsCreateOpportunityDrawerOpen(false);
+    setIsCreateMeetingDrawerOpen(false);
+    setMeetingSource(null);
+    setCreateContactDrawerInitialAccountRecordId(null);
+    setPendingOpportunityResumeAccountRecordId(null);
+    setResumeOpportunityAfterContactCreate(null);
     closeDrawer();
     setEmployeesError(null);
     setIsCreateDrawerOpen(true);
@@ -2550,13 +3673,163 @@ export function AccountsClient({
   }
 
   function openCreateContactDrawer() {
+    closeTransientMenus();
+    closeMailComposer();
     setIsCreateDrawerOpen(false);
+    setIsCreateMeetingDrawerOpen(false);
+    setMeetingSource(null);
     closeDrawer();
+    setCreateContactDrawerInitialAccountRecordId(null);
+    setPendingOpportunityResumeAccountRecordId(null);
+    setResumeOpportunityAfterContactCreate(null);
     setIsCreateContactDrawerOpen(true);
   }
 
   function closeCreateContactDrawer() {
     setIsCreateContactDrawerOpen(false);
+    setCreateContactDrawerInitialAccountRecordId(null);
+    if (resumeOpportunityAfterContactCreate) {
+      setOpportunityDrawerContext(resumeOpportunityAfterContactCreate);
+      setResumeOpportunityAfterContactCreate(null);
+      setPendingOpportunityResumeAccountRecordId(null);
+      setIsCreateOpportunityDrawerOpen(true);
+      return;
+    }
+
+    setPendingOpportunityResumeAccountRecordId(null);
+  }
+
+  function openCreateOpportunityDrawer(context?: Partial<OpportunityDrawerContext>) {
+    closeTransientMenus();
+    closeMailComposer();
+    setIsCreateDrawerOpen(false);
+    setIsCreateContactDrawerOpen(false);
+    setIsCreateMeetingDrawerOpen(false);
+    setMeetingSource(null);
+    setCreateContactDrawerInitialAccountRecordId(null);
+    setPendingOpportunityResumeAccountRecordId(null);
+    setResumeOpportunityAfterContactCreate(null);
+    closeDrawer();
+    setSaveError(null);
+    setSaveNotice(null);
+    setOpportunityDrawerContext({
+      initialAccountRecordId: context?.initialAccountRecordId ?? null,
+      initialContactId: context?.initialContactId ?? null,
+      initialOwnerId: context?.initialOwnerId ?? null,
+      initialOwnerName: context?.initialOwnerName ?? null,
+    });
+    setIsCreateOpportunityDrawerOpen(true);
+  }
+
+  function closeCreateOpportunityDrawer() {
+    setIsCreateOpportunityDrawerOpen(false);
+    setOpportunityDrawerContext({
+      initialAccountRecordId: null,
+      initialContactId: null,
+      initialOwnerId: null,
+      initialOwnerName: null,
+    });
+    setPendingOpportunityResumeAccountRecordId(null);
+    setResumeOpportunityAfterContactCreate(null);
+  }
+
+  function openCreateMeetingDrawer() {
+    closeTransientMenus();
+    closeMailComposer();
+    setIsCreateDrawerOpen(false);
+    setIsCreateContactDrawerOpen(false);
+    setIsCreateOpportunityDrawerOpen(false);
+    setCreateContactDrawerInitialAccountRecordId(null);
+    setPendingOpportunityResumeAccountRecordId(null);
+    setResumeOpportunityAfterContactCreate(null);
+    closeDrawer();
+    setSaveError(null);
+    setSaveNotice(null);
+    setMeetingSource(null);
+    setIsCreateMeetingDrawerOpen(true);
+    void loadMeetingOptions();
+  }
+
+  function openCreateMeetingDrawerFromRow(row: BusinessAccountRow) {
+    closeTransientMenus();
+    closeMailComposer();
+    setIsCreateDrawerOpen(false);
+    setIsCreateContactDrawerOpen(false);
+    setIsCreateOpportunityDrawerOpen(false);
+    setCreateContactDrawerInitialAccountRecordId(null);
+    setPendingOpportunityResumeAccountRecordId(null);
+    setResumeOpportunityAfterContactCreate(null);
+    closeDrawer();
+    setSaveError(null);
+    setSaveNotice(null);
+    setMeetingSource(buildMeetingSourceFromRow(row));
+    setIsCreateMeetingDrawerOpen(true);
+    void loadMeetingOptions();
+  }
+
+  function closeCreateMeetingDrawer() {
+    setIsCreateMeetingDrawerOpen(false);
+    setMeetingSource(null);
+  }
+
+  function openCreateOpportunityDrawerFromRow(row: BusinessAccountRow) {
+    const targetContactId = resolveRowContactId(row);
+    const businessAccountRecordId = resolveRowBusinessAccountRecordId(row);
+
+    if (targetContactId === null) {
+      setIsCreateOpportunityDrawerOpen(false);
+      setOpportunityDrawerContext({
+        initialAccountRecordId: null,
+        initialContactId: null,
+        initialOwnerId: null,
+        initialOwnerName: null,
+      });
+      setPendingOpportunityResumeAccountRecordId(businessAccountRecordId);
+      setResumeOpportunityAfterContactCreate(null);
+      setCreateContactDrawerInitialAccountRecordId(businessAccountRecordId);
+      setIsCreateDrawerOpen(false);
+      closeDrawer();
+      setSaveError(null);
+      setSaveNotice(
+        "Create a contact for this account first. The opportunity form will open after the contact is created.",
+      );
+      setIsCreateContactDrawerOpen(true);
+      return;
+    }
+
+    setPendingOpportunityResumeAccountRecordId(null);
+    setResumeOpportunityAfterContactCreate(null);
+    setCreateContactDrawerInitialAccountRecordId(null);
+    openCreateOpportunityDrawer({
+      initialAccountRecordId: businessAccountRecordId,
+      initialContactId: targetContactId,
+      initialOwnerId: row.salesRepId,
+      initialOwnerName: row.salesRepName,
+    });
+  }
+
+  function openEmailComposerFromRow(row: BusinessAccountRow) {
+    const initialState = buildEmailInitialStateFromRow(row);
+    if (!initialState) {
+      setSaveError(
+        "This contact does not have an email address on file. Add an email first.",
+      );
+      setSaveNotice(null);
+      return;
+    }
+
+    closeTransientMenus();
+    setSaveError(null);
+    setSaveNotice(null);
+    openMailComposer(initialState);
+  }
+
+  function handleOpportunityDrawerRequestCreateContact(businessAccountRecordId: string) {
+    setPendingOpportunityResumeAccountRecordId(businessAccountRecordId);
+    setResumeOpportunityAfterContactCreate(null);
+    setCreateContactDrawerInitialAccountRecordId(businessAccountRecordId);
+    setIsCreateOpportunityDrawerOpen(false);
+    setIsCreateContactDrawerOpen(true);
   }
 
   function handleAccountCreated(result: BusinessAccountCreateResponse) {
@@ -2587,27 +3860,160 @@ export function AccountsClient({
     );
     setLastSyncedAt(new Date().toISOString());
     clearCachedMapData();
+
+    if (pendingOpportunityResumeAccountRecordId) {
+      setResumeOpportunityAfterContactCreate({
+        initialAccountRecordId: result.businessAccountRecordId,
+        initialContactId: result.contactId,
+        initialOwnerId: null,
+        initialOwnerName: null,
+      });
+    }
   }
 
-  function closeDrawer() {
+  function handleMeetingContactCreated(
+    result:
+      | BusinessAccountContactCreateResponse
+      | BusinessAccountContactCreatePartialResponse,
+  ) {
+    handleContactCreated(result);
+    setMeetingOptions((current) =>
+      current ? mergeMeetingCreateOptions(current, result.accountRows) : current,
+    );
+  }
+
+  function handleOpportunityCreated(result: OpportunityCreateResponse) {
+    setSaveError(null);
+    const companyLabel = result.companyName?.trim() || "the selected account";
+    const contactLabel = result.contactName?.trim() || `contact ${result.contactId}`;
+    setSaveNotice(
+      `Opportunity ${result.opportunityId} created in Acumatica for ${companyLabel} (${contactLabel}).`,
+    );
+    setPendingOpportunityResumeAccountRecordId(null);
+    setResumeOpportunityAfterContactCreate(null);
+  }
+
+  function handleEmailSent(result: MailSendResponse) {
+    setSaveError(null);
+    if (result.activitySyncStatus === "synced" && result.activityId) {
+      setSaveNotice(
+        `Email sent and logged to Acumatica. Gmail thread ${result.threadId}, activity ${result.activityId}.`,
+      );
+    } else if (result.activitySyncStatus === "failed") {
+      setSaveNotice(
+        `Email sent, but Acumatica logging failed${result.activityError ? `: ${result.activityError}` : "."}`,
+      );
+    } else if (result.activitySyncStatus === "pending") {
+      setSaveNotice(`Email sent. Gmail thread ${result.threadId} is still syncing to Acumatica.`);
+    } else {
+      setSaveNotice(`Email sent. Gmail thread ${result.threadId} updated.`);
+    }
+    setLastEmailedRefreshVersion((current) => current + 1);
+    setEmailComposerState({
+      initialState: null,
+      isOpen: false,
+    });
+    void loadMailSession();
+  }
+
+  function openDrawerForNotes(row: BusinessAccountRow) {
+    if (!canEditRowNote(row)) {
+      setSaveError("This row has no contact to store a note on.");
+      setSaveNotice(null);
+      return;
+    }
+
+    setSaveError(null);
+    setDrawerFocusTarget("notes");
+    void openDrawer(row, { focusTarget: "notes" });
+  }
+
+  function openDeleteContactQueueModal(rows: BusinessAccountRow[]) {
+    const deletableRows = rows.filter((row) => canDeleteRowContact(row));
+    if (deletableRows.length === 0) {
+      setSaveError("These rows have no contact ID, so they cannot be deleted.");
+      setSaveNotice(null);
+      return;
+    }
+
+    closeTransientMenus();
+    setDeleteQueueRows(deletableRows);
+    setSaveError(null);
+  }
+
+  function openDeleteContactConfirmation(row: BusinessAccountRow) {
+    if (!canDeleteRowContact(row)) {
+      setSaveError("This row has no contact ID, so it cannot be deleted.");
+      setSaveNotice(null);
+      return;
+    }
+
+    openDeleteContactQueueModal([row]);
+  }
+
+  function closeDeleteContactConfirmation() {
+    if (isDeletingContact || isDeletingSelectedContacts) {
+      return;
+    }
+
+    setDeleteQueueRows([]);
+  }
+
+  function closeDrawer(options?: { preserveNotice?: boolean }) {
     setSelected(null);
     setDraft(null);
+    setDrawerFocusTarget(null);
     setSaveError(null);
-    setSaveNotice(null);
+    if (!options?.preserveNotice) {
+      setSaveNotice(null);
+    }
     setIsDeletingContact(false);
     setAddressSuggestions([]);
     setAddressLookupError(null);
     setIsAddressLookupLoading(false);
     setAddressLookupArmed(false);
     setIsApplyingAddress(false);
+    setDeleteQueueRows([]);
     if (employeeOptions.length === 0) {
       employeesFetchAttemptedRef.current = false;
     }
   }
 
-  async function openDrawer(row: BusinessAccountRow) {
+  function handleMeetingCreated(result: MeetingCreateResponse) {
+    setIsCreateMeetingDrawerOpen(false);
+    setMeetingSource(null);
+    setSaveError(null);
+    const messageParts = [`Meeting "${result.summary}" created in Acumatica.`];
+    if (result.inviteAuthority === "google" && (
+      result.calendarInviteStatus === "created" || result.calendarInviteStatus === "updated"
+    )) {
+      messageParts.push(
+        `Google Calendar invite ${result.calendarInviteStatus === "updated" ? "updated" : "created"}${result.connectedGoogleEmail ? ` from ${result.connectedGoogleEmail}` : ""}.`,
+      );
+    } else if (result.inviteAuthority === "acumatica") {
+      messageParts.push("Acumatica handled the invite sending.");
+    }
+    if (result.includeOrganizerInAcumatica) {
+      messageParts.push("Your internal contact was included in Acumatica.");
+    }
+    if (result.warnings.length > 0) {
+      messageParts.push(result.warnings.join(" "));
+    }
+    setSaveNotice(messageParts.join(" "));
+  }
+
+  async function openDrawer(
+    row: BusinessAccountRow,
+    options?: { focusTarget?: "notes" | null },
+  ) {
+    closeTransientMenus();
+    closeMailComposer();
     setIsCreateDrawerOpen(false);
     setIsCreateContactDrawerOpen(false);
+    setIsCreateOpportunityDrawerOpen(false);
+    setIsCreateMeetingDrawerOpen(false);
+    setMeetingSource(null);
+    setDrawerFocusTarget(options?.focusTarget ?? null);
     setSelected(row);
     setDraft(buildDraft(row));
     setSaveError(null);
@@ -2622,9 +4028,12 @@ export function AccountsClient({
 
     try {
       const accountRecordId = row.accountRecordId ?? row.id;
-      const response = await fetch(`/api/business-accounts/${accountRecordId}`, {
-        cache: "no-store",
-      });
+      const response = await fetch(
+        buildBusinessAccountDetailUrl(accountRecordId, resolveRowContactId(row)),
+        {
+          cache: "no-store",
+        },
+      );
       const payload = await readJsonResponse<
         BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
       >(response);
@@ -2788,29 +4197,14 @@ export function AccountsClient({
     }
   }
 
-  async function handleLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.replace("/signin");
-    router.refresh();
-  }
-
   async function saveRowDraft(
     sourceRow: BusinessAccountRow,
     sourceDraft: BusinessAccountUpdateRequest,
-    mode: "drawer" | "inline",
   ): Promise<boolean> {
     const sourceRowKey = getRowKey(sourceRow);
-    const isInline = mode === "inline";
-
-    if (isInline) {
-      setInlineSavingRowKey(sourceRowKey);
-      setInlineError(null);
-      setSaveNotice(null);
-    } else {
-      setIsSaving(true);
-      setSaveError(null);
-      setSaveNotice(null);
-    }
+    setIsSaving(true);
+    setSaveError(null);
+    setSaveNotice(null);
 
     let saved = false;
     try {
@@ -2884,7 +4278,7 @@ export function AccountsClient({
       if (accountWasReassigned) {
         try {
           const refreshResponse = await fetch(
-            `/api/business-accounts/${encodeURIComponent(updatedAccountRecordId)}`,
+            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId),
             {
               cache: "no-store",
             },
@@ -2959,9 +4353,7 @@ export function AccountsClient({
 
         setLastSyncedAt(new Date().toISOString());
         clearCachedMapData();
-        if (!isInline) {
-          setSaveNotice("Saved to Acumatica.");
-        }
+        setSaveNotice("Saved to Acumatica.");
         saved = true;
         return saved;
       }
@@ -2972,56 +4364,68 @@ export function AccountsClient({
             const rowAccountRecordId = row.accountRecordId ?? row.id;
             const sameAccount =
               rowAccountRecordId === accountRecordId ||
-            rowAccountRecordId === updatedAccountRecordId ||
-            row.businessAccountId === selectedBusinessAccountId;
-          if (!sameAccount) {
-            return row;
-          }
+              rowAccountRecordId === updatedAccountRecordId ||
+              row.businessAccountId === selectedBusinessAccountId;
+            const sameCompanyPhoneGroup = sharesCompanyPhoneGroup(row, updatedRow);
+            if (!sameAccount && !sameCompanyPhoneGroup) {
+              return row;
+            }
 
-          const updatedCommon: BusinessAccountRow = {
-            ...row,
-            accountRecordId: updatedAccountRecordId,
-            companyName: updatedRow.companyName,
-            salesRepId: updatedRow.salesRepId,
-            salesRepName: updatedRow.salesRepName,
-            industryType: updatedRow.industryType,
-            subCategory: updatedRow.subCategory,
-            companyRegion: updatedRow.companyRegion,
-            week: updatedRow.week,
-            address: updatedRow.address,
-            addressLine1: updatedRow.addressLine1,
-            addressLine2: updatedRow.addressLine2,
-            city: updatedRow.city,
-            state: updatedRow.state,
-            postalCode: updatedRow.postalCode,
-            country: updatedRow.country,
-            category: updatedRow.category,
-            lastModifiedIso: updatedRow.lastModifiedIso,
-            companyPhone: updatedRow.companyPhone ?? row.companyPhone,
-            primaryContactId: updatedPrimaryContactId,
-            isPrimaryContact:
-              updatedPrimaryContactId !== null &&
-              row.contactId !== null &&
-              row.contactId !== undefined
-                ? row.contactId === updatedPrimaryContactId
-                : row.isPrimaryContact,
-          };
-
-          if (
-            updatedContactId !== null &&
-            row.contactId !== null &&
-            row.contactId !== undefined &&
-            row.contactId === updatedContactId
-          ) {
-            return {
-              ...updatedCommon,
-              contactId: updatedContactId,
-              primaryContactName: updatedRow.primaryContactName,
-              primaryContactPhone: updatedRow.primaryContactPhone,
-              primaryContactEmail: updatedRow.primaryContactEmail,
-              notes: updatedRow.notes,
+            const updatedCommon: BusinessAccountRow = {
+              ...row,
+              accountRecordId: sameAccount ? updatedAccountRecordId : row.accountRecordId,
+              companyName: sameAccount ? updatedRow.companyName : row.companyName,
+              salesRepId: sameAccount ? updatedRow.salesRepId : row.salesRepId,
+              salesRepName: sameAccount ? updatedRow.salesRepName : row.salesRepName,
+              industryType: sameAccount ? updatedRow.industryType : row.industryType,
+              subCategory: sameAccount ? updatedRow.subCategory : row.subCategory,
+              companyRegion: sameAccount ? updatedRow.companyRegion : row.companyRegion,
+              week: sameAccount ? updatedRow.week : row.week,
+              address: sameAccount ? updatedRow.address : row.address,
+              addressLine1: sameAccount ? updatedRow.addressLine1 : row.addressLine1,
+              addressLine2: sameAccount ? updatedRow.addressLine2 : row.addressLine2,
+              city: sameAccount ? updatedRow.city : row.city,
+              state: sameAccount ? updatedRow.state : row.state,
+              postalCode: sameAccount ? updatedRow.postalCode : row.postalCode,
+              country: sameAccount ? updatedRow.country : row.country,
+              category: sameAccount ? updatedRow.category : row.category,
+              lastModifiedIso: sameAccount ? updatedRow.lastModifiedIso : row.lastModifiedIso,
+              companyPhone:
+                sameCompanyPhoneGroup ? updatedRow.companyPhone ?? row.companyPhone : row.companyPhone,
+              companyPhoneSource:
+                sameCompanyPhoneGroup
+                  ? updatedRow.companyPhoneSource ?? row.companyPhoneSource ?? null
+                  : row.companyPhoneSource,
+              primaryContactId: sameAccount ? updatedPrimaryContactId : row.primaryContactId,
+              isPrimaryContact:
+                sameAccount &&
+                updatedPrimaryContactId !== null &&
+                row.contactId !== null &&
+                row.contactId !== undefined
+                  ? row.contactId === updatedPrimaryContactId
+                  : row.isPrimaryContact,
             };
-          }
+
+            if (
+              sameAccount &&
+              updatedContactId !== null &&
+              row.contactId !== null &&
+              row.contactId !== undefined &&
+              row.contactId === updatedContactId
+            ) {
+              return {
+                ...updatedCommon,
+                contactId: updatedContactId,
+                primaryContactName: updatedRow.primaryContactName,
+                primaryContactJobTitle:
+                  updatedRow.primaryContactJobTitle ?? row.primaryContactJobTitle ?? null,
+                primaryContactPhone: updatedRow.primaryContactPhone,
+                primaryContactExtension:
+                  updatedRow.primaryContactExtension ?? row.primaryContactExtension ?? null,
+                primaryContactEmail: updatedRow.primaryContactEmail,
+                notes: updatedRow.notes,
+              };
+            }
 
             return updatedCommon;
           }),
@@ -3057,8 +4461,14 @@ export function AccountsClient({
           category: updatedRow.category,
           lastModifiedIso: updatedRow.lastModifiedIso,
           companyPhone: updatedRow.companyPhone ?? sourceRow.companyPhone,
+          companyPhoneSource:
+            updatedRow.companyPhoneSource ?? sourceRow.companyPhoneSource ?? null,
           primaryContactName: updatedRow.primaryContactName,
+          primaryContactJobTitle:
+            updatedRow.primaryContactJobTitle ?? sourceRow.primaryContactJobTitle ?? null,
           primaryContactPhone: updatedRow.primaryContactPhone,
+          primaryContactExtension:
+            updatedRow.primaryContactExtension ?? sourceRow.primaryContactExtension ?? null,
           primaryContactEmail: updatedRow.primaryContactEmail,
           notes: updatedRow.notes,
         };
@@ -3068,188 +4478,21 @@ export function AccountsClient({
         setDraft(buildDraft(selectedAfterSave));
       }
 
-      if (!isInline) {
-        setSaveNotice("Saved to Acumatica.");
-      }
+      setSaveNotice("Saved to Acumatica.");
       setLastSyncedAt(new Date().toISOString());
       clearCachedMapData();
       saved = true;
     } catch (saveRequestError) {
-      const message =
+      setSaveError(
         saveRequestError instanceof Error
           ? saveRequestError.message
-          : "Failed to save changes.";
-      if (isInline) {
-        setInlineError(message);
-      } else {
-        setSaveError(message);
-      }
+          : "Failed to save changes.",
+      );
     } finally {
-      if (isInline) {
-        setInlineSavingRowKey((current) => (current === sourceRowKey ? null : current));
-      } else {
-        setIsSaving(false);
-      }
+      setIsSaving(false);
     }
 
     return saved;
-  }
-
-  async function handleInlineSelectChange(
-    row: BusinessAccountRow,
-    columnId: InlineEditableColumn,
-    rawValue: string,
-  ) {
-    const normalizedValue = rawValue.trim();
-    const baseDraft = buildDraft(row);
-    let patch: Partial<BusinessAccountUpdateRequest> = {};
-
-    if (columnId === "industryType") {
-      patch = {
-        industryType:
-          normalizedValue.length > 0
-            ? normalizeOptionValue(INDUSTRY_TYPE_OPTIONS, normalizedValue)
-            : null,
-      };
-    } else if (columnId === "subCategory") {
-      patch = {
-        subCategory:
-          normalizedValue.length > 0
-            ? normalizeOptionValue(SUB_CATEGORY_OPTIONS, normalizedValue)
-            : null,
-      };
-    } else if (columnId === "companyRegion") {
-      patch = {
-        companyRegion:
-          normalizedValue.length > 0 ? normalizeRegionValue(normalizedValue) : null,
-      };
-    } else if (columnId === "week") {
-      patch = {
-        week: normalizedValue.length > 0 ? normalizeWeekValue(normalizedValue) : null,
-      };
-    } else if (columnId === "category") {
-      patch = {
-        category: (normalizedValue || null) as Category | null,
-      };
-    }
-
-    const nextDraft: BusinessAccountUpdateRequest = {
-      ...baseDraft,
-      ...patch,
-      expectedLastModified: row.lastModifiedIso,
-    };
-
-    await saveRowDraft(row, nextDraft, "inline");
-  }
-
-  async function handleInlineMakePrimary(row: BusinessAccountRow) {
-    const targetContactId = row.contactId ?? row.primaryContactId ?? null;
-    if (targetContactId === null) {
-      setInlineError("Contact must have ContactID to set as primary.");
-      return;
-    }
-
-    const nextDraft: BusinessAccountUpdateRequest = {
-      ...buildDraft(row),
-      targetContactId,
-      setAsPrimaryContact: true,
-      primaryOnlyIntent: true,
-      expectedLastModified: row.lastModifiedIso,
-    };
-
-    await saveRowDraft(row, nextDraft, "inline");
-  }
-
-  function handleInlinePhoneChange(rowKey: string, value: string) {
-    setInlinePhoneDrafts((current) => ({
-      ...current,
-      [rowKey]: formatPhoneDraftValue(value),
-    }));
-  }
-
-  async function handleInlinePhoneCommit(row: BusinessAccountRow, rowKey: string) {
-    const draftValue = inlinePhoneDrafts[rowKey];
-    if (draftValue === undefined) {
-      return;
-    }
-
-    const currentValue = row.primaryContactPhone ?? "";
-    if (draftValue === currentValue) {
-      setInlinePhoneDrafts((current) => {
-        const next = { ...current };
-        delete next[rowKey];
-        return next;
-      });
-      return;
-    }
-
-    const targetContactId = row.contactId ?? row.primaryContactId ?? null;
-    if (targetContactId === null) {
-      setInlineError("Contact ID is missing on this row. Phone cannot be saved.");
-      return;
-    }
-
-    if (draftValue.trim().length > 0 && normalizePhoneForSave(draftValue) === null) {
-      setInlineError("Phone number must use the format ###-###-####.");
-      return;
-    }
-
-    const nextDraft: BusinessAccountUpdateRequest = {
-      ...buildDraft(row),
-      targetContactId,
-      primaryContactPhone: draftValue,
-      expectedLastModified: row.lastModifiedIso,
-    };
-    const saved = await saveRowDraft(row, nextDraft, "inline");
-    if (!saved) {
-      return;
-    }
-
-    setInlinePhoneDrafts((current) => {
-      const next = { ...current };
-      delete next[rowKey];
-      return next;
-    });
-  }
-
-  function handleInlineNotesChange(rowKey: string, value: string) {
-    setInlineNotesDrafts((current) => ({
-      ...current,
-      [rowKey]: value,
-    }));
-  }
-
-  async function handleInlineNotesCommit(row: BusinessAccountRow, rowKey: string) {
-    const draftValue = inlineNotesDrafts[rowKey];
-    if (draftValue === undefined) {
-      return;
-    }
-
-    const currentValue = row.notes ?? "";
-    if (draftValue === currentValue) {
-      setInlineNotesDrafts((current) => {
-        const next = { ...current };
-        delete next[rowKey];
-        return next;
-      });
-      return;
-    }
-
-    const nextDraft: BusinessAccountUpdateRequest = {
-      ...buildDraft(row),
-      notes: draftValue,
-      expectedLastModified: row.lastModifiedIso,
-    };
-    const saved = await saveRowDraft(row, nextDraft, "inline");
-    if (!saved) {
-      return;
-    }
-
-    setInlineNotesDrafts((current) => {
-      const next = { ...current };
-      delete next[rowKey];
-      return next;
-    });
   }
 
   async function handleSave() {
@@ -3267,6 +4510,15 @@ export function AccountsClient({
     }
 
     if (
+      draft.companyPhone !== null &&
+      draft.companyPhone.trim().length > 0 &&
+      normalizePhoneForSave(draft.companyPhone) === null
+    ) {
+      setSaveError("Company phone number must use the format ###-###-####.");
+      return;
+    }
+
+    if (
       draft.primaryContactPhone !== null &&
       draft.primaryContactPhone.trim().length > 0 &&
       normalizePhoneForSave(draft.primaryContactPhone) === null
@@ -3275,26 +4527,281 @@ export function AccountsClient({
       return;
     }
 
-    await saveRowDraft(selected, draft, "drawer");
+    const primaryContactExtension = draft.primaryContactExtension ?? "";
+    if (primaryContactExtension.trim().length > 0) {
+      const normalizedExtension = normalizeExtensionForSave(primaryContactExtension);
+      if (!normalizedExtension || normalizedExtension.length > 5) {
+        setSaveError("Extension must use 1 to 5 digits.");
+        return;
+      }
+    }
+
+    const saved = await saveRowDraft(selected, draft);
+    if (saved) {
+      closeDrawer({ preserveNotice: true });
+    }
   }
 
-  async function handleDeleteSelectedContact() {
-    if (!selected) {
+  function handleToggleSelectedContactRow(row: BusinessAccountRow, forceSelected?: boolean) {
+    if (!isContactSelectableRow(row)) {
       return;
     }
 
-    const contactId = selected.contactId ?? selected.primaryContactId ?? null;
+    const rowKey = getRowKey(row);
+    setSelectedContactRowKeys((current) => {
+      const hasRow = current.includes(rowKey);
+      const shouldSelect = forceSelected ?? !hasRow;
+
+      if (shouldSelect === hasRow) {
+        return current;
+      }
+
+      return shouldSelect
+        ? [...current, rowKey]
+        : current.filter((currentRowKey) => currentRowKey !== rowKey);
+    });
+  }
+
+  function handleToggleCurrentPageSelection() {
+    const pageRowKeys = currentPageSelectableRows.map((row) => getRowKey(row));
+    setSelectedContactRowKeys((current) => {
+      const next = new Set(current);
+      if (allCurrentPageSelected) {
+        pageRowKeys.forEach((rowKey) => next.delete(rowKey));
+      } else {
+        pageRowKeys.forEach((rowKey) => next.add(rowKey));
+      }
+      return [...next];
+    });
+  }
+
+  function handleMergeSelectionCompleted(result: ContactMergeResponse) {
+    const activeSelectionRowKeys = new Set(
+      selectedContactRows.map((row) => getRowKey(row)),
+    );
+
+    setAllRows((currentRows) =>
+      replaceRowsForAccount(
+        currentRows,
+        result.accountRows,
+        result.businessAccountRecordId,
+        result.businessAccountId,
+      ),
+    );
+    setLastSyncedAt(new Date().toISOString());
+    clearCachedMapData();
+    setSelectedContactRowKeys((current) =>
+      current.filter((rowKey) => !activeSelectionRowKeys.has(rowKey)),
+    );
+    setIsSelectionMergeOpen(false);
+    setSaveError(null);
+    setSaveNotice(
+      "queued" in result
+        ? `Queued contact merge. ${result.deletedContactIds.length} contact${
+            result.deletedContactIds.length === 1 ? "" : "s"
+          } hidden until the scheduled action runs${
+            result.setKeptAsPrimary ? ". Primary contact will update when it executes." : "."
+          }`
+        : `Merged contacts. ${result.deletedContactIds.length} contact${
+            result.deletedContactIds.length === 1 ? "" : "s"
+          } deleted${result.setKeptAsPrimary ? ". Primary contact updated." : "."}`,
+    );
+
+    if (selected && selected.businessAccountId === result.businessAccountId) {
+      const nextSelected = findMatchingAccountRow(result.accountRows, selected) ?? result.updatedRow;
+      setSelected(nextSelected);
+      setDraft(buildDraft(nextSelected));
+    }
+  }
+
+  async function handleDeleteSelectedContacts(reason: string) {
+    if (!selectedContactRows.length) {
+      return;
+    }
+
+    setIsDeletingSelectedContacts(true);
+    setSaveError(null);
+    setSaveNotice(null);
+
+    try {
+      const uniqueSelections = new Map<
+        number,
+        {
+          row: BusinessAccountRow;
+          rowKey: string;
+          accountRecordId: string;
+          businessAccountId: string;
+        }
+      >();
+      selectedContactRows.forEach((row) => {
+        const contactId = resolveRowContactId(row);
+        if (contactId === null || uniqueSelections.has(contactId)) {
+          return;
+        }
+
+        uniqueSelections.set(contactId, {
+          row,
+          rowKey: getRowKey(row),
+          accountRecordId: resolveRowBusinessAccountRecordId(row),
+          businessAccountId: row.businessAccountId,
+        });
+      });
+
+      const successfulRowKeys = new Set<string>();
+      const failedLabels: string[] = [];
+      const affectedAccounts = new Map<
+        string,
+        {
+          businessAccountId: string;
+          deletions: Array<{
+            contactId: number;
+            rowKey: string;
+          }>;
+        }
+      >();
+
+      for (const [contactId, selection] of uniqueSelections.entries()) {
+        try {
+          const deleteResponse = await fetch(`/api/contacts/${contactId}?source=accounts`, {
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ reason }),
+          });
+          const deletePayload = await readJsonResponse<{ error?: string }>(deleteResponse);
+          if (!deleteResponse.ok) {
+            throw new Error(parseError(deletePayload));
+          }
+
+          successfulRowKeys.add(selection.rowKey);
+          const accountEntry = affectedAccounts.get(selection.accountRecordId);
+          if (accountEntry) {
+            accountEntry.deletions.push({
+              contactId,
+              rowKey: selection.rowKey,
+            });
+          } else {
+            affectedAccounts.set(selection.accountRecordId, {
+              businessAccountId: selection.businessAccountId,
+              deletions: [
+                {
+                  contactId,
+                  rowKey: selection.rowKey,
+                },
+              ],
+            });
+          }
+        } catch (error) {
+          failedLabels.push(
+            error instanceof Error
+              ? `${selection.row.primaryContactName ?? `Contact ${contactId}`}: ${error.message}`
+              : selection.row.primaryContactName ?? `Contact ${contactId}`,
+          );
+        }
+      }
+
+      let nextRows = allRowsRef.current;
+      for (const [accountRecordId, accountEntry] of affectedAccounts.entries()) {
+        try {
+          const refreshResponse = await fetch(`/api/business-accounts/${accountRecordId}`, {
+            cache: "no-store",
+          });
+          const refreshPayload = await readJsonResponse<
+            BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
+          >(refreshResponse);
+          if (!refreshResponse.ok) {
+            throw new Error(parseError(refreshPayload));
+          }
+
+          const refreshedRows =
+            readDetailResponseRows(refreshPayload) ??
+            (() => {
+              const refreshedRow = readDetailResponseRow(refreshPayload);
+              return refreshedRow ? [refreshedRow] : [];
+            })();
+          nextRows = replaceRowsForAccount(
+            nextRows,
+            refreshedRows,
+            accountRecordId,
+            accountEntry.businessAccountId,
+          );
+        } catch {
+          const currentAccountRows = nextRows.filter((row) => {
+            const rowAccountRecordId = row.accountRecordId ?? row.id;
+            return (
+              rowAccountRecordId === accountRecordId ||
+              row.businessAccountId === accountEntry.businessAccountId
+            );
+          });
+
+          const fallbackRows = accountEntry.deletions.reduce((rowsForAccount, deletion) => {
+            return removeDeletedContactFromAccountRows(
+              rowsForAccount,
+              deletion.contactId,
+              deletion.rowKey,
+            );
+          }, currentAccountRows);
+
+          nextRows = replaceRowsForAccount(
+            nextRows,
+            fallbackRows,
+            accountRecordId,
+            accountEntry.businessAccountId,
+          );
+        }
+      }
+
+      setAllRows(nextRows);
+      setLastSyncedAt(new Date().toISOString());
+      clearCachedMapData();
+      setSelectedContactRowKeys((current) =>
+        current.filter((rowKey) => !successfulRowKeys.has(rowKey)),
+      );
+      setDeleteQueueRows([]);
+      setSaveNotice(
+        `Queued ${successfulRowKeys.size} contact${successfulRowKeys.size === 1 ? "" : "s"} for deletion.${
+          failedLabels.length ? ` ${failedLabels.length} failed.` : ""
+        }`,
+      );
+      setSaveError(
+        failedLabels.length ? `Failed to queue: ${failedLabels.join("; ")}` : null,
+      );
+
+      if (selected) {
+        const selectedRowDeleted = successfulRowKeys.has(getRowKey(selected));
+        if (selectedRowDeleted) {
+          const selectedAccountRows = nextRows.filter((row) => {
+            return resolveRowBusinessAccountRecordId(row) === resolveRowBusinessAccountRecordId(selected);
+          });
+          const nextSelected = selectedAccountRows[0] ?? null;
+          if (!nextSelected) {
+            closeDrawer();
+          } else {
+            setSelected(nextSelected);
+            setDraft(buildDraft(nextSelected));
+          }
+        } else {
+          const nextSelected = findMatchingAccountRow(nextRows, selected);
+          if (nextSelected) {
+            setSelected(nextSelected);
+            setDraft(buildDraft(nextSelected));
+          }
+        }
+      }
+    } finally {
+      setIsDeletingSelectedContacts(false);
+    }
+  }
+
+  async function deleteContactRow(
+    targetRow: BusinessAccountRow,
+    reason: string,
+  ): Promise<boolean> {
+    const contactId = targetRow.contactId ?? targetRow.primaryContactId ?? null;
     if (contactId === null) {
       setSaveError("This row has no contact ID, so it cannot be deleted.");
-      return;
-    }
-
-    const contactLabel = selected.primaryContactName?.trim() || `Contact ${contactId}`;
-    const confirmed = window.confirm(
-      `Delete ${contactLabel} from Acumatica? This permanently removes the contact.`,
-    );
-    if (!confirmed) {
-      return;
+      return false;
     }
 
     setIsDeletingContact(true);
@@ -3302,17 +4809,21 @@ export function AccountsClient({
     setSaveNotice(null);
 
     try {
-      const deleteResponse = await fetch(`/api/contacts/${contactId}`, {
+      const deleteResponse = await fetch(`/api/contacts/${contactId}?source=accounts`, {
         method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ reason }),
       });
       const deletePayload = await readJsonResponse<{ error?: string }>(deleteResponse);
       if (!deleteResponse.ok) {
         throw new Error(parseError(deletePayload));
       }
 
-      const accountRecordId = selected.accountRecordId ?? selected.id;
+      const accountRecordId = targetRow.accountRecordId ?? targetRow.id;
       let nextAccountRows: BusinessAccountRow[] | null = null;
-      let deleteNotice = "Contact deleted from Acumatica.";
+      let deleteNotice = "Contact queued for deletion.";
 
       try {
         const refreshResponse = await fetch(`/api/business-accounts/${accountRecordId}`, {
@@ -3336,16 +4847,16 @@ export function AccountsClient({
           const rowAccountRecordId = row.accountRecordId ?? row.id;
           return (
             rowAccountRecordId === accountRecordId ||
-            row.businessAccountId === selected.businessAccountId
+            row.businessAccountId === targetRow.businessAccountId
           );
         });
         nextAccountRows = removeDeletedContactFromAccountRows(
           currentAccountRows,
           contactId,
-          selected.rowKey ?? null,
+          targetRow.rowKey ?? null,
         );
         deleteNotice =
-          "Contact deleted from Acumatica. The account refresh failed, so the local view was updated conservatively.";
+          "Contact queued for deletion. The account refresh failed, so the local view was updated conservatively.";
       }
 
       setAllRows((currentRows) =>
@@ -3353,605 +4864,967 @@ export function AccountsClient({
           currentRows,
           nextAccountRows ?? [],
           accountRecordId,
-          selected.businessAccountId,
+          targetRow.businessAccountId,
         ),
       );
       setLastSyncedAt(new Date().toISOString());
       clearCachedMapData();
+      setSelectedContactRowKeys((current) =>
+        current.filter((rowKey) => rowKey !== getRowKey(targetRow)),
+      );
 
       const nextSelected =
-        (nextAccountRows && findMatchingAccountRow(nextAccountRows, selected)) ??
-        nextAccountRows?.[0] ??
-        null;
+        selected && getRowKey(selected) === getRowKey(targetRow)
+          ? nextAccountRows?.[0] ?? null
+          : selected && nextAccountRows
+            ? findMatchingAccountRow(nextAccountRows, selected) ?? selected
+            : selected;
 
-      if (!nextSelected) {
+      if (selected && !nextSelected) {
         closeDrawer();
+        setSaveNotice(deleteNotice);
       } else {
-        setSelected(nextSelected);
-        setDraft(buildDraft(nextSelected));
+        if (nextSelected) {
+          setSelected(nextSelected);
+          setDraft(buildDraft(nextSelected));
+        }
         setSaveNotice(deleteNotice);
       }
+      return true;
     } catch (deleteError) {
       setSaveError(
         deleteError instanceof Error
           ? deleteError.message
-          : "Failed to delete contact.",
+          : "Failed to queue contact deletion.",
       );
+      return false;
     } finally {
       setIsDeletingContact(false);
     }
   }
 
+  function handleDeleteSelectedContact() {
+    if (!selected) {
+      return;
+    }
+
+    openDeleteContactConfirmation(selected);
+  }
+
+  async function handleConfirmDeleteContact(reason: string) {
+    if (deleteQueueRows.length === 0) {
+      return;
+    }
+
+    if (deleteQueueRows.length > 1) {
+      await handleDeleteSelectedContacts(reason);
+      return;
+    }
+
+    const deleted = await deleteContactRow(deleteQueueRows[0], reason);
+    if (deleted) {
+      setDeleteQueueRows([]);
+    }
+  }
+
+  function renderBlankCell(label = "No value"): ReactNode {
+    return (
+      <span aria-label={label} className={styles.emptyCell}>
+        {"\u00A0"}
+      </span>
+    );
+  }
+
+  function renderTextCell(
+    value: string | null | undefined,
+    emptyLabel?: string,
+    tone: "default" | "secondary" = "default",
+  ): ReactNode {
+    const text = readTextValue(value);
+    if (!text) {
+      return renderBlankCell(emptyLabel);
+    }
+
+    return (
+      <span className={tone === "secondary" ? styles.secondaryCellText : undefined}>
+        {text}
+      </span>
+    );
+  }
+
+  function renderPhoneCell(
+    phone: string | null | undefined,
+    label: string,
+    context: NonNullable<ComponentProps<typeof CallPhoneButton>["context"]>,
+  ): ReactNode {
+    const text = readTextValue(phone);
+    if (!text) {
+      return renderBlankCell(label);
+    }
+
+    return (
+      <div className={styles.phoneValue}>
+        <span>{text}</span>
+        <CallPhoneButton className={styles.tableCallButton} context={context} label={label} phone={text} />
+      </div>
+    );
+  }
+
+  function renderCellContent(row: BusinessAccountRow, columnId: SortBy): ReactNode {
+    if (columnId === "companyName") {
+      const companyLabel = readTextValue(row.companyName);
+      const companyUrl = buildAcumaticaBusinessAccountUrl(
+        acumaticaBaseUrl,
+        row.businessAccountId,
+        acumaticaCompanyId,
+      );
+
+      if (!companyLabel) {
+        return renderBlankCell("No company name");
+      }
+
+      if (!companyUrl) {
+        return companyLabel;
+      }
+
+      return (
+        <a
+          className={styles.recordLink}
+          href={companyUrl}
+          onClick={(event) => event.stopPropagation()}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {companyLabel}
+        </a>
+      );
+    }
+
+    if (columnId === "primaryContactName") {
+      const nameValue = readTextValue(row.primaryContactName);
+      const contactUrl = buildAcumaticaContactUrl(
+        acumaticaBaseUrl,
+        row.contactId ?? row.primaryContactId ?? null,
+        acumaticaCompanyId,
+      );
+
+      return (
+        <div className={styles.contactCellWrap}>
+          {nameValue ? (
+            contactUrl ? (
+              <a
+                className={styles.recordLink}
+                href={contactUrl}
+                onClick={(event) => event.stopPropagation()}
+                rel="noreferrer"
+                target="_blank"
+              >
+                {nameValue}
+              </a>
+            ) : (
+              <span>{nameValue}</span>
+            )
+          ) : (
+            renderBlankCell("No primary contact")
+          )}
+          {row.isPrimaryContact ? <span className={styles.primaryBadge}>Primary</span> : null}
+        </div>
+      );
+    }
+
+    if (columnId === "primaryContactJobTitle") {
+      return renderTextCell(row.primaryContactJobTitle ?? null, "No job title", "secondary");
+    }
+
+    if (columnId === "companyPhone") {
+      return renderPhoneCell(resolveCompanyPhone(row), `${row.companyName} company phone`, {
+        sourcePage: "accounts",
+        linkedBusinessAccountId: row.businessAccountId,
+        linkedAccountRowKey: row.rowKey ?? row.id,
+        linkedContactId: row.contactId ?? row.primaryContactId,
+        linkedCompanyName: row.companyName,
+        linkedContactName: row.primaryContactName,
+      });
+    }
+
+    if (columnId === "primaryContactPhone") {
+      return renderPhoneCell(
+        row.primaryContactPhone,
+        `${row.primaryContactName ?? row.companyName} phone`,
+        {
+          sourcePage: "accounts",
+          linkedBusinessAccountId: row.businessAccountId,
+          linkedAccountRowKey: row.rowKey ?? row.id,
+          linkedContactId: row.contactId ?? row.primaryContactId,
+          linkedCompanyName: row.companyName,
+          linkedContactName: row.primaryContactName,
+        },
+      );
+    }
+
+    if (columnId === "primaryContactExtension") {
+      const extensionValue = readTextValue(row.primaryContactExtension);
+      return renderTextCell(
+        extensionValue ? `Ext. ${extensionValue}` : null,
+        "No extension",
+        "secondary",
+      );
+    }
+
+    if (columnId === "category") {
+      const categoryLabel = readTextValue(row.category) ?? "Unassigned";
+      const pillClassName =
+        readTextValue(row.category) === null
+          ? `${styles.categoryPill} ${styles.categoryPillMuted}`
+          : styles.categoryPill;
+      return <span className={pillClassName}>{categoryLabel}</span>;
+    }
+
+    if (columnId === "lastEmailedAt") {
+      return renderTextCell(formatLastEmailed(row.lastEmailedAt), "Never emailed", "secondary");
+    }
+
+    if (columnId === "lastModifiedIso") {
+      return renderTextCell(formatLastModified(row.lastModifiedIso), "No update time", "secondary");
+    }
+
+    if (columnId === "primaryContactEmail") {
+      return renderTextCell(row.primaryContactEmail, "No email");
+    }
+
+    if (columnId === "salesRepName") {
+      return renderTextCell(row.salesRepName, "No sales rep");
+    }
+
+    if (columnId === "industryType") {
+      return renderTextCell(row.industryType, "No industry");
+    }
+
+    if (columnId === "subCategory") {
+      return renderTextCell(row.subCategory, "No subcategory");
+    }
+
+    if (columnId === "companyRegion") {
+      return renderTextCell(row.companyRegion, "No region");
+    }
+
+    if (columnId === "week") {
+      return renderTextCell(row.week, "No week");
+    }
+
+    if (columnId === "address") {
+      return renderTextCell(row.address, "No address");
+    }
+
+    if (columnId === "notes") {
+      return renderTextCell(row.notes, "No notes");
+    }
+
+    return renderBlankCell(`No ${columnId}`);
+  }
+
+  function renderHeaderFilterControl(columnId: SortBy): ReactNode {
+    const column = getColumnConfig(columnId);
+    const filterValue = headerFilters[column.filterKey];
+    const isDateFilter = columnId === "lastEmailedAt" || columnId === "lastModifiedIso";
+
+    if (column.filterKey === "category") {
+      return (
+        <select
+          aria-label={`Filter ${column.label}`}
+          className={styles.headerFilterSelect}
+          onChange={(event) =>
+            updateHeaderFilter("category", (event.target.value as Category | "") || "")
+          }
+          value={headerFilters.category}
+        >
+          <option value="">All</option>
+          <option value="A">A</option>
+          <option value="B">B</option>
+          <option value="C">C</option>
+          <option value="D">D</option>
+        </select>
+      );
+    }
+
+    return (
+      <input
+        aria-label={`Filter ${column.label}`}
+        className={styles.headerFilterInput}
+        onChange={(event) =>
+          updateHeaderFilter(
+            column.filterKey,
+            event.target.value as HeaderFilters[typeof column.filterKey],
+          )
+        }
+        placeholder={column.filterPlaceholder}
+        type={isDateFilter ? "date" : "text"}
+        value={typeof filterValue === "string" ? filterValue : ""}
+      />
+    );
+  }
+
   return (
-    <main className={styles.page}>
-      <header className={styles.header}>
-        <div className={styles.brandBlock}>
-          <Image
-            alt="MeadowBrook"
-            className={styles.brandLogo}
-            height={202}
-            priority
-            src="/mb-logo.png"
-            width={712}
-          />
-          <p className={styles.kicker}>Sales Database Fixer</p>
-          <h1 className={styles.title}>Business Accounts & Contacts</h1>
-          <p className={styles.subtitle}>
-            Company data synced live with Acumatica. Edit fields in the drawer and save.
-          </p>
-        </div>
-        <div className={styles.headerActions}>
-          <Link className={styles.mapViewButton} href="/map">
-            Map view
-          </Link>
-          <Link className={styles.mapViewButton} href="/quality">
-            Data quality
-          </Link>
-          <span className={styles.userName}>{session?.user?.name ?? "Signed in"}</span>
-          <button className={styles.logoutButton} onClick={handleLogout} type="button">
-            Sign out
-          </button>
-        </div>
-      </header>
-
-      <section className={styles.controls}>
-        <label className={styles.controlField}>
-          Global Search
-          <input
-            className={styles.controlInput}
-            onChange={(event) => {
-              setPage(1);
-              setQ(event.target.value);
-            }}
-            placeholder="Company, sales rep, industry, region, address, contact, email, notes"
-            value={q}
-          />
-        </label>
-
-        <div className={styles.controlActions}>
-          <button className={styles.newAccountButton} onClick={openCreateDrawer} type="button">
-            New account
-          </button>
+    <AppChrome
+      contentClassName={styles.pageContent}
+      headerActions={
+        <>
           <button
-            className={styles.newContactButton}
-            onClick={openCreateContactDrawer}
-            type="button"
-          >
-            New contact
-          </button>
-          <details className={styles.columnPicker}>
-            <summary className={styles.columnPickerSummary}>Columns</summary>
-            <div className={styles.columnPickerMenu}>
-              <div className={styles.columnPickerHeader}>
-                <strong>Show columns</strong>
-                <button onClick={handleShowAllColumns} type="button">
-                  Show all
-                </button>
-              </div>
-              <div className={styles.columnPickerList}>
-                {COLUMN_CONFIGS.map((column) => (
-                  <label className={styles.columnPickerItem} key={column.id}>
-                    <input
-                      checked={visibleColumns.includes(column.id)}
-                      disabled={
-                        visibleColumns.length <= 1 && visibleColumns.includes(column.id)
-                      }
-                      onChange={() => handleToggleColumn(column.id)}
-                      type="checkbox"
-                    />
-                    <span>{column.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </details>
-          <button
-            className={styles.syncButton}
+            className={styles.syncNowButton}
             disabled={isSyncing}
             onClick={handleSyncRecords}
             type="button"
           >
-            {isSyncing ? "Syncing..." : "Sync records"}
+            <SyncIcon />
+            <span>{isSyncing ? "Syncing..." : "Sync now"}</span>
           </button>
-          <button className={styles.clearFiltersButton} onClick={clearAllFilters} type="button">
-            Clear all filters
-          </button>
+          <div className={styles.createMenu} data-transient-menu="true">
+            <button
+              aria-expanded={isCreateMenuOpen}
+              aria-haspopup="menu"
+              className={styles.createButton}
+              ref={createMenuButtonRef}
+              onClick={(event) => {
+                event.stopPropagation();
+                const next = !isCreateMenuOpen;
+                closeTransientMenus();
+                if (next) {
+                  openCreateMenu();
+                }
+              }}
+              type="button"
+            >
+              <span>Create</span>
+              <ChevronDownIcon />
+            </button>
+            {isCreateMenuOpen && createMenuPosition ? (
+              <div
+                className={styles.createDropdownMenu}
+                role="menu"
+                style={createMenuPosition}
+              >
+                <button className={styles.createDropdownAction} onClick={openCreateDrawer} type="button">
+                  Account
+                </button>
+                <button
+                  className={styles.createDropdownAction}
+                  onClick={openCreateContactDrawer}
+                  type="button"
+                >
+                  Contact
+                </button>
+                <button
+                  className={styles.createDropdownAction}
+                  onClick={() => {
+                    openCreateOpportunityDrawer();
+                  }}
+                  type="button"
+                >
+                  Opportunity
+                </button>
+                <button
+                  className={styles.createDropdownAction}
+                  onClick={openCreateMeetingDrawer}
+                  type="button"
+                >
+                  Meeting
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </>
+      }
+      statusLine={
+        isSyncing ? (
+          <>
+            <span>Syncing records</span>
+            <span>{syncPercent === null ? "Preparing snapshot" : `${syncPercent}% complete`}</span>
+            <span>{formatElapsedDuration(syncElapsedMs)}</span>
+          </>
+        ) : hasSnapshot ? (
+          <>
+            <span>Synced with Acumatica</span>
+            <span>Edit in drawer</span>
+            <span>Live sync</span>
+            {syncUpdatedLabel ? <span>Updated {syncUpdatedLabel}</span> : null}
+          </>
+        ) : (
+          <>
+            <span>Snapshot not built yet</span>
+            <span>Manual sync required</span>
+          </>
+        )
+      }
+      title="Business Accounts & Contacts"
+      userName={session?.user?.name ?? "Signed in"}
+    >
+
+      <section className={styles.toolbar}>
+        <label className={styles.searchField}>
+          <SearchIcon />
+          <input
+            aria-label="Global search"
+            className={styles.searchInput}
+            onChange={(event) => {
+              setPage(1);
+              setQ(event.target.value);
+            }}
+            placeholder="Search company, sales rep, region, address, contact, email, or notes"
+            value={q}
+          />
+        </label>
+        <div className={styles.toolbarActions}>
+          <div className={styles.columnsMenu} data-transient-menu="true">
+            <button
+              aria-expanded={isFiltersOpen}
+              aria-haspopup="dialog"
+              className={styles.toolbarButton}
+              onClick={(event) => {
+                event.stopPropagation();
+                const next = !isFiltersOpen;
+                closeTransientMenus();
+                setIsFiltersOpen(next);
+              }}
+              type="button"
+            >
+              <FilterIcon />
+              <span>Columns</span>
+            </button>
+            {isFiltersOpen ? (
+              <div aria-label="Visible columns" className={styles.columnsPopover} role="dialog">
+                <div className={styles.columnsPopoverHeader}>
+                  <strong>Visible columns</strong>
+                  <button
+                    className={styles.columnsPopoverAction}
+                    onClick={handleShowAllColumns}
+                    type="button"
+                  >
+                    Show all
+                  </button>
+                </div>
+                <div className={styles.columnsPopoverList}>
+                  {visibleColumnConfigs.map((column, index) => (
+                    <div
+                      className={`${styles.columnsPopoverItem} ${
+                        draggedColumnId === column.id ? styles.columnsPopoverItemDragging : ""
+                      } ${
+                        columnDropTargetId === column.id && draggedColumnId !== column.id
+                          ? styles.columnsPopoverItemDropTarget
+                          : ""
+                      }`.trim()}
+                      key={column.id}
+                      onDragOver={(event) => handleColumnDragOver(event, column.id)}
+                      onDrop={(event) => handleColumnDrop(event, column.id)}
+                    >
+                      <button
+                        aria-label={`Drag to reorder ${column.label}`}
+                        className={styles.columnsPopoverDragHandle}
+                        draggable
+                        onClick={(event) => event.preventDefault()}
+                        onDragEnd={handleColumnDragEnd}
+                        onDragStart={(event) => handleColumnDragStart(event, column.id)}
+                        type="button"
+                      >
+                        <DragHandleIcon />
+                      </button>
+                      <label className={styles.columnsPopoverToggle}>
+                        <input
+                          checked={column.isVisible}
+                          disabled={visibleColumns.length <= 1 && column.isVisible}
+                          onChange={() => handleToggleColumn(column.id)}
+                          type="checkbox"
+                        />
+                        <span>{column.label}</span>
+                      </label>
+                      <div className={styles.columnsPopoverReorder}>
+                        <button
+                          aria-label={`Move ${column.label} up`}
+                          className={styles.columnsPopoverMoveButton}
+                          disabled={index === 0}
+                          onClick={() => handleMoveColumn(column.id, "up")}
+                          type="button"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          aria-label={`Move ${column.label} down`}
+                          className={styles.columnsPopoverMoveButton}
+                          disabled={index === visibleColumnConfigs.length - 1}
+                          onClick={() => handleMoveColumn(column.id, "down")}
+                          type="button"
+                        >
+                          ↓
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <div className={styles.sortMenu} data-transient-menu="true">
+            <button
+              aria-expanded={isSortMenuOpen}
+              aria-haspopup="menu"
+              className={styles.toolbarButton}
+              onClick={(event) => {
+                event.stopPropagation();
+                const next = !isSortMenuOpen;
+                closeTransientMenus();
+                setIsSortMenuOpen(next);
+              }}
+              type="button"
+            >
+              <SortIcon />
+              <span>Sort</span>
+              <span className={styles.toolbarMeta}>
+                {currentSortLabel} {sortDir === "asc" ? "A-Z" : "Z-A"}
+              </span>
+            </button>
+            {isSortMenuOpen ? (
+              <div className={styles.dropdownMenu} role="menu">
+                <div className={styles.dropdownMenuSection}>
+                  <span className={styles.dropdownMenuLabel}>Field</span>
+                  <div className={styles.sortFieldList}>
+                    {COLUMN_CONFIGS.map((column) => (
+                      <button
+                        className={
+                          column.id === sortBy
+                            ? `${styles.sortFieldButton} ${styles.sortFieldButtonActive}`
+                            : styles.sortFieldButton
+                        }
+                        key={column.id}
+                        onClick={() => handleSort(column.id)}
+                        type="button"
+                      >
+                        {column.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className={styles.dropdownMenuSection}>
+                  <span className={styles.dropdownMenuLabel}>Direction</span>
+                  <div className={styles.sortDirectionGroup}>
+                    <button
+                      className={
+                        sortDir === "asc"
+                          ? `${styles.sortDirectionButton} ${styles.sortDirectionButtonActive}`
+                          : styles.sortDirectionButton
+                      }
+                      onClick={() => handleSortDirectionChange("asc")}
+                      type="button"
+                    >
+                      A-Z
+                    </button>
+                    <button
+                      className={
+                        sortDir === "desc"
+                          ? `${styles.sortDirectionButton} ${styles.sortDirectionButtonActive}`
+                          : styles.sortDirectionButton
+                      }
+                      onClick={() => handleSortDirectionChange("desc")}
+                      type="button"
+                    >
+                      Z-A
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <label className={styles.jumpControl}>
+            <span>Jump to</span>
+            <select
+              className={styles.jumpSelect}
+              onChange={(event) => handleCompanyInitialFilterChange(event.target.value)}
+              value={companyNameInitialFilter ?? ""}
+            >
+              <option value="">All</option>
+              {availableJumpLetters.map((letter) => (
+                <option key={letter} value={letter}>
+                  {letter}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </section>
-      {syncProgress ? (
-        <section className={styles.syncProgressSection}>
-          <div className={styles.syncProgressHeader}>
+
+      <div className={styles.toolbarClearRow}>
+        <button
+          className={styles.clearFiltersButton}
+          disabled={!hasActiveWorkbenchFilters}
+          onClick={clearAllFilters}
+          type="button"
+        >
+          Clear search and filters
+        </button>
+      </div>
+
+      {selectedContactRows.length ? (
+        <section className={styles.selectionBar}>
+          <div className={styles.selectionInfo}>
             <strong>
-              Syncing records
-              {syncPercent === null ? "..." : `... ${syncPercent}%`}
+              {selectedContactRows.length} contact{selectedContactRows.length === 1 ? "" : "s"} selected
             </strong>
-            <span>
-              {(syncProgress.totalPages
-                ? `${syncProgress.fetchedPages} / ${syncProgress.totalPages} accounts`
-                : "Preparing snapshot...") + ` • ${formatElapsedDuration(syncElapsedMs)}`}
-            </span>
+            {mergeSelectionDisabledReason ? (
+              <span className={styles.selectionHint}>{mergeSelectionDisabledReason}</span>
+            ) : (
+              <span className={styles.selectionSubtext}>Bulk actions stay on the current filtered set.</span>
+            )}
           </div>
-          <div
-            aria-label="Sync progress"
-            aria-valuemax={100}
-            aria-valuemin={0}
-            aria-valuenow={syncPercent ?? undefined}
-            className={styles.syncProgressBar}
-            role="progressbar"
-          >
-            <div
-              className={
-                syncPercent === null
-                  ? `${styles.syncProgressFill} ${styles.syncProgressFillIndeterminate}`
-                  : styles.syncProgressFill
-              }
-              style={syncPercent === null ? undefined : { width: `${syncPercent}%` }}
-            />
+          <div className={styles.selectionActions}>
+            <button
+              className={styles.selectionMergeButton}
+              disabled={!mergeSelectionEligible || isDeletingSelectedContacts}
+              onClick={() => {
+                setIsSelectionMergeOpen(true);
+                setSaveError(null);
+                setSaveNotice(null);
+              }}
+              type="button"
+            >
+              Merge contacts
+            </button>
+            <button
+              className={styles.selectionDeleteButton}
+              disabled={isDeletingSelectedContacts}
+              onClick={() => {
+                openDeleteContactQueueModal(selectedContactRows);
+              }}
+              type="button"
+            >
+              {isDeletingSelectedContacts ? "Queueing..." : "Delete contacts"}
+            </button>
+            <button
+              className={styles.selectionClearButton}
+              disabled={isDeletingSelectedContacts}
+              onClick={() => {
+                setSelectedContactRowKeys([]);
+                setIsSelectionMergeOpen(false);
+              }}
+              type="button"
+            >
+              Clear selection
+            </button>
           </div>
-          <p className={styles.syncProgressMeta}>
-            Loaded {syncProgress.fetchedRows.toLocaleString()}
-            {syncProgress.totalRows !== null
-              ? ` of ${syncProgress.totalRows.toLocaleString()} records`
-              : " records"}
-          </p>
         </section>
       ) : null}
 
-      <section className={styles.tableWrap}>
+      <section className={styles.tableCard}>
+        {syncProgress ? (
+          <section className={styles.syncProgressSection}>
+            <div className={styles.syncProgressHeader}>
+              <strong>Sync in progress</strong>
+              <span>
+                {(syncProgress.totalPages
+                  ? `${syncProgress.fetchedPages} / ${syncProgress.totalPages} accounts`
+                  : "Preparing snapshot") + ` • ${formatElapsedDuration(syncElapsedMs)}`}
+              </span>
+            </div>
+            <div
+              aria-label="Sync progress"
+              aria-valuemax={100}
+              aria-valuemin={0}
+              aria-valuenow={syncPercent ?? undefined}
+              className={styles.syncProgressBar}
+              role="progressbar"
+            >
+              <div
+                className={
+                  syncPercent === null
+                    ? `${styles.syncProgressFill} ${styles.syncProgressFillIndeterminate}`
+                    : styles.syncProgressFill
+                }
+                style={syncPercent === null ? undefined : { width: `${syncPercent}%` }}
+              />
+            </div>
+            <p className={styles.syncProgressMeta}>
+              Loaded {syncProgress.fetchedRows.toLocaleString()}
+              {syncProgress.totalRows !== null
+                ? ` of ${syncProgress.totalRows.toLocaleString()} records`
+                : " records"}
+            </p>
+          </section>
+        ) : null}
         {error ? <p className={styles.tableError}>{error}</p> : null}
-        {inlineError ? <p className={styles.tableError}>{inlineError}</p> : null}
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              {visibleColumnOrder.map((columnId) => {
-                const config = getColumnConfig(columnId);
-                const headerClass =
-                  draggedColumn === columnId
-                    ? `${styles.draggableHeader} ${styles.draggingHeader}`
-                    : styles.draggableHeader;
+        {saveError ? <p className={styles.tableError}>{saveError}</p> : null}
+        {saveNotice ? <p className={styles.saveNoticeBanner}>{saveNotice}</p> : null}
 
-                return (
-                  <th
-                    className={headerClass}
-                    draggable
-                    key={`header-${columnId}`}
-                    onDragEnd={handleHeaderDragEnd}
-                    onDragOver={handleHeaderDragOver}
-                    onDragStart={(event) => handleHeaderDragStart(event, columnId)}
-                    onDrop={(event) => handleHeaderDrop(event, columnId)}
-                    title="Drag to reorder column"
-                  >
-                    <div className={styles.headerCell}>
-                      <SortHeader
-                        activeSort={{ sortBy, sortDir }}
-                        column={columnId}
-                        label={config.label}
-                        onSort={handleSort}
-                      />
-                      <span className={styles.dragHandle} aria-hidden>
-                        ⋮⋮
-                      </span>
-                    </div>
-                  </th>
-                );
-              })}
-            </tr>
-            <tr className={styles.filterRow}>
-              {visibleColumnOrder.map((columnId) => {
-                const config = getColumnConfig(columnId);
-                const filterKey = config.filterKey;
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
+            <thead>
+              <tr className={styles.tableHeaderRow}>
+                <th className={styles.selectionCheckboxCell}>
+                  <input
+                    aria-label="Select current page"
+                    checked={allCurrentPageSelected}
+                    disabled={!currentPageSelectableRows.length}
+                    onChange={() => {
+                      handleToggleCurrentPageSelection();
+                    }}
+                    type="checkbox"
+                  />
+                </th>
+                <th className={styles.actionsHeader}>Actions</th>
+                {visibleColumnOrder.map((columnId) => {
+                  const column = getColumnConfig(columnId);
+                  const isHeaderDragging = draggedColumnId === columnId;
+                  const isHeaderDropTarget =
+                    columnDropTargetId === columnId && draggedColumnId !== columnId;
 
-                if (filterKey === "category") {
                   return (
-                    <th key={`filter-${columnId}`}>
-                      <select
-                        className={styles.filterInput}
-                        onChange={(event) =>
-                          updateHeaderFilter(
-                            "category",
-                            (event.target.value as Category | "") || "",
-                          )
-                        }
-                        value={headerFilters.category}
-                      >
-                        <option value="">All</option>
-                        <option value="A">A</option>
-                        <option value="B">B</option>
-                        <option value="C">C</option>
-                        <option value="D">D</option>
-                      </select>
+                    <th
+                      className={`${isHeaderDragging ? styles.tableHeaderCellDragging : ""} ${
+                        isHeaderDropTarget ? styles.tableHeaderCellDropTarget : ""
+                      }`.trim()}
+                      draggable
+                      key={`header-${columnId}`}
+                      onDragEnd={handleColumnDragEnd}
+                      onDragOver={(event) => handleColumnDragOver(event, columnId)}
+                      onDrop={(event) => handleColumnDrop(event, columnId)}
+                      onDragStart={(event) => handleColumnDragStart(event, columnId)}
+                      title={`Drag to reorder ${column.label}`}
+                    >
+                      <div className={styles.tableHeaderCell}>
+                        <span aria-hidden="true" className={styles.tableHeaderDragHandle}>
+                          <DragHandleIcon />
+                        </span>
+                        <span className={styles.tableHeaderLabel}>{column.label}</span>
+                      </div>
                     </th>
                   );
-                }
-
-                const filterValue = headerFilters[filterKey];
-                return (
-                  <th key={`filter-${columnId}`}>
-                    <input
-                      className={styles.filterInput}
-                      onChange={(event) =>
-                        updateHeaderFilter(
-                          filterKey,
-                          event.target.value as HeaderFilters[typeof filterKey],
-                        )
-                      }
-                      placeholder={config.filterPlaceholder}
-                      value={typeof filterValue === "string" ? filterValue : ""}
-                    />
+                })}
+              </tr>
+              <tr className={styles.tableFilterRow}>
+                <th
+                  aria-hidden="true"
+                  className={`${styles.selectionCheckboxCell} ${styles.tableFilterCell} ${styles.filterSpacerCell}`}
+                />
+                <th
+                  aria-hidden="true"
+                  className={`${styles.actionsHeader} ${styles.tableFilterCell} ${styles.filterSpacerCell}`}
+                />
+                {visibleColumnOrder.map((columnId) => (
+                  <th className={styles.tableFilterCell} key={`filter-${columnId}`}>
+                    {renderHeaderFilterControl(columnId)}
                   </th>
-                );
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td className={styles.loadingCell} colSpan={visibleColumnOrder.length}>
-                  Loading contacts...
-                </td>
+                ))}
               </tr>
-            ) : rows.length === 0 ? (
-              <tr>
-                <td className={styles.loadingCell} colSpan={visibleColumnOrder.length}>
-                  No contacts found.
-                </td>
-              </tr>
-            ) : (
-              rows.map((row) => {
-                const rowKey = getRowKey(row);
-                const selectedClass =
-                  selected && getRowKey(selected) === rowKey ? styles.selectedRow : "";
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td className={styles.loadingCell} colSpan={visibleColumnOrder.length + 2}>
+                    Loading contacts...
+                  </td>
+                </tr>
+              ) : rows.length === 0 ? (
+                <tr>
+                  <td className={styles.loadingCell} colSpan={visibleColumnOrder.length + 2}>
+                    No contacts found.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((row) => {
+                  const rowKey = getRowKey(row);
+                  const rowContactId = resolveRowContactId(row);
+                  const rowHasEmail = hasRowContactEmail(row);
+                  const rowHasNote = hasRowNote(row);
+                  const rowCanEditNote = canEditRowNote(row);
+                  const rowCanDelete = canDeleteRowContact(row);
+                  const isRowSelectable = rowContactId !== null;
+                  const isRowChecked = selectedContactRowKeys.includes(rowKey);
+                  const selectedClass =
+                    selected && getRowKey(selected) === rowKey ? styles.selectedRow : "";
+                  const isRowMenuOpen = rowMenuRowKey === rowKey;
 
-                return (
-                  <tr
-                    className={`${styles.dataRow} ${selectedClass}`.trim()}
-                    key={rowKey}
-                    onClick={() => {
-                      void openDrawer(row);
-                    }}
-                  >
-                    {visibleColumnOrder.map((columnId) => {
-                      if (columnId === "primaryContactPhone") {
-                        const inlinePhoneValue =
-                          inlinePhoneDrafts[rowKey] ??
-                          row.primaryContactPhone ??
-                          "";
-                        const canEditPhone =
-                          (row.contactId ?? row.primaryContactId ?? null) !== null;
-                        return (
-                          <td
-                            key={`${rowKey}-${columnId}`}
-                            onClick={(event) => event.stopPropagation()}
+                  return (
+                    <tr
+                      className={`${styles.dataRow} ${selectedClass}`.trim()}
+                      key={rowKey}
+                      onClick={() => {
+                        void openDrawer(row);
+                      }}
+                    >
+                      <td
+                        className={styles.selectionCheckboxCell}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                        }}
+                      >
+                        {isRowSelectable ? (
+                          <input
+                            checked={isRowChecked}
+                            onChange={(event) => {
+                              handleToggleSelectedContactRow(row, event.target.checked);
+                            }}
+                            type="checkbox"
+                          />
+                        ) : null}
+                      </td>
+                      <td
+                        className={styles.rowActionsCell}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <div className={styles.rowActions}>
+                          <button
+                            className={`${styles.rowActionButton} ${styles.rowActionNote} ${
+                              rowHasNote ? styles.rowActionNoteActive : ""
+                            }`.trim()}
+                            disabled={!rowCanEditNote}
+                            onClick={() => {
+                              openDrawerForNotes(row);
+                            }}
+                            title={
+                              !rowCanEditNote
+                                ? "This row has no contact to store a note on."
+                                : rowHasNote
+                                  ? "Edit note"
+                                  : "Add note"
+                            }
+                            type="button"
                           >
-                            <div className={styles.inlineSelectWrap}>
-                              <input
-                                className={styles.inlineTextInput}
-                                disabled={inlineSaveInProgress || !canEditPhone}
-                                inputMode="numeric"
-                                maxLength={12}
-                                onBlur={() => {
-                                  void handleInlinePhoneCommit(row, rowKey);
-                                }}
-                                onChange={(event) => {
-                                  event.stopPropagation();
-                                  handleInlinePhoneChange(rowKey, event.target.value);
-                                }}
-                                onClick={(event) => event.stopPropagation()}
-                                onKeyDown={(event) => {
-                                  if (event.key === "Enter") {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    void handleInlinePhoneCommit(row, rowKey);
-                                  }
-                                }}
-                                placeholder={
-                                  canEditPhone ? "123-456-7890" : "No contact ID"
+                            <NoteIcon active={rowHasNote} />
+                          </button>
+                          <div className={styles.rowMenu} data-transient-menu="true">
+                            <button
+                              aria-expanded={isRowMenuOpen}
+                              aria-haspopup="menu"
+                              className={styles.rowMenuTrigger}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                if (rowMenuRowKey === rowKey) {
+                                  closeTransientMenus();
+                                  return;
                                 }
-                                title="Phone number must use the format ###-###-####."
-                                type="text"
-                                value={inlinePhoneValue}
-                              />
-                              {inlineSavingRowKey === rowKey ? (
-                                <span className={styles.inlineSavingText}>Saving...</span>
-                              ) : null}
-                            </div>
-                          </td>
-                        );
-                      }
 
-                      if (columnId === "notes") {
-                        const inlineNotesValue = inlineNotesDrafts[rowKey] ?? (row.notes ?? "");
-                        return (
-                          <td
-                            key={`${rowKey}-${columnId}`}
-                            onClick={(event) => event.stopPropagation()}
-                          >
-                            <div className={styles.inlineSelectWrap}>
-                              <input
-                                className={styles.inlineTextInput}
-                                disabled={inlineSaveInProgress}
-                                onBlur={() => {
-                                  void handleInlineNotesCommit(row, rowKey);
-                                }}
-                                onChange={(event) => {
-                                  event.stopPropagation();
-                                  handleInlineNotesChange(rowKey, event.target.value);
-                                }}
-                                onClick={(event) => event.stopPropagation()}
-                                onKeyDown={(event) => {
-                                  if (event.key === "Enter") {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    void handleInlineNotesCommit(row, rowKey);
-                                  }
-                                }}
-                                placeholder="Add note and press Enter"
-                                type="text"
-                                value={inlineNotesValue}
-                              />
-                              {inlineSavingRowKey === rowKey ? (
-                                <span className={styles.inlineSavingText}>Saving...</span>
-                              ) : null}
-                            </div>
-                          </td>
-                        );
-                      }
-
-                      if (isInlineEditableColumn(columnId)) {
-                        let inlineOptions: AttributeOption[] = [];
-                        let inlineValue = "";
-
-                        if (columnId === "industryType") {
-                          inlineOptions = withCurrentOption(
-                            INDUSTRY_TYPE_OPTIONS,
-                            row.industryType,
-                          );
-                          inlineValue =
-                            normalizeOptionValue(INDUSTRY_TYPE_OPTIONS, row.industryType) ?? "";
-                        } else if (columnId === "subCategory") {
-                          inlineOptions = withCurrentOption(
-                            SUB_CATEGORY_OPTIONS,
-                            row.subCategory,
-                          );
-                          inlineValue =
-                            normalizeOptionValue(SUB_CATEGORY_OPTIONS, row.subCategory) ?? "";
-                        } else if (columnId === "companyRegion") {
-                          inlineOptions = withCurrentOption(
-                            companyRegionOptions,
-                            row.companyRegion,
-                          );
-                          inlineValue = normalizeRegionValue(row.companyRegion) ?? "";
-                        } else if (columnId === "week") {
-                          inlineOptions = withCurrentOption(WEEK_OPTIONS, row.week);
-                          inlineValue = normalizeWeekValue(row.week) ?? "";
-                        } else if (columnId === "category") {
-                          inlineOptions = CATEGORY_OPTIONS;
-                          inlineValue = row.category ?? "";
-                        }
-
-                        return (
-                          <td key={`${rowKey}-${columnId}`} onClick={(event) => event.stopPropagation()}>
-                            <div className={styles.inlineSelectWrap}>
-                              <select
-                                className={styles.inlineSelect}
-                                disabled={inlineSaveInProgress}
-                                onChange={(event) => {
-                                  event.stopPropagation();
-                                  void handleInlineSelectChange(
-                                    row,
-                                    columnId,
-                                    event.target.value,
-                                  );
-                                }}
-                                onClick={(event) => event.stopPropagation()}
-                                onMouseDown={(event) => event.stopPropagation()}
-                                value={inlineValue}
+                                closeTransientMenus();
+                                openRowMenu(rowKey, event.currentTarget);
+                              }}
+                              title="More actions"
+                              type="button"
+                            >
+                              <MoreIcon />
+                            </button>
+                            {isRowMenuOpen && rowMenuPosition ? (
+                              <div
+                                className={styles.rowMenuPopover}
+                                role="menu"
+                                style={rowMenuPosition}
                               >
-                                <option value="">Unassigned</option>
-                                {inlineOptions.map((option) => (
-                                  <option key={option.value} value={option.value}>
-                                    {option.label}
-                                  </option>
-                                ))}
-                              </select>
-                              {inlineSavingRowKey === rowKey ? (
-                                <span className={styles.inlineSavingText}>Saving...</span>
-                              ) : null}
-                            </div>
-                          </td>
-                        );
-                      }
-
-                      if (columnId === "primaryContactName") {
-                        const nameValue = row.primaryContactName?.trim() ?? "";
-                        const contactUrl = buildAcumaticaContactUrl(
-                          acumaticaBaseUrl,
-                          row.contactId ?? row.primaryContactId ?? null,
-                          acumaticaCompanyId,
-                        );
-                        const canMakePrimary =
-                          row.isPrimaryContact !== true &&
-                          row.contactId !== null &&
-                          row.contactId !== undefined;
-                        return (
-                          <td
-                            key={`${rowKey}-${columnId}`}
-                            onClick={(event) => event.stopPropagation()}
-                          >
-                            <div className={styles.contactCellWrap}>
-                              <span className={styles.contactNameCell}>
-                                {contactUrl && nameValue ? (
-                                  <a
-                                    className={styles.recordLink}
-                                    href={contactUrl}
-                                    onClick={(event) => event.stopPropagation()}
-                                    rel="noreferrer"
-                                    target="_blank"
-                                  >
-                                    {nameValue}
-                                  </a>
-                                ) : (
-                                  nameValue
-                                )}
-                                {row.isPrimaryContact ? (
-                                  <span className={styles.primaryBadge}>(Primary)</span>
-                                ) : null}
-                              </span>
-                              {canMakePrimary ? (
                                 <button
-                                  className={styles.makePrimaryButton}
-                                  disabled={inlineSaveInProgress}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    void handleInlineMakePrimary(row);
+                                  className={styles.rowMenuAction}
+                                  disabled={!rowHasEmail}
+                                  onClick={() => {
+                                    openEmailComposerFromRow(row);
                                   }}
                                   type="button"
                                 >
-                                  {inlineSavingRowKey === rowKey ? "Saving..." : "Make Primary"}
+                                  Email contact
                                 </button>
-                              ) : null}
-                            </div>
-                          </td>
-                        );
-                      }
-
-                      if (columnId === "companyName") {
-                        const companyUrl = buildAcumaticaBusinessAccountUrl(
-                          acumaticaBaseUrl,
-                          row.businessAccountId,
-                          acumaticaCompanyId,
-                        );
-                        const companyLabel = renderColumnValue(row, columnId);
-
-                        return (
-                          <td
-                            key={`${rowKey}-${columnId}`}
-                            onClick={companyUrl ? (event) => event.stopPropagation() : undefined}
-                          >
-                            {companyUrl ? (
-                              <a
-                                className={styles.recordLink}
-                                href={companyUrl}
-                                onClick={(event) => event.stopPropagation()}
-                                rel="noreferrer"
-                                target="_blank"
-                              >
-                                {companyLabel}
-                              </a>
-                            ) : (
-                              companyLabel
-                            )}
-                          </td>
-                        );
-                      }
-
-                      return (
-                        <td key={`${rowKey}-${columnId}`}>{renderColumnValue(row, columnId)}</td>
-                      );
-                    })}
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </section>
-
-      <footer className={styles.pagination}>
-        <span className={styles.paginationSummary}>
-          Page {page} of {totalPages} ({total} matching contacts, {allRows.length} loaded)
-          {lastSyncedAt
-            ? ` • Last sync ${new Date(lastSyncedAt).toLocaleTimeString()}`
-            : ""}
-          {lastSyncedAt && lastSyncDurationMs !== null
-            ? ` • Duration ${formatElapsedDuration(lastSyncDurationMs)}`
-            : ""}
-        </span>
-        <div className={styles.paginationButtons}>
-          <button
-            disabled={page <= 1}
-            onClick={() => jumpToPage(1)}
-            type="button"
-          >
-            First
-          </button>
-          <button
-            disabled={page <= 1}
-            onClick={() => jumpToPage(page - 1)}
-            type="button"
-          >
-            Previous
-          </button>
-          {paginationNumbers.map((value, index) =>
-            value === "ellipsis" ? (
-              <span className={styles.pageEllipsis} key={`ellipsis-${index}`}>
-                ...
-              </span>
-            ) : (
-              <button
-                className={value === page ? styles.activePageButton : ""}
-                key={`page-${value}`}
-                onClick={() => jumpToPage(value)}
-                type="button"
-              >
-                {value}
-              </button>
-            ),
-          )}
-          <button
-            disabled={page >= totalPages}
-            onClick={() => jumpToPage(page + 1)}
-            type="button"
-          >
-            Next
-          </button>
-          <button
-            disabled={page >= totalPages}
-            onClick={() => jumpToPage(totalPages)}
-            type="button"
-          >
-            Last
-          </button>
-          <label className={styles.jumpToPage}>
-            Go to
-            <input
-              max={totalPages}
-              min={1}
-              onChange={(event) => setPageInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  handlePageJump();
-                }
-              }}
-              type="number"
-              value={pageInput}
-            />
-          </label>
-          <button onClick={handlePageJump} type="button">
-            Go
-          </button>
+                                <button
+                                  className={styles.rowMenuAction}
+                                  onClick={() => {
+                                    openCreateMeetingDrawerFromRow(row);
+                                  }}
+                                  type="button"
+                                >
+                                  Create meeting
+                                </button>
+                                <button
+                                  className={styles.rowMenuAction}
+                                  onClick={() => {
+                                    openCreateOpportunityDrawerFromRow(row);
+                                  }}
+                                  type="button"
+                                >
+                                  Create opportunity
+                                </button>
+                                <button
+                                  className={`${styles.rowMenuAction} ${styles.rowMenuActionDanger}`}
+                                  disabled={!rowCanDelete}
+                                  onClick={() => {
+                                    openDeleteContactConfirmation(row);
+                                  }}
+                                  type="button"
+                                >
+                                  Delete contact
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </td>
+                      {visibleColumnOrder.map((columnId) => (
+                        <td key={`${rowKey}-${columnId}`}>{renderCellContent(row, columnId)}</td>
+                      ))}
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
         </div>
-      </footer>
+
+        <footer className={styles.pagination}>
+          <span className={styles.paginationSummary}>
+            Page {page} of {totalPages} • {total.toLocaleString()} matching • {allRows.length.toLocaleString()} loaded
+            {lastSyncedAt ? ` • Last sync ${new Date(lastSyncedAt).toLocaleTimeString()}` : ""}
+            {lastSyncedAt && lastSyncDurationMs !== null
+              ? ` • Duration ${formatElapsedDuration(lastSyncDurationMs)}`
+              : ""}
+          </span>
+          <div className={styles.paginationButtons}>
+            <button disabled={page <= 1} onClick={() => jumpToPage(1)} type="button">
+              First
+            </button>
+            <button disabled={page <= 1} onClick={() => jumpToPage(page - 1)} type="button">
+              Previous
+            </button>
+            {paginationNumbers.map((value, index) =>
+              value === "ellipsis" ? (
+                <span className={styles.pageEllipsis} key={`ellipsis-${index}`}>
+                  ...
+                </span>
+              ) : (
+                <button
+                  className={value === page ? styles.activePageButton : ""}
+                  key={`page-${value}`}
+                  onClick={() => jumpToPage(value)}
+                  type="button"
+                >
+                  {value}
+                </button>
+              ),
+            )}
+            <button disabled={page >= totalPages} onClick={() => jumpToPage(page + 1)} type="button">
+              Next
+            </button>
+            <button disabled={page >= totalPages} onClick={() => jumpToPage(totalPages)} type="button">
+              Last
+            </button>
+            <label className={styles.jumpToPage}>
+              Go to
+              <input
+                max={totalPages}
+                min={1}
+                onChange={(event) => setPageInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    handlePageJump();
+                  }
+                }}
+                type="number"
+                value={pageInput}
+              />
+            </label>
+            <button onClick={handlePageJump} type="button">
+              Go
+            </button>
+          </div>
+        </footer>
+      </section>
 
       <CreateBusinessAccountDrawer
         employeeOptions={sortedEmployeeOptions}
@@ -3962,9 +5835,68 @@ export function AccountsClient({
       />
       <CreateContactDrawer
         accountOptions={createContactAccountOptions}
+        initialAccountRecordId={createContactDrawerInitialAccountRecordId}
         isOpen={isCreateContactDrawerOpen}
         onClose={closeCreateContactDrawer}
         onContactCreated={handleContactCreated}
+      />
+      <CreateOpportunityDrawer
+        accountOptions={createContactAccountOptions}
+        employeeOptions={sortedEmployeeOptions}
+        fallbackRows={allRows}
+        initialAccountRecordId={opportunityDrawerContext.initialAccountRecordId}
+        initialContactId={opportunityDrawerContext.initialContactId}
+        initialOwnerId={opportunityDrawerContext.initialOwnerId}
+        initialOwnerName={opportunityDrawerContext.initialOwnerName}
+        isOpen={isCreateOpportunityDrawerOpen}
+        onClose={closeCreateOpportunityDrawer}
+        onOpportunityCreated={handleOpportunityCreated}
+        onRequestCreateContact={handleOpportunityDrawerRequestCreateContact}
+      />
+      <CreateMeetingDrawer
+        isLoadingOptions={isLoadingMeetingOptions}
+        isOpen={isCreateMeetingDrawerOpen}
+        onClose={closeCreateMeetingDrawer}
+        onContactCreated={handleMeetingContactCreated}
+        onMeetingCreated={handleMeetingCreated}
+        onRetryLoadOptions={() => {
+          void loadMeetingOptions(true);
+        }}
+        options={meetingOptions ?? fallbackMeetingOptions}
+        optionsError={meetingOptions ?? fallbackMeetingOptions ? null : meetingOptionsError}
+        source={meetingSource}
+        viewerLoginName={session?.user?.id ?? null}
+      />
+      <GmailComposeModal
+        contactSuggestions={mailContactSuggestions}
+        initialState={emailComposerState.initialState}
+        isOpen={emailComposerState.isOpen}
+        onClose={closeMailComposer}
+        onRequestConnectGmail={handleConnectGmailFromAccounts}
+        onSendError={(message) => {
+          setSaveNotice(null);
+          setSaveError(message);
+        }}
+        onSendQueued={() => {
+          setSaveError(null);
+          setSaveNotice("Sending email in the background. You can keep working.");
+        }}
+        onSent={handleEmailSent}
+        session={mailSession}
+        title="New Message"
+      />
+      <QueueDeleteContactsModal
+        isOpen={deleteQueueRows.length > 0}
+        isSubmitting={isDeletingContact || isDeletingSelectedContacts}
+        onClose={closeDeleteContactConfirmation}
+        onConfirm={handleConfirmDeleteContact}
+        targets={deleteQueueRows.map(
+          (row): QueueDeleteContactTarget => ({
+            key: getRowKey(row),
+            contactName: row.primaryContactName ?? null,
+            companyName: row.companyName ?? null,
+          }),
+        )}
       />
 
       <aside className={`${styles.drawer} ${selected ? styles.drawerOpen : ""}`}>
@@ -4019,7 +5951,9 @@ export function AccountsClient({
           </div>
           <button
             className={styles.closeButton}
-            onClick={closeDrawer}
+            onClick={() => {
+              closeDrawer();
+            }}
             type="button"
           >
             Close
@@ -4278,6 +6212,26 @@ export function AccountsClient({
               />
             </label>
             <label>
+              Extension
+              <input
+                disabled={!selected.contactId}
+                inputMode="numeric"
+                maxLength={5}
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          primaryContactExtension: event.target.value.replace(/\D/g, "").slice(0, 5),
+                        }
+                      : current,
+                  )
+                }
+                placeholder="Extension"
+                value={draft.primaryContactExtension ?? ""}
+              />
+            </label>
+            <label>
               Email
               <input
                 disabled={!selected.contactId}
@@ -4441,6 +6395,7 @@ export function AccountsClient({
               Contact Notes
               <textarea
                 disabled={!selected.contactId}
+                ref={notesFieldRef}
                 onChange={(event) =>
                   setDraft((current) =>
                     current ? { ...current, notes: event.target.value } : current,
@@ -4453,6 +6408,40 @@ export function AccountsClient({
 
             <p className={styles.lastModified}>Last modified: {formatLastModified(selected.lastModifiedIso)}</p>
 
+            <section className={styles.auditHistorySection}>
+              <div className={styles.auditHistoryHeader}>
+                <h3>Audit History</h3>
+                <Link
+                  className={styles.recordLink}
+                  href={`/audit?${new URLSearchParams({
+                    businessAccountRecordId:
+                      selected.accountRecordId?.trim() || selected.id.trim(),
+                    ...(selected.contactId ? { contactId: String(selected.contactId) } : {}),
+                  }).toString()}`}
+                >
+                  View full audit log
+                </Link>
+              </div>
+              {auditHistoryLoading ? (
+                <p className={styles.auditHistoryEmpty}>Loading audit history...</p>
+              ) : auditHistoryError ? (
+                <p className={styles.lookupError}>{auditHistoryError}</p>
+              ) : auditHistory.length === 0 ? (
+                <p className={styles.auditHistoryEmpty}>No audit events have been recorded for this record yet.</p>
+              ) : (
+                <div className={styles.auditHistoryList}>
+                  {auditHistory.map((item) => (
+                    <article className={styles.auditHistoryItem} key={item.id}>
+                      <strong>{item.summary}</strong>
+                      <span className={styles.auditHistoryMeta}>
+                        {item.actorName ?? item.actorLoginName ?? "Unknown"} • {formatLastModified(item.occurredAt)}
+                      </span>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
             {saveError ? <p className={styles.saveError}>{saveError}</p> : null}
             {saveNotice ? <p className={styles.saveNotice}>{saveNotice}</p> : null}
 
@@ -4464,6 +6453,14 @@ export function AccountsClient({
                 type="button"
               >
                 {isSaving ? "Saving..." : "Save changes"}
+              </button>
+              <button
+                className={styles.secondaryButton}
+                disabled={isSaving || isDeletingContact}
+                onClick={() => openCreateMeetingDrawerFromRow(selected)}
+                type="button"
+              >
+                Create meeting
               </button>
               <button
                 className={styles.deleteContactButton}
@@ -4486,7 +6483,29 @@ export function AccountsClient({
         )}
       </aside>
 
-      {selected ? <button className={styles.backdrop} onClick={closeDrawer} type="button" /> : null}
-    </main>
+      {selected ? (
+        <button
+          className={styles.backdrop}
+          onClick={() => {
+            closeDrawer();
+          }}
+          type="button"
+        />
+      ) : null}
+
+      {isSelectionMergeOpen && selectedMergeAccountRecordId && selectedMergeBusinessAccountId ? (
+        <ContactMergeModal
+          businessAccountId={selectedMergeBusinessAccountId}
+          businessAccountRecordId={selectedMergeAccountRecordId}
+          companyName={selectedContactRows[0]?.companyName ?? ""}
+          contacts={selectedContactRows.map((row) => toMergeableContactCandidate(row))}
+          isOpen={isSelectionMergeOpen}
+          onClose={() => {
+            setIsSelectionMergeOpen(false);
+          }}
+          onMerged={handleMergeSelectionCompleted}
+        />
+      ) : null}
+    </AppChrome>
   );
 }

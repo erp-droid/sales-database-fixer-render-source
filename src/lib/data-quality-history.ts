@@ -8,6 +8,7 @@ import {
   type DataQualityBasis,
   type DataQualityExpandedSummaryResponse,
   type DataQualityIssueRow,
+  type DataQualityIssuesResponse,
   type DataQualityKpiSummary,
   type DataQualityLeaderboardResponse,
   type DataQualityLeaderboardRow,
@@ -20,7 +21,10 @@ import {
   type DataQualityTrendsResponse,
 } from "@/types/data-quality";
 import {
+  buildDataQualityReviewedGroupKey,
+  buildDataQualityReviewedItemKey,
   buildDataQualityIssueKey,
+  paginateDataQualityIssues,
   type DataQualitySnapshot,
   toDataQualitySummaryResponse,
 } from "@/lib/data-quality";
@@ -59,9 +63,16 @@ type DailyRollup = {
   openByMetricBasis: Record<DataQualityBasis, Record<DataQualityMetricKey, number>>;
 };
 
+type ReviewMarkerEntry = {
+  reviewKey: string;
+  reviewedAt: string;
+  lastSeen: string;
+};
+
 type DataQualityHistoryStore = {
-  version: 2;
+  version: 3;
   issues: Record<string, IssueHistoryEntry>;
+  reviews: Record<string, ReviewMarkerEntry>;
   fixEvents: IssueFixEvent[];
   daily: Record<string, DailyRollup>;
   lastSnapshotAt: string | null;
@@ -79,8 +90,9 @@ let queue: Promise<unknown> = Promise.resolve();
 
 function createEmptyStore(): DataQualityHistoryStore {
   return {
-    version: 2,
+    version: 3,
     issues: {},
+    reviews: {},
     fixEvents: [],
     daily: {},
     lastSnapshotAt: null,
@@ -105,10 +117,14 @@ async function loadStore(): Promise<DataQualityHistoryStore> {
     }
 
     return {
-      version: 2,
+      version: 3,
       issues:
         parsed.issues && typeof parsed.issues === "object"
           ? (parsed.issues as Record<string, IssueHistoryEntry>)
+          : {},
+      reviews:
+        parsed.reviews && typeof parsed.reviews === "object"
+          ? (parsed.reviews as Record<string, ReviewMarkerEntry>)
           : {},
       fixEvents: Array.isArray(parsed.fixEvents)
         ? parsed.fixEvents.filter((event): event is IssueFixEvent => {
@@ -218,31 +234,108 @@ function buildRecordIdentity(
   );
 }
 
-function countResolvedInWindow(
-  entries: IssueHistoryEntry[],
+function resolveReviewMarkerEntry(
+  store: DataQualityHistoryStore,
+  metric: DataQualityMetricKey,
+  basis: DataQualityBasis,
+  issue: DataQualityIssueRow,
+): ReviewMarkerEntry | null {
+  const itemReviewKey = buildDataQualityReviewedItemKey(metric, basis, issue);
+  const itemReview = store.reviews[itemReviewKey];
+  if (itemReview) {
+    return itemReview;
+  }
+
+  const duplicateGroupKey = issue.duplicateGroupKey?.trim();
+  if (!duplicateGroupKey) {
+    return null;
+  }
+
+  return store.reviews[buildDataQualityReviewedGroupKey(metric, basis, duplicateGroupKey)] ?? null;
+}
+
+function resolveIssueReviewState(
+  store: DataQualityHistoryStore,
+  metric: DataQualityMetricKey,
+  basis: DataQualityBasis,
+  issue: DataQualityIssueRow,
+  issueKey = buildDataQualityIssueKey(metric, basis, issue),
+): {
+  reviewed: boolean;
+  reviewedAt: string | null;
+} {
+  const issueEntry = store.issues[issueKey];
+  if (issueEntry?.status === "reviewed") {
+    return {
+      reviewed: true,
+      reviewedAt: issueEntry.reviewedAt,
+    };
+  }
+
+  const reviewMarker = resolveReviewMarkerEntry(store, metric, basis, issue);
+  if (reviewMarker) {
+    return {
+      reviewed: true,
+      reviewedAt: reviewMarker.reviewedAt,
+    };
+  }
+
+  return {
+    reviewed: false,
+    reviewedAt: null,
+  };
+}
+
+function countFixedEventsInWindow(
+  events: IssueFixEvent[],
   nowDay: string,
   earliestDay: string,
+  metric?: DataQualityMetricKey,
 ): number {
-  return entries.filter((entry) => {
-    if (entry.status !== "resolved" || !entry.resolvedAt) {
-      return false;
-    }
-    const resolvedDay = dateKey(entry.resolvedAt);
-    if (resolvedDay < earliestDay || resolvedDay > nowDay) {
+  return events.filter((event) => {
+    if (metric && event.metric !== metric) {
       return false;
     }
 
-    return dateKey(entry.firstSeen) < earliestDay;
+    const fixedDay = dateKey(event.fixedAt);
+    return fixedDay >= earliestDay && fixedDay <= nowDay;
   }).length;
+}
+
+function countFixedEventsOnDay(
+  events: IssueFixEvent[],
+  day: string,
+  metric?: DataQualityMetricKey,
+): number {
+  return events.filter((event) => {
+    if (metric && event.metric !== metric) {
+      return false;
+    }
+
+    return dateKey(event.fixedAt) === day;
+  }).length;
+}
+
+function getHistoryBootstrapDay(store: DataQualityHistoryStore): string | null {
+  const days = Object.keys(store.daily).sort();
+  return days[0] ?? null;
 }
 
 function countCreatedInWindow(
   entries: IssueHistoryEntry[],
   nowDay: string,
   earliestDay: string,
+  bootstrapDay: string | null,
+  metric?: DataQualityMetricKey,
 ): number {
   return entries.filter((entry) => {
+    if (metric && entry.metric !== metric) {
+      return false;
+    }
     const createdDay = dateKey(entry.firstSeen);
+    if (bootstrapDay && createdDay === bootstrapDay) {
+      return false;
+    }
     return createdDay >= earliestDay && createdDay <= nowDay;
   }).length;
 }
@@ -279,10 +372,8 @@ function computeKpis(
   DATA_QUALITY_METRIC_KEYS.forEach((metric) => {
     snapshot.issues[metric][basis].forEach((issue) => {
       const issueKey = buildDataQualityIssueKey(metric, basis, issue);
-      const entry = store.issues[issueKey];
-      const status = entry?.status ?? "open";
-
-      if (status === "reviewed") {
+      const { reviewed } = resolveIssueReviewState(store, metric, basis, issue, issueKey);
+      if (reviewed) {
         return;
       }
 
@@ -297,8 +388,8 @@ function computeKpis(
   DATA_QUALITY_METRIC_KEYS.forEach((metric) => {
     snapshot.issues[metric][basis].forEach((issue) => {
       const issueKey = buildDataQualityIssueKey(metric, basis, issue);
-      const entry = store.issues[issueKey];
-      if (entry?.status !== "reviewed") {
+      const { reviewed } = resolveIssueReviewState(store, metric, basis, issue, issueKey);
+      if (!reviewed) {
         return;
       }
 
@@ -347,6 +438,7 @@ function computeScoreboard(
   const currentMonthKey = monthKey(nowDay);
   const monthStart = `${currentMonthKey}-01`;
   const sevenDaysAgo = getLastNDays(nowDay, 8)[0];
+  const relevantFixEvents = store.fixEvents.filter((event) => event.basis === basis);
 
   return DATA_QUALITY_METRIC_KEYS.map((metric) => {
     const entries = Object.values(store.issues).filter(
@@ -356,9 +448,9 @@ function computeScoreboard(
     const open = openMetricCounts[metric];
     const percentComplete =
       totalChecked > 0 ? ((totalChecked - open) / totalChecked) * 100 : 0;
-    const fixedToday = countResolvedInWindow(entries, nowDay, nowDay);
-    const fixedWeek = countResolvedInWindow(entries, nowDay, weekStart);
-    const fixedMonth = countResolvedInWindow(entries, nowDay, monthStart);
+    const fixedToday = countFixedEventsInWindow(relevantFixEvents, nowDay, nowDay, metric);
+    const fixedWeek = countFixedEventsInWindow(relevantFixEvents, nowDay, weekStart, metric);
+    const fixedMonth = countFixedEventsInWindow(relevantFixEvents, nowDay, monthStart, metric);
 
     const daySnapshotNow = store.daily[nowDay];
     const daySnapshotBefore = store.daily[sevenDaysAgo];
@@ -387,20 +479,14 @@ function computeTrends(
 ): DataQualityTrendsResponse {
   const nowDay = dateKey(nowIso);
   const days = getLastNDays(nowDay, 30);
+  const bootstrapDay = getHistoryBootstrapDay(store);
+  const relevantEntries = Object.values(store.issues).filter((entry) => entry.basis === basis);
+  const relevantFixEvents = store.fixEvents.filter((event) => event.basis === basis);
   const points: DataQualityTrendPoint[] = days.map((day) => {
     const daily = store.daily[day];
     const openIssues = daily?.openIssueCountByBasis[basis] ?? 0;
-    const created = Object.values(store.issues).filter(
-      (entry) => entry.basis === basis && dateKey(entry.firstSeen) === day,
-    ).length;
-    const fixed = Object.values(store.issues).filter(
-      (entry) =>
-        entry.basis === basis &&
-        entry.status === "resolved" &&
-        entry.resolvedAt !== null &&
-        dateKey(entry.resolvedAt) === day &&
-        dateKey(entry.firstSeen) < day,
-    ).length;
+    const created = countCreatedInWindow(relevantEntries, day, day, bootstrapDay);
+    const fixed = countFixedEventsOnDay(relevantFixEvents, day);
 
     return {
       day,
@@ -514,13 +600,15 @@ function computeThroughput(
   const currentMonthKey = monthKey(nowDay);
   const monthStart = `${currentMonthKey}-01`;
   const entries = Object.values(store.issues).filter((entry) => entry.basis === basis);
+  const relevantFixEvents = store.fixEvents.filter((event) => event.basis === basis);
+  const bootstrapDay = getHistoryBootstrapDay(store);
 
-  const todayFixed = countResolvedInWindow(entries, nowDay, nowDay);
-  const todayCreated = countCreatedInWindow(entries, nowDay, nowDay);
-  const weekFixed = countResolvedInWindow(entries, nowDay, weekStart);
-  const weekCreated = countCreatedInWindow(entries, nowDay, weekStart);
-  const monthFixed = countResolvedInWindow(entries, nowDay, monthStart);
-  const monthCreated = countCreatedInWindow(entries, nowDay, monthStart);
+  const todayFixed = countFixedEventsInWindow(relevantFixEvents, nowDay, nowDay);
+  const todayCreated = countCreatedInWindow(entries, nowDay, nowDay, bootstrapDay);
+  const weekFixed = countFixedEventsInWindow(relevantFixEvents, nowDay, weekStart);
+  const weekCreated = countCreatedInWindow(entries, nowDay, weekStart, bootstrapDay);
+  const monthFixed = countFixedEventsInWindow(relevantFixEvents, nowDay, monthStart);
+  const monthCreated = countCreatedInWindow(entries, nowDay, monthStart, bootstrapDay);
 
   return {
     timezone: TIMEZONE,
@@ -559,8 +647,8 @@ function computeLeaderboard(
   DATA_QUALITY_METRIC_KEYS.forEach((metric) => {
     snapshot.issues[metric][basis].forEach((issue) => {
       const issueKey = buildDataQualityIssueKey(metric, basis, issue);
-      const entry = store.issues[issueKey];
-      if (entry?.status === "reviewed") {
+      const { reviewed } = resolveIssueReviewState(store, metric, basis, issue, issueKey);
+      if (reviewed) {
         return;
       }
 
@@ -676,15 +764,16 @@ export async function syncDataQualityHistory(
 
           const existing = store.issues[issueKey];
           if (!existing) {
+            const reviewState = resolveIssueReviewState(store, metric, basis, issue, issueKey);
             store.issues[issueKey] = {
               issueKey,
               metric,
               basis,
-              status: "open",
+              status: reviewState.reviewed ? "reviewed" : "open",
               firstSeen: atIso,
               lastSeen: atIso,
               resolvedAt: null,
-              reviewedAt: null,
+              reviewedAt: reviewState.reviewedAt,
               salesRepName: issue.salesRepName ?? null,
               accountKey: issue.accountKey,
               rowKey: issue.rowKey ?? null,
@@ -699,9 +788,18 @@ export async function syncDataQualityHistory(
           existing.accountKey = issue.accountKey;
           existing.rowKey = issue.rowKey ?? existing.rowKey;
 
-          if (existing.status === "resolved") {
+          const reviewState = resolveIssueReviewState(store, metric, basis, issue, issueKey);
+          if (reviewState.reviewed) {
+            existing.status = "reviewed";
+            existing.reviewedAt = reviewState.reviewedAt;
+            existing.resolvedAt = null;
+            return;
+          }
+
+          if (existing.status === "resolved" || existing.status === "reviewed") {
             existing.status = "open";
             existing.resolvedAt = null;
+            existing.reviewedAt = null;
           }
         });
       }
@@ -736,7 +834,8 @@ export async function syncDataQualityHistory(
     currentByKey.forEach(({ metric, basis, issue }, issueKey) => {
       const entry = store.issues[issueKey];
       const recordId = buildRecordIdentity(basis, issue);
-      if (entry?.status === "reviewed") {
+      const { reviewed } = resolveIssueReviewState(store, metric, basis, issue, issueKey);
+      if (reviewed || entry?.status === "reviewed") {
         reviewedRecordSets[basis].add(recordId);
         return;
       }
@@ -773,6 +872,7 @@ export async function syncDataQualityHistory(
 export async function markIssuesReviewed(
   issueKeys: string[],
   action: "review" | "unreview",
+  reviewKeys: string[] = [],
   atIso = new Date().toISOString(),
 ): Promise<void> {
   await withStore(async (store) => {
@@ -796,7 +896,46 @@ export async function markIssuesReviewed(
       }
       entry.lastSeen = atIso;
     });
+
+    reviewKeys.forEach((reviewKey) => {
+      const trimmed = reviewKey.trim();
+      if (!trimmed) {
+        return;
+      }
+
+      if (action === "review") {
+        store.reviews[trimmed] = {
+          reviewKey: trimmed,
+          reviewedAt: store.reviews[trimmed]?.reviewedAt ?? atIso,
+          lastSeen: atIso,
+        };
+        return;
+      }
+
+      delete store.reviews[trimmed];
+    });
   });
+}
+
+export async function paginateReviewedDataQualityIssues(
+  snapshot: DataQualitySnapshot,
+  metric: DataQualityMetricKey,
+  basis: DataQualityBasis,
+  page: number,
+  pageSize: number,
+  salesRep?: string,
+): Promise<DataQualityIssuesResponse> {
+  return withStore((store) =>
+    paginateDataQualityIssues(
+      snapshot,
+      metric,
+      basis,
+      page,
+      pageSize,
+      salesRep,
+      (issue) => !resolveIssueReviewState(store, metric, basis, issue).reviewed,
+    ),
+  );
 }
 
 function parseIssueKeyParts(issueKey: string): {

@@ -11,10 +11,12 @@ import {
   toDataQualitySummaryResponse,
   type DataQualitySnapshot,
 } from "@/lib/data-quality";
+import { buildDataQualityTasks } from "@/lib/data-quality-tasks";
 import {
   buildDataQualityContributors,
   buildDataQualityExpandedSummary,
   buildDataQualityLeaderboard,
+  paginateReviewedDataQualityIssues,
   buildDataQualityThroughput,
   buildDataQualityTrends,
   syncDataQualityHistory,
@@ -22,12 +24,17 @@ import {
 import {
   normalizeBusinessAccount,
   normalizeBusinessAccountRows,
+  filterSuppressedBusinessAccountRows,
   enforceSinglePrimaryPerAccountRows,
   selectPrimaryContactIndex,
 } from "@/lib/business-accounts";
+import {
+  isExcludedInternalCompanyName,
+  isExcludedInternalContactEmail,
+} from "@/lib/internal-records";
+import { resolvePrimaryContactPhoneFields } from "@/lib/phone";
 import { registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
-import { maybeTriggerReadModelSync } from "@/lib/read-model/sync";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type {
   DataQualityBasis,
@@ -37,6 +44,7 @@ import type {
   DataQualityLeaderboardResponse,
   DataQualityMetricKey,
   DataQualitySummaryResponse,
+  DataQualityTasksResponse,
   DataQualityThroughputResponse,
   DataQualityTrendsResponse,
 } from "@/types/data-quality";
@@ -169,6 +177,10 @@ function readContactEmail(record: unknown): string | null {
   return email && email.trim() ? email.trim() : null;
 }
 
+function readContactJobTitle(record: unknown): string | null {
+  return readWrappedString(record, "JobTitle") ?? readWrappedString(record, "Title");
+}
+
 function readWrappedNumber(record: unknown, key: string): number | null {
   if (!record || typeof record !== "object") {
     return null;
@@ -225,7 +237,32 @@ function readBusinessAccountCode(record: unknown): string | null {
   );
 }
 
+function readBusinessAccountName(record: unknown): string | null {
+  return (
+    readWrappedString(record, "Name") ??
+    readWrappedString(record, "CompanyName") ??
+    readWrappedString(record, "AcctName") ??
+    readWrappedString(record, "BusinessAccountName")
+  );
+}
+
 function readContactPhone(record: unknown): string | null {
+  return resolvePrimaryContactPhoneFields({
+    phone1: readWrappedString(record, "Phone1"),
+    phone2: readWrappedString(record, "Phone2"),
+    phone3: readWrappedString(record, "Phone3"),
+  }).phone;
+}
+
+function readContactExtension(record: unknown): string | null {
+  return resolvePrimaryContactPhoneFields({
+    phone1: readWrappedString(record, "Phone1"),
+    phone2: readWrappedString(record, "Phone2"),
+    phone3: readWrappedString(record, "Phone3"),
+  }).extension;
+}
+
+function readContactRawPhone(record: unknown): string | null {
   return (
     readWrappedString(record, "Phone1") ??
     readWrappedString(record, "Phone2") ??
@@ -263,7 +300,10 @@ function buildFallbackRowFromContact(contact: unknown, index: number): BusinessA
     postalCode: "",
     country: "",
     primaryContactName: contactName,
+    primaryContactJobTitle: readContactJobTitle(contact),
     primaryContactPhone: contactPhone,
+    primaryContactExtension: readContactExtension(contact),
+    primaryContactRawPhone: readContactRawPhone(contact),
     primaryContactEmail: contactEmail,
     primaryContactId: contactId,
     category: null,
@@ -303,7 +343,10 @@ function buildSyncRowsFromContacts(
     };
     basePrimary: {
       name: string | null;
+      jobTitle: string | null;
       phone: string | null;
+      extension: string | null;
+      rawPhone: string | null;
       email: string | null;
       notes: string | null;
     };
@@ -333,7 +376,10 @@ function buildSyncRowsFromContacts(
 
     const contactId = readWrappedNumber(contact, "ContactID");
     const contactName = readContactDisplayName(contact);
+    const contactJobTitle = readContactJobTitle(contact);
     const contactPhone = readContactPhone(contact);
+    const contactExtension = readContactExtension(contact);
+    const contactRawPhone = readContactRawPhone(contact);
     const contactEmail = readContactEmail(contact);
     const contactNotes = readWrappedString(contact, "note");
     const contactRecordId = readRecordIdentity(contact);
@@ -354,7 +400,19 @@ function buildSyncRowsFromContacts(
       contactId,
       isPrimaryContact: false,
       primaryContactName: pickFirstText([contactName]),
+      primaryContactJobTitle: pickFirstText([
+        contactJobTitle,
+        base.primaryContactJobTitle ?? null,
+      ]),
       primaryContactPhone: pickFirstText([contactPhone]),
+      primaryContactExtension: pickFirstText([
+        contactExtension,
+        base.primaryContactExtension ?? null,
+      ]),
+      primaryContactRawPhone: pickFirstText([
+        contactRawPhone,
+        base.primaryContactRawPhone ?? null,
+      ]),
       primaryContactEmail: pickFirstText([contactEmail]),
       notes: pickFirstText([contactNotes]),
       phoneNumber: pickFirstText([base.phoneNumber, contactPhone, base.primaryContactPhone]),
@@ -385,7 +443,10 @@ function buildSyncRowsFromContacts(
       },
       basePrimary: {
         name: base.primaryContactName,
+        jobTitle: base.primaryContactJobTitle ?? null,
         phone: base.primaryContactPhone,
+        extension: base.primaryContactExtension ?? null,
+        rawPhone: base.primaryContactRawPhone ?? null,
         email: base.primaryContactEmail,
         notes: base.notes,
       },
@@ -451,9 +512,21 @@ function buildSyncRowsFromContacts(
           selectedPrepared.row.primaryContactName,
           selectedPrepared.basePrimary.name,
         ]),
+        primaryContactJobTitle: pickFirstText([
+          selectedPrepared.row.primaryContactJobTitle ?? null,
+          selectedPrepared.basePrimary.jobTitle,
+        ]),
         primaryContactPhone: pickFirstText([
           selectedPrepared.row.primaryContactPhone,
           selectedPrepared.basePrimary.phone,
+        ]),
+        primaryContactExtension: pickFirstText([
+          selectedPrepared.row.primaryContactExtension ?? null,
+          selectedPrepared.basePrimary.extension,
+        ]),
+        primaryContactRawPhone: pickFirstText([
+          selectedPrepared.row.primaryContactRawPhone ?? null,
+          selectedPrepared.basePrimary.rawPhone,
         ]),
         primaryContactEmail: pickFirstText([
           selectedPrepared.row.primaryContactEmail,
@@ -494,7 +567,11 @@ function dedupeRows(rows: BusinessAccountRow[]): BusinessAccountRow[] {
 export async function fetchAllSyncRows(
   cookieValue: string,
   authCookieRefresh: AuthCookieRefreshState,
+  options?: {
+    includeInternal?: boolean;
+  },
 ): Promise<BusinessAccountRow[]> {
+  const includeInternal = Boolean(options?.includeInternal);
   const rawContacts = await fetchContacts(
     cookieValue,
     {
@@ -528,10 +605,17 @@ export async function fetchAllSyncRows(
     );
   }
   const filteredContacts = rawContacts.filter(
-    (contact) => !shouldExcludeContactByApToken(contact),
+    (contact) =>
+      !shouldExcludeContactByApToken(contact) &&
+      (includeInternal || !isExcludedInternalContactEmail(readContactEmail(contact))) &&
+      (includeInternal ||
+        !isExcludedInternalCompanyName(readWrappedString(contact, "CompanyName"))),
   );
-  const allowedRawAccounts = rawAccounts.filter((account) =>
-    isAllowedBusinessAccountType(account),
+  const allowedRawAccounts = rawAccounts.filter(
+    (account) =>
+      isAllowedBusinessAccountType(account) &&
+      (includeInternal ||
+        !isExcludedInternalCompanyName(readBusinessAccountName(account))),
   );
   const allowedBusinessIds = new Set(
     allowedRawAccounts
@@ -562,7 +646,12 @@ export async function fetchAllSyncRows(
       ),
     );
 
-  return dedupeRows([...normalizedAccountRows, ...normalizedContactRows]);
+  return filterSuppressedBusinessAccountRows(
+    dedupeRows([...normalizedAccountRows, ...normalizedContactRows]),
+    {
+      includeInternalRows: includeInternal,
+    },
+  );
 }
 
 async function computeLiveSnapshot(
@@ -573,7 +662,6 @@ async function computeLiveSnapshot(
   let rows: BusinessAccountRow[];
 
   if (READ_MODEL_ENABLED) {
-    maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
     rows = readAllAccountRowsFromReadModel();
   } else {
     rows = await fetchAllSyncRows(cookieValue, authCookieRefresh);
@@ -659,6 +747,7 @@ export async function getLiveDataQualityIssues(
     basis: DataQualityBasis;
     page: number;
     pageSize: number;
+    salesRep?: string;
     refresh?: boolean;
   },
 ): Promise<DataQualityIssuesResponse> {
@@ -668,13 +757,30 @@ export async function getLiveDataQualityIssues(
     { refresh: options.refresh },
   );
 
-  return paginateDataQualityIssues(
+  return paginateReviewedDataQualityIssues(
     snapshot,
     options.metric,
     options.basis,
     options.page,
     options.pageSize,
+    options.salesRep,
   );
+}
+
+export async function getLiveDataQualityTasks(
+  cookieValue: string,
+  authCookieRefresh: AuthCookieRefreshState,
+  options?: {
+    refresh?: boolean;
+  },
+): Promise<DataQualityTasksResponse> {
+  const snapshot = await getLiveDataQualitySnapshot(
+    cookieValue,
+    authCookieRefresh,
+    options,
+  );
+
+  return buildDataQualityTasks(snapshot);
 }
 
 export async function getLiveDataQualityTrends(

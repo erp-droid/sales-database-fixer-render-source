@@ -101,6 +101,19 @@ function hasUsableIssueContactName(value: string | null | undefined): value is s
   return typeof value === "string" && value.trim().length > 2;
 }
 
+function resolveIssueSourceRowKind(
+  row: BusinessAccountRow,
+): "contact" | "account" | "unknown" {
+  const rowKey = row.rowKey?.trim() ?? "";
+  if (rowKey.includes(":contact:")) {
+    return "contact";
+  }
+  if (rowKey) {
+    return "account";
+  }
+  return "unknown";
+}
+
 function resolveIssueDisplayRow(
   row: BusinessAccountRow,
   siblingRows?: BusinessAccountRow[],
@@ -165,7 +178,14 @@ function buildIssueRow(
     contactId: displayRow.contactId ?? null,
     contactName: displayRow.primaryContactName,
     contactPhone: displayRow.primaryContactPhone,
+    contactExtension: displayRow.primaryContactExtension ?? null,
     contactEmail: displayRow.primaryContactEmail,
+    rawContactName: row.primaryContactName,
+    rawContactPhone: row.primaryContactRawPhone ?? row.primaryContactPhone,
+    rawContactEmail: row.primaryContactEmail,
+    rawCompanyName: row.companyName,
+    rawAddress: row.address,
+    sourceRowKind: resolveIssueSourceRowKind(row),
     isPrimaryContact: isResolvedFromSameContact ? Boolean(row.isPrimaryContact) : false,
     salesRepName: row.salesRepName,
     address: row.address,
@@ -219,6 +239,21 @@ function normalizeComparable(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function matchesSalesRepFilter(
+  row: DataQualityIssueRow,
+  salesRep: string | undefined,
+): boolean {
+  if (!salesRep) {
+    return true;
+  }
+
+  if (salesRep === "__unassigned__") {
+    return !row.salesRepName?.trim();
+  }
+
+  return normalizeComparable(row.salesRepName ?? "") === normalizeComparable(salesRep);
+}
+
 export function buildDataQualityIssueKey(
   metric: DataQualityMetricKey,
   basis: DataQualityBasis,
@@ -239,6 +274,43 @@ export function buildDataQualityIssueKey(
     `${row.accountKey}:${normalizeComparable(row.contactName ?? "contact")}:${metric}`;
 
   return `${metric}|row|${identity}`;
+}
+
+function buildDataQualityReviewIdentity(
+  metric: DataQualityMetricKey,
+  basis: DataQualityBasis,
+  row: DataQualityIssueRow,
+): string {
+  if (basis === "account") {
+    return (
+      row.accountRecordId?.trim() ||
+      row.accountKey.trim() ||
+      row.businessAccountId.trim() ||
+      normalizeComparable(row.companyName)
+    );
+  }
+
+  return (
+    (row.contactId !== null ? `${row.accountKey}:contact:${row.contactId}` : "") ||
+    row.rowKey?.trim() ||
+    `${row.accountKey}:${normalizeComparable(row.contactName ?? "contact")}:${metric}`
+  );
+}
+
+export function buildDataQualityReviewedItemKey(
+  metric: DataQualityMetricKey,
+  basis: DataQualityBasis,
+  row: DataQualityIssueRow,
+): string {
+  return `${metric}|${basis}|${buildDataQualityReviewIdentity(metric, basis, row)}`;
+}
+
+export function buildDataQualityReviewedGroupKey(
+  metric: DataQualityMetricKey,
+  basis: DataQualityBasis,
+  groupKey: string,
+): string {
+  return `${metric}|${basis}|group|${groupKey.trim()}`;
 }
 
 function normalizeDuplicateName(
@@ -543,7 +615,9 @@ export function buildDataQualitySnapshot(
       group.rows.length === 0 ||
       !group.rows.some((row) => isAssociatedContactRow(row));
     const invalidPhoneRows = group.rows.filter(
-      (row) => isAssociatedContactRow(row) && isPhoneNumberIssue(row.primaryContactPhone),
+      (row) =>
+        isAssociatedContactRow(row) &&
+        isPhoneNumberIssue(row.primaryContactRawPhone ?? row.primaryContactPhone),
     );
     const invalidPhoneAccount = invalidPhoneRows.length > 0;
     const missingContactEmailRows = group.rows.filter(
@@ -663,7 +737,10 @@ export function buildDataQualitySnapshot(
         issues.missingContact.row.push(rowIssue);
         rowHasIssue = true;
       }
-      if (isAssociatedContactRow(row) && isPhoneNumberIssue(row.primaryContactPhone)) {
+      if (
+        isAssociatedContactRow(row) &&
+        isPhoneNumberIssue(row.primaryContactRawPhone ?? row.primaryContactPhone)
+      ) {
         issues.invalidPhone.row.push(rowIssue);
         rowHasIssue = true;
       }
@@ -784,10 +861,14 @@ export function paginateDataQualityIssues(
   basis: DataQualityBasis,
   page: number,
   pageSize: number,
+  salesRep?: string,
+  includeRow?: (row: DataQualityIssueRow) => boolean,
 ): DataQualityIssuesResponse {
   const safePage = Math.max(1, Math.trunc(page));
   const safePageSize = Math.max(1, Math.trunc(pageSize));
-  const sourceRows = basis === "account" ? snapshot.issues[metric].account : snapshot.issues[metric].row;
+  const sourceRows = (basis === "account" ? snapshot.issues[metric].account : snapshot.issues[metric].row).filter(
+    (row) => matchesSalesRepFilter(row, salesRep) && (includeRow ? includeRow(row) : true),
+  );
   const total = sourceRows.length;
   const start = (safePage - 1) * safePageSize;
   const items = sourceRows.slice(start, start + safePageSize).map((row) => ({
@@ -798,6 +879,7 @@ export function paginateDataQualityIssues(
   return {
     metric,
     basis,
+    salesRep: salesRep ?? null,
     total,
     page: safePage,
     pageSize: safePageSize,

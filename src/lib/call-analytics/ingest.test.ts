@@ -1,0 +1,115 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+function setCallAnalyticsEnv(): void {
+  process.env.AUTH_PROVIDER = "acumatica";
+  process.env.ACUMATICA_BASE_URL = "https://example.acumatica.com";
+  process.env.ACUMATICA_ENTITY_PATH = "/entity/lightspeed/24.200.001";
+  process.env.ACUMATICA_COMPANY = "MeadowBrook Live";
+  process.env.ACUMATICA_LOCALE = "en-US";
+  process.env.AUTH_COOKIE_NAME = ".ASPXAUTH";
+  process.env.AUTH_COOKIE_SECURE = "false";
+  process.env.CALL_ANALYTICS_STALE_AFTER_MS = "300000";
+  process.env.CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS = "86400000";
+}
+
+describe("call analytics refresh gating", () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    setCallAnalyticsEnv();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
+  });
+
+  it("does not auto-refresh when no call snapshot exists", async () => {
+    const { shouldTriggerCallAnalyticsAutoRefresh } = await import("@/lib/call-analytics/ingest");
+
+    expect(
+      shouldTriggerCallAnalyticsAutoRefresh({
+        status: "idle",
+        lastRecentSyncAt: null,
+        lastFullBackfillAt: null,
+        updatedAt: "2026-03-09T00:00:00.000Z",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not auto-refresh while a refresh is already running", async () => {
+    const { shouldTriggerCallAnalyticsAutoRefresh } = await import("@/lib/call-analytics/ingest");
+
+    expect(
+      shouldTriggerCallAnalyticsAutoRefresh(
+        {
+          status: "recent_sync_running",
+          lastRecentSyncAt: "2026-03-09T00:00:00.000Z",
+          lastFullBackfillAt: "2026-03-08T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:00.000Z",
+        },
+        Date.parse("2026-03-09T00:10:00.000Z"),
+      ),
+    ).toBe(false);
+  });
+
+  it("allows auto-refresh once the snapshot is stale", async () => {
+    const { shouldTriggerCallAnalyticsAutoRefresh } = await import("@/lib/call-analytics/ingest");
+
+    expect(
+      shouldTriggerCallAnalyticsAutoRefresh(
+        {
+          status: "complete",
+          lastRecentSyncAt: "2026-03-09T00:00:00.000Z",
+          lastFullBackfillAt: "2026-03-08T00:00:00.000Z",
+          updatedAt: "2026-03-09T00:00:00.000Z",
+        },
+        Date.parse("2026-03-09T00:06:00.000Z"),
+        300_000,
+      ),
+    ).toBe(true);
+  });
+
+  it("skips employee directory refresh while the directory is still fresh", async () => {
+    const { shouldRefreshCallEmployeeDirectory } = await import("@/lib/call-analytics/ingest");
+
+    expect(
+      shouldRefreshCallEmployeeDirectory(
+        {
+          total: 3,
+          latestUpdatedAt: "2026-03-09T00:00:00.000Z",
+        },
+        Date.parse("2026-03-09T12:00:00.000Z"),
+        86_400_000,
+      ),
+    ).toBe(false);
+  });
+
+  it("refreshes the employee directory when it is empty or stale", async () => {
+    const { shouldRefreshCallEmployeeDirectory } = await import("@/lib/call-analytics/ingest");
+
+    expect(
+      shouldRefreshCallEmployeeDirectory({
+        total: 0,
+        latestUpdatedAt: null,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldRefreshCallEmployeeDirectory(
+        {
+          total: 3,
+          latestUpdatedAt: "2026-03-08T00:00:00.000Z",
+        },
+        Date.parse("2026-03-09T12:00:00.000Z"),
+        86_400_000,
+      ),
+    ).toBe(true);
+  });
+});

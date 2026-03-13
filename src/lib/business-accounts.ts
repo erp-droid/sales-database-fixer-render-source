@@ -3,15 +3,28 @@ import {
   type BusinessAccountRow,
   type BusinessAccountUpdateRequest,
   type Category,
+  type CompanyPhoneSource,
   type SortBy,
   type SortDir,
 } from "@/types/business-account";
+import { isExcludedInternalBusinessAccountRow } from "@/lib/internal-records";
+import {
+  extractNormalizedPhoneDigits,
+  formatPhoneForDisplay,
+  looksLikeFullNorthAmericanPhone,
+  normalizeExtensionForSave,
+  normalizePhoneForSave,
+  phoneValuesEquivalent,
+  resolvePrimaryContactPhoneFields,
+} from "@/lib/phone";
+import { canonicalBusinessAccountRegionValue } from "@/lib/business-account-region-values";
 
 type UnknownRecord = Record<string, unknown>;
 
 type QueryOptions = {
   q?: string;
   category?: Category;
+  filterCompanyInitial?: string;
   filterCompanyName?: string;
   filterSalesRep?: string;
   filterIndustryType?: string;
@@ -21,15 +34,23 @@ type QueryOptions = {
   filterAddress?: string;
   filterCompanyPhone?: string;
   filterPrimaryContactName?: string;
+  filterPrimaryContactJobTitle?: string;
   filterPrimaryContactPhone?: string;
+  filterPrimaryContactExtension?: string;
   filterPrimaryContactEmail?: string;
   filterNotes?: string;
   filterCategory?: Category;
+  filterLastEmailed?: string;
   filterLastModified?: string;
   sortBy?: SortBy;
   sortDir?: SortDir;
+  includeInternalRows?: boolean;
   page: number;
   pageSize: number;
+};
+
+type SuppressionOptions = {
+  includeInternalRows?: boolean;
 };
 
 export type PrimaryContactCandidate = {
@@ -114,6 +135,47 @@ function readFirstString(record: unknown, keys: string[]): string {
   }
 
   return "";
+}
+
+function readFirstPhone(record: unknown, keys: string[]): string | null {
+  const value = readFirstString(record, keys);
+  return formatPhoneForDisplay(value);
+}
+
+function readRawPrimaryContactPhoneValue(record: unknown): string | null {
+  const phone1 = readNullableString(record, "Phone1");
+  if (phone1) {
+    return phone1;
+  }
+
+  const phone2 = readNullableString(record, "Phone2");
+  if (phone2 && looksLikeFullNorthAmericanPhone(phone2)) {
+    return phone2;
+  }
+
+  const phone3 = readNullableString(record, "Phone3");
+  if (phone3 && looksLikeFullNorthAmericanPhone(phone3)) {
+    return phone3;
+  }
+
+  return phone2 ?? phone3 ?? null;
+}
+
+function readPrimaryContactPhone(record: unknown): {
+  phone: string | null;
+  extension: string | null;
+  rawPhone: string | null;
+} {
+  const resolved = resolvePrimaryContactPhoneFields({
+    phone1: readNullableString(record, "Phone1"),
+    phone2: readNullableString(record, "Phone2"),
+    phone3: readNullableString(record, "Phone3"),
+  });
+
+  return {
+    ...resolved,
+    rawPhone: readRawPrimaryContactPhoneValue(record),
+  };
 }
 
 function readNullableString(record: unknown, key: string): string | null {
@@ -216,6 +278,13 @@ function chooseFirst(values: Array<string | null>): string | null {
   return null;
 }
 
+function readContactJobTitle(record: unknown): string | null {
+  return chooseFirst([
+    readNullableString(record, "JobTitle"),
+    readNullableString(record, "Title"),
+  ]);
+}
+
 function normalizeComparable(value: string | null | undefined): string {
   if (!value) {
     return "";
@@ -271,6 +340,10 @@ function mergeBusinessAccountRows(
     contactId: incoming.contactId ?? existing.contactId,
     isPrimaryContact: Boolean(existing.isPrimaryContact || incoming.isPrimaryContact),
     companyPhone: pickPreferredText(existing.companyPhone, incoming.companyPhone),
+    companyPhoneSource:
+      (hasText(incoming.companyPhone) ? incoming.companyPhoneSource : null) ??
+      (hasText(existing.companyPhone) ? existing.companyPhoneSource : null) ??
+      null,
     phoneNumber: pickPreferredText(existing.phoneNumber, incoming.phoneNumber),
     salesRepId: pickPreferredText(existing.salesRepId, incoming.salesRepId),
     salesRepName: pickPreferredText(existing.salesRepName, incoming.salesRepName),
@@ -291,9 +364,21 @@ function mergeBusinessAccountRows(
       existing.primaryContactName,
       incoming.primaryContactName,
     ),
+    primaryContactJobTitle: pickPreferredText(
+      existing.primaryContactJobTitle,
+      incoming.primaryContactJobTitle,
+    ),
     primaryContactPhone: pickPreferredText(
       existing.primaryContactPhone,
       incoming.primaryContactPhone,
+    ),
+    primaryContactExtension: pickPreferredText(
+      existing.primaryContactExtension,
+      incoming.primaryContactExtension,
+    ),
+    primaryContactRawPhone: pickPreferredText(
+      existing.primaryContactRawPhone,
+      incoming.primaryContactRawPhone,
     ),
     primaryContactEmail: pickPreferredText(
       existing.primaryContactEmail,
@@ -302,6 +387,7 @@ function mergeBusinessAccountRows(
     primaryContactId: incoming.primaryContactId ?? existing.primaryContactId,
     category: incoming.category ?? existing.category,
     notes: pickPreferredText(existing.notes, incoming.notes),
+    lastEmailedAt: pickPreferredText(existing.lastEmailedAt, incoming.lastEmailedAt),
     lastModifiedIso: pickPreferredText(existing.lastModifiedIso, incoming.lastModifiedIso),
   };
 }
@@ -350,19 +436,268 @@ function hasUsableSuppressedContactName(value: string | null | undefined): value
   return typeof value === "string" && value.trim().length > 0 && !/^[.\s]+$/.test(value);
 }
 
+export function isUsableContactRow(row: BusinessAccountRow): boolean {
+  return hasUsableSuppressedContactName(row.primaryContactName);
+}
+
 function isAssociatedContactRow(row: BusinessAccountRow): boolean {
   return typeof row.rowKey === "string" && row.rowKey.includes(":contact:");
 }
 
-export function filterSuppressedBusinessAccountRows(
+function isOrphanPlaceholderBusinessAccountRow(row: BusinessAccountRow): boolean {
+  return (
+    !hasText(row.companyName) &&
+    !hasText(row.businessAccountId) &&
+    !hasText(row.address) &&
+    !hasText(row.primaryContactName) &&
+    !hasText(row.primaryContactEmail) &&
+    row.contactId === null
+  );
+}
+
+function buildCanonicalAddressKey(row: BusinessAccountRow): string {
+  return [
+    row.addressLine1,
+    row.addressLine2,
+    row.city,
+    row.state,
+    row.postalCode,
+    row.country,
+  ]
+    .map((part) => normalizeComparable(part))
+    .join("|");
+}
+
+export function buildCanonicalCompanyPhoneGroupKey(row: BusinessAccountRow): string {
+  const addressKey = buildCanonicalAddressKey(row);
+  const normalizedBusinessAccountId = normalizeComparable(row.businessAccountId);
+  if (normalizedBusinessAccountId) {
+    return `business-account:${normalizedBusinessAccountId}|address:${addressKey}`;
+  }
+
+  const normalizedAccountRecordId = normalizeComparable(row.accountRecordId ?? row.id);
+  if (normalizedAccountRecordId) {
+    return `account-record:${normalizedAccountRecordId}|address:${addressKey}`;
+  }
+
+  return `company-name:${normalizeComparable(row.companyName)}|address:${addressKey}`;
+}
+
+function normalizePhoneCandidate(value: string | null | undefined): string | null {
+  return formatPhoneForDisplay(value);
+}
+
+type CompanyPhoneCandidate = {
+  value: string;
+  key: string;
+  count: number;
+  firstIndex: number;
+  source: CompanyPhoneSource;
+};
+
+function upsertCompanyPhoneCandidate(
+  candidates: Map<string, CompanyPhoneCandidate>,
+  value: string | null | undefined,
+  source: CompanyPhoneSource,
+  index: number,
+): void {
+  const normalized = normalizePhoneCandidate(value);
+  if (!normalized) {
+    return;
+  }
+
+  const key = normalizePhoneForSave(normalized) ?? normalizeComparable(normalized);
+  const existing = candidates.get(key);
+  if (existing) {
+    existing.count += 1;
+    return;
+  }
+
+  candidates.set(key, {
+    value: normalized,
+    key,
+    count: 1,
+    firstIndex: index,
+    source,
+  });
+}
+
+function compareCompanyPhoneCandidates(
+  left: CompanyPhoneCandidate,
+  right: CompanyPhoneCandidate,
+): number {
+  if (left.count !== right.count) {
+    return right.count - left.count;
+  }
+
+  return left.firstIndex - right.firstIndex;
+}
+
+function pickCanonicalCompanyPhoneCandidate(
+  rows: BusinessAccountRow[],
+): CompanyPhoneCandidate | null {
+  const explicitCandidates = new Map<string, CompanyPhoneCandidate>();
+  const placeholderCandidates = new Map<string, CompanyPhoneCandidate>();
+  const fallbackCandidates = new Map<string, CompanyPhoneCandidate>();
+
+  rows.forEach((row, index) => {
+    if (row.companyPhoneSource === "account") {
+      upsertCompanyPhoneCandidate(explicitCandidates, row.companyPhone, "account", index);
+    } else if (row.companyPhoneSource === "placeholder") {
+      upsertCompanyPhoneCandidate(
+        placeholderCandidates,
+        row.companyPhone ?? row.phoneNumber,
+        "placeholder",
+        index,
+      );
+    }
+
+    if (row.companyPhoneSource !== "placeholder" && isPlaceholderCompanyPhoneRow(row)) {
+      upsertCompanyPhoneCandidate(
+        placeholderCandidates,
+        row.phoneNumber ?? row.companyPhone,
+        "placeholder",
+        index,
+      );
+    }
+
+    upsertCompanyPhoneCandidate(fallbackCandidates, resolveCompanyPhone(row), "fallback", index);
+  });
+
+  const explicit = [...explicitCandidates.values()].sort(compareCompanyPhoneCandidates)[0] ?? null;
+  if (explicit) {
+    return explicit;
+  }
+
+  const placeholder =
+    [...placeholderCandidates.values()].sort(compareCompanyPhoneCandidates)[0] ?? null;
+  if (placeholder) {
+    return placeholder;
+  }
+
+  return [...fallbackCandidates.values()].sort(compareCompanyPhoneCandidates)[0] ?? null;
+}
+
+function comparePlaceholderVisibility(left: IndexedRow, right: IndexedRow): number {
+  const leftAssociated = isAssociatedContactRow(left.row);
+  const rightAssociated = isAssociatedContactRow(right.row);
+  if (leftAssociated !== rightAssociated) {
+    return leftAssociated ? 1 : -1;
+  }
+
+  const leftHasCompanyPhone = hasText(resolveCompanyPhone(left.row));
+  const rightHasCompanyPhone = hasText(resolveCompanyPhone(right.row));
+  if (leftHasCompanyPhone !== rightHasCompanyPhone) {
+    return leftHasCompanyPhone ? -1 : 1;
+  }
+
+  const leftContactId = left.row.contactId ?? Number.POSITIVE_INFINITY;
+  const rightContactId = right.row.contactId ?? Number.POSITIVE_INFINITY;
+  if (leftContactId !== rightContactId) {
+    return leftContactId - rightContactId;
+  }
+
+  return left.index - right.index;
+}
+
+export function isPlaceholderCompanyPhoneRow(row: BusinessAccountRow): boolean {
+  if (isUsableContactRow(row)) {
+    return false;
+  }
+
+  if (row.companyPhoneSource === "placeholder" && hasText(row.companyPhone)) {
+    return true;
+  }
+
+  if (hasText(row.phoneNumber)) {
+    return true;
+  }
+
+  return !isAssociatedContactRow(row) && hasText(row.companyPhone);
+}
+
+export function canonicalizeBusinessAccountRows(
   rows: BusinessAccountRow[],
 ): BusinessAccountRow[] {
-  return rows.filter((row) => {
-    if (isApEmailMailbox(row.primaryContactEmail)) {
+  const uniqueRows = dedupeBusinessAccountRows(rows);
+  if (uniqueRows.length === 0) {
+    return uniqueRows;
+  }
+
+  const grouped = new Map<string, IndexedRow[]>();
+  uniqueRows.forEach((row, index) => {
+    const key = buildCanonicalCompanyPhoneGroupKey(row);
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.push({ row, index });
+      return;
+    }
+
+    grouped.set(key, [{ row, index }]);
+  });
+
+  const nextRows: BusinessAccountRow[] = [];
+  grouped.forEach((entries) => {
+    const candidate = pickCanonicalCompanyPhoneCandidate(entries.map((entry) => entry.row));
+    const canonicalPhone = candidate?.value ?? null;
+    const canonicalSource = candidate?.source ?? null;
+    const rowsWithCanonicalPhone = entries.map((entry) => ({
+      ...entry.row,
+      companyPhone: canonicalPhone,
+      companyPhoneSource: canonicalSource,
+    }));
+
+    const realContactRows = rowsWithCanonicalPhone.filter(isUsableContactRow);
+    if (realContactRows.length > 0) {
+      nextRows.push(...realContactRows);
+      return;
+    }
+
+    const placeholderRows = rowsWithCanonicalPhone.filter(isPlaceholderCompanyPhoneRow);
+    const hasAccountLevelRow = entries.some((entry) => !isAssociatedContactRow(entry.row));
+    if (placeholderRows.length === 0 && !hasAccountLevelRow) {
+      return;
+    }
+
+    const visibleRow = entries
+      .map((entry, index) => ({
+        row: rowsWithCanonicalPhone[index] ?? entry.row,
+        index: entry.index,
+      }))
+      .sort(comparePlaceholderVisibility)[0];
+    if (visibleRow) {
+      nextRows.push({
+        ...visibleRow.row,
+        primaryContactName: null,
+        primaryContactJobTitle: null,
+        primaryContactEmail: null,
+        primaryContactPhone: null,
+        primaryContactExtension: null,
+        primaryContactRawPhone: null,
+        primaryContactId: null,
+        contactId: null,
+        isPrimaryContact: false,
+      });
+    }
+  });
+
+  return enforceSinglePrimaryPerAccountRows(nextRows);
+}
+
+export function filterSuppressedBusinessAccountRows(
+  rows: BusinessAccountRow[],
+  options: SuppressionOptions = {},
+): BusinessAccountRow[] {
+  return canonicalizeBusinessAccountRows(rows).filter((row) => {
+    if (isOrphanPlaceholderBusinessAccountRow(row)) {
       return false;
     }
 
-    if (isAssociatedContactRow(row) && !hasUsableSuppressedContactName(row.primaryContactName)) {
+    if (!options.includeInternalRows && isExcludedInternalBusinessAccountRow(row)) {
+      return false;
+    }
+
+    if (isApEmailMailbox(row.primaryContactEmail)) {
       return false;
     }
 
@@ -679,21 +1014,7 @@ function canonicalSubCategory(value: string | null | undefined): string {
 }
 
 function canonicalCompanyRegion(value: string | null | undefined): string {
-  const normalized = normalizeAttributeCandidate(value);
-  if (!normalized) {
-    return "";
-  }
-
-  const key = normalized.toLowerCase().replace(/\s+/g, " ").trim();
-  const map: Record<string, string> = {
-    "region 1": "Region 1",
-    "region 2": "Region 2",
-    "region 3": "Region 3",
-    "region 4": "Region 4",
-    "region 5": "Region 5",
-  };
-
-  return map[key] ?? normalized;
+  return canonicalBusinessAccountRegionValue(value);
 }
 
 function canonicalWeek(value: string | null | undefined): string {
@@ -738,21 +1059,40 @@ function upsertAttributeValue(
 }
 
 function readAccountPhone(record: unknown): string | null {
-  const value = readFirstString(record, [
+  return readFirstPhone(record, [
     "Business1",
     "Phone1",
     "BusinessPhone",
     "Phone2",
     "Phone3",
   ]);
-  return value || null;
+}
+
+type WritableBusinessAccountPhoneField = "Business1" | "BusinessPhone" | "Phone1";
+
+function resolveWritableBusinessAccountPhoneField(
+  record: unknown,
+): WritableBusinessAccountPhoneField {
+  const candidates: WritableBusinessAccountPhoneField[] = [
+    "Business1",
+    "BusinessPhone",
+    "Phone1",
+  ];
+
+  for (const candidate of candidates) {
+    if (hasText(readString(record, candidate))) {
+      return candidate;
+    }
+  }
+
+  return "Business1";
 }
 
 function readCompanyPhoneFromContacts(account: unknown): string | null {
   const contacts = readArrayField(account, "Contacts");
 
   for (const contact of contacts) {
-    const contactPhone = readFirstString(contact, ["Phone1", "Phone2", "Phone3"]) || null;
+    const contactPhone = readPrimaryContactPhone(contact).phone;
     if (!contactPhone) {
       continue;
     }
@@ -790,7 +1130,10 @@ function readSalesRepName(record: unknown): string | null {
 function normalizePrimaryContact(account: unknown): {
   id: number | null;
   name: string | null;
+  jobTitle: string | null;
   phone: string | null;
+  extension: string | null;
+  rawPhone: string | null;
   email: string | null;
   notes: string | null;
 } {
@@ -823,14 +1166,22 @@ function normalizePrimaryContact(account: unknown): {
     matchingContactById ?? matchingContactByName ?? matchingContactByEmail;
   const resolvedContactId =
     readNullableNumber(matchingContact, "ContactID") ?? primaryContactId;
+  const primaryPhone = readPrimaryContactPhone(primary);
+  const matchingPhone = readPrimaryContactPhone(matchingContact);
 
   return {
     id: resolvedContactId,
     name: chooseFirst([primaryContactName, composeContactName(matchingContact)]),
-    phone: chooseFirst([
-      readFirstString(primary, ["Phone1", "Phone2", "Phone3"]),
-      readFirstString(matchingContact, ["Phone1", "Phone2", "Phone3"]),
+    jobTitle: chooseFirst([
+      readContactJobTitle(primary),
+      readContactJobTitle(matchingContact),
     ]),
+    phone: chooseFirst([
+      primaryPhone.phone,
+      matchingPhone.phone,
+    ]),
+    extension: chooseFirst([primaryPhone.extension, matchingPhone.extension]),
+    rawPhone: chooseFirst([primaryPhone.rawPhone, matchingPhone.rawPhone]),
     email: chooseFirst([
       primaryContactEmail,
       readFirstString(matchingContact, ["Email", "EMail"]),
@@ -939,6 +1290,30 @@ function includesFilter(value: string | null, filter: string | undefined): boole
   return (value ?? "").toLowerCase().includes(filter.toLowerCase());
 }
 
+function readCompanyNameInitial(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    return null;
+  }
+
+  const first = trimmed[0]?.toUpperCase() ?? "";
+  return /^[A-Z]$/.test(first) ? first : null;
+}
+
+function includesPhoneFilter(value: string | null, filter: string | undefined): boolean {
+  if (includesFilter(value, filter)) {
+    return true;
+  }
+
+  const filterDigits = extractNormalizedPhoneDigits(filter);
+  if (!filterDigits) {
+    return false;
+  }
+
+  const valueDigits = extractNormalizedPhoneDigits(value);
+  return valueDigits.includes(filterDigits);
+}
+
 function includesLastModifiedFilter(
   value: string | null,
   filter: string | undefined,
@@ -998,7 +1373,13 @@ export function normalizeBusinessAccount(account: unknown): BusinessAccountRow {
   const rowId =
     (typeof id === "string" && id) || noteId || businessAccountId || companyName;
   const accountPhone = readAccountPhone(account);
-  const companyPhone = chooseFirst([accountPhone, readCompanyPhoneFromContacts(account)]);
+  const inferredCompanyPhone = readCompanyPhoneFromContacts(account);
+  const companyPhone = chooseFirst([accountPhone, inferredCompanyPhone]);
+  const companyPhoneSource: CompanyPhoneSource | null = accountPhone
+    ? "account"
+    : inferredCompanyPhone
+      ? "placeholder"
+      : null;
   const salesRepId = readSalesRepId(account);
   const salesRepName = readSalesRepName(account);
   const industryType = extractAttributeValue(account, "INDUSTRY");
@@ -1013,6 +1394,7 @@ export function normalizeBusinessAccount(account: unknown): BusinessAccountRow {
     contactId: contact.id,
     isPrimaryContact: true,
     companyPhone,
+    companyPhoneSource,
     phoneNumber: contact.phone,
     salesRepId,
     salesRepName,
@@ -1030,11 +1412,15 @@ export function normalizeBusinessAccount(account: unknown): BusinessAccountRow {
     postalCode: addressParts.postalCode,
     country: addressParts.country,
     primaryContactName: contact.name,
+    primaryContactJobTitle: contact.jobTitle,
     primaryContactPhone: contact.phone,
+    primaryContactExtension: contact.extension,
+    primaryContactRawPhone: contact.rawPhone,
     primaryContactEmail: contact.email,
     primaryContactId: contact.id,
     category: extractCategory(account),
     notes: contact.notes ?? accountNote,
+    lastEmailedAt: null,
     lastModifiedIso: readNullableString(account, "LastModifiedDateTime"),
   };
 }
@@ -1068,7 +1454,8 @@ export function normalizeBusinessAccountRows(account: unknown): BusinessAccountR
     const contact = contacts[index];
     const contactId = readNullableNumber(contact, "ContactID");
     const contactName = composeContactName(contact);
-    const contactPhone = readFirstString(contact, ["Phone1", "Phone2", "Phone3"]) || null;
+    const contactPhoneFields = readPrimaryContactPhone(contact);
+    const contactPhone = contactPhoneFields.phone;
     const contactEmail = readFirstString(contact, ["Email", "EMail"]) || null;
     const contactRecordId = readRecordIdentity(contact);
     const isPrimary = selectedPrimaryIndex !== null && selectedPrimaryIndex === index;
@@ -1084,13 +1471,26 @@ export function normalizeBusinessAccountRows(account: unknown): BusinessAccountR
       contactId,
       isPrimaryContact: isPrimary,
       companyPhone: base.companyPhone,
+      companyPhoneSource: base.companyPhoneSource ?? null,
       primaryContactName: chooseFirst([
         contactName,
         isPrimary ? base.primaryContactName : null,
       ]),
+      primaryContactJobTitle: chooseFirst([
+        readContactJobTitle(contact),
+        isPrimary ? base.primaryContactJobTitle ?? null : null,
+      ]),
       primaryContactPhone: chooseFirst([
         contactPhone,
         isPrimary ? base.primaryContactPhone : null,
+      ]),
+      primaryContactRawPhone: chooseFirst([
+        contactPhoneFields.rawPhone,
+        isPrimary ? base.primaryContactRawPhone ?? null : null,
+      ]),
+      primaryContactExtension: chooseFirst([
+        contactPhoneFields.extension,
+        isPrimary ? base.primaryContactExtension ?? null : null,
       ]),
       primaryContactEmail: chooseFirst([
         contactEmail,
@@ -1102,7 +1502,7 @@ export function normalizeBusinessAccountRows(account: unknown): BusinessAccountR
   }
 
   if (rows.length === 0) {
-    return [
+    return canonicalizeBusinessAccountRows([
       {
         ...base,
         rowKey: `${base.id}:primary`,
@@ -1110,24 +1510,39 @@ export function normalizeBusinessAccountRows(account: unknown): BusinessAccountR
         contactId: base.primaryContactId,
         isPrimaryContact: Boolean(base.primaryContactId || base.primaryContactName),
         companyPhone: base.companyPhone,
+        companyPhoneSource: base.companyPhoneSource ?? null,
         phoneNumber: base.primaryContactPhone,
+        primaryContactJobTitle: base.primaryContactJobTitle ?? null,
+        primaryContactRawPhone: base.primaryContactRawPhone ?? null,
+        primaryContactExtension: base.primaryContactExtension ?? null,
       },
-    ];
+    ]);
   }
 
-  return enforceSinglePrimaryPerAccountRows(rows);
+  return canonicalizeBusinessAccountRows(rows);
 }
 
 export function queryBusinessAccounts(
   rows: BusinessAccountRow[],
   options: QueryOptions,
 ): { items: BusinessAccountRow[]; total: number; page: number; pageSize: number } {
-  const sourceRows = dedupeBusinessAccountRows(filterSuppressedBusinessAccountRows(rows));
+  const sourceRows = dedupeBusinessAccountRows(
+    filterSuppressedBusinessAccountRows(rows, {
+      includeInternalRows: options.includeInternalRows,
+    }),
+  );
   const normalizedSearch = options.q?.trim().toLowerCase() ?? "";
   const effectiveCategory = options.filterCategory ?? options.category;
 
   const filtered = sourceRows.filter((row) => {
     if (effectiveCategory && row.category !== effectiveCategory) {
+      return false;
+    }
+
+    if (
+      options.filterCompanyInitial &&
+      readCompanyNameInitial(row.companyName) !== options.filterCompanyInitial.trim().toUpperCase()
+    ) {
       return false;
     }
 
@@ -1159,7 +1574,7 @@ export function queryBusinessAccounts(
       return false;
     }
 
-    if (!includesFilter(resolveCompanyPhone(row), options.filterCompanyPhone)) {
+    if (!includesPhoneFilter(resolveCompanyPhone(row), options.filterCompanyPhone)) {
       return false;
     }
 
@@ -1167,7 +1582,15 @@ export function queryBusinessAccounts(
       return false;
     }
 
-    if (!includesFilter(row.primaryContactPhone, options.filterPrimaryContactPhone)) {
+    if (!includesFilter(row.primaryContactJobTitle ?? null, options.filterPrimaryContactJobTitle)) {
+      return false;
+    }
+
+    if (!includesPhoneFilter(row.primaryContactPhone, options.filterPrimaryContactPhone)) {
+      return false;
+    }
+
+    if (!includesFilter(row.primaryContactExtension ?? null, options.filterPrimaryContactExtension)) {
       return false;
     }
 
@@ -1176,6 +1599,10 @@ export function queryBusinessAccounts(
     }
 
     if (!includesFilter(row.notes, options.filterNotes)) {
+      return false;
+    }
+
+    if (!includesLastModifiedFilter(row.lastEmailedAt ?? null, options.filterLastEmailed)) {
       return false;
     }
 
@@ -1197,9 +1624,12 @@ export function queryBusinessAccounts(
       row.address,
       resolveCompanyPhone(row),
       row.primaryContactName,
+      row.primaryContactJobTitle,
       row.primaryContactPhone,
+      row.primaryContactExtension,
       row.primaryContactEmail,
       row.notes,
+      row.lastEmailedAt,
       row.businessAccountId,
     ]
       .filter(Boolean)
@@ -1256,9 +1686,30 @@ export function hasPrimaryContactChanges(
       sanitizeNullableInput(existing.primaryContactName) ||
     sanitizeNullableInput(incoming.primaryContactPhone) !==
       sanitizeNullableInput(existing.primaryContactPhone) ||
+    sanitizeNullableInput(incoming.primaryContactExtension) !==
+      sanitizeNullableInput(existing.primaryContactExtension) ||
     sanitizeNullableInput(incoming.primaryContactEmail) !==
       sanitizeNullableInput(existing.primaryContactEmail) ||
     sanitizeNullableInput(incoming.notes) !== sanitizeNullableInput(existing.notes)
+  );
+}
+
+export function hasBusinessAccountChanges(
+  existing: BusinessAccountRow,
+  incoming: BusinessAccountUpdateRequest,
+): boolean {
+  return (
+    existing.companyName.trim() !== incoming.companyName.trim() ||
+    hasAddressChanges(existing, incoming) ||
+    sanitizeNullableInput(incoming.salesRepId) !== sanitizeNullableInput(existing.salesRepId) ||
+    sanitizeNullableInput(incoming.salesRepName) !== sanitizeNullableInput(existing.salesRepName) ||
+    sanitizeNullableInput(incoming.industryType) !== sanitizeNullableInput(existing.industryType) ||
+    sanitizeNullableInput(incoming.subCategory) !== sanitizeNullableInput(existing.subCategory) ||
+    sanitizeNullableInput(incoming.companyRegion) !==
+      sanitizeNullableInput(existing.companyRegion) ||
+    sanitizeNullableInput(incoming.week) !== sanitizeNullableInput(existing.week) ||
+    incoming.category !== existing.category ||
+    !phoneValuesEquivalent(incoming.companyPhone, resolveCompanyPhone(existing))
   );
 }
 
@@ -1279,6 +1730,9 @@ export function hasAddressChanges(
 export function buildBusinessAccountUpdatePayload(
   existingRawAccount: unknown,
   update: BusinessAccountUpdateRequest,
+  options?: {
+    includeCompanyPhone?: boolean;
+  },
 ): Record<string, unknown> {
   const existingPrimary = getField(existingRawAccount, "PrimaryContact");
   const existingPrimaryRecordId = readRecordIdentity(existingPrimary);
@@ -1312,6 +1766,9 @@ export function buildBusinessAccountUpdatePayload(
     }
   }
 
+  const companyPhoneField = resolveWritableBusinessAccountPhoneField(existingRawAccount);
+  const includeCompanyPhone = options?.includeCompanyPhone === true;
+
   return {
     Name: {
       value: update.companyName,
@@ -1340,6 +1797,13 @@ export function buildBusinessAccountUpdatePayload(
       },
     },
     Attributes: updatedAttributes,
+    ...(includeCompanyPhone
+      ? {
+          [companyPhoneField]: {
+            value: update.companyPhone ?? "",
+          },
+        }
+      : {}),
     ...(update.setAsPrimaryContact && update.targetContactId !== null
       ? {
           ContactID: {
@@ -1367,6 +1831,7 @@ export function buildPrimaryContactUpdatePayload(
   update: BusinessAccountUpdateRequest,
 ): Record<string, unknown> {
   const name = splitContactName(update.primaryContactName);
+  const normalizedExtension = normalizeExtensionForSave(update.primaryContactExtension);
   return {
     DisplayName: {
       value: update.primaryContactName ?? "",
@@ -1383,6 +1848,9 @@ export function buildPrimaryContactUpdatePayload(
     },
     Phone1: {
       value: update.primaryContactPhone ?? "",
+    },
+    Phone2: {
+      value: normalizedExtension ?? "",
     },
     Email: {
       value: update.primaryContactEmail ?? "",

@@ -1,6 +1,7 @@
 import {
   type AuthCookieRefreshState,
   fetchBusinessAccountById,
+  fetchContactById,
   fetchContactsByBusinessAccountIds,
   invokeBusinessAccountAction,
   updateCustomer,
@@ -18,7 +19,7 @@ import {
   withAccountContacts,
 } from "@/lib/business-accounts";
 import {
-  isStillDuplicateContactPair,
+  isStillDuplicateContactSelection,
   normalizeRawBusinessAccountForMerge,
   normalizeRawContactForMerge,
 } from "@/lib/contact-merge";
@@ -93,6 +94,32 @@ export type ContactMergeServerContext = {
   identityPayload: Record<string, unknown>;
 };
 
+export async function fetchSelectedContactsForMerge(
+  cookieValue: string,
+  contactIds: number[],
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawContact[]> {
+  const uniqueContactIds = [...new Set(contactIds)];
+  const contactsById = new Map<number, RawContact>();
+
+  await Promise.all(
+    uniqueContactIds.map(async (contactId) => {
+      contactsById.set(
+        contactId,
+        await fetchContactById(cookieValue, contactId, authCookieRefresh),
+      );
+    }),
+  );
+
+  return contactIds.map((contactId) => {
+    const rawContact = contactsById.get(contactId);
+    if (!rawContact) {
+      throw new HttpError(422, `Contact ${contactId} could not be loaded.`);
+    }
+    return rawContact;
+  });
+}
+
 export async function fetchContactMergeServerContext(
   cookieValue: string,
   businessAccountRecordId: string,
@@ -140,61 +167,90 @@ export async function fetchContactMergeServerContext(
 export function validateContactMergeScope(
   rawAccountWithContacts: RawBusinessAccount,
   keepRawContact: RawContact,
-  deleteRawContact: RawContact,
+  selectedRawContacts: RawContact[],
 ): {
   warnings: string[];
   keepIsPrimary: boolean;
-  deleteIsPrimary: boolean;
+  primaryContactId: number | null;
 } {
   const account = normalizeRawBusinessAccountForMerge(rawAccountWithContacts);
   const keepContact = normalizeRawContactForMerge(keepRawContact);
-  const deleteContact = normalizeRawContactForMerge(deleteRawContact);
+  const selectedContacts = selectedRawContacts.map((rawContact) =>
+    normalizeRawContactForMerge(rawContact),
+  );
 
   if (!account.businessAccountId) {
     throw new HttpError(422, "Business account ID is missing on this account.");
   }
 
-  if (!keepContact.contactId || !deleteContact.contactId) {
+  if (selectedContacts.length < 2) {
+    throw new HttpError(422, "Select at least 2 contacts to merge.");
+  }
+
+  if (!keepContact.contactId) {
     throw new HttpError(
       422,
-      "One of the selected contacts has no ContactID. Contact merge cannot continue.",
+      "The kept contact has no ContactID. Contact merge cannot continue.",
     );
   }
 
-  if (keepContact.contactId === deleteContact.contactId) {
-    throw new HttpError(422, "Keep and delete contact IDs must be different.");
+  const selectedContactIds = new Set<number>();
+  for (const contact of selectedContacts) {
+    if (!contact.contactId) {
+      throw new HttpError(
+        422,
+        "One of the selected contacts has no ContactID. Contact merge cannot continue.",
+      );
+    }
+
+    if (selectedContactIds.has(contact.contactId)) {
+      throw new HttpError(422, "Selected contact IDs must be unique.");
+    }
+
+    selectedContactIds.add(contact.contactId);
   }
 
-  if (keepContact.businessAccountId && keepContact.businessAccountId !== account.businessAccountId) {
+  if (!selectedContactIds.has(keepContact.contactId)) {
+    throw new HttpError(422, "Keep contact ID must be included in the selected contacts.");
+  }
+
+  if (
+    keepContact.businessAccountId &&
+    keepContact.businessAccountId !== account.businessAccountId
+  ) {
     throw new HttpError(
       422,
       "The selected keep contact no longer belongs to this business account.",
     );
   }
 
-  if (deleteContact.businessAccountId && deleteContact.businessAccountId !== account.businessAccountId) {
-    throw new HttpError(
-      422,
-      "The selected delete contact no longer belongs to this business account.",
-    );
+  for (const contact of selectedContacts) {
+    if (
+      contact.businessAccountId &&
+      contact.businessAccountId !== account.businessAccountId
+    ) {
+      throw new HttpError(
+        422,
+        "All selected contacts must belong to the selected business account before they can be merged.",
+      );
+    }
   }
 
   if (
     account.contactIds.size > 0 &&
-    (!account.contactIds.has(keepContact.contactId) || !account.contactIds.has(deleteContact.contactId))
+    [...selectedContactIds].some((contactId) => !account.contactIds.has(contactId))
   ) {
     throw new HttpError(
       422,
-      "Both contacts must belong to the selected business account before they can be merged.",
+      "All selected contacts must belong to the selected business account before they can be merged.",
     );
   }
 
-  const keepPrimaryContactId = readRawBusinessAccountPrimaryContactId(rawAccountWithContacts);
-  const keepIsPrimary = keepPrimaryContactId === keepContact.contactId;
-  const deleteIsPrimary = keepPrimaryContactId === deleteContact.contactId;
+  const primaryContactId = readRawBusinessAccountPrimaryContactId(rawAccountWithContacts);
+  const keepIsPrimary = primaryContactId === keepContact.contactId;
   const warnings: string[] = [];
 
-  if (!isStillDuplicateContactPair(keepContact, deleteContact)) {
+  if (!isStillDuplicateContactSelection(selectedContacts)) {
     warnings.push(
       "These records no longer match duplicate rules, but they can still be merged.",
     );
@@ -203,7 +259,7 @@ export function validateContactMergeScope(
   return {
     warnings,
     keepIsPrimary,
-    deleteIsPrimary,
+    primaryContactId,
   };
 }
 
@@ -353,6 +409,15 @@ export function buildDeletedContactRowKey(
 
   const account = normalizeRawBusinessAccountForMerge(rawAccountWithContacts);
   return account.recordId ? `${account.recordId}:contact:${contactId}` : null;
+}
+
+export function buildDeletedContactRowKeys(
+  rawAccountWithContacts: RawBusinessAccount,
+  contactIds: number[],
+): string[] {
+  return contactIds
+    .map((contactId) => buildDeletedContactRowKey(rawAccountWithContacts, contactId))
+    .filter((rowKey): rowKey is string => Boolean(rowKey));
 }
 
 export function buildAccountRowsFromRawAccount(

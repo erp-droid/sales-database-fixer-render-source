@@ -30,11 +30,23 @@ function setAcumaticaEnv(overrides?: Record<string, string | undefined>): void {
   process.env.ACUMATICA_LOCALE = "en-US";
   process.env.AUTH_COOKIE_NAME = ".ASPXAUTH";
   process.env.AUTH_COOKIE_SECURE = "false";
+  process.env.USER_CREDENTIALS_SECRET = "test-user-credentials-secret";
+  process.env.READ_MODEL_SQLITE_PATH = "/tmp/acumatica-test-read-model.sqlite";
   process.env.AUTH_LOGIN_URL = "";
   process.env.AUTH_ME_URL = "";
   process.env.AUTH_LOGOUT_URL = "";
   process.env.AUTH_FORGOT_PASSWORD_URL = "";
   process.env.ACUMATICA_BRANCH = "";
+  process.env.ACUMATICA_OPPORTUNITY_ENTITY = "Opportunity";
+  process.env.ACUMATICA_OPPORTUNITY_CLASS_DEFAULT = "PRODUCTION";
+  process.env.ACUMATICA_OPPORTUNITY_STAGE_DEFAULT = "Awaiting Estimate";
+  process.env.ACUMATICA_OPPORTUNITY_LOCATION_DEFAULT = "MAIN";
+  process.env.ACUMATICA_OPPORTUNITY_ESTIMATION_OFFSET_DAYS = "0";
+  process.env.ACUMATICA_OPPORTUNITY_ATTR_WIN_JOB_ID =
+    "Do you think we are going to win this job?";
+  process.env.ACUMATICA_OPPORTUNITY_ATTR_LINK_TO_DRIVE_ID = "Link to Drive";
+  process.env.ACUMATICA_OPPORTUNITY_ATTR_PROJECT_TYPE_ID = "Project Type";
+  process.env.ACUMATICA_OPPORTUNITY_LINK_TO_DRIVE_DEFAULT = "";
 
   if (!overrides) {
     return;
@@ -238,6 +250,157 @@ describe("Acumatica endpoint resolution", () => {
     );
     expect(String(fetchMock.mock.calls[3]?.[0])).toContain(
       "/entity/Default/24.200.001/Contact?$top=1",
+    );
+  });
+
+  it("falls back across endpoints when Event is missing on the configured endpoint", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 404,
+          body: {
+            message: 'Entity "Event" not found in the endpoint [lightspeed/24.200.001]',
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 404,
+          body: {
+            message: 'Entity "Event" not found in the endpoint [eCommerce/24.200.001]',
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: { id: "event-note-1" },
+        }),
+      );
+
+    const { createEvent } = await import("@/lib/acumatica");
+
+    await createEvent("cookie", [
+      {
+        Summary: { value: "Operations sync" },
+      },
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/entity/lightspeed/24.200.001/Event",
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/entity/eCommerce/24.200.001/Event",
+    );
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain(
+      "/entity/Default/24.200.001/Event",
+    );
+  });
+
+  it("retries alternate event payloads after recoverable event create errors", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 400,
+          body: {
+            message: "Body: field cannot be found in the system.",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: { id: "event-note-2" },
+        }),
+      );
+
+    const { createEvent } = await import("@/lib/acumatica");
+
+    await createEvent("cookie", [
+      {
+        Summary: { value: "Operations sync" },
+        Body: { value: "Initial payload" },
+      },
+      {
+        Summary: { value: "Operations sync" },
+        Description: { value: "Fallback payload" },
+      },
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(firstBody.Body).toEqual({ value: "Initial payload" });
+    expect(secondBody.Description).toEqual({ value: "Fallback payload" });
+  });
+
+  it("resolves a stale contact NoteID to the linked business account", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ status: 200, body: [] }));
+
+    const { fetchBusinessAccountById, validateSessionWithAcumatica } = await import(
+      "@/lib/acumatica"
+    );
+
+    await validateSessionWithAcumatica("cookie");
+    fetchMock.mockReset();
+
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ status: 200, body: [] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Invalid business account identifier" },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: 200, body: [] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: [
+            {
+              id: "contact-note-id",
+              NoteID: { value: "contact-note-id" },
+              BusinessAccount: { value: "02670D2595" },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: [
+            {
+              id: "account-record-id",
+              NoteID: { value: "account-note-id" },
+              BusinessAccountID: { value: "02670D2595" },
+              Name: { value: "MeadowBrook Construction - Internal" },
+            },
+          ],
+        }),
+      );
+
+    const result = await fetchBusinessAccountById("cookie", "contact-note-id");
+
+    expect(result).toMatchObject({
+      id: "account-record-id",
+      BusinessAccountID: { value: "02670D2595" },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(String(fetchMock.mock.calls[4]?.[0])).toContain(
+      "/Contact?%24top=1&%24skip=0&%24filter=NoteID+eq+%27contact-note-id%27",
+    );
+    expect(String(fetchMock.mock.calls[5]?.[0])).toContain(
+      "/BusinessAccount?%24top=1&%24skip=0",
+    );
+    expect(String(fetchMock.mock.calls[5]?.[0])).toContain(
+      "BusinessAccountID+eq+%2702670D2595%27",
     );
   });
 });
@@ -445,5 +608,62 @@ describe("Acumatica entity creation", () => {
 
     expect(requestUrl).toContain("/entity/lightspeed/24.200.001/Contact");
     expect(requestInit?.method).toBe("PUT");
+  });
+
+  it("creates opportunities with PUT on the configured opportunity entity before falling back", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ status: 200, body: { OpportunityID: { value: "000777" } } }),
+    );
+
+    const { createOpportunity } = await import("@/lib/acumatica");
+    await createOpportunity("cookie", {
+      Subject: { value: "Warehouse electrical upgrade" },
+    });
+
+    const requestUrl = String(fetchMock.mock.calls[0]?.[0]);
+    const requestInit = fetchMock.mock.calls[0]?.[1];
+
+    expect(requestUrl).toContain("/entity/lightspeed/24.200.001/Opportunity");
+    expect(requestInit?.method).toBe("PUT");
+  });
+
+  it("falls back to POST when PUT is rejected on the configured opportunity entity", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ status: 405, body: { message: "Method not allowed" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ status: 200, body: { OpportunityID: { value: "000778" } } }),
+      );
+
+    const { createOpportunity } = await import("@/lib/acumatica");
+    await createOpportunity("cookie", {
+      Subject: { value: "Warehouse electrical upgrade" },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/Opportunity");
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("PUT");
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("POST");
+  });
+});
+
+describe("readOpportunityId", () => {
+  it("extracts wrapped OpportunityID", async () => {
+    const { readOpportunityId } = await import("@/lib/acumatica");
+    expect(readOpportunityId({ OpportunityID: { value: "000777" } })).toBe("000777");
+  });
+
+  it("extracts wrapped OpportunityId", async () => {
+    const { readOpportunityId } = await import("@/lib/acumatica");
+    expect(readOpportunityId({ OpportunityId: { value: "000778" } })).toBe("000778");
+  });
+
+  it("extracts wrapped OpportunityNbr", async () => {
+    const { readOpportunityId } = await import("@/lib/acumatica");
+    expect(readOpportunityId({ OpportunityNbr: { value: "000779" } })).toBe("000779");
+  });
+
+  it("extracts wrapped ID", async () => {
+    const { readOpportunityId } = await import("@/lib/acumatica");
+    expect(readOpportunityId({ ID: { value: "000780" } })).toBe("000780");
   });
 });

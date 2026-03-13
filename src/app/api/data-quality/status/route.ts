@@ -17,14 +17,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const body = await request.json().catch(() => {
       throw new HttpError(400, "Request body must be valid JSON.");
     });
-    const { action, issueKeys } = parseDataQualityStatusPayload(body);
+    const { action, issueKeys, reviewKeys } = parseDataQualityStatusPayload(body);
 
     // Ensure history reflects latest snapshot before applying status changes.
     const snapshot = await getLiveDataQualitySnapshot(cookieValue, authCookieRefresh, {
       refresh: false,
     });
     await syncDataQualityHistory(snapshot);
-    await markIssuesReviewed(issueKeys, action);
+    await markIssuesReviewed(issueKeys, action, reviewKeys ?? []);
 
     const response = NextResponse.json({
       ok: true,

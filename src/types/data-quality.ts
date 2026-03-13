@@ -53,7 +53,14 @@ export type DataQualityIssueRow = {
   contactId: number | null;
   contactName: string | null;
   contactPhone: string | null;
+  contactExtension?: string | null;
   contactEmail: string | null;
+  rawContactName: string | null;
+  rawContactPhone: string | null;
+  rawContactEmail: string | null;
+  rawCompanyName: string | null;
+  rawAddress: string | null;
+  sourceRowKind: "contact" | "account" | "unknown";
   isPrimaryContact: boolean;
   salesRepName: string | null;
   address: string;
@@ -68,11 +75,56 @@ export type DataQualityIssueRow = {
 export type DataQualityIssuesResponse = {
   metric: DataQualityMetricKey;
   basis: DataQualityBasis;
+  salesRep: string | null;
   total: number;
   page: number;
   pageSize: number;
   items: DataQualityIssueRow[];
   computedAtIso: string;
+};
+
+export type DataQualityTaskPriority = "high" | "medium" | "low";
+
+export type DataQualityTaskActionPage = "accounts" | "quality";
+
+export type DataQualityTask = {
+  taskKey: string;
+  metric: DataQualityMetricKey;
+  metricLabel: string;
+  basis: DataQualityBasis;
+  assigneeName: string;
+  priority: DataQualityTaskPriority;
+  actionPage: DataQualityTaskActionPage;
+  title: string;
+  summary: string;
+  fixSteps: string[];
+  affectedCount: number;
+  actionable: boolean;
+  reviewReason: "missing_identity" | null;
+  companyAssignmentContext?: {
+    displayName: string | null;
+    email: string | null;
+    phone: string | null;
+    sourceCompanyName: string | null;
+    address: string | null;
+    clueBadges: string[];
+  };
+  issue: DataQualityIssueRow;
+  relatedIssues?: DataQualityIssueRow[];
+};
+
+export type DataQualityTaskRepSummary = {
+  salesRepName: string;
+  openTasks: number;
+  highPriorityTasks: number;
+};
+
+export type DataQualityTasksResponse = {
+  computedAtIso: string;
+  total: number;
+  reviewTotal?: number;
+  tasks: DataQualityTask[];
+  reps: DataQualityTaskRepSummary[];
 };
 
 export type DataQualityStatus = "open" | "reviewed" | "resolved";

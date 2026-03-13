@@ -1,0 +1,392 @@
+.pageContent {
+  --ink-strong: var(--app-text);
+  --ink: var(--app-text);
+  --ink-muted: var(--app-text-secondary);
+  --panel: var(--app-surface);
+  --panel-alt: #f7fafc;
+  --border: var(--app-border);
+  --accent: var(--app-green);
+  --accent-strong: var(--app-green);
+  --danger: var(--app-red);
+  --success: var(--app-green);
+  position: relative;
+  z-index: 1;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.brandBlock {
+  display: grid;
+  gap: 4px;
+}
+
+.brandLogo {
+  width: min(240px, 62vw);
+  height: auto;
+  object-fit: contain;
+}
+
+.kicker {
+  margin: 0;
+  font-family: var(--font-mono), "Courier New", monospace;
+  color: var(--accent-strong);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 6px 0 4px;
+  font-size: clamp(25px, 4vw, 38px);
+  color: var(--ink-strong);
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--ink-muted);
+  max-width: 720px;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.navButton,
+.logoutButton,
+.secondaryButton,
+.primaryButton,
+.dangerButton {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.navButton,
+.logoutButton,
+.secondaryButton {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.navButton:disabled,
+.logoutButton:disabled,
+.secondaryButton:disabled,
+.primaryButton:disabled,
+.dangerButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.primaryButton {
+  background: #e4f1ff;
+  border-color: #8cbbe8;
+  color: #1f5f9f;
+}
+
+.dangerButton {
+  background: #fff0f0;
+  border-color: #d79a9a;
+  color: #9d2f2f;
+}
+
+.navButton {
+  text-decoration: none;
+}
+
+.userName {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.warning,
+.success {
+  margin: 0 0 14px;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.warning {
+  background: #fff0f0;
+  border: 1px solid #efc4c4;
+  color: #872929;
+}
+
+.success {
+  background: #e9f6ea;
+  border: 1px solid #b8d9bd;
+  color: #205b2a;
+}
+
+.statusBar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 16px;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.stateTag {
+  background: #e9f4ff;
+  color: #1f5f9f;
+  border: 1px solid #b6d7f2;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.summaryCard {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.summaryCard small {
+  color: var(--ink-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.summaryCard strong {
+  color: var(--ink-strong);
+  font-size: 30px;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.1fr) minmax(320px, 1fr) auto;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.controlField {
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-strong);
+}
+
+.controlInput {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 9px 10px;
+  color: var(--ink);
+}
+
+.controlActions {
+  display: flex;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filterChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.filterChip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink-muted);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.filterChip:hover {
+  border-color: #8cbbe8;
+  color: #1f5f9f;
+}
+
+.filterChipActive {
+  background: #e9f4ff;
+  border-color: #8cbbe8;
+  color: #1f5f9f;
+  box-shadow: 0 8px 20px rgba(31, 95, 159, 0.08);
+}
+
+.controlHint {
+  grid-column: 1 / -1;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f7fafc;
+  color: var(--ink-muted);
+  padding: 11px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.tableShell {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--panel);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 960px;
+}
+
+.table th,
+.table td {
+  padding: 12px 14px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.table thead th {
+  background: var(--panel-alt);
+  color: var(--ink-strong);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.row:hover td {
+  background: #fbfdff;
+}
+
+.loadingCell {
+  color: var(--ink-muted);
+  text-align: center;
+  padding: 26px 14px;
+}
+
+.actionCell {
+  display: grid;
+  gap: 4px;
+}
+
+.actionCell strong {
+  color: var(--ink-strong);
+}
+
+.metaText {
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.reasonCell {
+  white-space: normal;
+  min-width: 220px;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.status_pending_review {
+  background: #fff7df;
+  color: #8b6614;
+  border-color: #ead28e;
+}
+
+.status_approved {
+  background: #e8f6eb;
+  color: #236f38;
+  border-color: #b4ddbe;
+}
+
+.status_cancelled {
+  background: #f1f3f5;
+  color: #58626f;
+  border-color: #d6dce3;
+}
+
+.status_executing {
+  background: #e9f4ff;
+  color: #1f5f9f;
+  border-color: #b6d7f2;
+}
+
+.status_executed {
+  background: #f1fbf2;
+  color: #1e6840;
+  border-color: #c0e2c9;
+}
+
+.status_failed {
+  background: #fff0f0;
+  color: #8a2f2f;
+  border-color: #efc4c4;
+}
+
+.failureText {
+  margin: 8px 0 0;
+  color: #8a2f2f;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+@media (max-width: 960px) {
+  .header {
+    flex-direction: column;
+  }
+
+  .headerActions {
+    justify-content: flex-start;
+  }
+
+  .summaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .controls {
+    grid-template-columns: 1fr;
+  }
+
+  .controlActions {
+    justify-content: flex-start;
+  }
+}

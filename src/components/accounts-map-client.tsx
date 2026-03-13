@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Image from "next/image";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import { AppChrome } from "@/components/app-chrome";
 import type {
   BusinessAccountDetailResponse,
   BusinessAccountMapPoint,
@@ -27,6 +26,11 @@ import {
   setMemoryCachedDataset,
 } from "@/lib/client-dataset-cache";
 import { formatPhoneDraftValue, normalizePhoneForSave } from "@/lib/phone";
+import { CallPhoneButton } from "@/components/call-phone-button";
+import {
+  QueueDeleteContactsModal,
+  type QueueDeleteContactTarget,
+} from "@/components/queue-delete-contacts-modal";
 
 import styles from "./accounts-map-client.module.css";
 
@@ -41,7 +45,6 @@ type SessionResponse = {
 };
 
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
-const DEFAULT_LIMIT = 600;
 const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v3";
 const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
 
@@ -636,6 +639,7 @@ function buildMapContactUpdateRequest(
     subCategory: targetRow.subCategory,
     companyRegion: targetRow.companyRegion,
     week: targetRow.week,
+    companyPhone: targetRow.companyPhone ?? null,
     primaryContactName: targetRow.primaryContactName,
     primaryContactPhone: targetRow.primaryContactPhone,
     primaryContactEmail: targetRow.primaryContactEmail,
@@ -823,7 +827,6 @@ export function AccountsMapClient({
   const [totalCandidates, setTotalCandidates] = useState(0);
   const [geocodedCount, setGeocodedCount] = useState(0);
   const [unmappedCount, setUnmappedCount] = useState(0);
-  const [activeLimit, setActiveLimit] = useState(DEFAULT_LIMIT);
   const [postalRegions, setPostalRegions] = useState<PostalRegion[]>([]);
   const [postalRegionsError, setPostalRegionsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -835,6 +838,7 @@ export function AccountsMapClient({
   const [editingContactRowKey, setEditingContactRowKey] = useState<string | null>(null);
   const [contactDrafts, setContactDrafts] = useState<Record<string, MapContactDraft>>({});
   const [contactActionError, setContactActionError] = useState<string | null>(null);
+  const [deleteQueueContact, setDeleteQueueContact] = useState<MapContactSummary | null>(null);
   const [panelPreferences, setPanelPreferences] = useState<MapPanelPreferences>(
     DEFAULT_MAP_PANEL_PREFERENCES,
   );
@@ -1026,15 +1030,13 @@ export function AccountsMapClient({
       try {
         const normalizedQuery = q.trim().toLowerCase();
         const lastSyncedAt = readDatasetSyncStamp() ?? "unsynced";
-        const effectiveLimit = DEFAULT_LIMIT;
-        const cacheKey = `${lastSyncedAt}|limit:${effectiveLimit}|${normalizedQuery}`;
+        const cacheKey = `${lastSyncedAt}|scope:all|${normalizedQuery}`;
         const cached = readMapCache(cacheKey);
         if (cached) {
           setPoints(cached.items);
           setTotalCandidates(cached.totalCandidates);
           setGeocodedCount(cached.geocodedCount);
           setUnmappedCount(cached.unmappedCount);
-          setActiveLimit(effectiveLimit);
           setSelectedId((current) =>
             cached.items.some((item) => item.id === current)
               ? current
@@ -1043,9 +1045,7 @@ export function AccountsMapClient({
           return;
         }
 
-        const params = new URLSearchParams({
-          limit: String(effectiveLimit),
-        });
+        const params = new URLSearchParams();
         if (normalizedQuery) {
           params.set("q", normalizedQuery);
         }
@@ -1071,7 +1071,6 @@ export function AccountsMapClient({
         setTotalCandidates(payload.totalCandidates);
         setGeocodedCount(payload.geocodedCount);
         setUnmappedCount(payload.unmappedCount);
-        setActiveLimit(effectiveLimit);
         writeMapCache(cacheKey, payload);
         setSelectedId((current) =>
           payload.items.some((item) => item.id === current) ? current : payload.items[0]?.id ?? null,
@@ -1372,12 +1371,6 @@ export function AccountsMapClient({
     setPanelPreferences((current) => buildAllDetailPreferences(current));
   }
 
-  async function handleLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.replace("/signin");
-    router.refresh();
-  }
-
   async function handleSaveContactEdits(contact: MapContactSummary) {
     if (!selectedPoint) {
       return;
@@ -1491,12 +1484,17 @@ export function AccountsMapClient({
       setContactActionError("Contact must have ContactID before it can be deleted.");
       return;
     }
+    setDeleteQueueContact(contact);
+  }
 
-    const contactLabel = contact.name?.trim() || `Contact ${contact.contactId}`;
-    const confirmed = window.confirm(
-      `Delete ${contactLabel} from Acumatica? This permanently removes the contact.`,
-    );
-    if (!confirmed) {
+  async function handleConfirmDeleteContact(reason: string) {
+    if (!selectedPoint || !deleteQueueContact) {
+      return;
+    }
+
+    const contact = deleteQueueContact;
+    const contactId = contact.contactId;
+    if (contactId === null || contactId === undefined) {
       return;
     }
 
@@ -1514,8 +1512,12 @@ export function AccountsMapClient({
     setContactActionError(null);
 
     try {
-      const deleteResponse = await fetch(`/api/contacts/${contact.contactId}`, {
+      const deleteResponse = await fetch(`/api/contacts/${contactId}?source=map`, {
         method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ reason }),
       });
       const deletePayload = await readJsonResponse<{ error?: string }>(deleteResponse);
       if (!deleteResponse.ok) {
@@ -1548,11 +1550,11 @@ export function AccountsMapClient({
       } catch {
         nextAccountRows = removeDeletedContactFromAccountRows(
           accountRows,
-          contact.contactId,
+          contactId,
           contact.rowKey,
         );
         setContactActionError(
-          "Contact deleted in Acumatica. The account refresh failed, so the local view was updated conservatively.",
+          "Contact queued for deletion. The account refresh failed, so the local view was updated conservatively.",
         );
       }
 
@@ -1574,9 +1576,12 @@ export function AccountsMapClient({
         ),
       );
       cancelEditingContact(contact.rowKey);
+      setDeleteQueueContact(null);
     } catch (requestError) {
       setContactActionError(
-        requestError instanceof Error ? requestError.message : "Failed to delete contact.",
+        requestError instanceof Error
+          ? requestError.message
+          : "Failed to queue contact deletion.",
       );
     } finally {
       setUpdatingContactRowKey(null);
@@ -1677,34 +1682,47 @@ export function AccountsMapClient({
   }
 
   return (
-    <main className={styles.page}>
-      <header className={styles.topbar}>
-        <div className={styles.brand}>
-          <Image alt="MeadowBrook" className={styles.brandLogo} height={202} priority src="/mb-logo.png" width={712} />
-          <div>
-            <p className={styles.kicker}>Business Accounts Map</p>
-            <h1 className={styles.title}>Contacts Location View</h1>
-          </div>
-        </div>
-        <div className={styles.actions}>
-          <input
-            className={styles.searchInput}
-            onChange={(event) => setQ(event.target.value)}
-            placeholder="Search company, contact, address"
-            value={q}
-          />
-          <Link className={styles.navButton} href="/accounts">
-            Back To Accounts
-          </Link>
-          <Link className={styles.navButton} href="/quality">
-            Data quality
-          </Link>
-          <button className={styles.navButton} onClick={handleLogout} type="button">
-            Sign out
-          </button>
-          <span className={styles.userName}>{session?.user?.name ?? "Signed in"}</span>
-        </div>
-      </header>
+    <AppChrome
+      contentClassName={styles.pageContent}
+      headerActions={
+        <input
+          className={styles.searchInput}
+          onChange={(event) => setQ(event.target.value)}
+          placeholder="Search company, contact, address"
+          value={q}
+        />
+      }
+      subtitle="Business Accounts Map"
+      title="Contacts Location View"
+      userName={session?.user?.name ?? "Signed in"}
+    >
+
+      <QueueDeleteContactsModal
+        isOpen={Boolean(deleteQueueContact)}
+        isSubmitting={
+          contactActionMode === "delete" &&
+          deleteQueueContact !== null &&
+          updatingContactRowKey === deleteQueueContact.rowKey
+        }
+        onClose={() => {
+          if (contactActionMode === "delete") {
+            return;
+          }
+          setDeleteQueueContact(null);
+        }}
+        onConfirm={handleConfirmDeleteContact}
+        targets={
+          deleteQueueContact
+            ? [
+                {
+                  key: deleteQueueContact.rowKey,
+                  contactName: deleteQueueContact.name,
+                  companyName: selectedPoint?.companyName ?? null,
+                } satisfies QueueDeleteContactTarget,
+              ]
+            : []
+        }
+      />
 
       <section className={styles.mapShell}>
         <div className={styles.mapCanvas} ref={mapContainerRef} />
@@ -1766,7 +1784,6 @@ export function AccountsMapClient({
 
           {panelPreferences.summaryStats ? (
             <div className={styles.stats}>
-              <span>Limit: {activeLimit}</span>
               <span>Account Candidates: {totalCandidates}</span>
               <span>Mapped Accounts: {geocodedCount}</span>
               <span>Unmapped Accounts: {unmappedCount}</span>
@@ -1940,7 +1957,21 @@ export function AccountsMapClient({
                             </div>
                           ) : (
                             <>
-                              <p>{renderText(contact.phone)}</p>
+                              <div className={styles.contactPhoneRow}>
+                                <p>{renderText(contact.phone)}</p>
+                                <CallPhoneButton
+                                  label={`${contact.name ?? selectedPoint?.companyName ?? "Contact"} phone`}
+                                  phone={contact.phone}
+                                  context={{
+                                    sourcePage: "map",
+                                    linkedBusinessAccountId: selectedPoint?.businessAccountId ?? null,
+                                    linkedAccountRowKey: contact.rowKey ?? null,
+                                    linkedContactId: contact.contactId,
+                                    linkedCompanyName: selectedPoint?.companyName ?? null,
+                                    linkedContactName: contact.name,
+                                  }}
+                                />
+                              </div>
                               <p>{renderText(contact.email)}</p>
                               {contact.notes?.trim() ? <p>{contact.notes}</p> : null}
                             </>
@@ -2026,6 +2057,6 @@ export function AccountsMapClient({
           ) : null}
         </aside>
       </section>
-    </main>
+    </AppChrome>
   );
 }

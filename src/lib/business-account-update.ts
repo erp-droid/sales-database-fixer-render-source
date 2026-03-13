@@ -2,7 +2,7 @@ import type {
   BusinessAccountRow,
   BusinessAccountUpdateRequest,
 } from "@/types/business-account";
-import { sanitizeNullableInput } from "@/lib/business-accounts";
+import { resolveCompanyPhone, sanitizeNullableInput } from "@/lib/business-accounts";
 
 function normalizeRequiredText(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -74,6 +74,7 @@ export function isPrimaryOnlyUpdate(
     sameNullableText(currentAccountRow.companyRegion, updateRequest.companyRegion) &&
     sameNullableText(currentAccountRow.week, updateRequest.week) &&
     currentAccountRow.category === updateRequest.category &&
+    sameNullableText(resolveCompanyPhone(currentAccountRow), updateRequest.companyPhone) &&
     sameNullableText(
       currentRowForContactComparison.primaryContactName,
       updateRequest.primaryContactName,
@@ -81,6 +82,10 @@ export function isPrimaryOnlyUpdate(
     sameNullableText(
       currentRowForContactComparison.primaryContactPhone,
       updateRequest.primaryContactPhone,
+    ) &&
+    sameNullableText(
+      currentRowForContactComparison.primaryContactExtension,
+      updateRequest.primaryContactExtension,
     ) &&
     sameNullableText(
       currentRowForContactComparison.primaryContactEmail,
@@ -115,8 +120,10 @@ export function buildPrimaryOnlyUpdateRequest(
     subCategory: currentAccountRow.subCategory,
     companyRegion: currentAccountRow.companyRegion,
     week: currentAccountRow.week,
+    companyPhone: resolveCompanyPhone(currentAccountRow),
     primaryContactName: currentRowForContactComparison.primaryContactName,
     primaryContactPhone: currentRowForContactComparison.primaryContactPhone,
+    primaryContactExtension: currentRowForContactComparison.primaryContactExtension ?? null,
     primaryContactEmail: currentRowForContactComparison.primaryContactEmail,
     category: currentAccountRow.category,
     notes: currentRowForContactComparison.notes,

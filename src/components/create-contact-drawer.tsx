@@ -21,6 +21,7 @@ export type CreateContactAccountOption = {
 
 type CreateContactDrawerProps = {
   accountOptions: CreateContactAccountOption[];
+  initialAccountRecordId?: string | null;
   isOpen: boolean;
   onClose: () => void;
   onContactCreated: (
@@ -117,6 +118,7 @@ function isBusinessAccountContactCreatePartialResponse(
 
 export function CreateContactDrawer({
   accountOptions,
+  initialAccountRecordId = null,
   isOpen,
   onClose,
   onContactCreated,
@@ -144,6 +146,23 @@ export function CreateContactDrawer({
     setIsCreatingContact(false);
     setContactPartialComplete(false);
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || selectedAccountRecordId || !initialAccountRecordId) {
+      return;
+    }
+
+    const matchingOption =
+      accountOptions.find(
+        (option) => option.businessAccountRecordId === initialAccountRecordId,
+      ) ?? null;
+    if (!matchingOption) {
+      return;
+    }
+
+    setSelectedAccountRecordId(matchingOption.businessAccountRecordId);
+    setAccountSearchTerm(matchingOption.companyName);
+  }, [accountOptions, initialAccountRecordId, isOpen, selectedAccountRecordId]);
 
   const selectedAccount = useMemo(
     () =>

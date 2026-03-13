@@ -1,8 +1,8 @@
 import {
-  filterSuppressedBusinessAccountRows,
   queryBusinessAccounts,
   resolveCompanyPhone,
 } from "@/lib/business-accounts";
+import { applyDeferredActionsToRows } from "@/lib/deferred-actions-store";
 import { invalidateReadModelCaches, registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import { getReadModelDb } from "@/lib/read-model/db";
 import type {
@@ -18,9 +18,11 @@ type StoredAccountRow = {
 type ReadModelListQuery = Parameters<typeof queryBusinessAccounts>[1];
 
 let allRowsCache: BusinessAccountRow[] | null = null;
+let allRowsCacheVersion: string | null = null;
 
 registerReadModelCacheClearer(() => {
   allRowsCache = null;
+  allRowsCacheVersion = null;
 });
 
 function normalizeText(value: string | null | undefined): string {
@@ -70,8 +72,28 @@ function parseStoredRow(payload: string): BusinessAccountRow | null {
   }
 }
 
+function readAccountRowsVersion(): string {
+  const db = getReadModelDb();
+  const row = db
+    .prepare(
+      `
+      SELECT
+        COUNT(*) AS row_count,
+        COALESCE(MAX(updated_at), '') AS latest_updated_at
+      FROM account_rows
+      `,
+    )
+    .get() as {
+    row_count?: number;
+    latest_updated_at?: string;
+  };
+
+  return `${Number(row?.row_count ?? 0)}|${row?.latest_updated_at ?? ""}`;
+}
+
 export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
-  if (allRowsCache) {
+  const nextVersion = readAccountRowsVersion();
+  if (allRowsCache && allRowsCacheVersion === nextVersion) {
     return allRowsCache;
   }
 
@@ -89,7 +111,8 @@ export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
   allRowsCache = rows
     .map((row) => parseStoredRow(row.payload_json))
     .filter((row): row is BusinessAccountRow => row !== null);
-  allRowsCache = filterSuppressedBusinessAccountRows(allRowsCache);
+  allRowsCache = applyDeferredActionsToRows(allRowsCache);
+  allRowsCacheVersion = nextVersion;
 
   return allRowsCache;
 }
@@ -97,7 +120,7 @@ export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
 export function replaceAllAccountRows(rows: BusinessAccountRow[]): void {
   const db = getReadModelDb();
   const now = new Date().toISOString();
-  const nextRows = filterSuppressedBusinessAccountRows(rows);
+  const nextRows = rows;
 
   const replace = db.transaction((nextRows: BusinessAccountRow[]) => {
     db.prepare("DELETE FROM account_rows").run();
@@ -222,7 +245,7 @@ export function replaceReadModelAccountRows(
 ): void {
   const db = getReadModelDb();
   const normalizedAccountRecordId = accountRecordId.trim();
-  const nextRows = filterSuppressedBusinessAccountRows(rows);
+  const nextRows = rows;
   const accountKey =
     rows[0]?.accountRecordId?.trim() ||
     rows[0]?.id.trim() ||
@@ -364,14 +387,20 @@ export function readBusinessAccountRowsFromReadModel(
 
 export function readBusinessAccountDetailFromReadModel(
   accountRecordId: string,
+  contactId?: number | null,
 ): BusinessAccountDetailResponse | null {
   const rows = readBusinessAccountRowsFromReadModel(accountRecordId);
   if (rows.length === 0) {
     return null;
   }
 
+  const requestedRow =
+    contactId !== null && contactId !== undefined
+      ? rows.find((row) => row.contactId === contactId)
+      : null;
+
   return {
-    row: rows.find((row) => row.isPrimaryContact) ?? rows[0],
+    row: requestedRow ?? rows.find((row) => row.isPrimaryContact) ?? rows[0],
     rows,
   };
 }

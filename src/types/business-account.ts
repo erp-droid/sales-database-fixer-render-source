@@ -12,13 +12,18 @@ export type SortBy =
   | "address"
   | "companyPhone"
   | "primaryContactName"
+  | "primaryContactJobTitle"
   | "primaryContactPhone"
+  | "primaryContactExtension"
   | "primaryContactEmail"
   | "notes"
   | "category"
+  | "lastEmailedAt"
   | "lastModifiedIso";
 
 export type SortDir = "asc" | "desc";
+
+export type CompanyPhoneSource = "account" | "placeholder" | "fallback";
 
 export type BusinessAccountRow = {
   id: string;
@@ -27,6 +32,7 @@ export type BusinessAccountRow = {
   contactId?: number | null;
   isPrimaryContact?: boolean;
   companyPhone?: string | null;
+  companyPhoneSource?: CompanyPhoneSource | null;
   phoneNumber?: string | null;
   salesRepId: string | null;
   salesRepName: string | null;
@@ -44,11 +50,15 @@ export type BusinessAccountRow = {
   postalCode: string;
   country: string;
   primaryContactName: string | null;
+  primaryContactJobTitle?: string | null;
   primaryContactPhone: string | null;
+  primaryContactExtension?: string | null;
+  primaryContactRawPhone?: string | null;
   primaryContactEmail: string | null;
   primaryContactId: number | null;
   category: Category | null;
   notes: string | null;
+  lastEmailedAt?: string | null;
   lastModifiedIso: string | null;
 };
 
@@ -65,14 +75,17 @@ export type BusinessAccountUpdateRequest = {
   targetContactId: number | null;
   setAsPrimaryContact: boolean;
   primaryOnlyIntent: boolean;
+  contactOnlyIntent?: boolean;
   salesRepId: string | null;
   salesRepName: string | null;
   industryType: string | null;
   subCategory: string | null;
   companyRegion: string | null;
   week: string | null;
+  companyPhone: string | null;
   primaryContactName: string | null;
   primaryContactPhone: string | null;
+  primaryContactExtension?: string | null;
   primaryContactEmail: string | null;
   category: Category | null;
   notes: string | null;
@@ -89,6 +102,7 @@ export type BusinessAccountsResponse = {
 export type BusinessAccountDetailResponse = {
   row: BusinessAccountRow;
   rows?: BusinessAccountRow[];
+  accountLocation?: string | null;
 };
 
 export type BusinessAccountMapPoint = {

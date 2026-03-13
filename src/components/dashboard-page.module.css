@@ -1,0 +1,1100 @@
+.pageContent {
+  --ink-strong: var(--app-text);
+  --ink: var(--app-text);
+  --ink-muted: var(--app-text-secondary);
+  --panel: var(--app-surface);
+  --panel-alt: #f7fafc;
+  --border: var(--app-border);
+  --accent: var(--app-green);
+  --accent-strong: var(--app-green);
+  --danger: var(--app-red);
+  --success: var(--app-green);
+  display: grid;
+  gap: 12px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.brandBlock {
+  display: grid;
+  gap: 2px;
+}
+
+.kicker,
+.sectionKicker {
+  margin: 0;
+  font-family: var(--font-mono), "Courier New", monospace;
+  color: var(--accent-strong);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(24px, 3.2vw, 32px);
+  color: var(--ink-strong);
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--ink-muted);
+  max-width: 560px;
+  font-size: 14px;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.navButton,
+.logoutButton,
+.subnavLink,
+.subnavLinkActive,
+.ghostButton,
+.primaryButton,
+.filterToggle,
+.quickButton,
+.tableRowButton,
+.trendButton,
+.summaryLink {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 14px;
+  background: var(--panel-alt);
+  color: var(--ink-strong);
+  text-decoration: none;
+}
+
+.navButton,
+.logoutButton,
+.ghostButton,
+.primaryButton,
+.filterToggle,
+.quickButton,
+.tableRowButton,
+.trendButton {
+  cursor: pointer;
+}
+
+.logoutButton {
+  background: #fff3ef;
+  color: #a34731;
+}
+
+.primaryButton {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.ghostButton {
+  background: var(--panel);
+}
+
+.userName {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.subnav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.subnavLink,
+.subnavLinkActive {
+  background: var(--panel);
+}
+
+.subnavLinkActive {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: #eef7ff;
+}
+
+.warning,
+.error {
+  margin: 0;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.warning,
+.error {
+  border: 1px solid #edb6b2;
+  background: #ffe7e5;
+  color: var(--danger);
+}
+
+.statusBar {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.stateTag,
+.badge,
+.softBadge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.stateTag,
+.badge {
+  border: 1px solid #9ec2e6;
+  background: #e9f4ff;
+  color: #1f5f9f;
+}
+
+.softBadge {
+  background: #f1f5fa;
+  color: var(--ink-muted);
+}
+
+.statusNote {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.card,
+.metricCard,
+.chartCard,
+.tableCard,
+.detailGrid div,
+.breakdownRow,
+.timelineItem,
+.employeePill {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.card,
+.chartCard,
+.tableCard {
+  padding: 14px;
+}
+
+.cardHeader,
+.tableHeader,
+.sectionHeader,
+.filterHeader,
+.chartHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.sectionTitle,
+.tableTitle,
+.chartTitle {
+  margin: 0;
+  color: var(--ink-strong);
+  font-size: 20px;
+}
+
+.sectionSubtle,
+.chartMeta,
+.tableMeta {
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.controlBar {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.controlRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.controlInputs {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.compactField {
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.filtersPanel {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.filtersCard {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.filterHeader {
+  align-items: center;
+}
+
+.quickRanges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.filterGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.filterField {
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--ink-strong);
+}
+
+.filterInput,
+.filterSelect {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 9px 11px;
+  font-size: 14px;
+}
+
+.searchSpan {
+  grid-column: span 2;
+}
+
+.employeePicker {
+  display: grid;
+  gap: 10px;
+}
+
+.employeeHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.employeeQuickActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.employeeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.employeePill {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  padding: 10px 12px;
+  background: #f9fbfe;
+}
+
+.employeePill span {
+  font-weight: 600;
+  color: var(--ink-strong);
+}
+
+.employeePill small {
+  grid-column: 2;
+  color: var(--ink-muted);
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.priorityGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.priorityCard {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+  min-height: 88px;
+}
+
+.priorityCard small {
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.priorityCard strong {
+  color: var(--ink-strong);
+  font-size: 24px;
+}
+
+.priorityCard span {
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.metricCard {
+  padding: 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.metricCard small {
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.metricCard strong {
+  color: var(--ink-strong);
+  font-size: 28px;
+}
+
+.overviewGrid,
+.heroGrid {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 12px;
+}
+
+.summarySection {
+  display: grid;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.sideStack {
+  display: grid;
+  gap: 12px;
+}
+
+.chartCard {
+  display: grid;
+  gap: 14px;
+}
+
+.chartLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.legendSwatch,
+.legendSwatchConnected {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+}
+
+.legendSwatch {
+  background: linear-gradient(180deg, #cfe4ff 0%, #84afe7 100%);
+}
+
+.legendSwatchConnected {
+  background: linear-gradient(180deg, #67b57b 0%, #2d7e4a 100%);
+}
+
+.chartFrame {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.chartYAxis {
+  min-height: 252px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 0 0 56px;
+}
+
+.chartYAxisValue {
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.chartViewport {
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.trendChart {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  min-height: 252px;
+  min-width: max-content;
+}
+
+.trendColumn {
+  display: grid;
+  gap: 10px;
+  width: 82px;
+  flex: 0 0 82px;
+}
+
+.trendButton {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  background: #f9fbff;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  text-align: left;
+}
+
+.trendButtonActive .trendBarTrack {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.trendButtonActive {
+  border-color: #b8d7f4;
+  background: #f1f8ff;
+}
+
+.trendValue {
+  color: var(--ink-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.trendBarTrack {
+  position: relative;
+  min-height: 190px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #eff4fb 0%, #f8fbff 100%);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.trendBarTotal,
+.trendBarAnswered {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.trendBarTotal {
+  background: linear-gradient(180deg, #cfe4ff 0%, #84afe7 100%);
+}
+
+.trendBarAnswered {
+  background: linear-gradient(180deg, #67b57b 0%, #2d7e4a 100%);
+}
+
+.trendFooter {
+  display: grid;
+  gap: 4px;
+}
+
+.trendLabel {
+  color: var(--ink-strong);
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 32px;
+  line-height: 1.35;
+}
+
+.trendMeta {
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.selectionPanel {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.selectionHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.selectionTitle {
+  margin: 2px 0 0;
+  color: var(--ink-strong);
+  font-size: 20px;
+}
+
+.selectionStats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.selectionStat {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f9fbff;
+  padding: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.selectionStat small {
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.selectionStat strong {
+  color: var(--ink-strong);
+  font-size: 19px;
+}
+
+.selectionStat span {
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.selectionFeed {
+  display: grid;
+  gap: 10px;
+}
+
+.selectionFeedItem {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f9fbff;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.selectionFeedLabel {
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.listCard {
+  display: grid;
+  gap: 10px;
+}
+
+.breakdownList,
+.timelineList,
+.summaryList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.summaryRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f9fbff;
+}
+
+.summaryCopy {
+  display: grid;
+  gap: 2px;
+}
+
+.summaryCopy strong {
+  color: var(--ink-strong);
+}
+
+.summaryCopy span,
+.summaryMeta span {
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.summaryMeta {
+  display: grid;
+  gap: 2px;
+  justify-items: end;
+  text-align: right;
+}
+
+.emailStatRow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.miniMetric {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f9fbff;
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.miniMetric small {
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.miniMetric strong {
+  color: var(--ink-strong);
+  font-size: 20px;
+}
+
+.emailTrendChart {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  min-height: 252px;
+  min-width: max-content;
+}
+
+.emailTrendColumn {
+  display: grid;
+  gap: 10px;
+  width: 84px;
+  flex: 0 0 84px;
+}
+
+.emailTrendButton {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  background: #f7fbf8;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  text-align: left;
+}
+
+.emailTrendButtonActive .emailTrendBarTrack {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.emailTrendButtonActive {
+  border-color: #b6dcc2;
+  background: #eef8f1;
+}
+
+.emailTrendBarTrack {
+  position: relative;
+  min-height: 190px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #eff7f2 0%, #f8fbf9 100%);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.emailTrendBar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(180deg, #72c08a 0%, var(--accent) 100%);
+}
+
+.emailTrendLabel {
+  color: var(--ink-strong);
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 32px;
+  line-height: 1.35;
+}
+
+.breakdownRow,
+.timelineItem {
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.breakdownCopy {
+  display: grid;
+  gap: 2px;
+}
+
+.breakdownCopy strong {
+  color: var(--ink-strong);
+}
+
+.breakdownCopy span,
+.breakdownMeta,
+.timelineItem span {
+  color: var(--ink-muted);
+}
+
+.breakdownMeta {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.clickRow {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.tableSelectButton {
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+}
+
+.drilldownGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.drilldownActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.tableCard {
+  display: grid;
+  gap: 12px;
+}
+
+.tableScroll {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 860px;
+}
+
+.table th {
+  text-align: left;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  padding-bottom: 12px;
+}
+
+.table td {
+  padding: 12px 10px;
+  border-top: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.tableRow {
+  cursor: pointer;
+}
+
+.tableRow:hover {
+  background: #f7fbff;
+}
+
+.tableRowActive {
+  background: #eef7ff;
+}
+
+.tableRow:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.comparisonTable {
+  min-width: 100%;
+}
+
+.comparisonTable th,
+.comparisonTable td {
+  white-space: nowrap;
+}
+
+.rankTag,
+.leaderTag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rankTag {
+  background: #f1f5fa;
+  color: var(--ink-muted);
+}
+
+.leaderTag {
+  background: #e9f4ff;
+  color: #1f5f9f;
+}
+
+.tablePerson {
+  display: grid;
+  gap: 2px;
+}
+
+.tablePerson strong {
+  color: var(--ink-strong);
+}
+
+.tablePerson span {
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.pagination {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  align-items: center;
+}
+
+.emptyState,
+.loadingText {
+  color: var(--ink-muted);
+}
+
+.drawerBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(19, 35, 63, 0.36);
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px;
+  z-index: 80;
+}
+
+.drawer {
+  width: min(560px, 100%);
+  height: 100%;
+  overflow: auto;
+  border-radius: 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.drawerHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.detailGrid div {
+  padding: 12px;
+}
+
+.detailGrid dt {
+  color: var(--ink-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.detailGrid dd {
+  margin: 8px 0 0;
+  word-break: break-word;
+  color: var(--ink-strong);
+}
+
+.timelineSection {
+  margin-top: 18px;
+}
+
+@media (max-width: 1100px) {
+  .header,
+  .filterHeader,
+  .cardHeader,
+  .tableHeader,
+  .chartHeader,
+  .employeeHeader,
+  .selectionHeader,
+  .controlRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .filterGrid,
+  .metricsGrid,
+  .overviewGrid,
+  .heroGrid,
+  .drilldownGrid,
+  .priorityGrid,
+  .summaryGrid,
+  .detailGrid,
+  .selectionStats,
+  .emailStatRow {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .searchSpan {
+    grid-column: span 2;
+  }
+
+  .chartFrame {
+    grid-template-columns: 1fr;
+  }
+
+  .chartYAxis {
+    display: none;
+  }
+
+  .controlInputs {
+    width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .filterGrid,
+  .metricsGrid,
+  .overviewGrid,
+  .heroGrid,
+  .drilldownGrid,
+  .priorityGrid,
+  .summaryGrid,
+  .detailGrid,
+  .selectionStats,
+  .emailStatRow {
+    grid-template-columns: 1fr;
+  }
+
+  .searchSpan {
+    grid-column: span 1;
+  }
+
+  .subnav,
+  .quickRanges,
+  .employeeQuickActions,
+  .drilldownActions,
+  .controlInputs {
+    width: 100%;
+  }
+
+  .trendColumn {
+    width: 72px;
+    flex-basis: 72px;
+  }
+
+  .emailTrendColumn {
+    width: 72px;
+    flex-basis: 72px;
+  }
+
+  .trendBarTrack {
+    min-height: 160px;
+  }
+
+  .emailTrendBarTrack {
+    min-height: 160px;
+  }
+
+  .summaryRow {
+    flex-direction: column;
+  }
+
+  .summaryMeta {
+    justify-items: start;
+    text-align: left;
+  }
+}

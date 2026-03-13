@@ -8,6 +8,7 @@ export type AuthCookieRefreshState = {
 
 type RequestAcumaticaInit = RequestInit & {
   authCookieRefresh?: AuthCookieRefreshState;
+  retryOnEntityNotFound?: boolean;
 };
 
 type ResolvedAcumaticaEndpoint = {
@@ -108,6 +109,41 @@ function isEndpointNotFoundMessage(message: string | null | undefined): boolean 
   return (
     (normalized.includes("endpoint [") && normalized.includes("not found")) ||
     normalized.includes("endpoint not found")
+  );
+}
+
+function isEntityNotFoundMessage(
+  message: string | null | undefined,
+  resourcePath?: string,
+): boolean {
+  if (!message) {
+    return false;
+  }
+
+  const normalized = message.trim().toLowerCase();
+  const resourceScope = resourcePath
+    ? readAcumaticaResourceScope(resourcePath).trim().toLowerCase()
+    : "";
+
+  if (
+    normalized.includes("entity not found") ||
+    normalized.includes("entity was not found") ||
+    normalized.includes("specified entity was not found") ||
+    normalized.includes("not found in the endpoint") ||
+    normalized.includes("entity is not available in the endpoint")
+  ) {
+    return true;
+  }
+
+  if (!resourceScope) {
+    return false;
+  }
+
+  return (
+    (normalized.includes(`entity [${resourceScope}]`) && normalized.includes("not found")) ||
+    (normalized.includes(`entity '${resourceScope}'`) && normalized.includes("not found")) ||
+    (normalized.includes(`entity "${resourceScope}"`) && normalized.includes("not found")) ||
+    (normalized.includes(resourceScope) && normalized.includes("not found in the endpoint"))
   );
 }
 
@@ -383,6 +419,7 @@ async function performAcumaticaFetchAtEntityPath(
   const authCookieRefresh = init?.authCookieRefresh;
   const requestInit: RequestAcumaticaInit = init ? { ...init } : {};
   delete requestInit.authCookieRefresh;
+  delete requestInit.retryOnEntityNotFound;
   headers.set("Accept", "application/json");
   headers.set("Cookie", buildCookieHeader(cookieValue));
 
@@ -568,7 +605,9 @@ async function performAcumaticaRequestWithEndpointFallback(
 
     if (
       isEndpointNotFoundMessage(errorResponse.message) ||
-      isCustomerManagementPreferencesError(errorResponse.message)
+      isCustomerManagementPreferencesError(errorResponse.message) ||
+      (init?.retryOnEntityNotFound &&
+        isEntityNotFoundMessage(errorResponse.message, resourcePath))
     ) {
       continue;
     }
@@ -627,11 +666,25 @@ async function requestAcumatica<T>(
 export type RawBusinessAccount = Record<string, unknown>;
 export type RawContact = Record<string, unknown>;
 export type RawEmployee = Record<string, unknown>;
+export type RawOpportunity = Record<string, unknown>;
+export type RawActivity = Record<string, unknown>;
+export type RawEvent = Record<string, unknown>;
 export type EmployeeDirectoryItem = {
   id: string;
   name: string;
 };
 export type BusinessAccountProfile = "sync" | "detail" | "list" | "map" | "quality";
+
+export type CreateActivityInput = {
+  summary: string;
+  bodyHtml: string;
+  relatedEntityNoteId: string;
+  relatedEntityType: string;
+  type?: string;
+  status?: string;
+  internal?: boolean;
+  dateIso?: string | null;
+};
 
 type FetchContactsOptions = {
   maxRecords?: number;
@@ -689,6 +742,47 @@ export function readWrappedNumber(record: unknown, key: string): number | null {
   const value = (field as Record<string, unknown>).value;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+export function readRecordIdentity(record: unknown): string | null {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  const rawRecord = record as Record<string, unknown>;
+  const id = rawRecord.id;
+  if (typeof id === "string" && id.trim()) {
+    return id.trim();
+  }
+
+  const noteId =
+    readWrappedScalarString(rawRecord, "NoteID") ||
+    readWrappedScalarString(rawRecord, "NoteId");
+  if (noteId) {
+    return noteId;
+  }
+
+  return null;
+}
+
+export function readOpportunityId(record: unknown): string | null {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  const rawRecord = record as Record<string, unknown>;
+  const wrapped =
+    readWrappedScalarString(rawRecord, "OpportunityID") ||
+    readWrappedScalarString(rawRecord, "OpportunityId") ||
+    readWrappedScalarString(rawRecord, "OpportunityNbr") ||
+    readWrappedScalarString(rawRecord, "ID");
+
+  if (wrapped) {
+    return wrapped;
+  }
+
+  const rawId = typeof rawRecord.id === "string" ? rawRecord.id.trim() : "";
+  return rawId || null;
 }
 
 function unwrapCollection<T>(payload: unknown): T[] {
@@ -939,6 +1033,10 @@ function buildContactCollectionPath(options: {
   return `/Contact?${query.toString()}`;
 }
 
+function escapeODataStringLiteral(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
 function buildEmployeeCollectionPath(resourcePath: string, options: {
   top: number;
   skip: number;
@@ -952,10 +1050,9 @@ function buildEmployeeCollectionPath(resourcePath: string, options: {
 }
 
 function readBusinessAccountIdentity(record: RawBusinessAccount): string {
-  const rawId = typeof record.id === "string" ? record.id : "";
-  const rawNoteId = readWrappedString(record, "NoteID");
+  const rawIdentity = readRecordIdentity(record);
   const rawBusinessAccountId = readWrappedString(record, "BusinessAccountID");
-  return rawId || rawNoteId || rawBusinessAccountId;
+  return rawIdentity || rawBusinessAccountId;
 }
 
 function mergePrimaryContactFromSupplement(
@@ -1250,6 +1347,74 @@ export async function fetchBusinessAccountById(
   id: string,
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<RawBusinessAccount> {
+  async function fetchFirstBusinessAccountByFilters(
+    filters: string[],
+  ): Promise<RawBusinessAccount | null> {
+    const expand = await resolveBusinessAccountExpand(
+      cookieValue,
+      "detail",
+      authCookieRefresh,
+    );
+
+    for (const filter of filters) {
+      try {
+        const payload = await requestAcumatica<unknown>(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          buildBusinessAccountCollectionPath({
+            top: 1,
+            skip: 0,
+            expand,
+            select: BUSINESS_ACCOUNT_PROFILE_SELECTS.detail,
+            filter,
+          }),
+          {
+            authCookieRefresh,
+          },
+        );
+        const rows = unwrapCollection<RawBusinessAccount>(payload);
+        if (rows[0]) {
+          return rows[0];
+        }
+      } catch (error) {
+        if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
+          throw error;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async function fetchFirstContactByFilters(
+    filters: string[],
+  ): Promise<RawContact | null> {
+    for (const filter of filters) {
+      try {
+        const payload = await requestAcumatica<unknown>(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          buildContactCollectionPath({
+            top: 1,
+            skip: 0,
+            filter,
+          }),
+          {
+            authCookieRefresh,
+          },
+        );
+        const rows = unwrapCollection<RawContact>(payload);
+        if (rows[0]) {
+          return rows[0];
+        }
+      } catch (error) {
+        if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
+          throw error;
+        }
+      }
+    }
+
+    return null;
+  }
+
   try {
     const expand = await resolveBusinessAccountExpand(
       cookieValue,
@@ -1277,34 +1442,25 @@ export async function fetchBusinessAccountById(
       `BusinessAccountID eq '${escapedId}'`,
       `NoteID eq '${escapedId}'`,
     ];
+    const matchedAccount = await fetchFirstBusinessAccountByFilters(filterCandidates);
+    if (matchedAccount) {
+      return matchedAccount;
+    }
 
-    for (const filter of filterCandidates) {
-      try {
-        const payload = await requestAcumatica<unknown>(
-          getActiveCookieValue(cookieValue, authCookieRefresh),
-          buildBusinessAccountCollectionPath({
-            top: 1,
-            skip: 0,
-            expand: await resolveBusinessAccountExpand(
-              cookieValue,
-              "detail",
-              authCookieRefresh,
-            ),
-            select: BUSINESS_ACCOUNT_PROFILE_SELECTS.detail,
-            filter,
-          }),
-          {
-            authCookieRefresh,
-          },
-        );
-        const rows = unwrapCollection<RawBusinessAccount>(payload);
-        if (rows[0]) {
-          return rows[0];
-        }
-      } catch (error) {
-        if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
-          throw error;
-        }
+    const matchedContact = await fetchFirstContactByFilters([`NoteID eq '${escapedId}'`]);
+    const linkedBusinessAccountId =
+      readWrappedString(matchedContact, "BusinessAccount") ||
+      readWrappedString(matchedContact, "BusinessAccountID") ||
+      readWrappedString(matchedContact, "BAccountID") ||
+      readWrappedString(matchedContact, "AccountCD");
+    if (linkedBusinessAccountId && linkedBusinessAccountId !== id) {
+      const escapedBusinessAccountId = linkedBusinessAccountId.replace(/'/g, "''");
+      const linkedAccount = await fetchFirstBusinessAccountByFilters([
+        `BusinessAccountID eq '${escapedBusinessAccountId}'`,
+        `NoteID eq '${escapedBusinessAccountId}'`,
+      ]);
+      if (linkedAccount) {
+        return linkedAccount;
       }
     }
 
@@ -1324,6 +1480,114 @@ export async function fetchContactById(
       authCookieRefresh,
     },
   );
+}
+
+export async function createActivity(
+  cookieValue: string,
+  input: CreateActivityInput,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawActivity> {
+  const payload: Record<string, unknown> = {
+    Summary: {
+      value: input.summary,
+    },
+    Body: {
+      value: input.bodyHtml,
+    },
+    Type: {
+      value: input.type ?? "M",
+    },
+    Status: {
+      value: input.status ?? "Completed",
+    },
+    RelatedEntityNoteID: {
+      value: input.relatedEntityNoteId,
+    },
+    RelatedEntityType: {
+      value: input.relatedEntityType,
+    },
+  };
+
+  if (typeof input.internal === "boolean") {
+    payload.Internal = {
+      value: input.internal,
+    };
+  }
+
+  if (input.dateIso) {
+    payload.Date = {
+      value: input.dateIso,
+    };
+  }
+
+  return requestAcumatica<RawActivity>(
+    getActiveCookieValue(cookieValue, authCookieRefresh),
+    "/Activity",
+    {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      authCookieRefresh,
+    },
+  );
+}
+
+function isRecoverableEventCreateError(error: unknown): boolean {
+  if (!(error instanceof HttpError)) {
+    return false;
+  }
+
+  if ([401, 403, 429, 502].includes(error.status)) {
+    return false;
+  }
+
+  return [400, 404, 405, 409, 422, 500].includes(error.status);
+}
+
+export async function createEvent(
+  cookieValue: string,
+  payloads: Record<string, unknown>[],
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawEvent> {
+  const candidates = payloads.length > 0 ? payloads : [{}];
+  const seenFingerprints = new Set<string>();
+  let lastRecoverableError: unknown = null;
+
+  for (const payload of candidates) {
+    const fingerprint = JSON.stringify(payload);
+    if (seenFingerprints.has(fingerprint)) {
+      continue;
+    }
+    seenFingerprints.add(fingerprint);
+
+    try {
+      return await requestAcumatica<RawEvent>(
+        getActiveCookieValue(cookieValue, authCookieRefresh),
+        "/Event",
+        {
+          method: "PUT",
+          body: JSON.stringify(payload),
+          authCookieRefresh,
+          retryOnEntityNotFound: true,
+        },
+      );
+    } catch (error) {
+      if (!isRecoverableEventCreateError(error)) {
+        throw error;
+      }
+
+      lastRecoverableError = error;
+    }
+  }
+
+  if (lastRecoverableError instanceof Error) {
+    throw lastRecoverableError;
+  }
+
+  throw new HttpError(500, "Failed to create event in Acumatica.");
 }
 
 export async function fetchContacts(
@@ -1407,10 +1671,9 @@ function buildBusinessAccountIdFilter(accountIds: string[]): string {
 }
 
 function readContactIdentity(record: RawContact): string {
-  const rawId = typeof record.id === "string" ? record.id : "";
-  const rawNoteId = readWrappedString(record, "NoteID");
+  const rawIdentity = readRecordIdentity(record);
   const rawContactId = readWrappedString(record, "ContactID");
-  return rawId || rawNoteId || rawContactId;
+  return rawIdentity || rawContactId;
 }
 
 function composeEmployeeName(record: RawEmployee): string {
@@ -1501,6 +1764,68 @@ export async function fetchContactsByBusinessAccountIds(
   }
 
   return [...deduped.values()];
+}
+
+export async function searchContacts(
+  cookieValue: string,
+  options: {
+    filter: string;
+    top?: number;
+    skip?: number;
+  },
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawContact[]> {
+  const payload = await requestAcumatica<unknown>(
+    getActiveCookieValue(cookieValue, authCookieRefresh),
+    buildContactCollectionPath({
+      top: Math.max(1, Math.min(options.top ?? 20, 100)),
+      skip: Math.max(0, options.skip ?? 0),
+      filter: options.filter,
+    }),
+    {
+      authCookieRefresh,
+    },
+  );
+
+  return unwrapCollection<RawContact>(payload);
+}
+
+export async function findContactsByEmailSubstring(
+  cookieValue: string,
+  emailFragment: string,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawContact[]> {
+  const trimmed = emailFragment.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  return searchContacts(
+    cookieValue,
+    {
+      filter: `substringof('${escapeODataStringLiteral(trimmed)}',Email)`,
+    },
+    authCookieRefresh,
+  );
+}
+
+export async function findContactsByDisplayName(
+  cookieValue: string,
+  displayName: string,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawContact[]> {
+  const trimmed = displayName.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  return searchContacts(
+    cookieValue,
+    {
+      filter: `DisplayName eq '${escapeODataStringLiteral(trimmed)}'`,
+    },
+    authCookieRefresh,
+  );
 }
 
 export async function fetchBusinessAccountsByBusinessAccountIds(
@@ -1806,6 +2131,54 @@ export async function createContact(
   );
 }
 
+export async function createOpportunity(
+  cookieValue: string,
+  payload: Record<string, unknown>,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawOpportunity> {
+  const configuredEntity = getEnv().ACUMATICA_OPPORTUNITY_ENTITY.trim();
+  const entityNames = [...new Set([
+    configuredEntity,
+    "Opportunity",
+    "Opportunities",
+    "CROpportunity",
+  ].filter(Boolean))];
+  const candidateMethods = ["PUT", "POST"] as const;
+
+  let lastRecoverableError: unknown = null;
+
+  for (const entityName of entityNames) {
+    for (const method of candidateMethods) {
+      try {
+        return await requestAcumatica<RawOpportunity>(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          `/${encodeURIComponent(entityName)}`,
+          {
+            method,
+            body: JSON.stringify(payload),
+            authCookieRefresh,
+          },
+        );
+      } catch (error) {
+        if (
+          error instanceof HttpError &&
+          ![400, 404, 405, 500].includes(error.status)
+        ) {
+          throw error;
+        }
+
+        lastRecoverableError = error;
+      }
+    }
+  }
+
+  if (lastRecoverableError instanceof Error) {
+    throw lastRecoverableError;
+  }
+
+  throw new HttpError(500, "Failed to create opportunity in Acumatica.");
+}
+
 export async function updateCustomer(
   cookieValue: string,
   payload: Record<string, unknown>,
@@ -1894,6 +2267,7 @@ export async function deleteContact(
 export async function validateSessionWithAcumatica(
   cookieValue: string,
   authCookieRefresh?: AuthCookieRefreshState,
+  requestInit?: RequestInit,
 ): Promise<unknown> {
   const env = getEnv();
   if (env.AUTH_PROVIDER === "custom") {
@@ -1912,6 +2286,7 @@ export async function validateSessionWithAcumatica(
           Accept: "application/json",
         },
         cache: "no-store",
+        signal: requestInit?.signal,
       });
 
       if (authCookieRefresh) {
@@ -1961,6 +2336,7 @@ export async function validateSessionWithAcumatica(
         Accept: "application/json",
       },
       cache: "no-store",
+      signal: requestInit?.signal,
     });
 
     if (authCookieRefresh) {
@@ -1998,6 +2374,7 @@ export async function validateSessionWithAcumatica(
     "/Contact?$top=1",
     {
       authCookieRefresh,
+      signal: requestInit?.signal,
     },
   );
 }

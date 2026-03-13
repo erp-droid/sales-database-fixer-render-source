@@ -2,6 +2,15 @@ import type { EmployeeDirectoryItem } from "@/lib/acumatica";
 import type { BusinessAccountRow } from "@/types/business-account";
 import { getReadModelDb } from "@/lib/read-model/db";
 
+export const DERIVED_EMPLOYEE_DIRECTORY_SOURCE = "sync";
+export const FULL_EMPLOYEE_DIRECTORY_SOURCE = "acumatica_employees";
+
+export type EmployeeDirectorySnapshot = {
+  items: EmployeeDirectoryItem[];
+  source: string | null;
+  updatedAt: string | null;
+};
+
 function normalizeComparable(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -28,7 +37,10 @@ export function buildEmployeeDirectoryFromRows(
   );
 }
 
-export function replaceEmployeeDirectory(items: EmployeeDirectoryItem[]): void {
+export function replaceEmployeeDirectory(
+  items: EmployeeDirectoryItem[],
+  source: string = DERIVED_EMPLOYEE_DIRECTORY_SOURCE,
+): void {
   const db = getReadModelDb();
   const now = new Date().toISOString();
   const replace = db.transaction((directory: EmployeeDirectoryItem[]) => {
@@ -50,7 +62,7 @@ export function replaceEmployeeDirectory(items: EmployeeDirectoryItem[]): void {
         item.id,
         item.name,
         normalizeComparable(item.name),
-        "sync",
+        source,
         now,
       );
     }
@@ -59,20 +71,33 @@ export function replaceEmployeeDirectory(items: EmployeeDirectoryItem[]): void {
   replace(items);
 }
 
-export function readEmployeeDirectory(): EmployeeDirectoryItem[] {
+export function readEmployeeDirectorySnapshot(): EmployeeDirectorySnapshot {
   const db = getReadModelDb();
   const rows = db
     .prepare(
       `
-      SELECT employee_id, name
+      SELECT employee_id, name, source, updated_at
       FROM employee_directory
       ORDER BY sort_name ASC, name ASC
       `,
     )
-    .all() as Array<{ employee_id: string; name: string }>;
+    .all() as Array<{
+      employee_id: string;
+      name: string;
+      source: string;
+      updated_at: string;
+    }>;
 
-  return rows.map((row) => ({
-    id: row.employee_id,
-    name: row.name,
-  }));
+  return {
+    items: rows.map((row) => ({
+      id: row.employee_id,
+      name: row.name,
+    })),
+    source: rows[0]?.source ?? null,
+    updatedAt: rows[0]?.updated_at ?? null,
+  };
+}
+
+export function readEmployeeDirectory(): EmployeeDirectoryItem[] {
+  return readEmployeeDirectorySnapshot().items;
 }

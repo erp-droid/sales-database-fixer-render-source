@@ -1,7 +1,7 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(10, 22, 35, 0.55);
+  background: rgba(23, 32, 51, 0.42);
   display: grid;
   place-items: center;
   padding: 20px;
@@ -13,12 +13,12 @@
   max-height: calc(100vh - 40px);
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: 16px;
   background: var(--panel);
-  box-shadow: 0 24px 80px rgba(15, 33, 54, 0.24);
-  padding: 18px;
+  box-shadow: 0 24px 80px rgba(23, 32, 51, 0.18);
+  padding: 14px;
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .header {
@@ -29,31 +29,34 @@
 }
 
 .header h2 {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   color: var(--ink-strong);
+  font-size: 18px;
+  line-height: 1.2;
 }
 
 .eyebrow {
   margin: 0;
   color: var(--accent-strong);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .accountMeta {
-  margin: 4px 0 0;
+  margin: 3px 0 0;
   color: var(--ink-muted);
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .closeButton,
 .secondaryButton,
 .primaryButton {
-  border-radius: 10px;
-  padding: 9px 12px;
-  font-size: 13px;
+  border-radius: 9px;
+  padding: 8px 11px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -66,9 +69,9 @@
 }
 
 .primaryButton {
-  border: 1px solid #7daee0;
-  background: #e9f4ff;
-  color: #1f5f9f;
+  border: 1px solid var(--app-green);
+  background: var(--app-green-soft);
+  color: var(--app-green);
 }
 
 .primaryButton:disabled,
@@ -88,13 +91,13 @@
 .partialBanner {
   margin: 0;
   border-radius: 10px;
-  padding: 10px 12px;
-  font-size: 13px;
+  padding: 8px 10px;
+  font-size: 12px;
 }
 
 .warningBanner {
-  border: 1px solid #e0c27f;
-  background: #fff7df;
+  border: 1px solid #ead9a0;
+  background: #fff8e6;
   color: #8a6500;
 }
 
@@ -105,8 +108,8 @@
 }
 
 .partialBanner {
-  border: 1px solid #d8b38d;
-  background: #fff1e4;
+  border: 1px solid #e5c2a4;
+  background: #fff4ea;
   color: #924f14;
 }
 
@@ -114,37 +117,16 @@
 .confirmNote {
   margin: 0;
   color: var(--ink-muted);
-  font-size: 14px;
-}
-
-.selectorSection {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.recordCard {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: #f8fbff;
-  padding: 12px;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 10px;
-  color: var(--ink);
-}
-
-.recordCard p {
-  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .primaryBadge {
   display: inline-flex;
-  margin-top: 8px;
   border: 1px solid #4b94d4;
   border-radius: 999px;
-  padding: 1px 8px;
-  font-size: 10px;
+  padding: 1px 7px;
+  font-size: 9px;
   color: #1f5f9f;
   background: #e9f4ff;
   font-weight: 700;
@@ -152,45 +134,257 @@
 
 .matrixSection {
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 12px;
   overflow: hidden;
+}
+
+.matrixScroller {
+  overflow-x: auto;
 }
 
 .matrixHeader,
 .matrixRow {
   display: grid;
-  grid-template-columns: minmax(140px, 180px) minmax(0, 1fr) minmax(0, 1fr) minmax(180px, 220px);
   gap: 0;
+  width: max-content;
+  min-width: 100%;
 }
 
 .matrixHeader {
   background: #f1f6fd;
   color: var(--ink-strong);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
+  align-items: stretch;
 }
 
-.matrixHeader span,
+.matrixHeader > *,
 .matrixRow > * {
-  padding: 10px 12px;
+  min-width: 0;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
+}
+
+.matrixHeader > *:not(:last-child),
+.matrixRow > *:not(:last-child) {
+  border-right: 1px solid var(--border);
 }
 
 .matrixBody .matrixRow:last-child > * {
   border-bottom: none;
 }
 
+.matrixFieldHeader,
+.matrixChoiceHeader {
+  display: flex;
+  align-items: flex-end;
+}
+
+.matrixContactHeader {
+  appearance: none;
+  border: none;
+  background: #f8fbff;
+  padding: 9px 10px;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.3;
+  position: relative;
+  min-width: 0;
+  transition:
+    background 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease;
+}
+
+.matrixContactHeader:hover {
+  background: #f4f9ff;
+}
+
+.matrixContactHeaderActive {
+  background: linear-gradient(180deg, #eef6ff 0%, #f9fcff 100%);
+  box-shadow:
+    inset 0 3px 0 #1f5f9f,
+    inset 2px 0 0 #6ba9df,
+    inset -2px 0 0 #6ba9df,
+    0 8px 18px rgba(31, 95, 159, 0.12);
+  z-index: 1;
+}
+
+.matrixContactHeaderActive .matrixContactTitle {
+  color: #163e69;
+}
+
+.matrixContactHeaderActive .matrixContactMeta {
+  color: #496785;
+}
+
+.matrixContactTitle {
+  display: block;
+  color: var(--ink-strong);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.matrixContactMeta {
+  display: block;
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.matrixContactBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 1px;
+}
+
+.matrixKeepBadge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #6ba9df;
+  border-radius: 999px;
+  background: #e9f4ff;
+  color: #1f5f9f;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.fieldLabel {
+  display: flex;
+  align-items: center;
+  color: var(--ink-strong);
+  font-size: 13px;
+  line-height: 1.25;
+  min-width: 0;
+}
+
 .valueCell {
   color: var(--ink);
-  white-space: pre-wrap;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.keepColumnCell {
+  background: linear-gradient(180deg, #f7fbff 0%, #fbfdff 100%);
+  box-shadow:
+    inset 2px 0 0 #8cbbe8,
+    inset -2px 0 0 #8cbbe8;
+}
+
+.valueButton {
+  width: 100%;
+  border: 1px solid #d6e2f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px 10px;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background 160ms ease;
+}
+
+.valueButton:hover {
+  border-color: #8cbbe8;
+  background: #f7fbff;
+}
+
+.valueButtonKeepColumn {
+  border-color: #9fc6ea;
+  background: #f7fbff;
+  box-shadow: inset 0 0 0 1px rgba(107, 169, 223, 0.18);
+}
+
+.valueButton:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.valueButtonSelected {
+  border-color: #1f5f9f;
+  background: #eef6ff;
+  box-shadow:
+    inset 0 2px 0 #1f5f9f,
+    0 0 0 1px rgba(31, 95, 159, 0.14);
+}
+
+.valueButtonValue {
+  color: var(--ink-strong);
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.valueStatic {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.3;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.valueStaticKeepColumn {
+  border-color: #dbe9f7;
+  background: #f8fbff;
+  box-shadow: inset 0 0 0 1px rgba(107, 169, 223, 0.14);
 }
 
 .choiceCell {
   display: flex;
-  align-items: center;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.choiceSummary {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 8px 10px;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.choiceValue {
+  color: var(--ink-strong);
+  font-size: 13px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .choiceGroup {
@@ -215,34 +409,37 @@
 
 .confirmSection {
   display: grid;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
 }
 
 .primarySection {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: #f8fbff;
-  padding: 12px;
+  padding: 10px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
   color: var(--ink);
+  font-size: 12px;
 }
 
 .inlineWarning {
   margin: 0;
   color: #924f14;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .summaryBox {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--panel-alt);
-  padding: 12px;
+  padding: 10px;
   display: grid;
-  gap: 6px;
+  gap: 5px;
   color: var(--ink);
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .summaryBox p {
@@ -250,38 +447,32 @@
 }
 
 .footer {
+  grid-column: 1 / -1;
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
 @media (max-width: 900px) {
   .modal {
-    padding: 14px;
+    padding: 12px;
   }
 
-  .selectorSection {
+  .confirmSection {
     grid-template-columns: 1fr;
   }
 
-  .matrixHeader {
-    display: none;
-  }
-
-  .matrixRow {
-    grid-template-columns: 1fr;
-  }
-
+  .matrixHeader > *,
   .matrixRow > * {
-    border-bottom: none;
+    padding: 8px;
   }
 
-  .matrixBody .matrixRow {
-    border-bottom: 1px solid var(--border);
+  .matrixContactHeader {
+    min-width: 200px;
   }
 
-  .matrixBody .matrixRow:last-child {
-    border-bottom: none;
+  .matrixContactTitle {
+    font-size: 13px;
   }
 }

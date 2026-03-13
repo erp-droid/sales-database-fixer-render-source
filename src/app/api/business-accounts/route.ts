@@ -21,20 +21,28 @@ import {
   buildBusinessAccountCreatePayload,
   normalizeCreatedBusinessAccountRows,
 } from "@/lib/business-account-create";
+import { logBusinessAccountCreateAudit } from "@/lib/audit-log-store";
+import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { resolvePrimaryContactPhoneFields } from "@/lib/phone";
 import {
   enforceSinglePrimaryPerAccountRows,
+  filterSuppressedBusinessAccountRows,
   normalizeBusinessAccount,
   normalizeBusinessAccountRows,
   queryBusinessAccounts,
   selectPrimaryContactIndex,
 } from "@/lib/business-accounts";
 import {
+  isExcludedInternalCompanyName,
+  isExcludedInternalContactEmail,
+} from "@/lib/internal-records";
+import {
   queryReadModelBusinessAccounts,
   replaceReadModelAccountRows,
 } from "@/lib/read-model/accounts";
-import { maybeTriggerReadModelSync, readSyncStatus } from "@/lib/read-model/sync";
+import { maybeTriggerReadModelSync } from "@/lib/read-model/sync";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type { BusinessAccountCreateResponse } from "@/types/business-account-create";
 import { parseBusinessAccountCreatePayload, parseListQuery } from "@/lib/validation";
@@ -184,6 +192,10 @@ function readContactEmail(record: unknown): string | null {
   return email && email.trim() ? email.trim() : null;
 }
 
+function readContactJobTitle(record: unknown): string | null {
+  return readWrappedString(record, "JobTitle") ?? readWrappedString(record, "Title");
+}
+
 function readWrappedNumber(record: unknown, key: string): number | null {
   if (!record || typeof record !== "object") {
     return null;
@@ -292,7 +304,32 @@ function readBusinessAccountCode(record: unknown): string | null {
   );
 }
 
+function readBusinessAccountName(record: unknown): string | null {
+  return (
+    readWrappedString(record, "Name") ??
+    readWrappedString(record, "CompanyName") ??
+    readWrappedString(record, "AcctName") ??
+    readWrappedString(record, "BusinessAccountName")
+  );
+}
+
 function readContactPhone(record: unknown): string | null {
+  return resolvePrimaryContactPhoneFields({
+    phone1: readWrappedString(record, "Phone1"),
+    phone2: readWrappedString(record, "Phone2"),
+    phone3: readWrappedString(record, "Phone3"),
+  }).phone;
+}
+
+function readContactExtension(record: unknown): string | null {
+  return resolvePrimaryContactPhoneFields({
+    phone1: readWrappedString(record, "Phone1"),
+    phone2: readWrappedString(record, "Phone2"),
+    phone3: readWrappedString(record, "Phone3"),
+  }).extension;
+}
+
+function readContactRawPhone(record: unknown): string | null {
   return (
     readWrappedString(record, "Phone1") ??
     readWrappedString(record, "Phone2") ??
@@ -363,7 +400,10 @@ function buildFallbackRowFromContact(contact: unknown, index: number): BusinessA
     postalCode: "",
     country: "",
     primaryContactName: contactName,
+    primaryContactJobTitle: readContactJobTitle(contact),
     primaryContactPhone: contactPhone,
+    primaryContactExtension: readContactExtension(contact),
+    primaryContactRawPhone: readContactRawPhone(contact),
     primaryContactEmail: contactEmail,
     primaryContactId: contactId,
     category: null,
@@ -403,7 +443,10 @@ function buildSyncRowsFromContacts(
     };
     basePrimary: {
       name: string | null;
+      jobTitle: string | null;
       phone: string | null;
+      extension: string | null;
+      rawPhone: string | null;
       email: string | null;
       notes: string | null;
     };
@@ -433,7 +476,10 @@ function buildSyncRowsFromContacts(
 
     const contactId = readWrappedNumber(contact, "ContactID");
     const contactName = readContactDisplayName(contact);
+    const contactJobTitle = readContactJobTitle(contact);
     const contactPhone = readContactPhone(contact);
+    const contactExtension = readContactExtension(contact);
+    const contactRawPhone = readContactRawPhone(contact);
     const contactEmail = readContactEmail(contact);
     const contactNotes = readWrappedString(contact, "note");
     const contactRecordId = readRecordIdentity(contact);
@@ -454,7 +500,19 @@ function buildSyncRowsFromContacts(
       contactId,
       isPrimaryContact: false,
       primaryContactName: pickFirstText([contactName]),
+      primaryContactJobTitle: pickFirstText([
+        contactJobTitle,
+        base.primaryContactJobTitle ?? null,
+      ]),
       primaryContactPhone: pickFirstText([contactPhone]),
+      primaryContactExtension: pickFirstText([
+        contactExtension,
+        base.primaryContactExtension ?? null,
+      ]),
+      primaryContactRawPhone: pickFirstText([
+        contactRawPhone,
+        base.primaryContactRawPhone ?? null,
+      ]),
       primaryContactEmail: pickFirstText([contactEmail]),
       notes: pickFirstText([contactNotes]),
       phoneNumber: pickFirstText([base.phoneNumber, contactPhone, base.primaryContactPhone]),
@@ -485,7 +543,10 @@ function buildSyncRowsFromContacts(
       },
       basePrimary: {
         name: base.primaryContactName,
+        jobTitle: base.primaryContactJobTitle ?? null,
         phone: base.primaryContactPhone,
+        extension: base.primaryContactExtension ?? null,
+        rawPhone: base.primaryContactRawPhone ?? null,
         email: base.primaryContactEmail,
         notes: base.notes,
       },
@@ -548,19 +609,31 @@ function buildSyncRowsFromContacts(
       ...selectedPrepared,
       row: {
         ...selectedPrepared.row,
-      isPrimaryContact: true,
-      primaryContactName: pickFirstText([
+        isPrimaryContact: true,
+        primaryContactName: pickFirstText([
           selectedPrepared.row.primaryContactName,
           selectedPrepared.basePrimary.name,
-      ]),
-      primaryContactPhone: pickFirstText([
+        ]),
+        primaryContactJobTitle: pickFirstText([
+          selectedPrepared.row.primaryContactJobTitle ?? null,
+          selectedPrepared.basePrimary.jobTitle,
+        ]),
+        primaryContactPhone: pickFirstText([
           selectedPrepared.row.primaryContactPhone,
           selectedPrepared.basePrimary.phone,
-      ]),
-      primaryContactEmail: pickFirstText([
+        ]),
+        primaryContactExtension: pickFirstText([
+          selectedPrepared.row.primaryContactExtension ?? null,
+          selectedPrepared.basePrimary.extension,
+        ]),
+        primaryContactRawPhone: pickFirstText([
+          selectedPrepared.row.primaryContactRawPhone ?? null,
+          selectedPrepared.basePrimary.rawPhone,
+        ]),
+        primaryContactEmail: pickFirstText([
           selectedPrepared.row.primaryContactEmail,
           selectedPrepared.basePrimary.email,
-      ]),
+        ]),
         notes: pickFirstText([selectedPrepared.row.notes, selectedPrepared.basePrimary.notes]),
       },
     };
@@ -738,6 +811,7 @@ async function queryAccountsWithCookie(
   authCookieRefresh: AuthCookieRefresh,
   options?: {
     full?: boolean;
+    includeInternal?: boolean;
   },
 ) {
   const { READ_MODEL_ENABLED } = getEnv();
@@ -746,12 +820,14 @@ async function queryAccountsWithCookie(
     const total = options?.full
       ? queryReadModelBusinessAccounts({
           ...params,
+          includeInternalRows: options?.includeInternal,
           page: 1,
           pageSize: 1,
         }).total
       : null;
     const result = queryReadModelBusinessAccounts({
       ...params,
+      includeInternalRows: options?.includeInternal,
       page: options?.full ? 1 : params.page,
       pageSize: options?.full ? Math.max(1, total ?? 1) : params.pageSize,
     });
@@ -772,15 +848,24 @@ async function queryAccountsWithCookie(
     authCookieRefresh,
   );
 
-  const allowedRawAccounts = rawAccounts.filter((account) =>
-    isAllowedBusinessAccountType(account),
+  const allowedRawAccounts = rawAccounts.filter(
+    (account) =>
+      isAllowedBusinessAccountType(account) &&
+      (options?.includeInternal ||
+        !isExcludedInternalCompanyName(readBusinessAccountName(account))),
   );
 
-  const normalizedRows = allowedRawAccounts
+  const normalizedRows = filterSuppressedBusinessAccountRows(
+    allowedRawAccounts
     .flatMap((item) => normalizeBusinessAccountRows(item))
-    .filter((item) => Boolean(item.id || item.businessAccountId || item.companyName));
+    .filter((item) => Boolean(item.id || item.businessAccountId || item.companyName)),
+    {
+      includeInternalRows: options?.includeInternal,
+    },
+  );
   const queried = queryBusinessAccounts(normalizedRows, {
     ...params,
+    includeInternalRows: options?.includeInternal,
     page: isFullDatasetRequest ? 1 : params.page,
     pageSize: isFullDatasetRequest
       ? Math.max(1, normalizedRows.length)
@@ -808,15 +893,51 @@ async function querySyncBatchWithCookie(
   cookieValue: string,
   params: ReturnType<typeof parseListQuery>,
   authCookieRefresh: AuthCookieRefresh,
+  options?: {
+    full?: boolean;
+    includeInternal?: boolean;
+  },
 ) {
   const { READ_MODEL_ENABLED } = getEnv();
   if (READ_MODEL_ENABLED) {
     maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
-    const result = queryReadModelBusinessAccounts(params);
+    if (options?.full) {
+      const total = queryReadModelBusinessAccounts({
+        ...params,
+        includeInternalRows: options?.includeInternal,
+        page: 1,
+        pageSize: 1,
+      }).total;
+      return queryReadModelBusinessAccounts({
+        ...params,
+        includeInternalRows: options?.includeInternal,
+        page: 1,
+        pageSize: Math.max(1, total ?? 1),
+      });
+    }
+
+    const result = queryReadModelBusinessAccounts({
+      ...params,
+      includeInternalRows: options?.includeInternal,
+    });
     return {
       ...result,
       hasMore: params.page * params.pageSize < result.total,
     };
+  }
+
+  if (options?.full) {
+    const { fetchAllSyncRows } = await import("@/lib/data-quality-live");
+    const normalizedRows = await fetchAllSyncRows(cookieValue, authCookieRefresh, {
+      includeInternal: options?.includeInternal,
+    });
+
+    return queryBusinessAccounts(normalizedRows, {
+      ...params,
+      includeInternalRows: options?.includeInternal,
+      page: 1,
+      pageSize: Math.max(1, normalizedRows.length),
+    });
   }
 
   const page = Math.max(1, params.page);
@@ -833,7 +954,10 @@ async function querySyncBatchWithCookie(
     authCookieRefresh,
   );
   const rawContacts = rawContactsPage.filter(
-    (contact) => !shouldExcludeContactByApToken(contact),
+    (contact) =>
+      !shouldExcludeContactByApToken(contact) &&
+      (options?.includeInternal || !isExcludedInternalContactEmail(readContactEmail(contact))) &&
+      (options?.includeInternal || !isExcludedInternalCompanyName(readWrappedString(contact, "CompanyName"))),
   );
 
   const businessAccountIds = rawContacts
@@ -856,20 +980,29 @@ async function querySyncBatchWithCookie(
 
     accountTypeByBusinessId.set(
       normalizedBusinessId,
-      isAllowedBusinessAccountType(account) ? "allowed" : "blocked",
+      isAllowedBusinessAccountType(account) &&
+        (options?.includeInternal || !isExcludedInternalCompanyName(readBusinessAccountName(account)))
+        ? "allowed"
+        : "blocked",
     );
   });
 
-  const normalizedRows = buildSyncRowsFromContacts(rawContacts, rawAccounts).filter((row) => {
-    const normalizedBusinessId = normalizeBusinessAccountCode(row.businessAccountId);
-    if (!normalizedBusinessId) {
-      return false;
-    }
+  const normalizedRows = filterSuppressedBusinessAccountRows(
+    buildSyncRowsFromContacts(rawContacts, rawAccounts).filter((row) => {
+      const normalizedBusinessId = normalizeBusinessAccountCode(row.businessAccountId);
+      if (!normalizedBusinessId) {
+        return false;
+      }
 
-    return accountTypeByBusinessId.get(normalizedBusinessId) === "allowed";
-  });
+      return accountTypeByBusinessId.get(normalizedBusinessId) === "allowed";
+    }),
+    {
+      includeInternalRows: options?.includeInternal,
+    },
+  );
   const queried = queryBusinessAccounts(normalizedRows, {
     ...params,
+    includeInternalRows: options?.includeInternal,
     page: 1,
     pageSize: Math.max(1, normalizedRows.length),
   });
@@ -889,13 +1022,16 @@ async function querySyncBatchWithCookie(
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh: AuthCookieRefresh = { value: null };
+  let actor: Awaited<ReturnType<typeof resolveDeferredActionActor>> | null = null;
+  let createRequest: ReturnType<typeof parseBusinessAccountCreatePayload> | null = null;
 
   try {
     const cookieValue = requireAuthCookieValue(request);
+    actor = await resolveDeferredActionActor(request, cookieValue, authCookieRefresh);
     const body = await request.json().catch(() => {
       throw new HttpError(400, "Request body must be valid JSON.");
     });
-    const createRequest = parseBusinessAccountCreatePayload(body);
+    createRequest = parseBusinessAccountCreatePayload(body);
 
     const normalizedAddress = await retrieveCanadaPostAddressCompleteAddress({
       id: createRequest.addressLookupId,
@@ -983,6 +1119,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    logBusinessAccountCreateAudit({
+      actor,
+      request: createRequest,
+      resultCode: "succeeded",
+      sourceSurface: "accounts",
+      businessAccountRecordId: responseBody.businessAccountRecordId,
+      businessAccountId: responseBody.businessAccountId,
+      companyName: responseBody.createdRow.companyName,
+      createdRow: responseBody.createdRow,
+    });
+
     const response = NextResponse.json(responseBody, { status: 201 });
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
@@ -990,6 +1137,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     return response;
   } catch (error) {
+    if (actor && createRequest) {
+      logBusinessAccountCreateAudit({
+        actor,
+        request: createRequest,
+        resultCode: "failed",
+        sourceSurface: "accounts",
+        companyName: createRequest.companyName,
+      });
+    }
+
     let response: NextResponse;
     if (error instanceof ZodError) {
       response = NextResponse.json(
@@ -1029,20 +1186,27 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const syncBatch =
     request.nextUrl.searchParams.get("sync") === "1" ||
     request.nextUrl.searchParams.get("sync") === "true";
+  const includeInternal =
+    request.nextUrl.searchParams.get("includeInternal") === "1" ||
+    request.nextUrl.searchParams.get("includeInternal") === "true";
+  const shouldUseSyncDataset = syncBatch || (fullDataset && includeInternal);
 
   try {
     cookieValue = requireAuthCookieValue(request);
     params = parseListQuery(request.nextUrl.searchParams);
-    if (getEnv().READ_MODEL_ENABLED && syncBatch && readSyncStatus().rowsCount === 0) {
-      maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
-    }
-    const result = syncBatch
-      ? await querySyncBatchWithCookie(cookieValue, params, authCookieRefresh)
+    const result = shouldUseSyncDataset
+      ? await querySyncBatchWithCookie(cookieValue, params, authCookieRefresh, {
+          full: fullDataset,
+          includeInternal,
+        })
       : await queryAccountsWithCookie(
           cookieValue,
           params,
           authCookieRefresh,
-          { full: fullDataset },
+          {
+            full: fullDataset,
+            includeInternal,
+          },
         );
 
     const response = NextResponse.json(result);
@@ -1063,17 +1227,24 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       const retryAuthCookieRefresh: AuthCookieRefresh = { value: null };
       const retryCookieValue = authCookieRefresh.value ?? cookieValue;
       try {
-        const retryResult = syncBatch
+        const retryResult = shouldUseSyncDataset
           ? await querySyncBatchWithCookie(
               retryCookieValue,
               params,
               retryAuthCookieRefresh,
+              {
+                full: fullDataset,
+                includeInternal,
+              },
             )
           : await queryAccountsWithCookie(
               retryCookieValue,
               params,
               retryAuthCookieRefresh,
-              { full: fullDataset },
+              {
+                full: fullDataset,
+                includeInternal,
+              },
             );
 
         const response = NextResponse.json(retryResult);

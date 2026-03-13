@@ -14,6 +14,7 @@ type BusinessAccountRow = {
   country: string;
   salesRepId: string | null;
   salesRepName: string | null;
+  companyPhone: string | null;
   primaryContactName: string | null;
   primaryContactPhone: string | null;
   primaryContactEmail: string | null;
@@ -36,6 +37,7 @@ type PutPayload = {
   country: string;
   salesRepId: string | null;
   salesRepName: string | null;
+  companyPhone: string | null;
   primaryContactName: string | null;
   primaryContactPhone: string | null;
   primaryContactEmail: string | null;
@@ -164,6 +166,7 @@ export default function PutSmokePage() {
         country: row.country,
         salesRepId: row.salesRepId,
         salesRepName: row.salesRepName,
+        companyPhone: row.companyPhone,
         primaryContactName: row.primaryContactName,
         primaryContactPhone: row.primaryContactPhone,
         primaryContactEmail: row.primaryContactEmail,

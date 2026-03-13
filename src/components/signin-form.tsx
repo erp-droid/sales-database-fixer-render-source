@@ -8,7 +8,7 @@ import styles from "@/app/signin/signin.module.css";
 const REMEMBER_PASSWORD_STORAGE_KEY = "businessAccounts.rememberPassword.v1";
 const COLUMN_PREF_RESET_STORAGE_KEY = "businessAccounts.resetColumnsOnNextLoad.v1";
 const SESSION_CHECK_TIMEOUT_MS = 6000;
-const LOGIN_TIMEOUT_MS = 20000;
+const LOGIN_TIMEOUT_MS = 35000;
 
 type StoredCredentials = {
   username: string;
@@ -65,14 +65,14 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
         SESSION_CHECK_TIMEOUT_MS,
       );
       const payload = (await response.json().catch(() => null)) as
-        | { authenticated?: boolean }
+        | { authenticated?: boolean; degraded?: boolean }
         | null;
 
       if (!isActive) {
         return;
       }
 
-      if (response.ok && payload?.authenticated) {
+      if (response.ok && payload?.authenticated && !payload.degraded) {
         router.replace(nextPath);
         router.refresh();
         return;

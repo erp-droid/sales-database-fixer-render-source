@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { buildCookieHeader, getAuthCookieValue } from "@/lib/auth";
+import {
+  buildCookieHeader,
+  clearAuthCookie,
+  clearStoredLoginName,
+  getAuthCookieValue,
+} from "@/lib/auth";
 import { getEnv } from "@/lib/env";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -24,17 +29,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const response = NextResponse.json({ ok: true });
-  response.cookies.set({
-    name: env.AUTH_COOKIE_NAME,
-    value: "",
-    path: "/",
-    httpOnly: true,
-    sameSite: "lax",
-    secure: env.AUTH_COOKIE_SECURE,
-    domain: env.AUTH_COOKIE_DOMAIN,
-    expires: new Date(0),
-    maxAge: 0,
-  });
+  clearAuthCookie(response);
+  clearStoredLoginName(response);
 
   return response;
 }

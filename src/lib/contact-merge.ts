@@ -3,7 +3,7 @@ import type { RawBusinessAccount, RawContact } from "@/lib/acumatica";
 import type {
   ContactMergeFieldChoice,
   ContactMergeFieldKey,
-  ContactMergeFieldSource,
+  ContactMergePreviewContact,
   ContactMergePreviewField,
 } from "@/types/contact-merge";
 
@@ -112,7 +112,8 @@ function normalizeDuplicateName(value: string | null | undefined): string {
 }
 
 export function normalizeRawContactForMerge(rawContact: RawContact): NormalizedContactForMerge {
-  const rawId = typeof rawContact.id === "string" && rawContact.id.trim() ? rawContact.id.trim() : null;
+  const rawId =
+    typeof rawContact.id === "string" && rawContact.id.trim() ? rawContact.id.trim() : null;
   const noteId = emptyToNull(readWrappedString(rawContact, "NoteID"));
 
   return {
@@ -163,68 +164,125 @@ export function normalizeRawBusinessAccountForMerge(
 }
 
 export function contactMergeValuesDiffer(
-  left: string | null | undefined,
-  right: string | null | undefined,
+  values: Array<string | null | undefined>,
 ): boolean {
-  return normalizeComparableValue(left) !== normalizeComparableValue(right);
+  if (values.length <= 1) {
+    return false;
+  }
+
+  const normalizedValues = values.map((value) => normalizeComparableValue(value));
+  return normalizedValues.some((value) => value !== normalizedValues[0]);
 }
 
-export function computeRecommendedFieldSource(
-  keepValue: string | null | undefined,
-  deleteValue: string | null | undefined,
-): ContactMergeFieldSource {
-  const normalizedKeep = emptyToNull(keepValue);
-  const normalizedDelete = emptyToNull(deleteValue);
-
-  if (normalizedKeep) {
-    return "keep";
+export function orderContactsForMerge<T extends { contactId: number | null }>(
+  contacts: T[],
+  keepContactId: number,
+): T[] {
+  const keepContact = contacts.find((contact) => contact.contactId === keepContactId);
+  if (!keepContact) {
+    return contacts.slice();
   }
 
-  if (normalizedDelete) {
-    return "delete";
+  return [
+    keepContact,
+    ...contacts.filter((contact) => contact.contactId !== keepContactId),
+  ];
+}
+
+function computeRecommendedFieldSourceContactId(
+  orderedContacts: NormalizedContactForMerge[],
+  field: ContactMergeFieldKey,
+): number {
+  const fallbackContactId = orderedContacts.find((contact) => contact.contactId !== null)?.contactId;
+  if (fallbackContactId === null || fallbackContactId === undefined) {
+    throw new Error("Selected contacts must include at least one contact ID.");
   }
 
-  return "keep";
+  for (const contact of orderedContacts) {
+    if (contact.contactId === null) {
+      continue;
+    }
+
+    if (emptyToNull(contact.fields[field])) {
+      return contact.contactId;
+    }
+  }
+
+  return fallbackContactId;
+}
+
+export function buildContactMergePreviewContacts(
+  orderedContacts: NormalizedContactForMerge[],
+  primaryContactId: number | null,
+): ContactMergePreviewContact[] {
+  return orderedContacts
+    .filter((contact): contact is NormalizedContactForMerge & { contactId: number } => {
+      return contact.contactId !== null;
+    })
+    .map((contact) => ({
+      contactId: contact.contactId,
+      displayName: contact.fields.displayName,
+      email: contact.fields.email,
+      phone: contact.fields.phone1,
+      isPrimary: primaryContactId === contact.contactId,
+      lastModifiedIso: contact.lastModifiedIso,
+    }));
 }
 
 export function buildContactMergePreviewFields(
-  keepContact: NormalizedContactForMerge,
-  deleteContact: NormalizedContactForMerge,
+  selectedContacts: NormalizedContactForMerge[],
+  keepContactId: number,
 ): ContactMergePreviewField[] {
+  const orderedContacts = orderContactsForMerge(selectedContacts, keepContactId).filter(
+    (contact): contact is NormalizedContactForMerge & { contactId: number } => {
+      return contact.contactId !== null;
+    },
+  );
+
   return (Object.keys(CONTACT_MERGE_FIELD_LABELS) as ContactMergeFieldKey[]).map((field) => {
-    const keepValue = keepContact.fields[field];
-    const deleteValue = deleteContact.fields[field];
+    const values = orderedContacts.map((contact) => ({
+      contactId: contact.contactId,
+      value: contact.fields[field],
+    }));
+
     return {
       field,
       label: CONTACT_MERGE_FIELD_LABELS[field],
-      keepValue,
-      deleteValue,
-      recommendedSource: computeRecommendedFieldSource(keepValue, deleteValue),
-      valuesDiffer: contactMergeValuesDiffer(keepValue, deleteValue),
+      values,
+      recommendedSourceContactId: computeRecommendedFieldSourceContactId(
+        orderedContacts,
+        field,
+      ),
+      valuesDiffer: contactMergeValuesDiffer(values.map((entry) => entry.value)),
     };
   });
 }
 
 export function buildSelectedMergeFieldMap(
-  keepContact: NormalizedContactForMerge,
-  deleteContact: NormalizedContactForMerge,
+  selectedContacts: NormalizedContactForMerge[],
+  keepContactId: number,
   fieldChoices: ContactMergeFieldChoice[],
 ): ContactMergeFieldMap {
-  const choicesByField = new Map<ContactMergeFieldKey, ContactMergeFieldSource>();
+  const orderedContacts = orderContactsForMerge(selectedContacts, keepContactId);
+  const contactsById = new Map<number, NormalizedContactForMerge>();
+
+  orderedContacts.forEach((contact) => {
+    if (contact.contactId !== null) {
+      contactsById.set(contact.contactId, contact);
+    }
+  });
+
+  const choicesByField = new Map<ContactMergeFieldKey, number>();
   fieldChoices.forEach((choice) => {
-    choicesByField.set(choice.field, choice.source);
+    choicesByField.set(choice.field, choice.sourceContactId);
   });
 
   return (Object.keys(CONTACT_MERGE_FIELD_LABELS) as ContactMergeFieldKey[]).reduce(
     (fields, field) => {
-      const source =
+      const sourceContactId =
         choicesByField.get(field) ??
-        computeRecommendedFieldSource(
-          keepContact.fields[field],
-          deleteContact.fields[field],
-        );
-      fields[field] =
-        source === "delete" ? deleteContact.fields[field] : keepContact.fields[field];
+        computeRecommendedFieldSourceContactId(orderedContacts, field);
+      fields[field] = contactsById.get(sourceContactId)?.fields[field] ?? null;
       return fields;
     },
     {} as ContactMergeFieldMap,
@@ -232,13 +290,18 @@ export function buildSelectedMergeFieldMap(
 }
 
 export function buildMergedContactPayload(
-  keepRaw: RawContact,
-  deleteRaw: RawContact,
+  selectedRawContacts: RawContact[],
+  keepContactId: number,
   fieldChoices: ContactMergeFieldChoice[],
 ): Record<string, unknown> {
-  const keepContact = normalizeRawContactForMerge(keepRaw);
-  const deleteContact = normalizeRawContactForMerge(deleteRaw);
-  const mergedFields = buildSelectedMergeFieldMap(keepContact, deleteContact, fieldChoices);
+  const selectedContacts = selectedRawContacts.map((rawContact) =>
+    normalizeRawContactForMerge(rawContact),
+  );
+  const mergedFields = buildSelectedMergeFieldMap(
+    selectedContacts,
+    keepContactId,
+    fieldChoices,
+  );
 
   return {
     FirstName: {
@@ -279,25 +342,57 @@ export function buildMergedContactPayload(
 
 export function derivePrimaryRecommendation(
   keepIsPrimary: boolean,
-  deleteIsPrimary: boolean,
+  loserIsPrimary: boolean,
 ): boolean {
-  return !keepIsPrimary && deleteIsPrimary;
+  return !keepIsPrimary && loserIsPrimary;
 }
 
 export function optimisticTimestampMatches(
   expected: string | null | undefined,
   actual: string | null | undefined,
 ): boolean {
-  return (expected ?? null) === (actual ?? null);
+  const normalizedExpected = expected?.trim() || null;
+  const normalizedActual = actual?.trim() || null;
+
+  if (normalizedExpected === normalizedActual) {
+    return true;
+  }
+
+  if (normalizedExpected === null || normalizedActual === null) {
+    return false;
+  }
+
+  const expectedMs = Date.parse(normalizedExpected);
+  const actualMs = Date.parse(normalizedActual);
+
+  if (Number.isNaN(expectedMs) || Number.isNaN(actualMs)) {
+    return false;
+  }
+
+  if (expectedMs === actualMs) {
+    return true;
+  }
+
+  return Math.trunc(expectedMs / 1000) === Math.trunc(actualMs / 1000);
+}
+
+export function isStillDuplicateContactSelection(
+  selectedContacts: NormalizedContactForMerge[],
+): boolean {
+  if (selectedContacts.length < 2) {
+    return false;
+  }
+
+  const normalizedNames = selectedContacts.map((contact) =>
+    normalizeDuplicateName(contact.fields.displayName),
+  );
+
+  return normalizedNames.every((name) => name !== "") && new Set(normalizedNames).size === 1;
 }
 
 export function isStillDuplicateContactPair(
   keepContact: NormalizedContactForMerge,
   deleteContact: NormalizedContactForMerge,
 ): boolean {
-  return (
-    normalizeDuplicateName(keepContact.fields.displayName) !== "" &&
-    normalizeDuplicateName(keepContact.fields.displayName) ===
-      normalizeDuplicateName(deleteContact.fields.displayName)
-  );
+  return isStillDuplicateContactSelection([keepContact, deleteContact]);
 }

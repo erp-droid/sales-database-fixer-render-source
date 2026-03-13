@@ -10,8 +10,10 @@ export function proxy(request: NextRequest) {
 
   if (
     (pathname.startsWith("/accounts") ||
+      pathname.startsWith("/dashboard") ||
       pathname.startsWith("/map") ||
-      pathname.startsWith("/quality")) &&
+      pathname.startsWith("/quality") ||
+      pathname.startsWith("/tasks")) &&
     !hasSessionCookie
   ) {
     const signInUrl = new URL("/signin", request.url);
@@ -23,5 +25,12 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/accounts/:path*", "/map/:path*", "/quality/:path*", "/signin"],
+  matcher: [
+    "/accounts/:path*",
+    "/dashboard/:path*",
+    "/map/:path*",
+    "/quality/:path*",
+    "/tasks/:path*",
+    "/signin",
+  ],
 };

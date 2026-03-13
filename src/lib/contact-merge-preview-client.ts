@@ -1,12 +1,14 @@
 import type {
+  ContactMergePreviewContact,
   ContactMergePreviewField,
+  ContactMergePreviewFieldValue,
   ContactMergePreviewResponse,
 } from "@/types/contact-merge";
 
 export type ContactMergePreviewQuery = {
   businessAccountRecordId: string;
   keepContactId: number;
-  deleteContactId: number;
+  contactIds: number[];
 };
 
 type MergeErrorPayload = {
@@ -24,38 +26,18 @@ function buildPreviewCacheKey(query: ContactMergePreviewQuery): string {
   return [
     query.businessAccountRecordId.trim(),
     String(query.keepContactId),
-    String(query.deleteContactId),
+    ...query.contactIds.map((contactId) => String(contactId)),
   ].join("|");
 }
 
-function reversePreviewCacheKey(query: ContactMergePreviewQuery): string {
-  return buildPreviewCacheKey({
-    ...query,
-    keepContactId: query.deleteContactId,
-    deleteContactId: query.keepContactId,
-  });
-}
-
 function hasCachedOrInflightPreview(query: ContactMergePreviewQuery): boolean {
-  const exactKey = buildPreviewCacheKey(query);
-  const reverseKey = reversePreviewCacheKey(query);
-
-  return (
-    previewCache.has(exactKey) ||
-    previewCache.has(reverseKey) ||
-    previewRequestCache.has(exactKey) ||
-    previewRequestCache.has(reverseKey)
-  );
+  const key = buildPreviewCacheKey(query);
+  return previewCache.has(key) || previewRequestCache.has(key);
 }
 
 function isQueuedPreview(query: ContactMergePreviewQuery): boolean {
-  const exactKey = buildPreviewCacheKey(query);
-  const reverseKey = reversePreviewCacheKey(query);
-
-  return prefetchQueue.some((queuedQuery) => {
-    const queuedKey = buildPreviewCacheKey(queuedQuery);
-    return queuedKey === exactKey || queuedKey === reverseKey;
-  });
+  const key = buildPreviewCacheKey(query);
+  return prefetchQueue.some((queuedQuery) => buildPreviewCacheKey(queuedQuery) === key);
 }
 
 function parseError(payload: MergeErrorPayload | null): string {
@@ -75,6 +57,34 @@ function readJsonResponse<T>(response: Response): Promise<T | null> {
   return response.json().catch(() => null) as Promise<T | null>;
 }
 
+function isContactMergePreviewContact(value: unknown): value is ContactMergePreviewContact {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.contactId === "number" &&
+    (record.displayName === null || typeof record.displayName === "string") &&
+    (record.email === null || typeof record.email === "string") &&
+    (record.phone === null || typeof record.phone === "string") &&
+    typeof record.isPrimary === "boolean" &&
+    (record.lastModifiedIso === null || typeof record.lastModifiedIso === "string")
+  );
+}
+
+function isContactMergePreviewFieldValue(value: unknown): value is ContactMergePreviewFieldValue {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.contactId === "number" &&
+    (record.value === null || typeof record.value === "string")
+  );
+}
+
 function isContactMergePreviewField(value: unknown): value is ContactMergePreviewField {
   if (!value || typeof value !== "object") {
     return false;
@@ -84,10 +94,10 @@ function isContactMergePreviewField(value: unknown): value is ContactMergePrevie
   return (
     typeof record.field === "string" &&
     typeof record.label === "string" &&
-    (record.keepValue === null || typeof record.keepValue === "string") &&
-    (record.deleteValue === null || typeof record.deleteValue === "string") &&
-    (record.recommendedSource === "keep" || record.recommendedSource === "delete") &&
-    typeof record.valuesDiffer === "boolean"
+    typeof record.recommendedSourceContactId === "number" &&
+    typeof record.valuesDiffer === "boolean" &&
+    Array.isArray(record.values) &&
+    record.values.every((entry) => isContactMergePreviewFieldValue(entry))
   );
 }
 
@@ -102,16 +112,11 @@ function isContactMergePreviewResponse(value: unknown): value is ContactMergePre
     typeof record.businessAccountId === "string" &&
     typeof record.companyName === "string" &&
     typeof record.keepContactId === "number" &&
-    typeof record.deleteContactId === "number" &&
-    typeof record.keepIsPrimary === "boolean" &&
-    typeof record.deleteIsPrimary === "boolean" &&
+    Array.isArray(record.contacts) &&
+    record.contacts.every((contact) => isContactMergePreviewContact(contact)) &&
     typeof record.recommendedSetKeptAsPrimary === "boolean" &&
     (record.expectedAccountLastModified === null ||
       typeof record.expectedAccountLastModified === "string") &&
-    (record.expectedKeepContactLastModified === null ||
-      typeof record.expectedKeepContactLastModified === "string") &&
-    (record.expectedDeleteContactLastModified === null ||
-      typeof record.expectedDeleteContactLastModified === "string") &&
     Array.isArray(record.warnings) &&
     record.warnings.every((warning) => typeof warning === "string") &&
     Array.isArray(record.fields) &&
@@ -119,63 +124,10 @@ function isContactMergePreviewResponse(value: unknown): value is ContactMergePre
   );
 }
 
-function normalizeComparableValue(value: string | null | undefined): string {
-  return value?.trim().toLowerCase() ?? "";
-}
-
-function computeRecommendedSource(
-  keepValue: string | null | undefined,
-  deleteValue: string | null | undefined,
-): "keep" | "delete" {
-  if (keepValue && keepValue.trim()) {
-    return "keep";
-  }
-
-  if (deleteValue && deleteValue.trim()) {
-    return "delete";
-  }
-
-  return "keep";
-}
-
-export function reverseContactMergePreview(
-  preview: ContactMergePreviewResponse,
-): ContactMergePreviewResponse {
-  return {
-    ...preview,
-    keepContactId: preview.deleteContactId,
-    deleteContactId: preview.keepContactId,
-    keepIsPrimary: preview.deleteIsPrimary,
-    deleteIsPrimary: preview.keepIsPrimary,
-    recommendedSetKeptAsPrimary: !preview.deleteIsPrimary && preview.keepIsPrimary,
-    expectedKeepContactLastModified: preview.expectedDeleteContactLastModified,
-    expectedDeleteContactLastModified: preview.expectedKeepContactLastModified,
-    fields: preview.fields.map((field) => {
-      const keepValue = field.deleteValue;
-      const deleteValue = field.keepValue;
-      return {
-        ...field,
-        keepValue,
-        deleteValue,
-        valuesDiffer:
-          normalizeComparableValue(keepValue) !== normalizeComparableValue(deleteValue),
-        recommendedSource: computeRecommendedSource(keepValue, deleteValue),
-      };
-    }),
-  };
-}
-
 export function getCachedContactMergePreview(
   query: ContactMergePreviewQuery,
 ): ContactMergePreviewResponse | null {
-  const exactKey = buildPreviewCacheKey(query);
-  const exactPreview = previewCache.get(exactKey);
-  if (exactPreview) {
-    return exactPreview;
-  }
-
-  const reversePreview = previewCache.get(reversePreviewCacheKey(query));
-  return reversePreview ? reverseContactMergePreview(reversePreview) : null;
+  return previewCache.get(buildPreviewCacheKey(query)) ?? null;
 }
 
 async function fetchContactMergePreview(
@@ -184,7 +136,9 @@ async function fetchContactMergePreview(
   const params = new URLSearchParams({
     businessAccountRecordId: query.businessAccountRecordId,
     keepContactId: String(query.keepContactId),
-    deleteContactId: String(query.deleteContactId),
+  });
+  query.contactIds.forEach((contactId) => {
+    params.append("contactId", String(contactId));
   });
 
   const response = await fetch(`/api/contacts/merge-preview?${params.toString()}`, {
@@ -205,6 +159,30 @@ async function fetchContactMergePreview(
   return payload;
 }
 
+export function refreshContactMergePreview(
+  query: ContactMergePreviewQuery,
+): Promise<ContactMergePreviewResponse> {
+  const key = buildPreviewCacheKey(query);
+  const inflightRequest = previewRequestCache.get(key);
+  if (inflightRequest) {
+    return inflightRequest;
+  }
+
+  const request = fetchContactMergePreview(query)
+    .then((preview) => {
+      previewCache.set(key, preview);
+      return preview;
+    })
+    .finally(() => {
+      if (previewRequestCache.get(key) === request) {
+        previewRequestCache.delete(key);
+      }
+    });
+
+  previewRequestCache.set(key, request);
+  return request;
+}
+
 export function loadContactMergePreview(
   query: ContactMergePreviewQuery,
 ): Promise<ContactMergePreviewResponse> {
@@ -213,30 +191,7 @@ export function loadContactMergePreview(
     return Promise.resolve(cached);
   }
 
-  const exactKey = buildPreviewCacheKey(query);
-  const exactRequest = previewRequestCache.get(exactKey);
-  if (exactRequest) {
-    return exactRequest;
-  }
-
-  const reverseRequest = previewRequestCache.get(reversePreviewCacheKey(query));
-  if (reverseRequest) {
-    return reverseRequest.then((preview) => reverseContactMergePreview(preview));
-  }
-
-  const request = fetchContactMergePreview(query)
-    .then((preview) => {
-      previewCache.set(exactKey, preview);
-      return preview;
-    })
-    .finally(() => {
-      if (previewRequestCache.get(exactKey) === request) {
-        previewRequestCache.delete(exactKey);
-      }
-    });
-
-  previewRequestCache.set(exactKey, request);
-  return request;
+  return refreshContactMergePreview(query);
 }
 
 function schedulePrefetchQueue(): void {

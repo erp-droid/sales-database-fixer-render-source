@@ -25,7 +25,7 @@ function buildRow(overrides: Partial<BusinessAccountRow>): BusinessAccountRow {
       overrides.companyRegion !== undefined ? overrides.companyRegion : "Region 1",
     week: overrides.week !== undefined ? overrides.week : "Week 1",
     businessAccountId: overrides.businessAccountId ?? "02670D2595",
-    companyName: overrides.companyName ?? "MeadowBrook Construction - Internal",
+    companyName: overrides.companyName ?? "Example Internal Company",
     address: overrides.address ?? "5579 McAdam Road, Mississauga ON L4Z 1N4, CA",
     addressLine1: overrides.addressLine1 ?? "5579 McAdam Road",
     addressLine2: overrides.addressLine2 ?? "",
@@ -44,7 +44,7 @@ function buildRow(overrides: Partial<BusinessAccountRow>): BusinessAccountRow {
     primaryContactEmail:
       overrides.primaryContactEmail !== undefined
         ? overrides.primaryContactEmail
-        : "jserrano@meadowb.com",
+        : "jorge@example.com",
     primaryContactId:
       overrides.primaryContactId !== undefined ? overrides.primaryContactId : 157497,
     category: overrides.category !== undefined ? overrides.category : "A",
@@ -92,6 +92,52 @@ describe("data-quality helpers", () => {
     const metric = snapshot.metrics.find((item) => item.key === "missingCompany");
     expect(metric?.missingAccounts).toBe(1);
     expect(metric?.missingRows).toBe(1);
+  });
+
+  it("preserves raw issue clues while still using sibling display fallback", () => {
+    const snapshot = buildDataQualitySnapshot([
+      buildRow({
+        id: "orphan-account",
+        accountRecordId: "orphan-account",
+        rowKey: "orphan-account:contact:41",
+        businessAccountId: "",
+        companyName: "",
+        primaryContactName: "Jo",
+        primaryContactEmail: "jo@example.com",
+        primaryContactPhone: "416-111-0100",
+        contactId: 41,
+        primaryContactId: 41,
+      }),
+      buildRow({
+        id: "orphan-account",
+        accountRecordId: "orphan-account",
+        rowKey: "orphan-account:contact:42",
+        businessAccountId: "",
+        companyName: "",
+        primaryContactName: "Jane Doe",
+        primaryContactEmail: "jane@example.com",
+        primaryContactPhone: "416-555-0100",
+        contactId: 42,
+        primaryContactId: 42,
+      }),
+    ]);
+
+    const firstContactIssue = snapshot.issues.missingCompany.row.find(
+      (item) => item.rowKey === "orphan-account:contact:41",
+    );
+    const contactRowIssue = snapshot.issues.missingCompany.row.find(
+      (item) => item.rowKey === "orphan-account:contact:42",
+    );
+
+    expect(firstContactIssue?.contactName).toBe("Jane Doe");
+    expect(firstContactIssue?.contactEmail).toBe("jane@example.com");
+    expect(firstContactIssue?.rawContactName).toBe("Jo");
+    expect(firstContactIssue?.rawContactEmail).toBe("jo@example.com");
+    expect(firstContactIssue?.sourceRowKind).toBe("contact");
+
+    expect(contactRowIssue?.rawContactName).toBe("Jane Doe");
+    expect(contactRowIssue?.rawContactEmail).toBe("jane@example.com");
+    expect(contactRowIssue?.sourceRowKind).toBe("contact");
   });
 
   it("does not classify orphan contacts as sales representative issues", () => {
@@ -144,7 +190,44 @@ describe("data-quality helpers", () => {
     expect(missingCompanyMetric?.missingRows).toBe(1);
   });
 
-  it("excludes contact rows with blank names from data-quality totals and issue counts", () => {
+  it("excludes MeadowBrook companies and internal MeadowBrook emails from data-quality totals", () => {
+    const snapshot = buildDataQualitySnapshot([
+      buildRow({
+        id: "mb-account",
+        accountRecordId: "mb-account",
+        rowKey: "mb-account:contact:1",
+        businessAccountId: "MB-100",
+        companyName: "MeadowBrook Construction - Internal",
+        primaryContactEmail: "internal@example.com",
+      }),
+      buildRow({
+        id: "mb-contact",
+        accountRecordId: "mb-contact",
+        rowKey: "mb-contact:contact:2",
+        businessAccountId: "CUSTOMER-1",
+        companyName: "Customer With Internal Contact",
+        primaryContactEmail: "person@meadowb.com",
+      }),
+      buildRow({
+        id: "normal-contact",
+        accountRecordId: "normal-contact",
+        rowKey: "normal-contact:contact:3",
+        businessAccountId: "",
+        companyName: "",
+        primaryContactName: "Jane Doe",
+        primaryContactEmail: "jane@example.com",
+        contactId: 3,
+        primaryContactId: 3,
+      }),
+    ]);
+
+    expect(snapshot.totals.rows).toBe(1);
+    expect(snapshot.totals.accounts).toBe(1);
+    const missingCompanyMetric = snapshot.metrics.find((item) => item.key === "missingCompany");
+    expect(missingCompanyMetric?.missingRows).toBe(1);
+  });
+
+  it("treats phone-bearing blank-name rows as company-only rows in data-quality totals", () => {
     const snapshot = buildDataQualitySnapshot([
       buildRow({
         id: "blank-contact",
@@ -166,10 +249,12 @@ describe("data-quality helpers", () => {
       }),
     ]);
 
-    expect(snapshot.totals.rows).toBe(1);
-    expect(snapshot.totals.accounts).toBe(1);
+    expect(snapshot.totals.rows).toBe(2);
+    expect(snapshot.totals.accounts).toBe(2);
     const missingCompanyMetric = snapshot.metrics.find((item) => item.key === "missingCompany");
     expect(missingCompanyMetric?.missingRows).toBe(1);
+    const missingContactMetric = snapshot.metrics.find((item) => item.key === "missingContact");
+    expect(missingContactMetric?.missingRows).toBe(0);
   });
 
   it("does not flag a synthetic primary row when a sibling row already resolves the same primary contact", () => {
@@ -375,12 +460,12 @@ describe("buildDataQualitySnapshot", () => {
     const metric = (key: string) => snapshot.metrics.find((item) => item.key === key)!;
 
     expect(snapshot.totals).toEqual({
-      accounts: 2,
-      rows: 4,
+      accounts: 3,
+      rows: 5,
     });
 
-    expect(metric("missingCompany").missingAccounts).toBe(0);
-    expect(metric("missingCompany").missingRows).toBe(0);
+    expect(metric("missingCompany").missingAccounts).toBe(1);
+    expect(metric("missingCompany").missingRows).toBe(1);
 
     expect(metric("missingContact").missingAccounts).toBe(0);
     expect(metric("missingContact").missingRows).toBe(0);
@@ -388,8 +473,8 @@ describe("buildDataQualitySnapshot", () => {
     expect(metric("invalidPhone").missingAccounts).toBe(0);
     expect(metric("invalidPhone").missingRows).toBe(0);
 
-    expect(metric("missingContactEmail").missingAccounts).toBe(0);
-    expect(metric("missingContactEmail").missingRows).toBe(0);
+    expect(metric("missingContactEmail").missingAccounts).toBe(1);
+    expect(metric("missingContactEmail").missingRows).toBe(1);
 
     expect(metric("missingSalesRep").missingAccounts).toBe(1);
     expect(metric("missingSalesRep").missingRows).toBe(2);
@@ -400,20 +485,20 @@ describe("buildDataQualitySnapshot", () => {
     expect(metric("duplicateContact").missingAccounts).toBe(1);
     expect(metric("duplicateContact").missingRows).toBe(2);
 
-    expect(metric("missingCategory").missingAccounts).toBe(0);
-    expect(metric("missingRegion").missingAccounts).toBe(0);
-    expect(metric("missingSubCategory").missingAccounts).toBe(0);
-    expect(metric("missingIndustry").missingAccounts).toBe(0);
+    expect(metric("missingCategory").missingAccounts).toBe(1);
+    expect(metric("missingRegion").missingAccounts).toBe(1);
+    expect(metric("missingSubCategory").missingAccounts).toBe(1);
+    expect(metric("missingIndustry").missingAccounts).toBe(1);
 
     expect(metric("missingContact").rowMissingPct).toBe(0);
-    expect(metric("missingCompany").accountMissingPct).toBe(0);
+    expect(metric("missingCompany").accountMissingPct).toBe(33.3);
     expect(snapshot.issueTotals).toEqual({
-      accountsWithIssues: 2,
-      rowsWithIssues: 4,
+      accountsWithIssues: 3,
+      rowsWithIssues: 5,
       accountIssuePct: 100,
       rowIssuePct: 100,
     });
-    expect(snapshot.overallScorePct).toBe(81.8);
+    expect(snapshot.overallScorePct).toBe(69.7);
   });
 
   it("builds summary response schema", () => {
@@ -423,8 +508,8 @@ describe("buildDataQualitySnapshot", () => {
     expect(summary.source).toBe("live");
     expect(summary.computedAtIso).toBe("2026-03-05T15:00:00.000Z");
     expect(summary.issueTotals).toEqual({
-      accountsWithIssues: 2,
-      rowsWithIssues: 4,
+      accountsWithIssues: 3,
+      rowsWithIssues: 5,
       accountIssuePct: 100,
       rowIssuePct: 100,
     });
@@ -444,6 +529,63 @@ describe("buildDataQualitySnapshot", () => {
     expect(names).toContain("Mary-Jane");
     expect(page1.items[0].duplicateGroupKey).toBe("acc-3|mary jane");
     expect(page2.items[0].duplicateGroupKey).toBe("acc-3|mary jane");
+  });
+
+  it("filters paginated issue rows by sales rep", () => {
+    const snapshot = buildDataQualitySnapshot(
+      [
+        buildRow({
+          id: "rep-1",
+          accountRecordId: "rep-1",
+          rowKey: "rep-1:contact:1",
+          businessAccountId: "REP-1",
+          companyName: "",
+          salesRepName: "Jorge Serrano",
+        }),
+        buildRow({
+          id: "rep-2",
+          accountRecordId: "rep-2",
+          rowKey: "rep-2:contact:2",
+          businessAccountId: "REP-2",
+          companyName: "",
+          salesRepName: "Derek Cowell",
+        }),
+        buildRow({
+          id: "rep-3",
+          accountRecordId: "rep-3",
+          rowKey: "rep-3:contact:3",
+          businessAccountId: "REP-3",
+          companyName: "",
+          salesRepName: null,
+          salesRepId: null,
+        }),
+      ],
+      "2026-03-05T15:00:00.000Z",
+    );
+
+    const jorgePage = paginateDataQualityIssues(
+      snapshot,
+      "missingCompany",
+      "row",
+      1,
+      25,
+      "Jorge Serrano",
+    );
+    const unassignedPage = paginateDataQualityIssues(
+      snapshot,
+      "missingCompany",
+      "row",
+      1,
+      25,
+      "__unassigned__",
+    );
+
+    expect(jorgePage.salesRep).toBe("Jorge Serrano");
+    expect(jorgePage.total).toBe(1);
+    expect(jorgePage.items[0]?.salesRepName).toBe("Jorge Serrano");
+    expect(unassignedPage.salesRep).toBe("__unassigned__");
+    expect(unassignedPage.total).toBe(1);
+    expect(unassignedPage.items[0]?.salesRepName).toBeNull();
   });
 
   it("does not mark duplicate business accounts when company names match but addresses differ", () => {

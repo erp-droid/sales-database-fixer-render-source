@@ -17,10 +17,12 @@ import {
   buildPrimaryContactFallbackPayloads,
   buildBusinessAccountUpdatePayload,
   buildPrimaryContactUpdatePayload,
+  hasBusinessAccountChanges,
   hasAddressChanges,
   hasPrimaryContactChanges,
   normalizeBusinessAccount,
   normalizeBusinessAccountRows,
+  resolveCompanyPhone,
   sanitizeNullableInput,
   withPrimaryContact,
 } from "@/lib/business-accounts";
@@ -36,19 +38,214 @@ import {
 } from "@/lib/address-complete";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
-import { normalizePhoneForSave } from "@/lib/phone";
+import {
+  normalizePhoneForSave,
+  resolvePrimaryContactPhoneFields,
+} from "@/lib/phone";
 import {
   readBusinessAccountDetailFromReadModel,
   replaceReadModelAccountRows,
 } from "@/lib/read-model/accounts";
-import { maybeTriggerReadModelSync } from "@/lib/read-model/sync";
-import { parseUpdatePayload } from "@/lib/validation";
+import {
+  maybeTriggerReadModelSync,
+  readSyncStatus,
+  waitForReadModelSync,
+} from "@/lib/read-model/sync";
+import {
+  parseContactOnlyUpdatePayload,
+  parseUpdatePayload,
+} from "@/lib/validation";
 
 type RouteContext = {
   params: Promise<{
     id: string;
   }>;
 };
+
+function readRequestedContactId(request: NextRequest): number | null {
+  const raw = request.nextUrl.searchParams.get("contactId")?.trim() ?? "";
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function requestBodyHasOwnField(requestBody: unknown, key: string): boolean {
+  return Boolean(
+    requestBody &&
+      typeof requestBody === "object" &&
+      Object.prototype.hasOwnProperty.call(requestBody, key),
+  );
+}
+
+function selectDetailRow(
+  rows: BusinessAccountRow[],
+  requestedContactId: number | null,
+  fallbackRow: BusinessAccountRow | null,
+): BusinessAccountRow | null {
+  if (requestedContactId !== null) {
+    const requestedRow = rows.find((row) => row.contactId === requestedContactId);
+    if (requestedRow) {
+      return requestedRow;
+    }
+  }
+
+  return rows.find((row) => row.isPrimaryContact) ?? fallbackRow ?? rows[0] ?? null;
+}
+
+function mergeResponseRowIntoRows(
+  rows: BusinessAccountRow[],
+  responseRow: BusinessAccountRow,
+): BusinessAccountRow[] {
+  const responseContactId = responseRow.contactId ?? null;
+  if (responseContactId === null) {
+    return rows;
+  }
+
+  let matched = false;
+  const nextRows = rows.map((row) => {
+    if (row.contactId !== responseContactId) {
+      return row;
+    }
+
+    matched = true;
+    return {
+      ...row,
+      ...responseRow,
+      id: row.id,
+      accountRecordId: row.accountRecordId ?? responseRow.accountRecordId ?? responseRow.id,
+      rowKey:
+        responseRow.rowKey ??
+        row.rowKey ??
+        `${row.accountRecordId ?? responseRow.accountRecordId ?? row.id}:contact:${responseContactId}`,
+    };
+  });
+
+  if (matched) {
+    return nextRows;
+  }
+
+  return [...rows, responseRow];
+}
+
+function schedulePostSyncAccountRefresh(
+  cookieValue: string,
+  accountRecordId: string,
+  targetContactId: number | null,
+): void {
+  if (readSyncStatus().status !== "running") {
+    return;
+  }
+
+  void (async () => {
+    try {
+      await waitForReadModelSync();
+
+      const postSyncAuthCookieRefresh = {
+        value: null as string | null,
+      };
+      const refreshedRaw = await fetchBusinessAccountById(
+        cookieValue,
+        accountRecordId,
+        postSyncAuthCookieRefresh,
+      );
+      const refreshedAccountRow = await normalizeWithContactNotes(
+        cookieValue,
+        refreshedRaw,
+        postSyncAuthCookieRefresh,
+      );
+
+      let refreshedResponseRow = refreshedAccountRow;
+      if (targetContactId !== null) {
+        try {
+          const refreshedTargetContact = await fetchContactById(
+            cookieValue,
+            targetContactId,
+            postSyncAuthCookieRefresh,
+          );
+          const normalizedTargetRow = normalizeBusinessAccount(
+            withPrimaryContact(refreshedRaw, refreshedTargetContact),
+          );
+          refreshedResponseRow = {
+            ...refreshedAccountRow,
+            ...normalizedTargetRow,
+            id: refreshedAccountRow.id,
+            accountRecordId: refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id,
+            rowKey: `${refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id}:contact:${targetContactId}`,
+            contactId: targetContactId,
+            isPrimaryContact:
+              refreshedAccountRow.primaryContactId !== null &&
+              refreshedAccountRow.primaryContactId === targetContactId,
+            primaryContactId: refreshedAccountRow.primaryContactId,
+          };
+        } catch (contactError) {
+          if (
+            contactError instanceof HttpError &&
+            (contactError.status === 401 || contactError.status === 403)
+          ) {
+            throw contactError;
+          }
+        }
+      }
+
+      const refreshedRows = normalizeBusinessAccountRows(refreshedRaw);
+      replaceReadModelAccountRows(
+        accountRecordId,
+        mergeResponseRowIntoRows(refreshedRows, refreshedResponseRow),
+      );
+    } catch (error) {
+      console.warn("[business-account-update]", {
+        event: "post-sync-refresh-failed",
+        accountRecordId,
+        targetContactId,
+        error: getErrorMessage(error),
+      });
+    }
+  })();
+}
+
+function isStandaloneContactRow(row: BusinessAccountRow | null): row is BusinessAccountRow {
+  return (
+    row !== null &&
+    row.businessAccountId.trim().length === 0 &&
+    (row.contactId ?? row.primaryContactId ?? null) !== null
+  );
+}
+
+function buildStandaloneContactFallback(
+  row: BusinessAccountRow,
+): ReturnType<typeof parseUpdatePayload> {
+  return {
+    companyName: row.companyName,
+    assignedBusinessAccountRecordId: null,
+    assignedBusinessAccountId: row.businessAccountId.trim() || null,
+    addressLine1: row.addressLine1,
+    addressLine2: row.addressLine2,
+    city: row.city,
+    state: row.state,
+    postalCode: row.postalCode,
+    country: row.country.trim().toUpperCase() || "CA",
+    targetContactId: row.contactId ?? row.primaryContactId ?? null,
+    setAsPrimaryContact: false,
+    primaryOnlyIntent: false,
+    salesRepId: row.salesRepId,
+    salesRepName: row.salesRepName,
+    industryType: row.industryType,
+    subCategory: row.subCategory,
+    companyRegion: row.companyRegion,
+    week: row.week,
+    companyPhone: resolveCompanyPhone(row),
+    primaryContactName: row.primaryContactName,
+    primaryContactPhone: row.primaryContactPhone,
+    primaryContactExtension: row.primaryContactExtension ?? null,
+    primaryContactEmail: row.primaryContactEmail,
+    category: row.category,
+    notes: row.notes,
+    expectedLastModified: row.lastModifiedIso,
+  };
+}
 
 function readWrappedString(record: unknown, key: string): string | null {
   if (!record || typeof record !== "object") {
@@ -97,6 +294,22 @@ function readContactDisplayName(record: unknown): string | null {
 }
 
 function readContactPhone(record: unknown): string | null {
+  return resolvePrimaryContactPhoneFields({
+    phone1: readWrappedString(record, "Phone1"),
+    phone2: readWrappedString(record, "Phone2"),
+    phone3: readWrappedString(record, "Phone3"),
+  }).phone;
+}
+
+function readContactExtension(record: unknown): string | null {
+  return resolvePrimaryContactPhoneFields({
+    phone1: readWrappedString(record, "Phone1"),
+    phone2: readWrappedString(record, "Phone2"),
+    phone3: readWrappedString(record, "Phone3"),
+  }).extension;
+}
+
+function readContactRawPhone(record: unknown): string | null {
   return (
     readWrappedString(record, "Phone1") ??
     readWrappedString(record, "Phone2") ??
@@ -106,6 +319,10 @@ function readContactPhone(record: unknown): string | null {
 
 function readContactEmail(record: unknown): string | null {
   return readWrappedString(record, "Email") ?? readWrappedString(record, "EMail");
+}
+
+function readContactJobTitle(record: unknown): string | null {
+  return readWrappedString(record, "JobTitle") ?? readWrappedString(record, "Title");
 }
 
 function buildFallbackRowFromContact(
@@ -124,6 +341,8 @@ function buildFallbackRowFromContact(
     rowKey: `${accountRecordId}:contact:${contactId ?? contactRecordId}`,
     contactId,
     isPrimaryContact: existingRow?.isPrimaryContact ?? false,
+    companyPhone: existingRow?.companyPhone ?? null,
+    companyPhoneSource: existingRow?.companyPhoneSource ?? null,
     phoneNumber: readContactPhone(contact),
     salesRepId: existingRow?.salesRepId ?? null,
     salesRepName: existingRow?.salesRepName ?? null,
@@ -141,7 +360,10 @@ function buildFallbackRowFromContact(
     postalCode: existingRow?.postalCode ?? "",
     country: existingRow?.country ?? "",
     primaryContactName: readContactDisplayName(contact),
+    primaryContactJobTitle: readContactJobTitle(contact) ?? existingRow?.primaryContactJobTitle ?? null,
     primaryContactPhone: readContactPhone(contact),
+    primaryContactExtension: readContactExtension(contact),
+    primaryContactRawPhone: readContactRawPhone(contact),
     primaryContactEmail: readContactEmail(contact),
     primaryContactId: contactId,
     category: existingRow?.category ?? null,
@@ -181,6 +403,64 @@ function buildContactAccountAssignmentPayload(
   };
 }
 
+function buildContactOnlyUpdateRequestFromCurrentRow(
+  currentRow: BusinessAccountRow,
+  targetContactId: number,
+  parsedRequest: ReturnType<typeof parseUpdatePayload>,
+  requestBody: unknown,
+): ReturnType<typeof parseUpdatePayload> {
+  const nextRequest: ReturnType<typeof parseUpdatePayload> = {
+    companyName: currentRow.companyName,
+    assignedBusinessAccountRecordId: currentRow.accountRecordId ?? currentRow.id,
+    assignedBusinessAccountId: currentRow.businessAccountId,
+    addressLine1: currentRow.addressLine1,
+    addressLine2: currentRow.addressLine2,
+    city: currentRow.city,
+    state: currentRow.state,
+    postalCode: currentRow.postalCode,
+    country: currentRow.country,
+    targetContactId,
+    setAsPrimaryContact: false,
+    primaryOnlyIntent: false,
+    contactOnlyIntent: true,
+    salesRepId: currentRow.salesRepId,
+    salesRepName: currentRow.salesRepName,
+    industryType: currentRow.industryType,
+    subCategory: currentRow.subCategory,
+    companyRegion: currentRow.companyRegion,
+    week: currentRow.week,
+    companyPhone: resolveCompanyPhone(currentRow),
+    primaryContactName: currentRow.primaryContactName,
+    primaryContactPhone: currentRow.primaryContactPhone,
+    primaryContactExtension: currentRow.primaryContactExtension ?? null,
+    primaryContactEmail: currentRow.primaryContactEmail,
+    category: currentRow.category,
+    notes: currentRow.notes,
+    expectedLastModified: currentRow.lastModifiedIso,
+  };
+
+  if (requestBodyHasOwnField(requestBody, "primaryContactName")) {
+    nextRequest.primaryContactName = parsedRequest.primaryContactName;
+  }
+  if (requestBodyHasOwnField(requestBody, "primaryContactPhone")) {
+    nextRequest.primaryContactPhone = parsedRequest.primaryContactPhone;
+  }
+  if (requestBodyHasOwnField(requestBody, "primaryContactExtension")) {
+    nextRequest.primaryContactExtension = parsedRequest.primaryContactExtension;
+  }
+  if (requestBodyHasOwnField(requestBody, "primaryContactEmail")) {
+    nextRequest.primaryContactEmail = parsedRequest.primaryContactEmail;
+  }
+  if (requestBodyHasOwnField(requestBody, "notes")) {
+    nextRequest.notes = parsedRequest.notes;
+  }
+  if (requestBodyHasOwnField(requestBody, "expectedLastModified")) {
+    nextRequest.expectedLastModified = parsedRequest.expectedLastModified;
+  }
+
+  return nextRequest;
+}
+
 function readPrimaryContactIdFromRawAccount(rawAccount: unknown): number | null {
   if (!rawAccount || typeof rawAccount !== "object") {
     return null;
@@ -191,6 +471,15 @@ function readPrimaryContactIdFromRawAccount(rawAccount: unknown): number | null 
     readWrappedNumber(primary, "ContactID") ??
     readWrappedNumber(rawAccount, "PrimaryContactID") ??
     readWrappedNumber(rawAccount, "MainContactID")
+  );
+}
+
+function readAccountLocation(rawAccount: unknown): string | null {
+  return (
+    readWrappedString(rawAccount, "Location") ??
+    readWrappedString(rawAccount, "LocationID") ??
+    readWrappedString(rawAccount, "LocationCD") ??
+    readWrappedString(rawAccount, "DefaultLocation")
   );
 }
 
@@ -306,13 +595,15 @@ export async function GET(
     value: null as string | null,
   };
   let cookieValue: string | null = null;
+  const requestedContactId = readRequestedContactId(request);
 
   try {
     const { id } = await context.params;
     cookieValue = requireAuthCookieValue(request);
-    if (getEnv().READ_MODEL_ENABLED) {
+    const forceLive = request.nextUrl.searchParams.get("live") === "1";
+    if (getEnv().READ_MODEL_ENABLED && !forceLive) {
       maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
-      const cached = readBusinessAccountDetailFromReadModel(id);
+      const cached = readBusinessAccountDetailFromReadModel(id, requestedContactId);
       if (cached) {
         const response = NextResponse.json(cached);
         if (authCookieRefresh.value) {
@@ -329,12 +620,17 @@ export async function GET(
       authCookieRefresh,
     );
     const normalizedRows = normalizeBusinessAccountRows(rawAccount);
+    const detailRow = selectDetailRow(normalizedRows, requestedContactId, normalized);
 
     if (getEnv().READ_MODEL_ENABLED) {
       replaceReadModelAccountRows(id, normalizedRows);
     }
 
-    const response = NextResponse.json({ row: normalized, rows: normalizedRows });
+    const response = NextResponse.json({
+      row: detailRow,
+      rows: normalizedRows,
+      accountLocation: readAccountLocation(rawAccount),
+    });
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
     }
@@ -365,8 +661,13 @@ export async function GET(
           retryAuthCookieRefresh,
         );
         const normalizedRows = normalizeBusinessAccountRows(rawAccount);
+        const detailRow = selectDetailRow(normalizedRows, requestedContactId, normalized);
 
-        const response = NextResponse.json({ row: normalized, rows: normalizedRows });
+        const response = NextResponse.json({
+          row: detailRow,
+          rows: normalizedRows,
+          accountLocation: readAccountLocation(rawAccount),
+        });
         if (retryAuthCookieRefresh.value) {
           setAuthCookie(response, retryAuthCookieRefresh.value);
         } else if (authCookieRefresh.value) {
@@ -411,23 +712,51 @@ export async function PUT(
     value: null as string | null,
   };
   let cookieValue: string | null = null;
+  let requestBody: unknown;
   let updateRequest: ReturnType<typeof parseUpdatePayload> | null = null;
 
   const executePutWithCookie = async (
     activeCookieValue: string,
     activeAuthCookieRefresh: AuthCookieRefreshState,
   ): Promise<BusinessAccountRow> => {
+    const cachedDetail = readBusinessAccountDetailFromReadModel(id);
+    const cachedCurrentRow = cachedDetail?.row ?? null;
+    const isExplicitContactOnlyIntent =
+      Boolean(requestBody) &&
+      typeof requestBody === "object" &&
+      (requestBody as Record<string, unknown>).contactOnlyIntent === true;
+
+    if (!updateRequest) {
+      try {
+        updateRequest = isExplicitContactOnlyIntent
+          ? parseContactOnlyUpdatePayload(requestBody, cachedCurrentRow ?? undefined)
+          : parseUpdatePayload(requestBody);
+      } catch (error) {
+        if (error instanceof ZodError && isStandaloneContactRow(cachedCurrentRow)) {
+          updateRequest = parseContactOnlyUpdatePayload(
+            requestBody,
+            buildStandaloneContactFallback(cachedCurrentRow),
+          );
+        } else {
+          throw error;
+        }
+      }
+    }
+
     if (!updateRequest) {
       throw new HttpError(500, "Update payload was not parsed.");
     }
 
-    const cachedDetail = readBusinessAccountDetailFromReadModel(id);
-    const cachedCurrentRow = cachedDetail?.row ?? null;
     const cachedTargetContactId =
       updateRequest.targetContactId ??
       cachedCurrentRow?.contactId ??
       cachedCurrentRow?.primaryContactId ??
       null;
+    const cachedTargetDetail =
+      cachedTargetContactId !== null
+        ? readBusinessAccountDetailFromReadModel(id, cachedTargetContactId)
+        : cachedDetail;
+    const cachedTargetRow = cachedTargetDetail?.row ?? cachedCurrentRow;
     const requestedAssignedBusinessAccountId = sanitizeNullableInput(
       updateRequest.assignedBusinessAccountId,
     );
@@ -525,6 +854,96 @@ export async function PUT(
       return refreshedRow;
     }
 
+    if (updateRequest.contactOnlyIntent === true && cachedTargetContactId !== null) {
+      const cachedContactComparisonRow =
+        cachedTargetRow !== null
+          ? {
+              ...cachedTargetRow,
+              accountRecordId: cachedTargetRow.accountRecordId ?? cachedTargetRow.id,
+              contactId: cachedTargetContactId,
+              rowKey:
+                cachedTargetRow.rowKey ??
+                `${cachedTargetRow.accountRecordId ?? cachedTargetRow.id}:contact:${cachedTargetContactId}`,
+            }
+          : cachedCurrentRow !== null
+            ? {
+                ...cachedCurrentRow,
+                accountRecordId: cachedCurrentRow.accountRecordId ?? cachedCurrentRow.id,
+                contactId: cachedTargetContactId,
+                rowKey:
+                  cachedCurrentRow.rowKey ??
+                  `${cachedCurrentRow.accountRecordId ?? cachedCurrentRow.id}:contact:${cachedTargetContactId}`,
+              }
+            : null;
+
+      const currentTargetContact = await fetchContactById(
+        activeCookieValue,
+        cachedTargetContactId,
+        activeAuthCookieRefresh,
+      );
+      const currentTargetRow = buildFallbackRowFromContact(
+        currentTargetContact,
+        id,
+        cachedContactComparisonRow,
+      );
+      const effectiveContactOnlyUpdateRequest = buildContactOnlyUpdateRequestFromCurrentRow(
+        currentTargetRow,
+        cachedTargetContactId,
+        updateRequest,
+        requestBody,
+      );
+
+      if (
+        requestBodyHasOwnField(requestBody, "expectedLastModified") &&
+        effectiveContactOnlyUpdateRequest.expectedLastModified &&
+        currentTargetRow.lastModifiedIso &&
+        effectiveContactOnlyUpdateRequest.expectedLastModified !== currentTargetRow.lastModifiedIso
+      ) {
+        throw new HttpError(
+          409,
+          "This record was modified in Acumatica after you loaded it. Reload and try again.",
+        );
+      }
+
+      const contactPayload = buildPrimaryContactUpdatePayload(
+        effectiveContactOnlyUpdateRequest,
+      );
+      await updateContact(
+        activeCookieValue,
+        cachedTargetContactId,
+        contactPayload,
+        activeAuthCookieRefresh,
+      );
+
+      const refreshedContact = await fetchContactById(
+        activeCookieValue,
+        cachedTargetContactId,
+        activeAuthCookieRefresh,
+      );
+      const refreshedRow = buildFallbackRowFromContact(
+        refreshedContact,
+        id,
+        currentTargetRow,
+      );
+
+      if (getEnv().READ_MODEL_ENABLED) {
+        replaceReadModelAccountRows(
+          refreshedRow.accountRecordId ?? id,
+          mergeResponseRowIntoRows(
+            cachedTargetDetail?.rows ?? cachedDetail?.rows ?? [currentTargetRow],
+            refreshedRow,
+          ),
+        );
+        schedulePostSyncAccountRefresh(
+          activeCookieValue,
+          refreshedRow.accountRecordId ?? id,
+          cachedTargetContactId,
+        );
+      }
+
+      return refreshedRow;
+    }
+
     const currentRaw = await fetchBusinessAccountById(
       activeCookieValue,
       id,
@@ -539,6 +958,7 @@ export async function PUT(
     );
 
     const requestedTargetContactId = updateRequest.targetContactId;
+    const requestedContactOnlyIntent = updateRequest.contactOnlyIntent === true;
     const effectiveTargetContactId =
       requestedTargetContactId ??
       currentAccountRow.contactId ??
@@ -586,6 +1006,13 @@ export async function PUT(
       );
     }
 
+    if (requestedContactOnlyIntent && effectiveTargetContactId === null) {
+      throw new HttpError(
+        422,
+        "Contact-only updates require a valid contact ID.",
+      );
+    }
+
     if (
       hasPrimaryContactChanges(currentRowForContactComparison, updateRequest) &&
       effectiveTargetContactId === null
@@ -596,10 +1023,37 @@ export async function PUT(
       );
     }
 
-    const normalizedUpdateRequest: typeof updateRequest = {
+    let normalizedUpdateRequest: typeof updateRequest = {
       ...updateRequest,
       targetContactId: effectiveTargetContactId,
     };
+
+    if (requestedContactOnlyIntent && effectiveTargetContactId !== null) {
+      normalizedUpdateRequest = {
+        ...normalizedUpdateRequest,
+        companyName: currentAccountRow.companyName,
+        assignedBusinessAccountRecordId:
+          currentAccountRow.accountRecordId ?? currentAccountRow.id,
+        assignedBusinessAccountId: currentAccountRow.businessAccountId,
+        addressLine1: currentAccountRow.addressLine1,
+        addressLine2: currentAccountRow.addressLine2,
+        city: currentAccountRow.city,
+        state: currentAccountRow.state,
+        postalCode: currentAccountRow.postalCode,
+        country: currentAccountRow.country,
+        setAsPrimaryContact: false,
+        primaryOnlyIntent: false,
+        salesRepId: currentAccountRow.salesRepId,
+        salesRepName: currentAccountRow.salesRepName,
+        industryType: currentAccountRow.industryType,
+        subCategory: currentAccountRow.subCategory,
+        companyRegion: currentAccountRow.companyRegion,
+        week: currentAccountRow.week,
+        companyPhone: resolveCompanyPhone(currentAccountRow),
+        category: currentAccountRow.category,
+        contactOnlyIntent: true,
+      };
+    }
     const primaryOnlyUpdate = isPrimaryOnlyUpdate(
       currentAccountRow,
       currentRowForContactComparison,
@@ -663,6 +1117,7 @@ export async function PUT(
       const normalizedAddress = await validateCanadianAddress(updateRequest);
       effectiveUpdateRequest = {
         ...updateRequest,
+        companyPhone: effectiveUpdateRequest.companyPhone,
         primaryContactPhone: effectiveUpdateRequest.primaryContactPhone,
         ...normalizedAddress,
       };
@@ -684,15 +1139,28 @@ export async function PUT(
     }
 
     const identityPayload = buildBusinessAccountIdentityPayload(currentRaw);
+    const accountWasEdited = hasBusinessAccountChanges(
+      currentAccountRow,
+      effectiveUpdateRequest,
+    );
+    const companyPhoneWasEdited =
+      sanitizeNullableInput(effectiveUpdateRequest.companyPhone) !==
+      sanitizeNullableInput(resolveCompanyPhone(currentAccountRow));
     const primaryOnlySwitch =
       primaryOnlyUpdate &&
       effectiveUpdateRequest.setAsPrimaryContact &&
       effectiveTargetContactId !== null;
 
-    if (!primaryOnlySwitch) {
+    if (
+      !primaryOnlySwitch &&
+      (accountWasEdited ||
+        (effectiveUpdateRequest.setAsPrimaryContact && effectiveTargetContactId !== null))
+    ) {
       const accountPayload = buildBusinessAccountUpdatePayload(currentRaw, {
         ...effectiveUpdateRequest,
         targetContactId: effectiveTargetContactId,
+      }, {
+        includeCompanyPhone: companyPhoneWasEdited,
       });
       await updateBusinessAccount(
         activeCookieValue,
@@ -876,9 +1344,15 @@ export async function PUT(
     }
 
     if (getEnv().READ_MODEL_ENABLED) {
+      const refreshedRows = normalizeBusinessAccountRows(refreshedRaw);
       replaceReadModelAccountRows(
         resolvedRecordId,
-        normalizeBusinessAccountRows(refreshedRaw),
+        mergeResponseRowIntoRows(refreshedRows, responseRow),
+      );
+      schedulePostSyncAccountRefresh(
+        activeCookieValue,
+        resolvedRecordId,
+        responseTargetContactId,
       );
     }
 
@@ -887,10 +1361,9 @@ export async function PUT(
 
   try {
     cookieValue = requireAuthCookieValue(request);
-    const body = await request.json().catch(() => {
+    requestBody = await request.json().catch(() => {
       throw new HttpError(400, "Request body must be valid JSON.");
     });
-    updateRequest = parseUpdatePayload(body);
 
     const responseRow = await executePutWithCookie(cookieValue, authCookieRefresh);
     const response = NextResponse.json(responseRow);

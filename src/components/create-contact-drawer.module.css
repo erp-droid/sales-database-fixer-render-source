@@ -3,7 +3,7 @@
   inset: 0;
   z-index: 41;
   border: 0;
-  background: rgba(19, 35, 63, 0.28);
+  background: rgba(23, 32, 51, 0.28);
 }
 
 .drawer {
@@ -14,7 +14,7 @@
   height: 100vh;
   background: var(--panel);
   border-left: 1px solid var(--border);
-  box-shadow: -20px 0 30px rgba(19, 35, 63, 0.22);
+  box-shadow: -20px 0 30px rgba(23, 32, 51, 0.18);
   z-index: 42;
   transition: right 0.24s ease;
   display: flex;
@@ -76,7 +76,7 @@
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: #fff;
+  background: var(--app-surface);
 }
 
 .section h3 {
@@ -95,15 +95,15 @@
 .section select {
   border: 1px solid var(--border);
   border-radius: 9px;
-  background: #fff;
+  background: var(--app-surface);
   color: var(--ink);
   padding: 9px 10px;
 }
 
 .section input:disabled,
 .section select:disabled {
-  background: #f3f6fb;
-  color: #7386a0;
+  background: #f7fafc;
+  color: var(--app-text-soft);
 }
 
 .lookupHint {
@@ -113,9 +113,9 @@
 }
 
 .lookupSuggestions {
-  border: 1px solid #c8d6e9;
+  border: 1px solid var(--app-border);
   border-radius: 9px;
-  background: #fff;
+  background: var(--app-surface);
   display: grid;
   max-height: 240px;
   overflow-y: auto;

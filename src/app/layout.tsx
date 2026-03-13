@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 
+import { AuthSessionGuard } from "@/components/auth-session-guard";
+import { TwilioCallProvider } from "@/components/twilio-call-provider";
+
 import "./globals.css";
 
 const displayFont = Space_Grotesk({
@@ -26,7 +29,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${displayFont.variable} ${monoFont.variable}`}>{children}</body>
+      <body className={`${displayFont.variable} ${monoFont.variable}`}>
+        <TwilioCallProvider>
+          <AuthSessionGuard />
+          {children}
+        </TwilioCallProvider>
+      </body>
     </html>
   );
 }

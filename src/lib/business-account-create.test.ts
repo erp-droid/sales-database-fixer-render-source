@@ -73,6 +73,24 @@ describe("buildBusinessAccountCreatePayload", () => {
     );
   });
 
+  it("canonicalizes Region 10 when creating the REGION attribute", () => {
+    const payload = buildBusinessAccountCreatePayload({
+      ...baseRequest,
+      companyRegion: "region10",
+    }) as {
+      Attributes: Array<Record<string, { value: string }>>;
+    };
+
+    expect(payload.Attributes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          AttributeID: { value: "REGION" },
+          Value: { value: "Region 10" },
+        }),
+      ]),
+    );
+  });
+
   it("omits the WEEK attribute when blank", () => {
     const payload = buildBusinessAccountCreatePayload({
       ...baseRequest,

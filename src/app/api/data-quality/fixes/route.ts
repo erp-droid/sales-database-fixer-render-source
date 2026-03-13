@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ZodError, z } from "zod";
 
-import { requireAuthCookieValue, normalizeSessionUser, setAuthCookie } from "@/lib/auth";
+import {
+  getStoredLoginName,
+  normalizeSessionUser,
+  requireAuthCookieValue,
+  setAuthCookie,
+} from "@/lib/auth";
 import { recordFixedIssues } from "@/lib/data-quality-history";
 import { type AuthCookieRefreshState, validateSessionWithAcumatica } from "@/lib/acumatica";
 import { HttpError, getErrorMessage } from "@/lib/errors";
@@ -21,8 +26,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       throw new HttpError(400, "Request body must be valid JSON.");
     });
     const { issueKeys } = payloadSchema.parse(body);
-    const sessionPayload = await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
-    const user = normalizeSessionUser(sessionPayload);
+    const storedLoginName = getStoredLoginName(request);
+    let user =
+      storedLoginName
+        ? {
+            id: storedLoginName,
+            name: storedLoginName,
+          }
+        : null;
+
+    if (!user) {
+      const sessionPayload = await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
+      user = normalizeSessionUser(sessionPayload);
+    }
+
     if (!user) {
       throw new HttpError(401, "Unable to resolve the signed-in user for fix attribution.");
     }

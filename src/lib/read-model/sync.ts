@@ -1,5 +1,12 @@
 import type { AuthCookieRefreshState } from "@/lib/acumatica";
-import { buildEmployeeDirectoryFromRows, readEmployeeDirectory, replaceEmployeeDirectory } from "@/lib/read-model/employees";
+import {
+  buildEmployeeDirectoryFromRows,
+  DERIVED_EMPLOYEE_DIRECTORY_SOURCE,
+  FULL_EMPLOYEE_DIRECTORY_SOURCE,
+  readEmployeeDirectory,
+  readEmployeeDirectorySnapshot,
+  replaceEmployeeDirectory,
+} from "@/lib/read-model/employees";
 import { geocodePendingAddresses, queueGeocodesForRows } from "@/lib/read-model/geocodes";
 import { getReadModelDb } from "@/lib/read-model/db";
 import { replaceAllAccountRows, readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
@@ -168,6 +175,7 @@ async function runFullSync(
     const rows = await fetchAllSyncRows(
       cookieValue,
       authCookieRefresh ?? { value: null },
+      { includeInternal: true },
     );
     const counts = computeCounts(rows);
     currentPhase = "persist";
@@ -194,7 +202,16 @@ async function runFullSync(
     });
 
     replaceAllAccountRows(rows);
-    replaceEmployeeDirectory(buildEmployeeDirectoryFromRows(rows));
+    const employeeDirectorySnapshot = readEmployeeDirectorySnapshot();
+    if (
+      employeeDirectorySnapshot.source !== FULL_EMPLOYEE_DIRECTORY_SOURCE ||
+      employeeDirectorySnapshot.items.length === 0
+    ) {
+      replaceEmployeeDirectory(
+        buildEmployeeDirectoryFromRows(rows),
+        DERIVED_EMPLOYEE_DIRECTORY_SOURCE,
+      );
+    }
     queueGeocodesForRows(rows);
 
     const completedAt = new Date().toISOString();

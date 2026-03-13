@@ -3,17 +3,20 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   buildStoredAuthCookieValueFromSetCookies,
   buildCookieHeader,
+  clearStoredLoginName,
   getAuthCookieValue,
   getSetCookieHeaders,
+  setStoredLoginName,
   setAuthCookie,
 } from "@/lib/auth";
 import type { AppEnv } from "@/lib/env";
 import { getEnv } from "@/lib/env";
 import { type AuthCookieRefreshState, validateSessionWithAcumatica } from "@/lib/acumatica";
 import { HttpError } from "@/lib/errors";
+import { storeUserCredentials } from "@/lib/stored-user-credentials";
 
 const EXISTING_SESSION_TIMEOUT_MS = 6000;
-const UPSTREAM_LOGIN_TIMEOUT_MS = 15000;
+const UPSTREAM_LOGIN_TIMEOUT_MS = 30000;
 const LOGOUT_TIMEOUT_MS = 4000;
 
 function isAbortError(error: unknown): boolean {
@@ -22,26 +25,6 @@ function isAbortError(error: unknown): boolean {
     (error.name === "AbortError" ||
       error.message.toLowerCase().includes("aborted"))
   );
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  timeoutError: Error,
-): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-  return new Promise<T>((resolve, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(timeoutError);
-    }, timeoutMs);
-
-    promise.then(resolve).catch(reject).finally(() => {
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-      }
-    });
-  });
 }
 
 async function fetchWithTimeout(
@@ -59,6 +42,29 @@ async function fetchWithTimeout(
       ...init,
       signal: controller.signal,
     });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function validateSessionWithTimeout(
+  cookieValue: string,
+  authCookieRefresh: AuthCookieRefreshState,
+): Promise<unknown> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, EXISTING_SESSION_TIMEOUT_MS);
+
+  try {
+    return await validateSessionWithAcumatica(cookieValue, authCookieRefresh, {
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new HttpError(504, "Session check timed out");
+    }
+    throw error;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -194,11 +200,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (existingCookie) {
     const refreshState: AuthCookieRefreshState = { value: null };
     try {
-      await withTimeout(
-        validateSessionWithAcumatica(existingCookie, refreshState),
-        EXISTING_SESSION_TIMEOUT_MS,
-        new HttpError(504, "Session check timed out"),
-      );
+      await validateSessionWithTimeout(existingCookie, refreshState);
       const response = NextResponse.json({
         ok: true,
         reusedSession: true,
@@ -206,23 +208,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (refreshState.value) {
         setAuthCookie(response, refreshState.value);
       }
+      setStoredLoginName(response, username);
+      if (env.AUTH_PROVIDER === "acumatica") {
+        storeUserCredentials({
+          loginName: username,
+          username,
+          password,
+        });
+      }
       return response;
     } catch (error) {
-      if (!(error instanceof HttpError) || error.status !== 401) {
-        // Do not create a new Acumatica login when we cannot confidently verify
-        // the current one (transient network/upstream failure). This protects
-        // against quickly exhausting concurrent API login slots.
-        const response = NextResponse.json(
-          {
-            error:
-              "Unable to verify your existing Acumatica session right now. Please retry in a few seconds.",
-          },
-          { status: 502 },
-        );
-        if (refreshState.value) {
-          setAuthCookie(response, refreshState.value);
-        }
-        return response;
+      if (error instanceof HttpError && error.status !== 401) {
+        // The user explicitly submitted credentials. If the existing session
+        // cannot be verified quickly, continue to a best-effort logout + fresh
+        // login instead of blocking sign-in behind a slow health probe.
       }
     }
   }
@@ -303,15 +302,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const response = NextResponse.json({ ok: true });
-  response.cookies.set({
-    name: env.AUTH_COOKIE_NAME,
-    value: cookieValue,
-    path: "/",
-    httpOnly: true,
-    sameSite: "lax",
-    secure: env.AUTH_COOKIE_SECURE,
-    domain: env.AUTH_COOKIE_DOMAIN,
-  });
+  setAuthCookie(response, cookieValue);
+  if (username) {
+    setStoredLoginName(response, username);
+  } else {
+    clearStoredLoginName(response);
+  }
+  if (env.AUTH_PROVIDER === "acumatica") {
+    storeUserCredentials({
+      loginName: username,
+      username,
+      password,
+    });
+  }
 
   return response;
 }

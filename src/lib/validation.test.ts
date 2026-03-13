@@ -3,12 +3,16 @@ import { ZodError } from "zod";
 import {
   parseBusinessAccountContactCreatePayload,
   parseBusinessAccountCreatePayload,
+  parseContactOnlyUpdatePayload,
   parseContactMergePayload,
   parseContactMergePreviewQuery,
   parseDataQualityBasisQuery,
   parseDataQualityIssuesQuery,
   parseDataQualityStatusPayload,
+  parseDeleteReasonPayload,
   parseListQuery,
+  parseMeetingCreatePayload,
+  parseOpportunityCreatePayload,
   parseUpdatePayload,
 } from "@/lib/validation";
 
@@ -37,8 +41,9 @@ describe("parseListQuery", () => {
         filterPrimaryContactPhone: "416",
         filterPrimaryContactEmail: "meadowb.com",
         filterCategory: "B",
+        filterLastEmailed: "2026-03-10",
         filterLastModified: "2026-03-04",
-        sortBy: "salesRepName",
+        sortBy: "lastEmailedAt",
         sortDir: "desc",
         page: "2",
         pageSize: "50",
@@ -59,8 +64,9 @@ describe("parseListQuery", () => {
       filterPrimaryContactPhone: "416",
       filterPrimaryContactEmail: "meadowb.com",
       filterCategory: "B",
+      filterLastEmailed: "2026-03-10",
       filterLastModified: "2026-03-04",
-      sortBy: "salesRepName",
+      sortBy: "lastEmailedAt",
       sortDir: "desc",
       page: 2,
       pageSize: 50,
@@ -77,6 +83,7 @@ describe("parseUpdatePayload", () => {
     state: "ON",
     postalCode: "L4Z1N4",
     country: "CA",
+    companyPhone: "19055550100",
     primaryContactName: "Jorge Serrano",
     primaryContactPhone: "4162304681",
     primaryContactEmail: "jserrano@meadowb.com",
@@ -104,6 +111,22 @@ describe("parseUpdatePayload", () => {
     expect(parsed.notes).toBeNull();
   });
 
+  it("normalizes company phone to ###-###-####", () => {
+    const parsed = parseUpdatePayload(validPayload);
+
+    expect(parsed.companyPhone).toBe("905-555-0100");
+    expect(parsed.primaryContactPhone).toBe("416-230-4681");
+  });
+
+  it("rejects invalid company phone", () => {
+    expect(() =>
+      parseUpdatePayload({
+        ...validPayload,
+        companyPhone: "12345",
+      }),
+    ).toThrow(ZodError);
+  });
+
   it("defaults blank country to CA", () => {
     const parsed = parseUpdatePayload({
       ...validPayload,
@@ -116,6 +139,7 @@ describe("parseUpdatePayload", () => {
   it("defaults primaryOnlyIntent to false", () => {
     const parsed = parseUpdatePayload(validPayload);
     expect(parsed.primaryOnlyIntent).toBe(false);
+    expect(parsed.contactOnlyIntent).toBe(false);
   });
 
   it("parses primaryOnlyIntent when provided", () => {
@@ -135,6 +159,17 @@ describe("parseUpdatePayload", () => {
     expect(parsed.assignedBusinessAccountId).toBe("B20266");
   });
 
+  it("parses contactOnlyIntent when provided", () => {
+    const parsed = parseUpdatePayload({
+      ...validPayload,
+      contactOnlyIntent: true,
+      targetContactId: 157315,
+    });
+
+    expect(parsed.contactOnlyIntent).toBe(true);
+    expect(parsed.targetContactId).toBe(157315);
+  });
+
   it("rejects invalid category", () => {
     expect(() =>
       parseUpdatePayload({
@@ -150,6 +185,116 @@ describe("parseUpdatePayload", () => {
         ...validPayload,
         primaryContactEmail: "not-an-email",
       }),
+    ).toThrow(ZodError);
+  });
+});
+
+describe("parseContactOnlyUpdatePayload", () => {
+  const fallback = {
+    companyName: "",
+    addressLine1: "",
+    addressLine2: "",
+    city: "",
+    state: "",
+    postalCode: "",
+    country: "CA",
+    salesRepId: null,
+    salesRepName: null,
+    industryType: null,
+    subCategory: null,
+    companyRegion: null,
+    week: null,
+    primaryContactName: "Ashur Hanna",
+    primaryContactPhone: "905-878-9000",
+    primaryContactExtension: "120",
+    primaryContactEmail: "ashur.hanna@freshstartfoods.com",
+    category: null,
+    notes: null,
+    expectedLastModified: "2026-03-04T16:39:08.13+00:00",
+  } as const;
+
+  it("allows standalone contact updates without required account fields", () => {
+    const parsed = parseContactOnlyUpdatePayload(
+      {
+        targetContactId: 157315,
+        primaryContactPhone: "19058789000",
+        expectedLastModified: "2026-03-04T16:39:08.13+00:00",
+      },
+      fallback,
+    );
+
+    expect(parsed.companyName).toBe("");
+    expect(parsed.addressLine1).toBe("");
+    expect(parsed.country).toBe("CA");
+    expect(parsed.targetContactId).toBe(157315);
+    expect(parsed.primaryContactName).toBe("Ashur Hanna");
+    expect(parsed.primaryContactPhone).toBe("905-878-9000");
+    expect(parsed.primaryContactExtension).toBe("120");
+    expect(parsed.primaryContactEmail).toBe("ashur.hanna@freshstartfoods.com");
+  });
+
+  it("parses and normalizes contact-only extension values", () => {
+    const parsed = parseContactOnlyUpdatePayload(
+      {
+        targetContactId: 157315,
+        primaryContactPhone: "9053370800",
+        primaryContactExtension: "ext. 101",
+      },
+      fallback,
+    );
+
+    expect(parsed.primaryContactPhone).toBe("905-337-0800");
+    expect(parsed.primaryContactExtension).toBe("101");
+  });
+
+  it("ignores invalid company phones on contact-only payloads", () => {
+    const parsed = parseContactOnlyUpdatePayload(
+      {
+        targetContactId: 157315,
+        companyPhone: "905-456-8700 x249",
+        primaryContactPhone: "9054568700",
+        primaryContactExtension: "249",
+      },
+      fallback,
+    );
+
+    expect(parsed.companyPhone).toBeNull();
+    expect(parsed.primaryContactPhone).toBe("905-456-8700");
+    expect(parsed.primaryContactExtension).toBe("249");
+  });
+
+  it("defaults contactOnlyIntent to false for contact-only payloads", () => {
+    const parsed = parseContactOnlyUpdatePayload(
+      {
+        targetContactId: 157315,
+      },
+      fallback,
+    );
+
+    expect(parsed.contactOnlyIntent).toBe(false);
+  });
+
+  it("still rejects invalid contact-only email values", () => {
+    expect(() =>
+      parseContactOnlyUpdatePayload(
+        {
+          targetContactId: 157315,
+          primaryContactEmail: "not-an-email",
+        },
+        fallback,
+      ),
+    ).toThrow(ZodError);
+  });
+
+  it("rejects invalid contact-only extension values", () => {
+    expect(() =>
+      parseContactOnlyUpdatePayload(
+        {
+          targetContactId: 157315,
+          primaryContactExtension: "123456",
+        },
+        fallback,
+      ),
     ).toThrow(ZodError);
   });
 });
@@ -306,6 +451,313 @@ describe("parseBusinessAccountContactCreatePayload", () => {
   });
 });
 
+describe("parseOpportunityCreatePayload", () => {
+  const validPayload = {
+    businessAccountRecordId: "02670D2595",
+    businessAccountId: "BA0001",
+    contactId: 157497,
+    subject: "Warehouse electrical upgrade",
+    classId: "PRODUCTION",
+    location: "MAIN",
+    stage: "Awaiting Estimate",
+    estimationDate: "2026-03-11T00:00:00.000Z",
+    note: null,
+    willWinJob: "Yes",
+    linkToDrive: "https://drive.google.com/example",
+    projectType: "Electrical",
+    ownerId: null,
+    ownerName: "Jane Doe",
+  };
+
+  it("requires businessAccountRecordId", () => {
+    expect(() =>
+      parseOpportunityCreatePayload({
+        ...validPayload,
+        businessAccountRecordId: "",
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("requires a positive contactId", () => {
+    expect(() =>
+      parseOpportunityCreatePayload({
+        ...validPayload,
+        contactId: 0,
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("requires subject", () => {
+    expect(() =>
+      parseOpportunityCreatePayload({
+        ...validPayload,
+        subject: "   ",
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("requires businessAccountId", () => {
+    expect(() =>
+      parseOpportunityCreatePayload({
+        ...validPayload,
+        businessAccountId: "",
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("requires class and estimation date", () => {
+    expect(() =>
+      parseOpportunityCreatePayload({
+        ...validPayload,
+        classId: "",
+      }),
+    ).toThrow(ZodError);
+
+    expect(() =>
+      parseOpportunityCreatePayload({
+        ...validPayload,
+        estimationDate: "",
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("requires valid willWinJob values", () => {
+    expect(() =>
+      parseOpportunityCreatePayload({
+        ...validPayload,
+        willWinJob: "Maybe",
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("requires linkToDrive", () => {
+    expect(() =>
+      parseOpportunityCreatePayload({
+        ...validPayload,
+        linkToDrive: "",
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("requires a supported projectType", () => {
+    expect(() =>
+      parseOpportunityCreatePayload({
+        ...validPayload,
+        projectType: "Roofing",
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("requires ownerId or ownerName", () => {
+    expect(() =>
+      parseOpportunityCreatePayload({
+        ...validPayload,
+        ownerName: null,
+      }),
+    ).toThrowError("Estimator is required.");
+  });
+
+  it("accepts a valid payload and trims strings", () => {
+    const parsed = parseOpportunityCreatePayload({
+      ...validPayload,
+      businessAccountRecordId: " 02670D2595 ",
+      businessAccountId: " BA0001 ",
+      subject: " Warehouse electrical upgrade ",
+      classId: " PRODUCTION ",
+      location: " MAIN ",
+      stage: " Awaiting Estimate ",
+      estimationDate: " 2026-03-11T00:00:00.000Z ",
+      linkToDrive: " https://drive.google.com/example ",
+      ownerId: " E0001 ",
+      ownerName: " Jane Doe ",
+    });
+
+    expect(parsed).toEqual({
+      businessAccountRecordId: "02670D2595",
+      businessAccountId: "BA0001",
+      contactId: 157497,
+      subject: "Warehouse electrical upgrade",
+      classId: "PRODUCTION",
+      location: "MAIN",
+      stage: "Awaiting Estimate",
+      estimationDate: "2026-03-11T00:00:00.000Z",
+      note: null,
+      willWinJob: "Yes",
+      linkToDrive: "https://drive.google.com/example",
+      projectType: "Electrical",
+      ownerId: "E0001",
+      ownerName: "Jane Doe",
+    });
+  });
+});
+
+describe("parseMeetingCreatePayload", () => {
+  const validPayload = {
+    businessAccountRecordId: "02670D2595",
+    businessAccountId: "BA0001",
+    sourceContactId: 157497,
+    organizerContactId: 157499,
+    includeOrganizerInAcumatica: true,
+    relatedContactId: 157497,
+    summary: "Operations sync",
+    location: "Boardroom",
+    timeZone: "America/Toronto",
+    startDate: "2026-03-11",
+    startTime: "09:00",
+    endDate: "2026-03-11",
+    endTime: "10:00",
+    priority: "Normal",
+    details: "Review open items.",
+    attendeeContactIds: [157497, 157498],
+    attendeeEmails: ["guest@example.com"],
+  };
+
+  it("accepts a valid payload and trims strings", () => {
+    const parsed = parseMeetingCreatePayload({
+      ...validPayload,
+      businessAccountRecordId: " 02670D2595 ",
+      businessAccountId: " BA0001 ",
+      summary: " Operations sync ",
+      location: " Boardroom ",
+      timeZone: " America/Toronto ",
+      details: " Review open items. ",
+    });
+
+    expect(parsed).toEqual({
+      businessAccountRecordId: "02670D2595",
+      businessAccountId: "BA0001",
+      sourceContactId: 157497,
+      organizerContactId: 157499,
+      includeOrganizerInAcumatica: true,
+      relatedContactId: 157497,
+      summary: "Operations sync",
+      location: "Boardroom",
+      timeZone: "America/Toronto",
+      startDate: "2026-03-11",
+      startTime: "09:00",
+      endDate: "2026-03-11",
+      endTime: "10:00",
+      priority: "Normal",
+      details: "Review open items.",
+      attendeeContactIds: [157497, 157498],
+      attendeeEmails: ["guest@example.com"],
+    });
+  });
+
+  it("requires summary and related contact", () => {
+    expect(() =>
+      parseMeetingCreatePayload({
+        ...validPayload,
+        summary: "   ",
+      }),
+    ).toThrow(ZodError);
+
+    expect(() =>
+      parseMeetingCreatePayload({
+        ...validPayload,
+        relatedContactId: 0,
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("requires organizer contact when including organizer in Acumatica", () => {
+    expect(() =>
+      parseMeetingCreatePayload({
+        ...validPayload,
+        organizerContactId: null,
+      }),
+    ).toThrow(ZodError);
+
+    expect(
+      parseMeetingCreatePayload({
+        ...validPayload,
+        includeOrganizerInAcumatica: false,
+        organizerContactId: null,
+      }),
+    ).toEqual({
+      ...validPayload,
+      organizerContactId: null,
+      includeOrganizerInAcumatica: false,
+    });
+  });
+
+  it("allows attendee normalization to happen server-side", () => {
+    const parsed = parseMeetingCreatePayload({
+      ...validPayload,
+      attendeeContactIds: [157498, 157498],
+    });
+
+    expect(parsed.attendeeContactIds).toEqual([157498, 157498]);
+    expect(parsed.attendeeEmails).toEqual(["guest@example.com"]);
+
+    const parsedWithoutAttendees = parseMeetingCreatePayload({
+      ...validPayload,
+      attendeeContactIds: [],
+      attendeeEmails: [],
+    });
+
+    expect(parsedWithoutAttendees.attendeeContactIds).toEqual([]);
+    expect(parsedWithoutAttendees.attendeeEmails).toEqual([]);
+  });
+
+  it("rejects end values that are not after start", () => {
+    expect(() =>
+      parseMeetingCreatePayload({
+        ...validPayload,
+        endTime: "08:59",
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("rejects unsupported priorities and invalid date formats", () => {
+    expect(() =>
+      parseMeetingCreatePayload({
+        ...validPayload,
+        priority: "Urgent",
+      }),
+    ).toThrow(ZodError);
+
+    expect(() =>
+      parseMeetingCreatePayload({
+        ...validPayload,
+        startDate: "03/11/2026",
+      }),
+    ).toThrow(ZodError);
+
+    expect(() =>
+      parseMeetingCreatePayload({
+        ...validPayload,
+        attendeeEmails: ["not-an-email"],
+      }),
+    ).toThrow(ZodError);
+  });
+});
+
+describe("parseDeleteReasonPayload", () => {
+  it("rejects empty and whitespace-only reasons", () => {
+    expect(() => parseDeleteReasonPayload({ reason: "" })).toThrow(ZodError);
+    expect(() => parseDeleteReasonPayload({ reason: "   " })).toThrow(ZodError);
+  });
+
+  it("rejects reasons longer than 1000 characters", () => {
+    expect(() =>
+      parseDeleteReasonPayload({
+        reason: "x".repeat(1001),
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("trims valid reasons", () => {
+    expect(
+      parseDeleteReasonPayload({
+        reason: " Duplicate contact requested by sales rep ",
+      }),
+    ).toEqual({
+      reason: "Duplicate contact requested by sales rep",
+    });
+  });
+});
+
 describe("parseDataQualityIssuesQuery", () => {
   it("uses defaults for basis and pagination", () => {
     const parsed = parseDataQualityIssuesQuery(
@@ -327,6 +779,7 @@ describe("parseDataQualityIssuesQuery", () => {
       new URLSearchParams({
         metric: "missingSalesRep",
         basis: "row",
+        salesRep: " Jorge Serrano ",
         page: "3",
         pageSize: "75",
       }),
@@ -335,6 +788,7 @@ describe("parseDataQualityIssuesQuery", () => {
     expect(parsed).toEqual({
       metric: "missingSalesRep",
       basis: "row",
+      salesRep: "Jorge Serrano",
       page: 3,
       pageSize: 75,
     });
@@ -427,17 +881,19 @@ describe("parseDataQualityStatusPayload", () => {
 describe("parseContactMergePreviewQuery", () => {
   it("parses valid IDs", () => {
     const parsed = parseContactMergePreviewQuery(
-      new URLSearchParams({
-        businessAccountRecordId: "acc-1",
-        keepContactId: "157497",
-        deleteContactId: "158410",
-      }),
+      new URLSearchParams([
+        ["businessAccountRecordId", "acc-1"],
+        ["keepContactId", "157497"],
+        ["contactId", "157497"],
+        ["contactId", "158410"],
+        ["contactId", "158499"],
+      ]),
     );
 
     expect(parsed).toEqual({
       businessAccountRecordId: "acc-1",
       keepContactId: 157497,
-      deleteContactId: 158410,
+      contactIds: [157497, 158410, 158499],
     });
   });
 });
@@ -447,24 +903,36 @@ describe("parseContactMergePayload", () => {
     businessAccountRecordId: "acc-1",
     businessAccountId: "AC-100",
     keepContactId: 157497,
-    deleteContactId: 158410,
+    selectedContactIds: [157497, 158410, 158499],
     setKeptAsPrimary: true,
     expectedAccountLastModified: "2026-03-04T16:39:08.13+00:00",
-    expectedKeepContactLastModified: "2026-03-04T16:39:08.13+00:00",
-    expectedDeleteContactLastModified: "2026-03-04T16:39:08.13+00:00",
+    expectedContactLastModifieds: [
+      {
+        contactId: 157497,
+        lastModified: "2026-03-04T16:39:08.13+00:00",
+      },
+      {
+        contactId: 158410,
+        lastModified: "2026-03-04T16:39:08.13+00:00",
+      },
+      {
+        contactId: 158499,
+        lastModified: "2026-03-04T16:39:08.13+00:00",
+      },
+    ],
     fieldChoices: [
       {
         field: "displayName",
-        source: "keep",
+        sourceContactId: 157497,
       },
     ],
   };
 
-  it("rejects same keep and delete contact IDs", () => {
+  it("rejects duplicate selected contact IDs", () => {
     expect(() =>
       parseContactMergePayload({
         ...validPayload,
-        deleteContactId: 157497,
+        selectedContactIds: [157497, 157497],
       }),
     ).toThrow(ZodError);
   });
@@ -476,7 +944,7 @@ describe("parseContactMergePayload", () => {
         fieldChoices: [
           {
             field: "badField",
-            source: "keep",
+            sourceContactId: 157497,
           },
         ],
       }),
@@ -490,12 +958,57 @@ describe("parseContactMergePayload", () => {
         fieldChoices: [
           {
             field: "displayName",
-            source: "keep",
+            sourceContactId: 157497,
           },
           {
             field: "displayName",
-            source: "delete",
+            sourceContactId: 158410,
           },
+        ],
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("rejects keep contact IDs that are not selected", () => {
+    expect(() =>
+      parseContactMergePayload({
+        ...validPayload,
+        keepContactId: 999999,
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("rejects field choices that reference unselected contacts", () => {
+    expect(() =>
+      parseContactMergePayload({
+        ...validPayload,
+        fieldChoices: [
+          {
+            field: "displayName",
+            sourceContactId: 999999,
+          },
+        ],
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("rejects incomplete expected contact timestamps", () => {
+    expect(() =>
+      parseContactMergePayload({
+        ...validPayload,
+        expectedContactLastModifieds: validPayload.expectedContactLastModifieds.slice(0, 2),
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("rejects duplicate expected contact timestamps", () => {
+    expect(() =>
+      parseContactMergePayload({
+        ...validPayload,
+        expectedContactLastModifieds: [
+          validPayload.expectedContactLastModifieds[0],
+          validPayload.expectedContactLastModifieds[0],
+          validPayload.expectedContactLastModifieds[2],
         ],
       }),
     ).toThrow(ZodError);

@@ -16,6 +16,8 @@ import {
   fetchContactMergeServerContext,
   setBusinessAccountPrimaryContact,
 } from "@/lib/contact-merge-server";
+import { logContactCreateAudit } from "@/lib/audit-log-store";
+import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { getEnv } from "@/lib/env";
 import { replaceReadModelAccountRows } from "@/lib/read-model/accounts";
@@ -55,14 +57,20 @@ export async function POST(
   const authCookieRefresh = {
     value: null as string | null,
   };
+  let actor: Awaited<ReturnType<typeof resolveDeferredActionActor>> | null = null;
+  let contactRequest: ReturnType<typeof parseBusinessAccountContactCreatePayload> | null = null;
+  let auditBusinessAccountRecordId: string | null = null;
+  let auditBusinessAccountId: string | null = null;
+  let auditCompanyName: string | null = null;
 
   try {
     const cookieValue = requireAuthCookieValue(request);
+    actor = await resolveDeferredActionActor(request, cookieValue, authCookieRefresh);
     const { id } = await context.params;
     const body = await request.json().catch(() => {
       throw new HttpError(400, "Request body must be valid JSON.");
     });
-    const contactRequest = parseBusinessAccountContactCreatePayload(body);
+    contactRequest = parseBusinessAccountContactCreatePayload(body);
 
     const serverContext = await fetchContactMergeServerContext(
       cookieValue,
@@ -77,6 +85,9 @@ export async function POST(
         "Business account ID is missing on this account. Contact creation cannot continue.",
       );
     }
+    auditBusinessAccountRecordId = serverContext.resolvedRecordId;
+    auditBusinessAccountId = businessAccountId;
+    auditCompanyName = readBusinessAccountName(currentRawAccount);
 
     const createdContact = await createContact(
       cookieValue,
@@ -132,6 +143,16 @@ export async function POST(
       if (getEnv().READ_MODEL_ENABLED) {
         replaceReadModelAccountRows(serverContext.resolvedRecordId, refreshedRows);
       }
+      logContactCreateAudit({
+        actor,
+        request: contactRequest,
+        resultCode: "partial",
+        businessAccountRecordId: serverContext.resolvedRecordId,
+        businessAccountId,
+        companyName: auditCompanyName,
+        contactId,
+        createdRow: refreshedRows.find((row) => row.contactId === contactId) ?? null,
+      });
       const response = NextResponse.json(responseBody, { status: 409 });
       if (authCookieRefresh.value) {
         setAuthCookie(response, authCookieRefresh.value);
@@ -170,6 +191,17 @@ export async function POST(
       replaceReadModelAccountRows(serverContext.resolvedRecordId, accountRows);
     }
 
+    logContactCreateAudit({
+      actor,
+      request: contactRequest,
+      resultCode: "succeeded",
+      businessAccountRecordId: responseBody.businessAccountRecordId,
+      businessAccountId: responseBody.businessAccountId,
+      companyName: createdRow.companyName,
+      contactId,
+      createdRow,
+    });
+
     const response = NextResponse.json(responseBody, { status: 201 });
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
@@ -177,6 +209,17 @@ export async function POST(
 
     return response;
   } catch (error) {
+    if (actor && contactRequest) {
+      logContactCreateAudit({
+        actor,
+        request: contactRequest,
+        resultCode: "failed",
+        businessAccountRecordId: auditBusinessAccountRecordId,
+        businessAccountId: auditBusinessAccountId,
+        companyName: auditCompanyName,
+      });
+    }
+
     let response: NextResponse;
     if (error instanceof ZodError) {
       response = NextResponse.json(

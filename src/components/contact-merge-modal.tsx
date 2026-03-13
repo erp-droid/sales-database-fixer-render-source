@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 
 import {
   getCachedContactMergePreview,
-  loadContactMergePreview,
+  refreshContactMergePreview,
+  type ContactMergePreviewQuery,
 } from "@/lib/contact-merge-preview-client";
-import type { DataQualityIssueRow } from "@/types/data-quality";
 import type {
   ContactMergeFieldChoice,
   ContactMergeFieldKey,
+  ContactMergePreviewContact,
   ContactMergeResponse,
-  ContactMergePreviewResponse,
+  MergeableContactCandidate,
 } from "@/types/contact-merge";
 
 import styles from "./contact-merge-modal.module.css";
@@ -21,7 +22,7 @@ type ContactMergeModalProps = {
   businessAccountRecordId: string;
   businessAccountId: string;
   companyName: string;
-  contacts: DataQualityIssueRow[];
+  contacts: MergeableContactCandidate[];
   onClose: () => void;
   onMerged: (result: ContactMergeResponse) => void;
 };
@@ -32,12 +33,18 @@ type MergeErrorPayload = {
   stage?: string;
 };
 
+const EMPTY_PREVIEW_CONTACTS: ContactMergePreviewContact[] = [];
+
+function hasMeaningfulValue(value: string | null | undefined): boolean {
+  return Boolean(value && value.trim());
+}
+
 function formatText(value: string | null | undefined): string {
-  if (!value || !value.trim()) {
+  if (!hasMeaningfulValue(value)) {
     return "-";
   }
 
-  return value;
+  return value ?? "-";
 }
 
 function formatDateTime(value: string | null | undefined): string {
@@ -77,16 +84,17 @@ function isContactMergeResponse(value: unknown): value is ContactMergeResponse {
 
   const record = value as Record<string, unknown>;
   return (
-    record.merged === true &&
+    (record.merged === true || record.queued === true) &&
     typeof record.businessAccountRecordId === "string" &&
     typeof record.businessAccountId === "string" &&
     typeof record.keptContactId === "number" &&
-    typeof record.deletedContactId === "number" &&
+    Array.isArray(record.deletedContactIds) &&
+    record.deletedContactIds.every((contactId) => typeof contactId === "number") &&
     Array.isArray(record.accountRows)
   );
 }
 
-function pickDefaultKeepContact(contacts: DataQualityIssueRow[]): number | null {
+function pickDefaultKeepContact(contacts: MergeableContactCandidate[]): number | null {
   if (contacts.length < 2) {
     return contacts[0]?.contactId ?? null;
   }
@@ -99,16 +107,62 @@ function pickDefaultKeepContact(contacts: DataQualityIssueRow[]): number | null 
   return contacts[0]?.contactId ?? null;
 }
 
+function buildPreviewQuery(
+  businessAccountRecordId: string,
+  contacts: MergeableContactCandidate[],
+  keepContactId: number,
+): ContactMergePreviewQuery {
+  const contactIds = contacts
+    .filter((contact): contact is MergeableContactCandidate & { contactId: number } => {
+      return contact.contactId !== null;
+    })
+    .map((contact) => contact.contactId);
+
+  return {
+    businessAccountRecordId,
+    keepContactId,
+    contactIds: [keepContactId, ...contactIds.filter((contactId) => contactId !== keepContactId)],
+  };
+}
+
 function buildFieldChoicesFromPreview(
-  preview: ContactMergePreviewResponse,
-): Record<ContactMergeFieldKey, "keep" | "delete"> {
+  preview: {
+    fields: Array<{
+      field: ContactMergeFieldKey;
+      recommendedSourceContactId: number;
+    }>;
+  },
+): Record<ContactMergeFieldKey, number> {
   return preview.fields.reduce(
     (choices, field) => {
-      choices[field.field] = field.recommendedSource;
+      choices[field.field] = field.recommendedSourceContactId;
       return choices;
     },
-    {} as Record<ContactMergeFieldKey, "keep" | "delete">,
+    {} as Record<ContactMergeFieldKey, number>,
   );
+}
+
+function resolveCandidateLabel(
+  candidate: MergeableContactCandidate | null | undefined,
+  previewContact: ContactMergePreviewContact | null | undefined,
+): string {
+  return (
+    candidate?.contactName?.trim() ||
+    previewContact?.displayName?.trim() ||
+    (previewContact?.contactId ? `Contact ${previewContact.contactId}` : "Contact")
+  );
+}
+
+function getFieldValueForContact(
+  field: {
+    values: Array<{
+      contactId: number;
+      value: string | null;
+    }>;
+  },
+  contactId: number,
+): string | null {
+  return field.values.find((entry) => entry.contactId === contactId)?.value ?? null;
 }
 
 export function ContactMergeModal({
@@ -120,23 +174,24 @@ export function ContactMergeModal({
   onClose,
   onMerged,
 }: ContactMergeModalProps) {
-  const initialKeepContactId = pickDefaultKeepContact(contacts);
-  const initialDeleteContactId =
-    initialKeepContactId === null
-      ? null
-      : contacts.find((contact) => contact.contactId !== initialKeepContactId)?.contactId ?? null;
+  const mergeableContacts = useMemo(
+    () =>
+      contacts.filter((contact): contact is MergeableContactCandidate & { contactId: number } => {
+        return contact.contactId !== null;
+      }),
+    [contacts],
+  );
+  const initialKeepContactId = pickDefaultKeepContact(mergeableContacts);
   const initialPreview =
-    initialKeepContactId !== null && initialDeleteContactId !== null
-      ? getCachedContactMergePreview({
-          businessAccountRecordId,
-          keepContactId: initialKeepContactId,
-          deleteContactId: initialDeleteContactId,
-        })
+    initialKeepContactId !== null && mergeableContacts.length >= 2
+      ? getCachedContactMergePreview(
+          buildPreviewQuery(businessAccountRecordId, mergeableContacts, initialKeepContactId),
+        )
       : null;
 
   const [keepContactId, setKeepContactId] = useState<number | null>(initialKeepContactId);
-  const [preview, setPreview] = useState<ContactMergePreviewResponse | null>(initialPreview);
-  const [fieldChoices, setFieldChoices] = useState<Record<ContactMergeFieldKey, "keep" | "delete"> | null>(
+  const [preview, setPreview] = useState(initialPreview);
+  const [fieldChoices, setFieldChoices] = useState<Record<ContactMergeFieldKey, number> | null>(
     initialPreview ? buildFieldChoicesFromPreview(initialPreview) : null,
   );
   const [setKeptAsPrimary, setSetKeptAsPrimary] = useState(
@@ -146,26 +201,23 @@ export function ContactMergeModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [partialErrorMessage, setPartialErrorMessage] = useState<string | null>(null);
+  const [submissionLocked, setSubmissionLocked] = useState(false);
 
-  const orderedContacts = useMemo(() => contacts.slice(0, 2), [contacts]);
-  const deleteContactId = useMemo(() => {
-    if (keepContactId === null) {
+  const contactsById = useMemo(() => {
+    const mapped = new Map<number, MergeableContactCandidate>();
+    mergeableContacts.forEach((contact) => {
+      mapped.set(contact.contactId, contact);
+    });
+    return mapped;
+  }, [mergeableContacts]);
+
+  const previewQuery = useMemo(() => {
+    if (keepContactId === null || mergeableContacts.length < 2) {
       return null;
     }
 
-    const other = orderedContacts.find((contact) => contact.contactId !== keepContactId);
-    return other?.contactId ?? null;
-  }, [keepContactId, orderedContacts]);
-
-  const contactsById = useMemo(() => {
-    const mapped = new Map<number, DataQualityIssueRow>();
-    orderedContacts.forEach((contact) => {
-      if (contact.contactId !== null) {
-        mapped.set(contact.contactId, contact);
-      }
-    });
-    return mapped;
-  }, [orderedContacts]);
+    return buildPreviewQuery(businessAccountRecordId, mergeableContacts, keepContactId);
+  }, [businessAccountRecordId, keepContactId, mergeableContacts]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -175,76 +227,94 @@ export function ContactMergeModal({
       setIsLoadingPreview(false);
       setErrorMessage(null);
       setPartialErrorMessage(null);
-      setKeepContactId(pickDefaultKeepContact(contacts));
+      setSubmissionLocked(false);
+      setKeepContactId(pickDefaultKeepContact(mergeableContacts));
       return;
     }
 
-    if (orderedContacts.length !== 2) {
+    if (contacts.length !== mergeableContacts.length) {
       setPreview(null);
       setFieldChoices(null);
       setIsLoadingPreview(false);
-      setErrorMessage("This group must have exactly 2 contacts to use merge.");
+      setErrorMessage("Every selected row must have a Contact ID before it can be merged.");
       return;
     }
 
-    if (keepContactId === null || deleteContactId === null) {
+    if (mergeableContacts.length < 2) {
       setPreview(null);
       setFieldChoices(null);
       setIsLoadingPreview(false);
-      setErrorMessage("Both selected contacts must have ContactID values before they can be merged.");
+      setErrorMessage("Select at least 2 contacts to use merge.");
       return;
     }
 
-    const previewKeepContactId = keepContactId;
-    const previewDeleteContactId = deleteContactId;
+    if (!previewQuery) {
+      setPreview(null);
+      setFieldChoices(null);
+      setIsLoadingPreview(false);
+      setErrorMessage("Choose a kept contact to continue.");
+      return;
+    }
 
-    const cachedPreview = getCachedContactMergePreview({
-      businessAccountRecordId,
-      keepContactId: previewKeepContactId,
-      deleteContactId: previewDeleteContactId,
-    });
+    const activePreviewQuery = previewQuery;
+    const cachedPreview = getCachedContactMergePreview(activePreviewQuery);
+    const cachedFieldChoices = cachedPreview
+      ? buildFieldChoicesFromPreview(cachedPreview)
+      : null;
     if (cachedPreview) {
       setPreview(cachedPreview);
-      setFieldChoices(buildFieldChoicesFromPreview(cachedPreview));
+      setFieldChoices(cachedFieldChoices);
       setSetKeptAsPrimary(cachedPreview.recommendedSetKeptAsPrimary);
-      setIsLoadingPreview(false);
+      setIsLoadingPreview(true);
       setErrorMessage(null);
       setPartialErrorMessage(null);
-      return;
+      setSubmissionLocked(true);
+    } else {
+      setPreview(null);
+      setFieldChoices(null);
+      setIsLoadingPreview(true);
+      setErrorMessage(null);
+      setPartialErrorMessage(null);
+      setSubmissionLocked(true);
     }
 
     let isActive = true;
-    setPreview(null);
-    setFieldChoices(null);
-    setIsLoadingPreview(true);
-    setErrorMessage(null);
-    setPartialErrorMessage(null);
 
     async function loadPreview() {
       try {
-        const payload = await loadContactMergePreview({
-          businessAccountRecordId,
-          keepContactId: previewKeepContactId,
-          deleteContactId: previewDeleteContactId,
-        });
+        const payload = await refreshContactMergePreview(activePreviewQuery);
 
         if (!isActive) {
           return;
         }
 
         setPreview(payload);
-        setFieldChoices(buildFieldChoicesFromPreview(payload));
-        setSetKeptAsPrimary(payload.recommendedSetKeptAsPrimary);
+        if (!cachedPreview) {
+          setFieldChoices(buildFieldChoicesFromPreview(payload));
+          setSetKeptAsPrimary(payload.recommendedSetKeptAsPrimary);
+        }
+        setErrorMessage(null);
+        setPartialErrorMessage(null);
+        setSubmissionLocked(false);
       } catch (error) {
         if (!isActive) {
           return;
         }
 
-        setPreview(null);
-        setFieldChoices(null);
-        setErrorMessage(
-          error instanceof Error ? error.message : "Failed to load contact merge preview.",
-        );
+        if (cachedPreview) {
+          setPreview(cachedPreview);
+          setFieldChoices((currentFieldChoices) => currentFieldChoices ?? cachedFieldChoices);
+          setPartialErrorMessage(
+            "Could not refresh the merge preview. Reload and try again.",
+          );
+          setSubmissionLocked(true);
+        } else {
+          setPreview(null);
+          setFieldChoices(null);
+          setErrorMessage(
+            error instanceof Error ? error.message : "Failed to load contact merge preview.",
+          );
+        }
       } finally {
         if (isActive) {
           setIsLoadingPreview(false);
@@ -257,18 +327,36 @@ export function ContactMergeModal({
     return () => {
       isActive = false;
     };
-  }, [
-    businessAccountRecordId,
-    contacts,
-    deleteContactId,
-    isOpen,
-    keepContactId,
-    orderedContacts,
-  ]);
+  }, [contacts.length, isOpen, mergeableContacts, previewQuery]);
 
-  const keepContact = keepContactId !== null ? contactsById.get(keepContactId) ?? null : null;
-  const deleteContact =
-    deleteContactId !== null ? contactsById.get(deleteContactId) ?? null : null;
+  const previewContacts = useMemo(() => {
+    if (!preview?.contacts.length) {
+      return EMPTY_PREVIEW_CONTACTS;
+    }
+
+    return preview.contacts;
+  }, [preview?.contacts]);
+  const previewContactsById = useMemo(() => {
+    const mapped = new Map<number, ContactMergePreviewContact>();
+    previewContacts.forEach((contact) => {
+      mapped.set(contact.contactId, contact);
+    });
+    return mapped;
+  }, [previewContacts]);
+  const previewFields = useMemo(() => {
+    if (!preview?.fields.length) {
+      return [];
+    }
+
+    return preview.fields
+      .filter((field) => field.values.some((entry) => hasMeaningfulValue(entry.value)));
+  }, [preview?.fields]);
+
+  const keptContact = keepContactId !== null ? contactsById.get(keepContactId) ?? null : null;
+  const loserContacts = useMemo(
+    () => mergeableContacts.filter((contact) => contact.contactId !== keepContactId),
+    [keepContactId, mergeableContacts],
+  );
   const selectedFieldChoices = useMemo(() => {
     if (!preview || !fieldChoices) {
       return [] as ContactMergeFieldChoice[];
@@ -276,33 +364,57 @@ export function ContactMergeModal({
 
     return preview.fields.map((field) => ({
       field: field.field,
-      source: field.valuesDiffer ? fieldChoices[field.field] ?? field.recommendedSource : "keep",
+      sourceContactId:
+        field.valuesDiffer
+          ? fieldChoices[field.field] ?? field.recommendedSourceContactId
+          : keepContactId ?? field.recommendedSourceContactId,
     }));
-  }, [fieldChoices, preview]);
+  }, [fieldChoices, keepContactId, preview]);
 
   const updatedFields = useMemo(() => {
-    if (!preview || !fieldChoices) {
+    if (!preview || !fieldChoices || keepContactId === null) {
       return [] as string[];
     }
 
     return preview.fields
       .filter((field) => {
-        const selectedSource = field.valuesDiffer
-          ? fieldChoices[field.field] ?? field.recommendedSource
-          : "keep";
-        const nextValue = selectedSource === "delete" ? field.deleteValue : field.keepValue;
-        return (nextValue ?? "") !== (field.keepValue ?? "");
+        const keepValue =
+          field.values.find((entry) => entry.contactId === keepContactId)?.value ?? null;
+        const selectedSourceContactId = field.valuesDiffer
+          ? fieldChoices[field.field] ?? field.recommendedSourceContactId
+          : keepContactId;
+        const nextValue =
+          field.values.find((entry) => entry.contactId === selectedSourceContactId)?.value ?? null;
+        return (nextValue ?? "") !== (keepValue ?? "");
       })
       .map((field) => field.label);
-  }, [fieldChoices, preview]);
+  }, [fieldChoices, keepContactId, preview]);
+
+  const matrixGridStyle = useMemo<CSSProperties | undefined>(() => {
+    if (!previewContacts.length) {
+      return undefined;
+    }
+
+    return {
+      gridTemplateColumns: `144px repeat(${previewContacts.length}, 240px) 240px`,
+    };
+  }, [previewContacts.length]);
 
   async function handleMerge() {
-    if (!preview || keepContactId === null || deleteContactId === null) {
+    if (
+      !previewQuery ||
+      !preview ||
+      keepContactId === null ||
+      submissionLocked ||
+      isLoadingPreview
+    ) {
       return;
     }
 
     const confirmed = window.confirm(
-      "This will permanently delete the selected duplicate contact in Acumatica.",
+      `This will queue ${loserContacts.length} duplicate contact${
+        loserContacts.length === 1 ? "" : "s"
+      } for merge. The loser contact${loserContacts.length === 1 ? "" : "s"} will disappear from the app immediately, but Acumatica will not be updated until the queued action is approved and reaches the scheduled cutoff.`,
     );
     if (!confirmed) {
       return;
@@ -322,11 +434,13 @@ export function ContactMergeModal({
           businessAccountRecordId: preview.businessAccountRecordId,
           businessAccountId: preview.businessAccountId,
           keepContactId,
-          deleteContactId,
+          selectedContactIds: previewQuery.contactIds,
           setKeptAsPrimary,
           expectedAccountLastModified: preview.expectedAccountLastModified,
-          expectedKeepContactLastModified: preview.expectedKeepContactLastModified,
-          expectedDeleteContactLastModified: preview.expectedDeleteContactLastModified,
+          expectedContactLastModifieds: preview.contacts.map((contact) => ({
+            contactId: contact.contactId,
+            lastModified: contact.lastModifiedIso,
+          })),
           fieldChoices: selectedFieldChoices,
         }),
       });
@@ -336,6 +450,7 @@ export function ContactMergeModal({
         const message = parseError(payload as MergeErrorPayload | null);
         if ((payload as MergeErrorPayload | null)?.partial) {
           setPartialErrorMessage(message);
+          setSubmissionLocked(true);
           return;
         }
 
@@ -343,12 +458,14 @@ export function ContactMergeModal({
       }
 
       if (!isContactMergeResponse(payload)) {
-        throw new Error("Unexpected response while merging contacts.");
+        throw new Error("Unexpected response while queueing the contact merge.");
       }
 
       onMerged(payload);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to merge contacts.");
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to queue the contact merge.",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -372,13 +489,13 @@ export function ContactMergeModal({
         <header className={styles.header}>
           <div>
             <p className={styles.eyebrow}>Duplicate Contact Merge</p>
-            <h2 id="contact-merge-title">Merge contacts in Acumatica</h2>
+            <h2 id="contact-merge-title">Queue contact merge</h2>
             <p className={styles.accountMeta}>
               {formatText(companyName)} · Account ID {formatText(businessAccountId)} · Sales Rep{" "}
-              {formatText(orderedContacts[0]?.salesRepName)}
+              {formatText(mergeableContacts[0]?.salesRepName)}
             </p>
             <p className={styles.accountMeta}>
-              Duplicate group: {formatText(orderedContacts[0]?.contactName)}
+              Selected contacts: {mergeableContacts.length}
             </p>
           </div>
           <button className={styles.closeButton} onClick={onClose} type="button">
@@ -398,176 +515,228 @@ export function ContactMergeModal({
           </div>
         ) : null}
 
-        {orderedContacts.length === 2 ? (
+        {isLoadingPreview ? (
+          <p className={styles.loading}>Loading full field comparison...</p>
+        ) : null}
+
+        {preview ? (
           <>
-            <section className={styles.selectorSection}>
-              {orderedContacts.map((contact) => {
-                const contactId = contact.contactId;
-                const isKeep = contactId !== null && contactId === keepContactId;
-                const lastModified =
-                  contactId !== null && contactId === preview?.keepContactId
-                    ? preview.expectedKeepContactLastModified
-                    : preview?.expectedDeleteContactLastModified;
+            <section className={styles.matrixSection}>
+              <div className={styles.matrixScroller}>
+                <div className={styles.matrixHeader} style={matrixGridStyle}>
+                  <span className={styles.matrixFieldHeader}>Field</span>
+                  {previewContacts.map((contact) => {
+                    const isKeep = contact.contactId === keepContactId;
+                    return (
+                      <button
+                        className={`${styles.matrixContactHeader} ${
+                          isKeep ? styles.matrixContactHeaderActive : ""
+                        }`}
+                        disabled={isSubmitting || submissionLocked}
+                        key={`header-${contact.contactId}`}
+                        onClick={() => {
+                          setKeepContactId(contact.contactId);
+                          setSubmissionLocked(false);
+                        }}
+                        aria-pressed={isKeep}
+                        type="button"
+                      >
+                        <span
+                          className={styles.matrixContactTitle}
+                          title={`${resolveCandidateLabel(
+                            contactsById.get(contact.contactId),
+                            contact,
+                          )} · ${contact.contactId}`}
+                        >
+                          {resolveCandidateLabel(
+                            contactsById.get(contact.contactId),
+                            contact,
+                          )}{" "}
+                          · {contact.contactId}
+                        </span>
+                        <span
+                          className={styles.matrixContactMeta}
+                          title={formatText(contact.email)}
+                        >
+                          {formatText(contact.email)}
+                        </span>
+                        <span className={styles.matrixContactMeta}>
+                          Last modified: {formatDateTime(contact.lastModifiedIso)}
+                        </span>
+                        <span className={styles.matrixContactBadges}>
+                          {isKeep ? (
+                            <span className={styles.matrixKeepBadge}>Keep this contact</span>
+                          ) : null}
+                          {contact.isPrimary ? (
+                            <span className={styles.primaryBadge}>PRIMARY</span>
+                          ) : null}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  <span className={styles.matrixChoiceHeader}>Selected value</span>
+                </div>
+                <div className={styles.matrixBody}>
+                  {previewFields.map((field) => {
+                    const selectedSourceContactId = field.valuesDiffer
+                      ? fieldChoices?.[field.field] ?? field.recommendedSourceContactId
+                      : keepContactId ?? field.recommendedSourceContactId;
+                    const selectedValue = getFieldValueForContact(field, selectedSourceContactId);
 
-                return (
-                  <label className={styles.recordCard} key={contact.rowKey ?? String(contactId)}>
-                    <input
-                      checked={isKeep}
-                      disabled={contactId === null || isSubmitting}
-                      name="keep-contact"
-                      onChange={() => {
-                        if (contactId !== null) {
-                          setKeepContactId(contactId);
-                        }
-                      }}
-                      type="radio"
-                    />
-                    <div>
-                      <strong>{isKeep ? "Keep this record" : "Delete this record"}</strong>
-                      <p>Contact ID: {contactId ?? "-"}</p>
-                      <p>{formatText(contact.contactName)}</p>
-                      <p>{formatText(contact.contactEmail)}</p>
-                      <p>Last modified: {formatDateTime(lastModified)}</p>
-                      {contact.isPrimaryContact ? (
-                        <span className={styles.primaryBadge}>PRIMARY</span>
-                      ) : null}
-                    </div>
-                  </label>
-                );
-              })}
-            </section>
+                    return (
+                      <div className={styles.matrixRow} key={field.field} style={matrixGridStyle}>
+                        <strong className={styles.fieldLabel}>{field.label}</strong>
+                        {field.values.map((entry) => {
+                          const isSelected = entry.contactId === selectedSourceContactId;
+                          const isKeepColumn = entry.contactId === keepContactId;
 
-            {isLoadingPreview ? (
-              <p className={styles.loading}>Loading full field comparison...</p>
-            ) : null}
-
-            {preview ? (
-              <>
-                <section className={styles.matrixSection}>
-                  <div className={styles.matrixHeader}>
-                    <span>Field</span>
-                    <span>Keep record</span>
-                    <span>Delete record</span>
-                    <span>Choice</span>
-                  </div>
-                  <div className={styles.matrixBody}>
-                    {preview.fields.map((field) => {
-                      const selectedSource = field.valuesDiffer
-                        ? fieldChoices?.[field.field] ?? field.recommendedSource
-                        : "keep";
-                      return (
-                        <div className={styles.matrixRow} key={field.field}>
-                          <strong>{field.label}</strong>
-                          <div className={styles.valueCell}>{formatText(field.keepValue)}</div>
-                          <div className={styles.valueCell}>{formatText(field.deleteValue)}</div>
-                          <div className={styles.choiceCell}>
-                            {field.valuesDiffer ? (
-                              <div className={styles.choiceGroup}>
-                                <label>
-                                  <input
-                                    checked={selectedSource === "keep"}
-                                    name={`merge-field-${field.field}`}
-                                    onChange={() => {
-                                      setFieldChoices((current) =>
-                                        current
-                                          ? {
-                                              ...current,
-                                              [field.field]: "keep",
-                                            }
-                                          : current,
-                                      );
-                                    }}
-                                    type="radio"
-                                  />
-                                  Keep left
-                                </label>
-                                <label>
-                                  <input
-                                    checked={selectedSource === "delete"}
-                                    name={`merge-field-${field.field}`}
-                                    onChange={() => {
-                                      setFieldChoices((current) =>
-                                        current
-                                          ? {
-                                              ...current,
-                                              [field.field]: "delete",
-                                            }
-                                          : current,
-                                      );
-                                    }}
-                                    type="radio"
-                                  />
-                                  Keep right
-                                </label>
-                              </div>
-                            ) : (
-                              <span className={styles.sameValue}>Same value</span>
-                            )}
+                          return (
+                            <div
+                              className={`${styles.valueCell} ${
+                                isKeepColumn ? styles.keepColumnCell : ""
+                              }`}
+                              key={`${field.field}-${entry.contactId}`}
+                            >
+                              {field.valuesDiffer ? (
+                                <button
+                                  className={`${styles.valueButton} ${
+                                    isKeepColumn ? styles.valueButtonKeepColumn : ""
+                                  } ${
+                                    isSelected ? styles.valueButtonSelected : ""
+                                  }`}
+                                  disabled={isSubmitting || submissionLocked}
+                                  onClick={() => {
+                                    setFieldChoices((current) =>
+                                      current
+                                        ? {
+                                            ...current,
+                                            [field.field]: entry.contactId,
+                                          }
+                                        : current,
+                                    );
+                                    setSubmissionLocked(false);
+                                  }}
+                                  title={formatText(entry.value)}
+                                  type="button"
+                                >
+                                  <span className={styles.valueButtonValue}>
+                                    {formatText(entry.value)}
+                                  </span>
+                                </button>
+                              ) : (
+                                <div
+                                  className={`${styles.valueStatic} ${
+                                    isKeepColumn ? styles.valueStaticKeepColumn : ""
+                                  }`}
+                                  title={formatText(entry.value)}
+                                >
+                                  {formatText(entry.value)}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        <div className={styles.choiceCell}>
+                          <div
+                            className={styles.choiceSummary}
+                            title={formatText(selectedValue)}
+                          >
+                            <strong className={styles.choiceValue}>
+                              {formatText(selectedValue)}
+                            </strong>
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                </section>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </section>
 
-                <section className={styles.confirmSection}>
-                  <div className={styles.primarySection}>
-                    <label>
-                      <input
-                        checked={setKeptAsPrimary}
-                        disabled={keepContactId === null || isSubmitting}
-                        onChange={(event) => {
-                          setSetKeptAsPrimary(event.target.checked);
-                        }}
-                        type="checkbox"
-                      />
-                      Make kept record primary
-                    </label>
-                    {preview.deleteIsPrimary && !setKeptAsPrimary ? (
-                      <p className={styles.inlineWarning}>
-                        This account will lose its current primary contact unless another contact
-                        is already primary.
-                      </p>
-                    ) : null}
-                  </div>
+            <section className={styles.confirmSection}>
+              <div className={styles.primarySection}>
+                <label>
+                  <input
+                    checked={setKeptAsPrimary}
+                    disabled={keepContactId === null || isSubmitting || submissionLocked}
+                    onChange={(event) => {
+                      setSetKeptAsPrimary(event.target.checked);
+                      setSubmissionLocked(false);
+                    }}
+                    type="checkbox"
+                  />
+                  Make kept record primary
+                </label>
+                {preview.contacts.some(
+                  (contact) => contact.isPrimary && contact.contactId !== keepContactId,
+                ) && !setKeptAsPrimary ? (
+                  <p className={styles.inlineWarning}>
+                    This account will lose its current primary contact unless another contact is
+                    already primary.
+                  </p>
+                ) : null}
+              </div>
 
-                  <div className={styles.summaryBox}>
-                    <p>Kept contact ID: {keepContactId}</p>
-                    <p>Deleted contact ID: {deleteContactId}</p>
-                    <p>
-                      Fields updated: {updatedFields.length ? updatedFields.join(", ") : "No field changes"}
-                    </p>
-                    <p>
-                      Primary change:{" "}
-                      {setKeptAsPrimary && !preview.keepIsPrimary ? "Yes" : "No"}
-                    </p>
-                  </div>
+              <div className={styles.summaryBox}>
+                <p>
+                  Kept contact:{" "}
+                  {keepContactId !== null
+                    ? `${resolveCandidateLabel(
+                        contactsById.get(keepContactId),
+                        previewContactsById.get(keepContactId),
+                      )} · ${keepContactId}`
+                    : "-"}
+                </p>
+                <p>
+                  Merged contact IDs:{" "}
+                  {loserContacts.length
+                    ? loserContacts.map((contact) => contact.contactId).join(", ")
+                    : "-"}
+                </p>
+                <p>
+                  Fields updated: {updatedFields.length ? updatedFields.join(", ") : "No field changes"}
+                </p>
+                <p>
+                  Primary change:{" "}
+                  {setKeptAsPrimary &&
+                  !preview.contacts.some(
+                    (contact) => contact.isPrimary && contact.contactId === keepContactId,
+                  )
+                    ? "Yes"
+                    : "No"}
+                </p>
+              </div>
 
-                  <div className={styles.footer}>
-                    <button className={styles.secondaryButton} onClick={onClose} type="button">
-                      Cancel
-                    </button>
-                    <button
-                      className={styles.primaryButton}
-                      disabled={!preview || keepContactId === null || deleteContactId === null || isSubmitting}
-                      onClick={() => {
-                        void handleMerge();
-                      }}
-                      type="button"
-                    >
-                      {isSubmitting ? "Merging..." : "Merge into Acumatica"}
-                    </button>
-                  </div>
-                </section>
-              </>
-            ) : null}
+              <div className={styles.footer}>
+                <button className={styles.secondaryButton} onClick={onClose} type="button">
+                  Cancel
+                </button>
+                <button
+                  className={styles.primaryButton}
+                  disabled={
+                    !preview ||
+                    keepContactId === null ||
+                    isSubmitting ||
+                    submissionLocked ||
+                    isLoadingPreview
+                  }
+                  onClick={() => {
+                    void handleMerge();
+                  }}
+                  type="button"
+                >
+                  {isSubmitting ? "Queueing..." : "Queue merge"}
+                </button>
+              </div>
+            </section>
           </>
         ) : null}
 
-        {preview && keepContact && deleteContact ? (
+        {keptContact ? (
           <p className={styles.confirmNote}>
-            {formatText(keepContact.contactName)} will be kept. {formatText(deleteContact.contactName)} will
-            be deleted if the merge succeeds.
+            {formatText(keptContact.contactName)} will be kept. {loserContacts.length} contact
+            {loserContacts.length === 1 ? "" : "s"} will be hidden from the app immediately and
+            merged later when the queued action runs.
           </p>
         ) : null}
       </section>

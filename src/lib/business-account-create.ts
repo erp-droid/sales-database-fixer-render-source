@@ -9,6 +9,11 @@ import type {
   BusinessAccountContactCreateRequest,
   ContactClassKey,
 } from "@/types/business-account-create";
+import {
+  BUSINESS_ACCOUNT_REGION_VALUES,
+  canonicalBusinessAccountRegionValue,
+  normalizeBusinessAccountRegionValue,
+} from "@/lib/business-account-region-values";
 import { normalizeBusinessAccount, normalizeBusinessAccountRows } from "@/lib/business-accounts";
 
 export type AttributeOption = {
@@ -92,11 +97,10 @@ export const SUB_CATEGORY_OPTIONS: AttributeOption[] = [
 ];
 
 export const COMPANY_REGION_OPTIONS: AttributeOption[] = [
-  { value: "Region 1", label: "Region 1" },
-  { value: "Region 2", label: "Region 2" },
-  { value: "Region 3", label: "Region 3" },
-  { value: "Region 4", label: "Region 4" },
-  { value: "Region 5", label: "Region 5" },
+  ...BUSINESS_ACCOUNT_REGION_VALUES.map((value) => ({
+    value,
+    label: value,
+  })),
 ];
 
 export const WEEK_OPTIONS: AttributeOption[] = Array.from({ length: 15 }, (_, index) => {
@@ -167,21 +171,7 @@ export function normalizeOptionValue(
 }
 
 export function normalizeRegionValue(value: string | null | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const match = trimmed.match(/^region\\s*(\\d+)$/i);
-  if (match) {
-    return `Region ${match[1]}`;
-  }
-
-  return trimmed;
+  return normalizeBusinessAccountRegionValue(value);
 }
 
 export function normalizeWeekValue(value: string | null | undefined): string | null {
@@ -252,21 +242,7 @@ function canonicalSubCategory(value: string | null | undefined): string {
 }
 
 function canonicalCompanyRegion(value: string | null | undefined): string {
-  const normalized = normalizeAttributeCandidate(value);
-  if (!normalized) {
-    return "";
-  }
-
-  const key = normalized.toLowerCase().replace(/\\s+/g, " ").trim();
-  const map: Record<string, string> = {
-    "region 1": "Region 1",
-    "region 2": "Region 2",
-    "region 3": "Region 3",
-    "region 4": "Region 4",
-    "region 5": "Region 5",
-  };
-
-  return map[key] ?? normalized;
+  return canonicalBusinessAccountRegionValue(value);
 }
 
 function canonicalWeek(value: string | null | undefined): string {
