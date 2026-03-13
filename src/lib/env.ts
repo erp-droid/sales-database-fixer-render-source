@@ -88,6 +88,7 @@ const schema = z.object({
     ),
   ADDRESS_COMPLETE_GEOCODE_ENABLED: z.enum(["true", "false"]).optional(),
   READ_MODEL_ENABLED: z.enum(["true", "false"]).optional(),
+  READ_MODEL_AUTO_SYNC_ENABLED: z.enum(["true", "false"]).optional(),
   READ_MODEL_SQLITE_PATH: z.string().min(1).optional(),
   DATA_QUALITY_HISTORY_PATH: z.string().min(1).optional(),
   READ_MODEL_STALE_AFTER_MS: z.string().optional(),
@@ -155,6 +156,7 @@ export type AppEnv = {
   ADDRESS_COMPLETE_RETRIEVE_URL: string;
   ADDRESS_COMPLETE_GEOCODE_ENABLED: boolean;
   READ_MODEL_ENABLED: boolean;
+  READ_MODEL_AUTO_SYNC_ENABLED: boolean;
   READ_MODEL_SQLITE_PATH: string;
   DATA_QUALITY_HISTORY_PATH: string;
   READ_MODEL_STALE_AFTER_MS: number;
@@ -268,6 +270,7 @@ export function getEnv(): AppEnv {
     ),
     ADDRESS_COMPLETE_GEOCODE_ENABLED: process.env.ADDRESS_COMPLETE_GEOCODE_ENABLED,
     READ_MODEL_ENABLED: process.env.READ_MODEL_ENABLED,
+    READ_MODEL_AUTO_SYNC_ENABLED: process.env.READ_MODEL_AUTO_SYNC_ENABLED,
     READ_MODEL_SQLITE_PATH: emptyToUndefined(process.env.READ_MODEL_SQLITE_PATH),
     DATA_QUALITY_HISTORY_PATH: emptyToUndefined(process.env.DATA_QUALITY_HISTORY_PATH),
     READ_MODEL_STALE_AFTER_MS: emptyToUndefined(process.env.READ_MODEL_STALE_AFTER_MS),
@@ -333,6 +336,8 @@ export function getEnv(): AppEnv {
     ADDRESS_COMPLETE_GEOCODE_ENABLED:
       parsed.data.ADDRESS_COMPLETE_GEOCODE_ENABLED === "true",
     READ_MODEL_ENABLED: parsed.data.READ_MODEL_ENABLED === "true",
+    READ_MODEL_AUTO_SYNC_ENABLED:
+      parsed.data.READ_MODEL_AUTO_SYNC_ENABLED === "true",
     READ_MODEL_SQLITE_PATH: readModelSqlitePath,
     DATA_QUALITY_HISTORY_PATH: dataQualityHistoryPath,
     READ_MODEL_STALE_AFTER_MS: Math.max(

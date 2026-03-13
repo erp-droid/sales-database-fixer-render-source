@@ -114,6 +114,8 @@ services:
         value: https://ws1.postescanada-canadapost.ca/AddressComplete/Interactive/Retrieve/v2.10/json3.ws
       - key: READ_MODEL_ENABLED
         value: "true"
+      - key: READ_MODEL_AUTO_SYNC_ENABLED
+        value: "false"
       - key: READ_MODEL_SQLITE_PATH
         value: /app/data/read-model.sqlite
       - key: DATA_QUALITY_HISTORY_PATH

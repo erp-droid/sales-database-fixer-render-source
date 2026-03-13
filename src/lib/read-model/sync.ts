@@ -28,6 +28,19 @@ type StoredSyncState = {
   progress_json: string | null;
 };
 
+function readNextStoredValue<K extends keyof StoredSyncState>(
+  current: StoredSyncState | undefined,
+  next: Partial<StoredSyncState>,
+  key: K,
+  fallback: StoredSyncState[K],
+): StoredSyncState[K] {
+  if (Object.prototype.hasOwnProperty.call(next, key)) {
+    return (next[key] ?? fallback) as StoredSyncState[K];
+  }
+
+  return (current?.[key] ?? fallback) as StoredSyncState[K];
+}
+
 let syncInFlight: Promise<void> | null = null;
 let geocodeInFlight: Promise<void> | null = null;
 
@@ -95,15 +108,15 @@ function writeSyncState(next: Partial<StoredSyncState> & { status: StoredSyncSta
     `,
   ).run(
     next.status,
-    next.started_at ?? current?.started_at ?? null,
-    next.completed_at ?? current?.completed_at ?? null,
-    next.last_successful_sync_at ?? current?.last_successful_sync_at ?? null,
-    next.last_error ?? current?.last_error ?? null,
-    next.rows_count ?? current?.rows_count ?? 0,
-    next.accounts_count ?? current?.accounts_count ?? 0,
-    next.contacts_count ?? current?.contacts_count ?? 0,
-    next.phase ?? current?.phase ?? null,
-    next.progress_json ?? current?.progress_json ?? null,
+    readNextStoredValue(current, next, "started_at", null),
+    readNextStoredValue(current, next, "completed_at", null),
+    readNextStoredValue(current, next, "last_successful_sync_at", null),
+    readNextStoredValue(current, next, "last_error", null),
+    readNextStoredValue(current, next, "rows_count", 0),
+    readNextStoredValue(current, next, "accounts_count", 0),
+    readNextStoredValue(current, next, "contacts_count", 0),
+    readNextStoredValue(current, next, "phase", null),
+    readNextStoredValue(current, next, "progress_json", null),
   );
 }
 
@@ -233,12 +246,7 @@ async function runFullSync(
       rows_count: counts.rowsCount,
       accounts_count: counts.accountsCount,
       contacts_count: counts.contactsCount,
-      progress_json: JSON.stringify({
-        fetchedAccounts: counts.accountsCount,
-        fetchedContacts: counts.contactsCount,
-        totalAccounts: counts.accountsCount,
-        totalContacts: counts.contactsCount,
-      }),
+      progress_json: null,
     });
 
     kickGeocodeWorker();
@@ -295,7 +303,15 @@ export function hasReadModelSnapshot(): boolean {
 }
 
 export function shouldTriggerAutoSync(): boolean {
-  const { READ_MODEL_STALE_AFTER_MS, READ_MODEL_SYNC_INTERVAL_MS } = getEnv();
+  const {
+    READ_MODEL_AUTO_SYNC_ENABLED,
+    READ_MODEL_STALE_AFTER_MS,
+    READ_MODEL_SYNC_INTERVAL_MS,
+  } = getEnv();
+  if (!READ_MODEL_AUTO_SYNC_ENABLED) {
+    return false;
+  }
+
   const status = readSyncStatus();
   if (status.status === "running") {
     return false;

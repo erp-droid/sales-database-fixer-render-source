@@ -27,6 +27,10 @@ import {
   withPrimaryContact,
 } from "@/lib/business-accounts";
 import {
+  readContactBusinessAccountCode,
+  readContactCompanyName,
+} from "@/lib/contact-business-account";
+import {
   buildPrimaryOnlyUpdateRequest,
   isPrimaryOnlyConflictRetryAllowed,
   isPrimaryOnlyUpdate,
@@ -350,8 +354,11 @@ function buildFallbackRowFromContact(
     subCategory: existingRow?.subCategory ?? null,
     companyRegion: existingRow?.companyRegion ?? null,
     week: existingRow?.week ?? null,
-    businessAccountId: readWrappedString(contact, "BusinessAccount") ?? "",
-    companyName: existingRow?.companyName ?? "",
+    businessAccountId: readContactBusinessAccountCode(contact, readWrappedString) ?? "",
+    companyName:
+      existingRow?.companyName ??
+      readContactCompanyName(contact, readWrappedString) ??
+      "",
     address: existingRow?.address ?? "",
     addressLine1: existingRow?.addressLine1 ?? "",
     addressLine2: existingRow?.addressLine2 ?? "",
