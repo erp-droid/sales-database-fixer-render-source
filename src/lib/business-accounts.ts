@@ -1645,6 +1645,12 @@ export function queryBusinessAccounts(
   const sorted = [...filtered].sort((left, right) => {
     const leftValue = sortValue(left, sortBy);
     const rightValue = sortValue(right, sortBy);
+    const leftBlank = leftValue.trim().length === 0;
+    const rightBlank = rightValue.trim().length === 0;
+
+    if (leftBlank !== rightBlank) {
+      return leftBlank ? 1 : -1;
+    }
 
     const compare = leftValue.localeCompare(rightValue, undefined, {
       numeric: true,

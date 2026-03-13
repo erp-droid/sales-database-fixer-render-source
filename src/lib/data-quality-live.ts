@@ -29,6 +29,10 @@ import {
   selectPrimaryContactIndex,
 } from "@/lib/business-accounts";
 import {
+  readContactBusinessAccountCode,
+  readContactCompanyName,
+} from "@/lib/contact-business-account";
+import {
   isExcludedInternalCompanyName,
   isExcludedInternalContactEmail,
 } from "@/lib/internal-records";
@@ -290,8 +294,8 @@ function buildFallbackRowFromContact(contact: unknown, index: number): BusinessA
     subCategory: null,
     companyRegion: null,
     week: null,
-    businessAccountId: readWrappedString(contact, "BusinessAccount") ?? "",
-    companyName: "",
+    businessAccountId: readContactBusinessAccountCode(contact, readWrappedString) ?? "",
+    companyName: readContactCompanyName(contact, readWrappedString) ?? "",
     address: "",
     addressLine1: "",
     addressLine2: "",
@@ -353,7 +357,7 @@ function buildSyncRowsFromContacts(
   };
 
   const preparedRows: PreparedSyncRow[] = rawContacts.map((contact, index) => {
-    const businessAccountCode = readWrappedString(contact, "BusinessAccount");
+    const businessAccountCode = readContactBusinessAccountCode(contact, readWrappedString);
     const normalizedBusinessAccountCode = normalizeBusinessAccountCode(
       businessAccountCode,
     );
@@ -392,11 +396,14 @@ function buildSyncRowsFromContacts(
       companyName: hasText(businessAccountCode)
         ? pickFirstText([
             base.companyName,
-            readWrappedString(contact, "CompanyName"),
+            readContactCompanyName(contact, readWrappedString),
             businessAccountCode,
             contactName,
           ]) ?? ""
-        : base.companyName,
+        : pickFirstText([
+            base.companyName,
+            readContactCompanyName(contact, readWrappedString),
+          ]) ?? "",
       contactId,
       isPrimaryContact: false,
       primaryContactName: pickFirstText([contactName]),
@@ -595,7 +602,7 @@ export async function fetchAllSyncRows(
     );
   } catch {
     const contactBusinessIds = rawContacts
-      .map((contact) => readWrappedString(contact, "BusinessAccount"))
+      .map((contact) => readContactBusinessAccountCode(contact, readWrappedString))
       .filter((value): value is string => Boolean(value));
 
     rawAccounts = await fetchBusinessAccountsByBusinessAccountIds(
@@ -609,7 +616,7 @@ export async function fetchAllSyncRows(
       !shouldExcludeContactByApToken(contact) &&
       (includeInternal || !isExcludedInternalContactEmail(readContactEmail(contact))) &&
       (includeInternal ||
-        !isExcludedInternalCompanyName(readWrappedString(contact, "CompanyName"))),
+        !isExcludedInternalCompanyName(readContactCompanyName(contact, readWrappedString))),
   );
   const allowedRawAccounts = rawAccounts.filter(
     (account) =>
