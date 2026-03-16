@@ -22,6 +22,7 @@ import {
 } from "./dashboard-ui";
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const ACTIVE_REFRESH_INTERVAL_MS = 2_000;
 
 type ErrorPayload = {
   error?: string;
@@ -94,6 +95,15 @@ function readStatusLabel(snapshot: DashboardSnapshotResponse | null): string {
     return "Refreshing calls";
   }
   return "SQLite snapshot";
+}
+
+function shouldUseActiveRefresh(snapshot: DashboardSnapshotResponse | null): boolean {
+  const status = snapshot?.importState.status;
+  return (
+    snapshot?.backgroundRefreshTriggered === true ||
+    status === "recent_sync_running" ||
+    status === "full_backfill_running"
+  );
 }
 
 function buildExplorerHref(filters: DashboardFilters): string {
@@ -225,8 +235,11 @@ export function DashboardOverviewClient() {
     }
   }, [selectedEmployeeLoginName, snapshot]);
 
+  const useActiveRefresh = shouldUseActiveRefresh(snapshot);
+
   useEffect(() => {
     let cancelled = false;
+    const intervalMs = useActiveRefresh ? ACTIVE_REFRESH_INTERVAL_MS : REFRESH_INTERVAL_MS;
 
     async function refreshSnapshotInPlace() {
       try {
@@ -246,7 +259,7 @@ export function DashboardOverviewClient() {
 
     const intervalId = window.setInterval(() => {
       void refreshSnapshotInPlace();
-    }, REFRESH_INTERVAL_MS);
+    }, intervalMs);
 
     function handleFocus() {
       void refreshSnapshotInPlace();
@@ -258,7 +271,7 @@ export function DashboardOverviewClient() {
       window.clearInterval(intervalId);
       window.removeEventListener("focus", handleFocus);
     };
-  }, [currentQuery, filters]);
+  }, [currentQuery, filters, useActiveRefresh]);
 
   async function handleManualRefresh(): Promise<void> {
     setRefreshing(true);

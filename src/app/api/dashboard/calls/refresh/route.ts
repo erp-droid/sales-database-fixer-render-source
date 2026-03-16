@@ -9,9 +9,7 @@ import { HttpError, getErrorMessage } from "@/lib/errors";
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const auth = await authenticateDashboardRefreshRequest(request);
-    const state = await refreshCallAnalytics(auth.cookieValue, auth.authCookieRefresh, {
-      forceEmployeeDirectoryRefresh: true,
-    });
+    const state = await refreshCallAnalytics(auth.cookieValue, auth.authCookieRefresh);
     return finalizeDashboardResponse(NextResponse.json({ ok: true, importState: state }), auth.authCookieRefresh);
   } catch (error) {
     if (error instanceof HttpError) {

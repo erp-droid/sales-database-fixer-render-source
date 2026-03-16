@@ -43,6 +43,24 @@ describe("call analytics refresh gating", () => {
     ).toBe(false);
   });
 
+  it("allows an empty snapshot to trigger the first import when explicitly enabled", async () => {
+    const { shouldTriggerCallAnalyticsAutoRefresh } = await import("@/lib/call-analytics/ingest");
+
+    expect(
+      shouldTriggerCallAnalyticsAutoRefresh(
+        {
+          status: "idle",
+          lastRecentSyncAt: null,
+          lastFullBackfillAt: null,
+          updatedAt: "2026-03-09T00:00:00.000Z",
+        },
+        Date.parse("2026-03-09T00:01:00.000Z"),
+        300_000,
+        { allowEmptySnapshot: true },
+      ),
+    ).toBe(true);
+  });
+
   it("does not auto-refresh while a refresh is already running", async () => {
     const { shouldTriggerCallAnalyticsAutoRefresh } = await import("@/lib/call-analytics/ingest");
 

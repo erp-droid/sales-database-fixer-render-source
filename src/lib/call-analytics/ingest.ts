@@ -153,6 +153,9 @@ export function shouldTriggerCallAnalyticsAutoRefresh(
   state: CallAnalyticsRefreshEligibility,
   nowMs = Date.now(),
   staleAfterMs = getEnv().CALL_ANALYTICS_STALE_AFTER_MS,
+  options?: {
+    allowEmptySnapshot?: boolean;
+  },
 ): boolean {
   if (state.status === "recent_sync_running" || state.status === "full_backfill_running") {
     return false;
@@ -160,7 +163,7 @@ export function shouldTriggerCallAnalyticsAutoRefresh(
 
   const latestSnapshotAt = readLatestSnapshotTimestamp(state);
   if (!latestSnapshotAt) {
-    return false;
+    return options?.allowEmptySnapshot === true;
   }
 
   const ageMs = nowMs - Date.parse(latestSnapshotAt);
@@ -886,7 +889,15 @@ export function maybeTriggerCallAnalyticsRefresh(
     return false;
   }
 
-  if (!shouldTriggerCallAnalyticsAutoRefresh(readCallIngestState())) {
+  const state = readCallIngestState();
+  if (
+    !shouldTriggerCallAnalyticsAutoRefresh(
+      state,
+      Date.now(),
+      getEnv().CALL_ANALYTICS_STALE_AFTER_MS,
+      { allowEmptySnapshot: getTwilioRestConfig() !== null },
+    )
+  ) {
     return false;
   }
 

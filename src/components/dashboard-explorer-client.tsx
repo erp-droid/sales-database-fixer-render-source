@@ -24,6 +24,7 @@ import {
 } from "./dashboard-ui";
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const ACTIVE_REFRESH_INTERVAL_MS = 2_000;
 
 type ErrorPayload = {
   error?: string;
@@ -52,6 +53,15 @@ function readStatusLabel(callList: DashboardCallListResponse | null): string {
     return "Refreshing calls";
   }
   return "SQLite snapshot";
+}
+
+function shouldUseActiveRefresh(callList: DashboardCallListResponse | null): boolean {
+  const status = callList?.importState.status;
+  return (
+    callList?.backgroundRefreshTriggered === true ||
+    status === "recent_sync_running" ||
+    status === "full_backfill_running"
+  );
 }
 
 function mergeFilters(filters: DashboardFilters, next: Partial<DashboardFilters>): DashboardFilters {
@@ -169,8 +179,11 @@ export function DashboardExplorerClient() {
     };
   }, [currentQuery, filters, page, pageSize, pathname, router]);
 
+  const useActiveRefresh = shouldUseActiveRefresh(callList);
+
   useEffect(() => {
     let cancelled = false;
+    const intervalMs = useActiveRefresh ? ACTIVE_REFRESH_INTERVAL_MS : REFRESH_INTERVAL_MS;
 
     async function refreshCallListInPlace() {
       try {
@@ -193,7 +206,7 @@ export function DashboardExplorerClient() {
 
     const intervalId = window.setInterval(() => {
       void refreshCallListInPlace();
-    }, REFRESH_INTERVAL_MS);
+    }, intervalMs);
 
     function handleFocus() {
       void refreshCallListInPlace();
@@ -205,7 +218,7 @@ export function DashboardExplorerClient() {
       window.clearInterval(intervalId);
       window.removeEventListener("focus", handleFocus);
     };
-  }, [filters, page, pageSize]);
+  }, [filters, page, pageSize, useActiveRefresh]);
 
   useEffect(() => {
     if (!selectedSessionId) {
