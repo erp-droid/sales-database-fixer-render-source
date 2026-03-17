@@ -868,6 +868,7 @@ function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
 
   return {
     companyName: row.companyName,
+    companyDescription: row.companyDescription ?? null,
     assignedBusinessAccountRecordId:
       row.businessAccountId.trim().length > 0
         ? (row.accountRecordId ?? row.id)
@@ -990,6 +991,10 @@ function mergeSyncedRows(
     subCategory: pickPreferredText(existing.subCategory, incoming.subCategory),
     companyRegion: pickPreferredText(existing.companyRegion, incoming.companyRegion),
     week: pickPreferredText(existing.week, incoming.week),
+    companyDescription: pickPreferredText(
+      existing.companyDescription,
+      incoming.companyDescription,
+    ),
     primaryContactName: pickPreferredContactName(
       existing.primaryContactName,
       incoming.primaryContactName,
@@ -1262,6 +1267,7 @@ function isCompanyAttributeSuggestion(value: unknown): value is CompanyAttribute
     (record.industryTypeLabel === null || typeof record.industryTypeLabel === "string") &&
     (record.subCategory === null || typeof record.subCategory === "string") &&
     (record.subCategoryLabel === null || typeof record.subCategoryLabel === "string") &&
+    (record.companyDescription === null || typeof record.companyDescription === "string") &&
     (record.confidence === "low" ||
       record.confidence === "medium" ||
       record.confidence === "high") &&
@@ -1304,7 +1310,8 @@ function hasMissingCompanyAttributeSuggestionField(
     readTextValue(draft.companyRegion) === null ||
     readTextValue(draft.category) === null ||
     readTextValue(draft.industryType) === null ||
-    readTextValue(draft.subCategory) === null
+    readTextValue(draft.subCategory) === null ||
+    readTextValue(draft.companyDescription) === null
   );
 }
 
@@ -1314,6 +1321,7 @@ function buildCompanyAttributeSuggestionRequest(
 ): CompanyAttributeSuggestionRequest {
   return {
     companyName: readTextValue(draft.companyName),
+    companyDescription: readTextValue(draft.companyDescription),
     businessAccountId:
       readTextValue(draft.assignedBusinessAccountId) ??
       readTextValue(row.businessAccountId),
@@ -1381,6 +1389,17 @@ function applyCompanyAttributeSuggestion(
     nextDraft = {
       ...nextDraft,
       subCategory: suggestion.subCategory,
+    };
+    appliedCount += 1;
+  }
+
+  if (
+    readTextValue(draft.companyDescription) === null &&
+    readTextValue(suggestion.companyDescription) !== null
+  ) {
+    nextDraft = {
+      ...nextDraft,
+      companyDescription: suggestion.companyDescription,
     };
     appliedCount += 1;
   }
@@ -2166,6 +2185,7 @@ export function AccountsClient({
   const resolvingSalesRepAccountIdsRef = useRef(new Set<string>());
   const resolvedSalesRepAccountIdsRef = useRef(new Set<string>());
   const employeesFetchAttemptedRef = useRef(false);
+  const employeesFetchRequestRef = useRef(0);
   const notesFieldRef = useRef<HTMLTextAreaElement | null>(null);
   const createMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const currentContactEnhanceRequest = useMemo(
@@ -3082,6 +3102,9 @@ export function AccountsClient({
     }
 
     const controller = new AbortController();
+    const requestId = employeesFetchRequestRef.current + 1;
+    let settled = false;
+    employeesFetchRequestRef.current = requestId;
 
     async function fetchEmployees() {
       employeesFetchAttemptedRef.current = true;
@@ -3105,23 +3128,25 @@ export function AccountsClient({
           throw new Error("Unexpected response while loading sales reps.");
         }
 
-        if (controller.signal.aborted) {
+        if (controller.signal.aborted || requestId !== employeesFetchRequestRef.current) {
           return;
         }
 
+        settled = true;
         setEmployeeOptions(payload.items);
       } catch (employeesRequestError) {
-        if (controller.signal.aborted) {
+        if (controller.signal.aborted || requestId !== employeesFetchRequestRef.current) {
           return;
         }
 
+        settled = true;
         setEmployeesError(
           employeesRequestError instanceof Error
             ? employeesRequestError.message
             : "Unable to load sales reps.",
         );
       } finally {
-        if (!controller.signal.aborted) {
+        if (requestId === employeesFetchRequestRef.current) {
           setIsEmployeesLoading(false);
         }
       }
@@ -3129,12 +3154,17 @@ export function AccountsClient({
 
     void fetchEmployees();
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (!settled && requestId === employeesFetchRequestRef.current) {
+        employeesFetchAttemptedRef.current = false;
+        setIsEmployeesLoading(false);
+      }
+    };
   }, [
     employeeOptions.length,
     isCreateDrawerOpen,
     isCreateOpportunityDrawerOpen,
-    isEmployeesLoading,
     selected,
   ]);
 
@@ -4826,6 +4856,8 @@ export function AccountsClient({
               ...row,
               accountRecordId: sameAccount ? updatedAccountRecordId : row.accountRecordId,
               companyName: sameAccount ? updatedRow.companyName : row.companyName,
+              companyDescription:
+                sameAccount ? updatedRow.companyDescription ?? null : row.companyDescription ?? null,
               salesRepId: sameAccount ? updatedRow.salesRepId : row.salesRepId,
               salesRepName: sameAccount ? updatedRow.salesRepName : row.salesRepName,
               industryType: sameAccount ? updatedRow.industryType : row.industryType,
@@ -4896,6 +4928,7 @@ export function AccountsClient({
               ? updatedPrimaryContactId === updatedContactId
               : sourceRow.isPrimaryContact,
           companyName: updatedRow.companyName,
+          companyDescription: updatedRow.companyDescription ?? null,
           salesRepId: updatedRow.salesRepId,
           salesRepName: updatedRow.salesRepName,
           industryType: updatedRow.industryType,
@@ -5085,19 +5118,21 @@ export function AccountsClient({
           .map((field) =>
             field === "companyRegion"
               ? "Company Region"
+              : field === "companyDescription"
+                ? "Company Description"
               : field === "industryType"
                 ? "Industry Type"
                 : field === "subCategory"
                   ? "Sub-Category"
                   : "Category",
           )
-          .join(" and ");
+          .join(", ");
         setCompanyAttributeSuggestionNotice(
           `OpenAI filled missing ${filledLabels}. Click Save to persist.`,
         );
       } else {
         setCompanyAttributeSuggestionNotice(
-          "OpenAI found attribute suggestions, but there was no new Company Region, Category, Industry Type, or Sub-Category to add.",
+          "OpenAI found suggestions, but there was no new Company Region, Category, Industry Type, Sub-Category, or Company Description to add.",
         );
       }
     } catch (error) {
@@ -6453,6 +6488,7 @@ export function AccountsClient({
       <CreateBusinessAccountDrawer
         employeeOptions={sortedEmployeeOptions}
         isOpen={isCreateDrawerOpen}
+        openAiAttributeSuggestEnabled={openAiAttributeSuggestEnabled}
         onAccountCreated={handleAccountCreated}
         onClose={closeCreateDrawer}
         onContactCreated={handleContactCreated}
@@ -6657,6 +6693,24 @@ export function AccountsClient({
                   value={draft.companyName}
                 />
               )}
+            </label>
+
+            <label>
+              Company Description
+              <textarea
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current
+                      ? { ...current, companyDescription: event.target.value }
+                      : current,
+                  )
+                }
+                placeholder="Stored only in this app. Not sent to Acumatica."
+                value={draft.companyDescription ?? ""}
+              />
+              <span className={styles.lookupHint}>
+                This description stays in the app only. Save stores it locally and does not push it to Acumatica.
+              </span>
             </label>
 
             <h3>Sales Rep</h3>
@@ -7143,11 +7197,11 @@ export function AccountsClient({
                   </p>
                 ) : !hasMissingCompanyAttributeSuggestionField(draft) ? (
                   <p className={styles.lookupHint}>
-                    OpenAI only fills missing Company Region, Category, Industry Type, or Sub-Category.
+                    OpenAI only fills missing Company Region, Category, Industry Type, Sub-Category, or Company Description.
                   </p>
                 ) : (
                   <p className={styles.lookupHint}>
-                    OpenAI looks online for company evidence and also uses MeadowBrook's postal-code region map.
+                    OpenAI looks online for company evidence, writes a local-only company description, and also uses MeadowBrook's postal-code region map.
                   </p>
                 )}
               </div>
@@ -7172,6 +7226,9 @@ export function AccountsClient({
                     {" "}
                     ({companyAttributeSuggestionResult.confidence} confidence)
                   </p>
+                  {companyAttributeSuggestionResult.companyDescription ? (
+                    <p>{companyAttributeSuggestionResult.companyDescription}</p>
+                  ) : null}
                   <p>{companyAttributeSuggestionResult.reasoning}</p>
                   {companyAttributeSuggestionResult.sources.length > 0 ? (
                     <div className={styles.companyAttributeSuggestionSources}>

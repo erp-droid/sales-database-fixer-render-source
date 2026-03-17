@@ -32,6 +32,7 @@ import {
   CONTACT_MERGE_FIELD_KEYS,
   type ContactMergeRequest,
 } from "@/types/contact-merge";
+import type { CompanyAttributeSuggestionRequest } from "@/types/company-attribute-suggestion";
 import { buildMeetingDateTimeRange } from "@/lib/meeting-create";
 import { normalizeExtensionForSave, normalizePhoneForSave } from "@/lib/phone";
 
@@ -157,6 +158,7 @@ const nullableExpectedLastModifiedSchema = z
 
 export const updateRequestSchema = z.object({
   companyName: z.string().trim().min(1, "Company name is required").max(255),
+  companyDescription: nullableStringSchema.default(null),
   assignedBusinessAccountRecordId: nullableStringSchema.default(null),
   assignedBusinessAccountId: nullableStringSchema.default(null),
   addressLine1: z.string().trim().min(1, "Address line 1 is required").max(255),
@@ -206,6 +208,7 @@ export const updateRequestSchema = z.object({
 
 const contactOnlyUpdateRequestSchema = z.object({
   companyName: nullableStringSchema.default(null),
+  companyDescription: nullableStringSchema.default(null),
   assignedBusinessAccountRecordId: nullableStringSchema.default(null),
   assignedBusinessAccountId: nullableStringSchema.default(null),
   addressLine1: nullableStringSchema.default(null),
@@ -251,6 +254,7 @@ const contactOnlyUpdateRequestSchema = z.object({
 
 export const businessAccountCreateRequestSchema = z.object({
   companyName: z.string().trim().min(1, "Account name is required.").max(255),
+  companyDescription: nullableStringSchema.default(null),
   classId: z.enum(BUSINESS_ACCOUNT_CLASS_CODES, {
     required_error: "Business account class is required.",
     invalid_type_error: "Business account class is required.",
@@ -286,6 +290,22 @@ export const businessAccountCreateRequestSchema = z.object({
       path: ["salesRepId"],
     });
   }
+});
+
+export const companyAttributeSuggestionRequestSchema = z.object({
+  companyName: nullableStringSchema.default(null),
+  companyDescription: nullableStringSchema.default(null),
+  businessAccountId: nullableStringSchema.default(null),
+  addressLine1: nullableStringSchema.default(null),
+  city: nullableStringSchema.default(null),
+  state: nullableStringSchema.default(null),
+  postalCode: nullableStringSchema.default(null),
+  country: nullableStringSchema.default(null),
+  contactEmail: nullableStringSchema.default(null),
+  companyRegion: nullableStringSchema.default(null),
+  industryType: nullableStringSchema.default(null),
+  subCategory: nullableStringSchema.default(null),
+  category: nullableStringSchema.default(null),
 });
 
 export const businessAccountContactCreateRequestSchema = z.object({
@@ -710,6 +730,7 @@ export function parseContactOnlyUpdatePayload(
 
   return {
     companyName: parsed.companyName ?? fallback?.companyName ?? "",
+    companyDescription: parsed.companyDescription ?? fallback?.companyDescription ?? null,
     assignedBusinessAccountRecordId: parsed.assignedBusinessAccountRecordId,
     assignedBusinessAccountId: parsed.assignedBusinessAccountId,
     addressLine1: parsed.addressLine1 ?? fallback?.addressLine1 ?? "",
@@ -746,6 +767,12 @@ export function parseBusinessAccountCreatePayload(
   payload: unknown,
 ): BusinessAccountCreateRequest {
   return businessAccountCreateRequestSchema.parse(payload);
+}
+
+export function parseCompanyAttributeSuggestionPayload(
+  payload: unknown,
+): CompanyAttributeSuggestionRequest {
+  return companyAttributeSuggestionRequestSchema.parse(payload);
 }
 
 export function parseBusinessAccountContactCreatePayload(

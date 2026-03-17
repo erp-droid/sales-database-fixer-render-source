@@ -353,6 +353,7 @@ function mergeBusinessAccountRows(
     week: pickPreferredText(existing.week, incoming.week),
     businessAccountId: pickRequiredText(existing.businessAccountId, incoming.businessAccountId),
     companyName: pickRequiredText(existing.companyName, incoming.companyName),
+    companyDescription: pickPreferredText(existing.companyDescription, incoming.companyDescription),
     address: pickRequiredText(existing.address, incoming.address),
     addressLine1: pickRequiredText(existing.addressLine1, incoming.addressLine1),
     addressLine2: pickRequiredText(existing.addressLine2, incoming.addressLine2),
@@ -1404,6 +1405,7 @@ export function normalizeBusinessAccount(account: unknown): BusinessAccountRow {
     week,
     businessAccountId,
     companyName,
+    companyDescription: null,
     address: formatAddress(addressParts),
     addressLine1: addressParts.line1,
     addressLine2: addressParts.line2,
@@ -1631,6 +1633,7 @@ export function queryBusinessAccounts(
       row.notes,
       row.lastEmailedAt,
       row.businessAccountId,
+      row.companyDescription,
     ]
       .filter(Boolean)
       .join(" ")

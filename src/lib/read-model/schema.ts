@@ -49,6 +49,16 @@ CREATE INDEX IF NOT EXISTS idx_account_rows_sales_rep_name
 CREATE INDEX IF NOT EXISTS idx_account_rows_address_key
   ON account_rows(address_key);
 
+CREATE TABLE IF NOT EXISTS account_local_metadata (
+  account_record_id TEXT PRIMARY KEY,
+  business_account_id TEXT,
+  company_description TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_local_metadata_business_account_id
+  ON account_local_metadata(business_account_id);
+
 CREATE TABLE IF NOT EXISTS employee_directory (
   employee_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

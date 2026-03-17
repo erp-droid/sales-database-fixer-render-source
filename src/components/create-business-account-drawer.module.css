@@ -92,12 +92,18 @@
 }
 
 .section input,
-.section select {
+.section select,
+.section textarea {
   border: 1px solid var(--border);
   border-radius: 9px;
   background: var(--app-surface);
   color: var(--ink);
   padding: 9px 10px;
+}
+
+.section textarea {
+  min-height: 108px;
+  resize: vertical;
 }
 
 .section input:disabled,
@@ -171,6 +177,51 @@
   border-radius: 10px;
   background: #f6fbff;
   color: var(--ink-strong);
+}
+
+.companyAttributeSuggestionSection {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #d6e1ee;
+  border-radius: 12px;
+  background: #f7fafc;
+}
+
+.companyAttributeSuggestionActions {
+  display: grid;
+  gap: 8px;
+}
+
+.companyAttributeSuggestionResult {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #d6e1ee;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.companyAttributeSuggestionResult p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.companyAttributeSuggestionSources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.companyAttributeSuggestionSource {
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.companyAttributeSuggestionSource:hover {
+  color: var(--accent);
 }
 
 .actions {

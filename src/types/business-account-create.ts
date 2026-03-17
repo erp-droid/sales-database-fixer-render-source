@@ -16,6 +16,7 @@ export type ContactClassKey = (typeof CONTACT_CLASS_KEYS)[number];
 
 export type BusinessAccountCreateRequest = {
   companyName: string;
+  companyDescription?: string | null;
   classId: BusinessAccountClassCode;
   salesRepId: string | null;
   salesRepName: string | null;

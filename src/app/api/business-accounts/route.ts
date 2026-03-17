@@ -46,6 +46,11 @@ import {
   queryReadModelBusinessAccounts,
   replaceReadModelAccountRows,
 } from "@/lib/read-model/accounts";
+import {
+  applyLocalAccountMetadataToRow,
+  applyLocalAccountMetadataToRows,
+  saveAccountCompanyDescription,
+} from "@/lib/read-model/account-local-metadata";
 import { maybeTriggerReadModelSync } from "@/lib/read-model/sync";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type { BusinessAccountCreateResponse } from "@/types/business-account-create";
@@ -1120,6 +1125,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       warnings,
     };
 
+    saveAccountCompanyDescription({
+      accountRecordId: responseBody.businessAccountRecordId,
+      businessAccountId: responseBody.businessAccountId,
+      companyDescription: createRequest.companyDescription,
+    });
+
+    const responseRows = applyLocalAccountMetadataToRows(responseBody.accountRows);
+    const responseCreatedRow =
+      applyLocalAccountMetadataToRow(responseBody.createdRow) ?? responseBody.createdRow;
+
     if (getEnv().READ_MODEL_ENABLED) {
       replaceReadModelAccountRows(
         responseBody.businessAccountRecordId,
@@ -1138,7 +1153,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       createdRow: responseBody.createdRow,
     });
 
-    const response = NextResponse.json(responseBody, { status: 201 });
+    const response = NextResponse.json(
+      {
+        ...responseBody,
+        accountRows: responseRows,
+        createdRow: responseCreatedRow,
+      },
+      { status: 201 },
+    );
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
     }
@@ -1217,7 +1239,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           },
         );
 
-    const response = NextResponse.json(result);
+    const response = NextResponse.json({
+      ...result,
+      items: applyLocalAccountMetadataToRows(result.items),
+    });
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
     }
@@ -1255,7 +1280,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
               },
             );
 
-        const response = NextResponse.json(retryResult);
+        const response = NextResponse.json({
+          ...retryResult,
+          items: applyLocalAccountMetadataToRows(retryResult.items),
+        });
         if (retryAuthCookieRefresh.value) {
           setAuthCookie(response, retryAuthCookieRefresh.value);
         } else if (authCookieRefresh.value) {

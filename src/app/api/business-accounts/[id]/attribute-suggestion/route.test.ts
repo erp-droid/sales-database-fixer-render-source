@@ -62,6 +62,7 @@ describe("POST /api/business-accounts/[id]/attribute-suggestion", () => {
         industryTypeLabel: "Service",
         subCategory: "General",
         subCategoryLabel: "General",
+        companyDescription: "CBRE is a commercial real estate services and investment firm.",
         confidence: "medium",
         reasoning: "The company appears to be a commercial property services business.",
         sources: [
@@ -72,7 +73,13 @@ describe("POST /api/business-accounts/[id]/attribute-suggestion", () => {
           },
         ],
       },
-      filledFieldKeys: ["companyRegion", "category", "industryType", "subCategory"],
+      filledFieldKeys: [
+        "companyRegion",
+        "category",
+        "industryType",
+        "subCategory",
+        "companyDescription",
+      ],
     });
 
     const { POST } = await import("@/app/api/business-accounts/[id]/attribute-suggestion/route");
@@ -108,6 +115,7 @@ describe("POST /api/business-accounts/[id]/attribute-suggestion", () => {
         industryTypeLabel: "Service",
         subCategory: "General",
         subCategoryLabel: "General",
+        companyDescription: "CBRE is a commercial real estate services and investment firm.",
         confidence: "medium",
         reasoning: "The company appears to be a commercial property services business.",
         sources: [
@@ -118,7 +126,13 @@ describe("POST /api/business-accounts/[id]/attribute-suggestion", () => {
           },
         ],
       },
-      filledFieldKeys: ["companyRegion", "category", "industryType", "subCategory"],
+      filledFieldKeys: [
+        "companyRegion",
+        "category",
+        "industryType",
+        "subCategory",
+        "companyDescription",
+      ],
     });
   });
 

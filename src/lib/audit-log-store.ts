@@ -61,6 +61,7 @@ type StoredAccountLink = {
 
 const BUSINESS_ACCOUNT_CREATE_FIELD_LABELS: Record<keyof BusinessAccountCreateRequest, string> = {
   companyName: "Company name",
+  companyDescription: "Company description",
   classId: "Class",
   salesRepId: "Sales rep",
   salesRepName: "Sales rep",

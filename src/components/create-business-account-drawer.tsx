@@ -19,6 +19,11 @@ import type {
   BusinessAccountContactCreateRequest,
   BusinessAccountContactCreateResponse,
 } from "@/types/business-account-create";
+import type {
+  CompanyAttributeSuggestion,
+  CompanyAttributeSuggestionRequest,
+  CompanyAttributeSuggestionResponse,
+} from "@/types/company-attribute-suggestion";
 
 import styles from "./create-business-account-drawer.module.css";
 
@@ -47,6 +52,7 @@ type AddressRetrieveResponse = {
 type CreateBusinessAccountDrawerProps = {
   isOpen: boolean;
   employeeOptions: Array<{ id: string; name: string }>;
+  openAiAttributeSuggestEnabled: boolean;
   onClose: () => void;
   onAccountCreated: (result: BusinessAccountCreateResponse) => void;
   onContactCreated: (
@@ -74,6 +80,7 @@ type CreatedAccountState = {
 
 const EMPTY_ACCOUNT_FORM: AccountCreateFormState = {
   companyName: "",
+  companyDescription: null,
   classId: "",
   salesRepId: null,
   salesRepName: null,
@@ -251,9 +258,173 @@ function isBusinessAccountContactCreatePartialResponse(
   );
 }
 
+function isCompanyAttributeSuggestionSource(
+  value: unknown,
+): value is CompanyAttributeSuggestion["sources"][number] {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.title === "string" &&
+    typeof record.url === "string" &&
+    (record.domain === null || typeof record.domain === "string")
+  );
+}
+
+function isCompanyAttributeSuggestion(value: unknown): value is CompanyAttributeSuggestion {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    (record.companyRegion === null || typeof record.companyRegion === "string") &&
+    (record.companyRegionLabel === null || typeof record.companyRegionLabel === "string") &&
+    (record.category === null || typeof record.category === "string") &&
+    (record.categoryLabel === null || typeof record.categoryLabel === "string") &&
+    (record.industryType === null || typeof record.industryType === "string") &&
+    (record.industryTypeLabel === null || typeof record.industryTypeLabel === "string") &&
+    (record.subCategory === null || typeof record.subCategory === "string") &&
+    (record.subCategoryLabel === null || typeof record.subCategoryLabel === "string") &&
+    (record.companyDescription === null || typeof record.companyDescription === "string") &&
+    (record.confidence === "low" ||
+      record.confidence === "medium" ||
+      record.confidence === "high") &&
+    typeof record.reasoning === "string" &&
+    Array.isArray(record.sources) &&
+    record.sources.every((source) => isCompanyAttributeSuggestionSource(source))
+  );
+}
+
+function isCompanyAttributeSuggestionResponse(
+  value: unknown,
+): value is CompanyAttributeSuggestionResponse {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.status === "ready") {
+    return (
+      isCompanyAttributeSuggestion(record.suggestion) &&
+      Array.isArray(record.filledFieldKeys)
+    );
+  }
+
+  if (record.status === "need_more_context" || record.status === "no_match") {
+    return typeof record.message === "string";
+  }
+
+  return false;
+}
+
+function hasMissingCompanyAttributeSuggestionField(
+  form: Pick<
+    AccountCreateFormState,
+    "companyDescription" | "companyRegion" | "category" | "industryType" | "subCategory"
+  >,
+): boolean {
+  return (
+    readText(form.companyDescription) === null ||
+    readText(form.companyRegion) === null ||
+    readText(form.category) === null ||
+    readText(form.industryType) === null ||
+    readText(form.subCategory) === null
+  );
+}
+
+function buildCompanyAttributeSuggestionRequest(
+  form: AccountCreateFormState,
+): CompanyAttributeSuggestionRequest {
+  return {
+    companyName: readText(form.companyName),
+    companyDescription: readText(form.companyDescription),
+    businessAccountId: null,
+    addressLine1: readText(form.addressLine1),
+    city: readText(form.city),
+    state: readText(form.state),
+    postalCode: readText(form.postalCode),
+    country: readText(form.country),
+    contactEmail: null,
+    companyRegion: readText(form.companyRegion),
+    industryType: readText(form.industryType),
+    subCategory: readText(form.subCategory),
+    category: readText(form.category),
+  };
+}
+
+function buildCompanyAttributeSuggestionFingerprint(
+  request: CompanyAttributeSuggestionRequest | null,
+): string | null {
+  if (!request) {
+    return null;
+  }
+
+  return JSON.stringify(request);
+}
+
+function applyCompanyAttributeSuggestion(
+  form: AccountCreateFormState,
+  suggestion: CompanyAttributeSuggestion,
+): {
+  form: AccountCreateFormState;
+  appliedCount: number;
+} {
+  let appliedCount = 0;
+  let nextForm = form;
+
+  if (!readText(form.companyRegion) && readText(suggestion.companyRegion)) {
+    nextForm = {
+      ...nextForm,
+      companyRegion: suggestion.companyRegion ?? "",
+    };
+    appliedCount += 1;
+  }
+
+  if (!readText(form.category) && readText(suggestion.category)) {
+    nextForm = {
+      ...nextForm,
+      category: (suggestion.category as AccountCreateFormState["category"]) ?? "",
+    };
+    appliedCount += 1;
+  }
+
+  if (!readText(form.industryType) && readText(suggestion.industryType)) {
+    nextForm = {
+      ...nextForm,
+      industryType: suggestion.industryType ?? "",
+    };
+    appliedCount += 1;
+  }
+
+  if (!readText(form.subCategory) && readText(suggestion.subCategory)) {
+    nextForm = {
+      ...nextForm,
+      subCategory: suggestion.subCategory ?? "",
+    };
+    appliedCount += 1;
+  }
+
+  if (!readText(form.companyDescription) && readText(suggestion.companyDescription)) {
+    nextForm = {
+      ...nextForm,
+      companyDescription: suggestion.companyDescription,
+    };
+    appliedCount += 1;
+  }
+
+  return {
+    form: nextForm,
+    appliedCount,
+  };
+}
+
 export function CreateBusinessAccountDrawer({
   isOpen,
   employeeOptions,
+  openAiAttributeSuggestEnabled,
   onClose,
   onAccountCreated,
   onContactCreated,
@@ -270,6 +441,14 @@ export function CreateBusinessAccountDrawer({
   const [isApplyingAddress, setIsApplyingAddress] = useState(false);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [accountNotice, setAccountNotice] = useState<string | null>(null);
+  const [companyAttributeSuggestionError, setCompanyAttributeSuggestionError] = useState<string | null>(null);
+  const [companyAttributeSuggestionNotice, setCompanyAttributeSuggestionNotice] =
+    useState<string | null>(null);
+  const [companyAttributeSuggestionResult, setCompanyAttributeSuggestionResult] =
+    useState<CompanyAttributeSuggestion | null>(null);
+  const [companyAttributeSuggestionFingerprint, setCompanyAttributeSuggestionFingerprint] =
+    useState<string | null>(null);
+  const [isSuggestingCompanyAttributes, setIsSuggestingCompanyAttributes] = useState(false);
   const [isCreatingAccount, setIsCreatingAccount] = useState(false);
   const [createdAccount, setCreatedAccount] = useState<CreatedAccountState | null>(null);
   const [contactError, setContactError] = useState<string | null>(null);
@@ -278,6 +457,14 @@ export function CreateBusinessAccountDrawer({
   const [contactPartialComplete, setContactPartialComplete] = useState(false);
 
   const debouncedAddressSearchTerm = useDebouncedValue(addressSearchTerm, 220);
+  const currentCompanyAttributeSuggestionRequest = useMemo(
+    () => buildCompanyAttributeSuggestionRequest(accountForm),
+    [accountForm],
+  );
+  const currentCompanyAttributeSuggestionFingerprint = useMemo(
+    () => buildCompanyAttributeSuggestionFingerprint(currentCompanyAttributeSuggestionRequest),
+    [currentCompanyAttributeSuggestionRequest],
+  );
   const sortedEmployeeOptions = useMemo(
     () =>
       [...employeeOptions].sort((left, right) =>
@@ -288,6 +475,11 @@ export function CreateBusinessAccountDrawer({
       ),
     [employeeOptions],
   );
+  const canSuggestCompanyAttributes =
+    openAiAttributeSuggestEnabled &&
+    !createdAccount &&
+    readText(accountForm.companyName) !== null &&
+    hasMissingCompanyAttributeSuggestionField(accountForm);
 
   useEffect(() => {
     if (isOpen) {
@@ -304,6 +496,11 @@ export function CreateBusinessAccountDrawer({
     setIsApplyingAddress(false);
     setAccountError(null);
     setAccountNotice(null);
+    setCompanyAttributeSuggestionError(null);
+    setCompanyAttributeSuggestionNotice(null);
+    setCompanyAttributeSuggestionResult(null);
+    setCompanyAttributeSuggestionFingerprint(null);
+    setIsSuggestingCompanyAttributes(false);
     setIsCreatingAccount(false);
     setCreatedAccount(null);
     setContactError(null);
@@ -311,6 +508,22 @@ export function CreateBusinessAccountDrawer({
     setIsCreatingContact(false);
     setContactPartialComplete(false);
   }, [isOpen]);
+
+  useEffect(() => {
+    if (
+      companyAttributeSuggestionFingerprint !== null &&
+      currentCompanyAttributeSuggestionFingerprint !== null &&
+      companyAttributeSuggestionFingerprint !== currentCompanyAttributeSuggestionFingerprint
+    ) {
+      setCompanyAttributeSuggestionError(null);
+      setCompanyAttributeSuggestionNotice(null);
+      setCompanyAttributeSuggestionResult(null);
+      setCompanyAttributeSuggestionFingerprint(null);
+    }
+  }, [
+    companyAttributeSuggestionFingerprint,
+    currentCompanyAttributeSuggestionFingerprint,
+  ]);
 
   useEffect(() => {
     if (!isOpen || createdAccount || accountForm.addressLookupId || debouncedAddressSearchTerm.length < 3) {
@@ -469,6 +682,7 @@ export function CreateBusinessAccountDrawer({
     try {
       const requestBody: BusinessAccountCreateRequest = {
         ...accountForm,
+        companyDescription: readText(accountForm.companyDescription),
         classId: accountForm.classId,
         category: accountForm.category,
         week: accountForm.week || null,
@@ -504,6 +718,81 @@ export function CreateBusinessAccountDrawer({
       setAccountError(error instanceof Error ? error.message : "Unable to create business account.");
     } finally {
       setIsCreatingAccount(false);
+    }
+  }
+
+  async function handleSuggestCompanyAttributes() {
+    const requestBody = buildCompanyAttributeSuggestionRequest(accountForm);
+    const requestFingerprint = buildCompanyAttributeSuggestionFingerprint(requestBody);
+
+    setIsSuggestingCompanyAttributes(true);
+    setCompanyAttributeSuggestionError(null);
+
+    try {
+      const response = await fetch("/api/business-accounts/attribute-suggestion", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
+      const payload = await readJsonResponse<
+        CompanyAttributeSuggestionResponse | { error?: string }
+      >(response);
+
+      if (!response.ok) {
+        throw new Error(parseError(payload));
+      }
+      if (!isCompanyAttributeSuggestionResponse(payload)) {
+        throw new Error("Unexpected response while suggesting company attributes.");
+      }
+
+      setCompanyAttributeSuggestionFingerprint(requestFingerprint);
+
+      if (payload.status === "need_more_context" || payload.status === "no_match") {
+        setCompanyAttributeSuggestionResult(null);
+        setCompanyAttributeSuggestionNotice(payload.message);
+        return;
+      }
+
+      setCompanyAttributeSuggestionResult(payload.suggestion);
+      let appliedCount = 0;
+      setAccountForm((current) => {
+        const result = applyCompanyAttributeSuggestion(current, payload.suggestion);
+        appliedCount = result.appliedCount;
+        return result.form;
+      });
+
+      if (appliedCount > 0) {
+        const filledLabels = payload.filledFieldKeys
+          .map((field) =>
+            field === "companyRegion"
+              ? "Company Region"
+              : field === "companyDescription"
+                ? "Company Description"
+                : field === "industryType"
+                  ? "Industry Type"
+                  : field === "subCategory"
+                    ? "Sub-Category"
+                    : "Category",
+          )
+          .join(", ");
+        setCompanyAttributeSuggestionNotice(
+          `OpenAI filled missing ${filledLabels}. Create saves the description locally and sends only Acumatica attributes upstream.`,
+        );
+      } else {
+        setCompanyAttributeSuggestionNotice(
+          "OpenAI found suggestions, but there was no new Company Region, Category, Industry Type, Sub-Category, or Company Description to add.",
+        );
+      }
+    } catch (error) {
+      setCompanyAttributeSuggestionResult(null);
+      setCompanyAttributeSuggestionNotice(null);
+      setCompanyAttributeSuggestionError(
+        error instanceof Error ? error.message : "Failed to suggest company attributes.",
+      );
+    } finally {
+      setIsSuggestingCompanyAttributes(false);
     }
   }
 
@@ -625,6 +914,23 @@ export function CreateBusinessAccountDrawer({
                     value={accountForm.companyName}
                   />
                 </label>
+
+                <label>
+                  Company Description
+                  <textarea
+                    onChange={(event) =>
+                      setAccountForm((current) => ({
+                        ...current,
+                        companyDescription: event.target.value,
+                      }))
+                    }
+                    placeholder="Stored only in this app. Not sent to Acumatica."
+                    value={accountForm.companyDescription ?? ""}
+                  />
+                </label>
+                <p className={styles.lookupHint}>
+                  This description stays in the app only. Create saves it locally and does not push it to Acumatica.
+                </p>
 
                 <label>
                   Business Account Class
@@ -751,6 +1057,85 @@ export function CreateBusinessAccountDrawer({
 
               <section className={styles.section}>
                 <h3>Attributes</h3>
+                <div className={styles.companyAttributeSuggestionSection}>
+                  <div className={styles.companyAttributeSuggestionActions}>
+                    <button
+                      className={styles.secondaryButton}
+                      disabled={
+                        isCreatingAccount ||
+                        isApplyingAddress ||
+                        isSuggestingCompanyAttributes ||
+                        !canSuggestCompanyAttributes
+                      }
+                      onClick={() => {
+                        void handleSuggestCompanyAttributes();
+                      }}
+                      type="button"
+                    >
+                      {isSuggestingCompanyAttributes ? "Researching..." : "Suggest with OpenAI"}
+                    </button>
+                    {!openAiAttributeSuggestEnabled ? (
+                      <p className={styles.lookupHint}>
+                        OpenAI attribute suggestions are not configured for this environment.
+                      </p>
+                    ) : !hasMissingCompanyAttributeSuggestionField(accountForm) ? (
+                      <p className={styles.lookupHint}>
+                        OpenAI only fills missing Company Region, Category, Industry Type, Sub-Category, or Company Description.
+                      </p>
+                    ) : readText(accountForm.companyName) === null ? (
+                      <p className={styles.lookupHint}>
+                        Enter an account name before asking OpenAI to research this company.
+                      </p>
+                    ) : (
+                      <p className={styles.lookupHint}>
+                        OpenAI looks online for company evidence, writes a local-only company description, and also uses MeadowBrook's postal-code region map.
+                      </p>
+                    )}
+                  </div>
+                  {companyAttributeSuggestionError ? (
+                    <p className={styles.lookupError}>{companyAttributeSuggestionError}</p>
+                  ) : null}
+                  {companyAttributeSuggestionNotice ? (
+                    <p className={styles.lookupHint}>{companyAttributeSuggestionNotice}</p>
+                  ) : null}
+                  {companyAttributeSuggestionResult ? (
+                    <div className={styles.companyAttributeSuggestionResult}>
+                      <p>
+                        Suggested values:
+                        {" "}
+                        {companyAttributeSuggestionResult.companyRegionLabel ?? "No region"}
+                        {" / "}
+                        {companyAttributeSuggestionResult.categoryLabel ?? "No category"}
+                        {" / "}
+                        {companyAttributeSuggestionResult.industryTypeLabel ?? "No industry type"}
+                        {" / "}
+                        {companyAttributeSuggestionResult.subCategoryLabel ?? "No sub-category"}
+                        {" "}
+                        ({companyAttributeSuggestionResult.confidence} confidence)
+                      </p>
+                      {companyAttributeSuggestionResult.companyDescription ? (
+                        <p>{companyAttributeSuggestionResult.companyDescription}</p>
+                      ) : null}
+                      <p>{companyAttributeSuggestionResult.reasoning}</p>
+                      {companyAttributeSuggestionResult.sources.length > 0 ? (
+                        <div className={styles.companyAttributeSuggestionSources}>
+                          {companyAttributeSuggestionResult.sources.map((source) => (
+                            <a
+                              className={styles.companyAttributeSuggestionSource}
+                              href={source.url}
+                              key={source.url}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              {source.title}
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+
                 <label>
                   Industry Type
                   <select

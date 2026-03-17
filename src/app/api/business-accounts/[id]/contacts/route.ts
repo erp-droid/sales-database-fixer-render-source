@@ -21,6 +21,10 @@ import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { getEnv } from "@/lib/env";
 import { replaceReadModelAccountRows } from "@/lib/read-model/accounts";
+import {
+  applyLocalAccountMetadataToRow,
+  applyLocalAccountMetadataToRows,
+} from "@/lib/read-model/account-local-metadata";
 import type {
   BusinessAccountContactCreatePartialResponse,
   BusinessAccountContactCreateResponse,
@@ -153,7 +157,13 @@ export async function POST(
         contactId,
         createdRow: refreshedRows.find((row) => row.contactId === contactId) ?? null,
       });
-      const response = NextResponse.json(responseBody, { status: 409 });
+      const response = NextResponse.json(
+        {
+          ...responseBody,
+          accountRows: applyLocalAccountMetadataToRows(responseBody.accountRows),
+        },
+        { status: 409 },
+      );
       if (authCookieRefresh.value) {
         setAuthCookie(response, authCookieRefresh.value);
       }
@@ -202,7 +212,14 @@ export async function POST(
       createdRow,
     });
 
-    const response = NextResponse.json(responseBody, { status: 201 });
+    const response = NextResponse.json(
+      {
+        ...responseBody,
+        accountRows: applyLocalAccountMetadataToRows(responseBody.accountRows),
+        createdRow: applyLocalAccountMetadataToRow(responseBody.createdRow) ?? responseBody.createdRow,
+      },
+      { status: 201 },
+    );
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
     }

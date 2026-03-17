@@ -161,4 +161,21 @@ describe("ensureReadModelSchema", () => {
       ]),
     );
   });
+
+  it("creates the account_local_metadata table", () => {
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(account_local_metadata)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "account_record_id",
+        "business_account_id",
+        "company_description",
+        "updated_at",
+      ]),
+    );
+  });
 });

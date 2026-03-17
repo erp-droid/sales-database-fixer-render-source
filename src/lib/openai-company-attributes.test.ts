@@ -8,6 +8,7 @@ function buildRequest(
 ): CompanyAttributeSuggestionRequest {
   return {
     companyName: "Acme Packaging",
+    companyDescription: null,
     businessAccountId: "BACCT-100",
     addressLine1: "123 Industrial Way",
     city: "Mississauga",
@@ -62,6 +63,8 @@ describe("openai-company-attributes", () => {
                     category: "A",
                     industryType: "Manufactur",
                     subCategory: "Package",
+                    companyDescription:
+                      "Acme Packaging is a Canadian packaging manufacturer serving industrial and consumer brands.",
                     confidence: "high",
                     reasoning:
                       "The company describes itself as a packaging manufacturer on its website.",
@@ -103,6 +106,8 @@ describe("openai-company-attributes", () => {
         industryTypeLabel: "Manufacturing",
         subCategory: "Package",
         subCategoryLabel: "Packaging",
+        companyDescription:
+          "Acme Packaging is a Canadian packaging manufacturer serving industrial and consumer brands.",
         confidence: "high",
         reasoning: "The company describes itself as a packaging manufacturer on its website.",
         sources: [
@@ -113,7 +118,13 @@ describe("openai-company-attributes", () => {
           },
         ],
       },
-      filledFieldKeys: ["companyRegion", "category", "industryType", "subCategory"],
+      filledFieldKeys: [
+        "companyRegion",
+        "category",
+        "industryType",
+        "subCategory",
+        "companyDescription",
+      ],
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -160,6 +171,7 @@ describe("openai-company-attributes", () => {
                       category: "NONE",
                       industryType: "NONE",
                       subCategory: "NONE",
+                      companyDescription: "NONE",
                       confidence: "low",
                       reasoning: "The public web results were too generic to classify this company.",
                     }),
@@ -192,6 +204,7 @@ describe("openai-company-attributes", () => {
         industryTypeLabel: null,
         subCategory: null,
         subCategoryLabel: null,
+        companyDescription: null,
         confidence: "low",
         reasoning: "The public web results were too generic to classify this company.",
         sources: [],

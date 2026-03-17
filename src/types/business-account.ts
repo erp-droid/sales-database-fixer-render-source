@@ -42,6 +42,7 @@ export type BusinessAccountRow = {
   week: string | null;
   businessAccountId: string;
   companyName: string;
+  companyDescription?: string | null;
   address: string;
   addressLine1: string;
   addressLine2: string;
@@ -64,6 +65,7 @@ export type BusinessAccountRow = {
 
 export type BusinessAccountUpdateRequest = {
   companyName: string;
+  companyDescription?: string | null;
   assignedBusinessAccountRecordId: string | null;
   assignedBusinessAccountId: string | null;
   addressLine1: string;

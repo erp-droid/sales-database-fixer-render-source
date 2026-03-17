@@ -3,6 +3,7 @@ import { ZodError } from "zod";
 import {
   parseBusinessAccountContactCreatePayload,
   parseBusinessAccountCreatePayload,
+  parseCompanyAttributeSuggestionPayload,
   parseContactOnlyUpdatePayload,
   parseContactMergePayload,
   parseContactMergePreviewQuery,
@@ -77,6 +78,7 @@ describe("parseListQuery", () => {
 describe("parseUpdatePayload", () => {
   const validPayload = {
     companyName: "Alpha Inc",
+    companyDescription: "Industrial controls distributor and service provider.",
     addressLine1: "5579 McAdam Road",
     addressLine2: "",
     city: "Mississauga",
@@ -107,6 +109,7 @@ describe("parseUpdatePayload", () => {
     });
 
     expect(parsed.primaryContactName).toBeNull();
+    expect(parsed.companyDescription).toBe("Industrial controls distributor and service provider.");
     expect(parsed.primaryContactJobTitle).toBeNull();
     expect(parsed.primaryContactPhone).toBeNull();
     expect(parsed.primaryContactEmail).toBeNull();
@@ -195,6 +198,7 @@ describe("parseUpdatePayload", () => {
 describe("parseContactOnlyUpdatePayload", () => {
   const fallback = {
     companyName: "",
+    companyDescription: null,
     addressLine1: "",
     addressLine2: "",
     city: "",
@@ -307,6 +311,7 @@ describe("parseContactOnlyUpdatePayload", () => {
 describe("parseBusinessAccountCreatePayload", () => {
   const validPayload = {
     companyName: "Alpha Inc",
+    companyDescription: "Industrial controls distributor and service provider.",
     classId: "CUSTOMER",
     salesRepId: "109343",
     salesRepName: "Jorge Serrano",
@@ -383,6 +388,15 @@ describe("parseBusinessAccountCreatePayload", () => {
     expect(parsed.week).toBeNull();
   });
 
+  it("normalizes blank company descriptions to null", () => {
+    const parsed = parseBusinessAccountCreatePayload({
+      ...validPayload,
+      companyDescription: "   ",
+    });
+
+    expect(parsed.companyDescription).toBeNull();
+  });
+
   it("requires addressLookupId", () => {
     expect(() =>
       parseBusinessAccountCreatePayload({
@@ -398,6 +412,42 @@ describe("parseBusinessAccountCreatePayload", () => {
       country: "",
     });
     expect(parsed.country).toBe("CA");
+  });
+});
+
+describe("parseCompanyAttributeSuggestionPayload", () => {
+  it("normalizes empty optional values to null", () => {
+    const parsed = parseCompanyAttributeSuggestionPayload({
+      companyName: "  Alpha Inc  ",
+      companyDescription: "   ",
+      businessAccountId: "",
+      addressLine1: " 5579 McAdam Road ",
+      city: "",
+      state: " ON ",
+      postalCode: "",
+      country: " ca ",
+      contactEmail: "",
+      companyRegion: "",
+      industryType: "",
+      subCategory: "",
+      category: "",
+    });
+
+    expect(parsed).toEqual({
+      companyName: "Alpha Inc",
+      companyDescription: null,
+      businessAccountId: null,
+      addressLine1: "5579 McAdam Road",
+      city: null,
+      state: "ON",
+      postalCode: null,
+      country: "ca",
+      contactEmail: null,
+      companyRegion: null,
+      industryType: null,
+      subCategory: null,
+      category: null,
+    });
   });
 });
 

@@ -56,6 +56,11 @@ import {
   replaceReadModelAccountRows,
 } from "@/lib/read-model/accounts";
 import {
+  applyLocalAccountMetadataToRow,
+  applyLocalAccountMetadataToRows,
+  saveAccountCompanyDescription,
+} from "@/lib/read-model/account-local-metadata";
+import {
   maybeTriggerReadModelSync,
   readSyncStatus,
   waitForReadModelSync,
@@ -238,6 +243,7 @@ function buildStandaloneContactFallback(
 ): ReturnType<typeof parseUpdatePayload> {
   return {
     companyName: row.companyName,
+    companyDescription: row.companyDescription ?? null,
     assignedBusinessAccountRecordId: null,
     assignedBusinessAccountId: row.businessAccountId.trim() || null,
     addressLine1: row.addressLine1,
@@ -375,6 +381,7 @@ function buildFallbackRowFromContact(
       existingRow?.companyName ??
       readContactCompanyName(contact, readWrappedString) ??
       "",
+    companyDescription: existingRow?.companyDescription ?? null,
     address: existingRow?.address ?? "",
     addressLine1: existingRow?.addressLine1 ?? "",
     addressLine2: existingRow?.addressLine2 ?? "",
@@ -434,6 +441,7 @@ function buildContactOnlyUpdateRequestFromCurrentRow(
 ): ReturnType<typeof parseUpdatePayload> {
   const nextRequest: ReturnType<typeof parseUpdatePayload> = {
     companyName: currentRow.companyName,
+    companyDescription: currentRow.companyDescription ?? null,
     assignedBusinessAccountRecordId: currentRow.accountRecordId ?? currentRow.id,
     assignedBusinessAccountId: currentRow.businessAccountId,
     addressLine1: currentRow.addressLine1,
@@ -465,6 +473,9 @@ function buildContactOnlyUpdateRequestFromCurrentRow(
 
   if (requestBodyHasOwnField(requestBody, "primaryContactName")) {
     nextRequest.primaryContactName = parsedRequest.primaryContactName;
+  }
+  if (requestBodyHasOwnField(requestBody, "companyDescription")) {
+    nextRequest.companyDescription = parsedRequest.companyDescription ?? null;
   }
   if (requestBodyHasOwnField(requestBody, "primaryContactJobTitle")) {
     nextRequest.primaryContactJobTitle = parsedRequest.primaryContactJobTitle ?? null;
@@ -668,6 +679,31 @@ async function buildResponseRowFromRawAccount(
   };
 }
 
+function persistLocalCompanyDescription(
+  row: BusinessAccountRow,
+  updateRequest: ReturnType<typeof parseUpdatePayload>,
+  shouldPersist: boolean,
+): void {
+  if (!shouldPersist) {
+    return;
+  }
+
+  saveAccountCompanyDescription({
+    accountRecordId: row.accountRecordId ?? row.id,
+    businessAccountId: row.businessAccountId,
+    companyDescription: updateRequest.companyDescription,
+  });
+}
+
+function withLocalCompanyDescription(
+  row: BusinessAccountRow,
+  updateRequest: ReturnType<typeof parseUpdatePayload>,
+  shouldPersist: boolean,
+): BusinessAccountRow {
+  persistLocalCompanyDescription(row, updateRequest, shouldPersist);
+  return applyLocalAccountMetadataToRow(row) ?? row;
+}
+
 export async function GET(
   request: NextRequest,
   context: RouteContext,
@@ -686,7 +722,11 @@ export async function GET(
       maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
       const cached = readBusinessAccountDetailFromReadModel(id, requestedContactId);
       if (cached) {
-        const response = NextResponse.json(cached);
+        const response = NextResponse.json({
+          ...cached,
+          row: applyLocalAccountMetadataToRow(cached.row) ?? cached.row,
+          rows: cached.rows ? applyLocalAccountMetadataToRows(cached.rows) : cached.rows,
+        });
         if (authCookieRefresh.value) {
           setAuthCookie(response, authCookieRefresh.value);
         }
@@ -708,8 +748,8 @@ export async function GET(
     }
 
     const response = NextResponse.json({
-      row: detailRow,
-      rows: normalizedRows,
+      row: applyLocalAccountMetadataToRow(detailRow) ?? detailRow,
+      rows: applyLocalAccountMetadataToRows(normalizedRows),
       accountLocation: readAccountLocation(rawAccount),
     });
     if (authCookieRefresh.value) {
@@ -745,8 +785,8 @@ export async function GET(
         const detailRow = selectDetailRow(normalizedRows, requestedContactId, normalized);
 
         const response = NextResponse.json({
-          row: detailRow,
-          rows: normalizedRows,
+          row: applyLocalAccountMetadataToRow(detailRow) ?? detailRow,
+          rows: applyLocalAccountMetadataToRows(normalizedRows),
           accountLocation: readAccountLocation(rawAccount),
         });
         if (retryAuthCookieRefresh.value) {
@@ -828,6 +868,11 @@ export async function PUT(
       throw new HttpError(500, "Update payload was not parsed.");
     }
 
+    const submittedCompanyDescription = requestBodyHasOwnField(
+      requestBody,
+      "companyDescription",
+    );
+
     const cachedTargetContactId =
       updateRequest.targetContactId ??
       cachedCurrentRow?.contactId ??
@@ -896,7 +941,11 @@ export async function PUT(
         replaceReadModelAccountRows(refreshedTargetRecordId, refreshedTargetRows);
       }
 
-      return matchedTargetRow;
+      return withLocalCompanyDescription(
+        matchedTargetRow,
+        updateRequest,
+        submittedCompanyDescription,
+      );
     }
 
     if (cachedCurrentRow && !currentCachedBusinessAccountId && cachedTargetContactId !== null) {
@@ -932,7 +981,11 @@ export async function PUT(
         replaceReadModelAccountRows(id, [refreshedRow]);
       }
 
-      return refreshedRow;
+      return withLocalCompanyDescription(
+        refreshedRow,
+        updateRequest,
+        submittedCompanyDescription,
+      );
     }
 
     if (updateRequest.contactOnlyIntent === true && cachedTargetContactId !== null) {
@@ -1022,7 +1075,11 @@ export async function PUT(
         );
       }
 
-      return refreshedRow;
+      return withLocalCompanyDescription(
+        refreshedRow,
+        updateRequest,
+        submittedCompanyDescription,
+      );
     }
 
     const currentRaw = await fetchBusinessAccountById(
@@ -1032,11 +1089,13 @@ export async function PUT(
     );
     const resolvedRecordId = resolveBusinessAccountRecordId(currentRaw, id);
     const updateIdentifiers = buildBusinessAccountUpdateIdentifiers(currentRaw, id);
-    const currentAccountRow = await normalizeWithContactNotes(
+    const normalizedCurrentAccountRow = await normalizeWithContactNotes(
       activeCookieValue,
       currentRaw,
       activeAuthCookieRefresh,
     );
+    const currentAccountRow =
+      applyLocalAccountMetadataToRow(normalizedCurrentAccountRow) ?? normalizedCurrentAccountRow;
 
     const requestedTargetContactId = updateRequest.targetContactId;
     const requestedContactOnlyIntent = updateRequest.contactOnlyIntent === true;
@@ -1135,6 +1194,24 @@ export async function PUT(
         contactOnlyIntent: true,
       };
     }
+    const companyDescriptionChanged =
+      submittedCompanyDescription &&
+      sanitizeNullableInput(normalizedUpdateRequest.companyDescription) !==
+      sanitizeNullableInput(currentAccountRow.companyDescription);
+    const isLocalDescriptionOnlySave =
+      companyDescriptionChanged &&
+      !hasBusinessAccountChanges(currentAccountRow, normalizedUpdateRequest) &&
+      !hasPrimaryContactChanges(currentRowForContactComparison, normalizedUpdateRequest) &&
+      !normalizedUpdateRequest.setAsPrimaryContact;
+
+    if (isLocalDescriptionOnlySave) {
+      return withLocalCompanyDescription(
+        currentRowForContactComparison,
+        normalizedUpdateRequest,
+        submittedCompanyDescription,
+      );
+    }
+
     const primaryOnlyUpdate = isPrimaryOnlyUpdate(
       currentAccountRow,
       currentRowForContactComparison,
@@ -1453,7 +1530,11 @@ export async function PUT(
         );
       }
 
-      return responseRow;
+      return withLocalCompanyDescription(
+        responseRow,
+        effectiveUpdateRequest,
+        submittedCompanyDescription,
+      );
     }
 
     if (getEnv().READ_MODEL_ENABLED) {
@@ -1469,7 +1550,11 @@ export async function PUT(
       );
     }
 
-    return responseRow;
+    return withLocalCompanyDescription(
+      responseRow,
+      effectiveUpdateRequest,
+      submittedCompanyDescription,
+    );
   };
 
   try {

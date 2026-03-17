@@ -2,10 +2,12 @@ export type CompanyAttributeSuggestionField =
   | "industryType"
   | "subCategory"
   | "category"
-  | "companyRegion";
+  | "companyRegion"
+  | "companyDescription";
 
 export type CompanyAttributeSuggestionRequest = {
   companyName: string | null;
+  companyDescription: string | null;
   businessAccountId: string | null;
   addressLine1: string | null;
   city: string | null;
@@ -34,6 +36,7 @@ export type CompanyAttributeSuggestion = {
   categoryLabel: string | null;
   companyRegion: string | null;
   companyRegionLabel: string | null;
+  companyDescription: string | null;
   confidence: "low" | "medium" | "high";
   reasoning: string;
   sources: CompanyAttributeSuggestionSource[];

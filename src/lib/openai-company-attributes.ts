@@ -49,6 +49,7 @@ type RawCompanyAttributeSuggestion = {
   category?: unknown;
   industryType?: unknown;
   subCategory?: unknown;
+  companyDescription?: unknown;
   confidence?: unknown;
   reasoning?: unknown;
 };
@@ -203,6 +204,7 @@ export function buildCompanyAttributeSuggestionInput(
     "",
     `Company name: ${readText(request.companyName) ?? "Unknown"}`,
     `Business account ID: ${readText(request.businessAccountId) ?? "Unknown"}`,
+    `Current Company Description: ${readText(request.companyDescription) ?? "Missing"}`,
     `Address hint: ${address || "Unknown"}`,
     `Location hint: ${location || "Unknown"}`,
     `Email domain hint: ${emailDomain ?? "Unknown"}`,
@@ -222,6 +224,8 @@ export function buildCompanyAttributeSuggestionInput(
     "Allowed Sub-Category values:",
     buildOptionGuide(SUB_CATEGORY_OPTIONS),
     `- ${NO_SELECTION} = no confident sub-category suggestion`,
+    "",
+    `Also return a concise factual company description in plain English. Limit it to one or two sentences and return ${NO_SELECTION} when the public evidence is weak or too generic.`,
     "",
     "Return only the closest allowed values. Never invent a company website, product line, or market segment.",
   ];
@@ -356,6 +360,15 @@ function readOptionLabel(options: AttributeOption[], value: string | null): stri
   return options.find((option) => option.value === value)?.label ?? null;
 }
 
+function normalizeSuggestedDescription(value: unknown): string | null {
+  const text = readText(value);
+  if (!text || text.toUpperCase() === NO_SELECTION) {
+    return null;
+  }
+
+  return text;
+}
+
 export function mapOpenAiCompanyAttributeSuggestion(
   rawSuggestion: RawCompanyAttributeSuggestion,
   sources: CompanyAttributeSuggestionSource[],
@@ -372,6 +385,7 @@ export function mapOpenAiCompanyAttributeSuggestion(
     SUB_CATEGORY_OPTIONS,
     rawSuggestion.subCategory,
   );
+  const companyDescription = normalizeSuggestedDescription(rawSuggestion.companyDescription);
   const reasoning =
     readText(rawSuggestion.reasoning) ??
     "OpenAI could not provide a confident company classification from public web results.";
@@ -379,14 +393,16 @@ export function mapOpenAiCompanyAttributeSuggestion(
     ? (rawSuggestion.confidence as CompanyAttributeSuggestion["confidence"])
     : "low";
 
-  if (!companyRegion && !category && !industryType && !subCategory) {
+  if (!companyRegion && !category && !industryType && !subCategory && !companyDescription) {
     return {
       status: "no_match",
       message: reasoning,
     };
   }
 
-  const filledFieldKeys: Array<"industryType" | "subCategory" | "category" | "companyRegion"> = [];
+  const filledFieldKeys: Array<
+    "industryType" | "subCategory" | "category" | "companyRegion" | "companyDescription"
+  > = [];
   if (!readText(request.companyRegion) && companyRegion) {
     filledFieldKeys.push("companyRegion");
   }
@@ -398,6 +414,9 @@ export function mapOpenAiCompanyAttributeSuggestion(
   }
   if (!readText(request.subCategory) && subCategory) {
     filledFieldKeys.push("subCategory");
+  }
+  if (!readText(request.companyDescription) && companyDescription) {
+    filledFieldKeys.push("companyDescription");
   }
 
   return {
@@ -411,6 +430,7 @@ export function mapOpenAiCompanyAttributeSuggestion(
       industryTypeLabel: readOptionLabel(INDUSTRY_TYPE_OPTIONS, industryType),
       subCategory,
       subCategoryLabel: readOptionLabel(SUB_CATEGORY_OPTIONS, subCategory),
+      companyDescription,
       confidence,
       reasoning,
       sources,
@@ -461,7 +481,14 @@ export async function suggestCompanyAttributesWithOpenAi(
           schema: {
             type: "object",
             additionalProperties: false,
-            required: ["category", "industryType", "subCategory", "confidence", "reasoning"],
+            required: [
+              "category",
+              "industryType",
+              "subCategory",
+              "companyDescription",
+              "confidence",
+              "reasoning",
+            ],
             properties: {
               category: {
                 type: "string",
@@ -474,6 +501,9 @@ export async function suggestCompanyAttributesWithOpenAi(
               subCategory: {
                 type: "string",
                 enum: SUB_CATEGORY_VALUES,
+              },
+              companyDescription: {
+                type: "string",
               },
               confidence: {
                 type: "string",

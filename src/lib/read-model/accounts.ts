@@ -4,6 +4,7 @@ import {
 } from "@/lib/business-accounts";
 import { applyDeferredActionsToRows } from "@/lib/deferred-actions-store";
 import { invalidateReadModelCaches, registerReadModelCacheClearer } from "@/lib/read-model/cache";
+import { applyLocalAccountMetadataToRows } from "@/lib/read-model/account-local-metadata";
 import { getReadModelDb } from "@/lib/read-model/db";
 import type {
   BusinessAccountDetailResponse,
@@ -56,6 +57,7 @@ function buildSearchText(row: BusinessAccountRow): string {
     row.subCategory,
     row.companyRegion,
     row.week,
+    row.companyDescription,
     row.notes,
     row.category,
   ]
@@ -112,6 +114,7 @@ export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
     .map((row) => parseStoredRow(row.payload_json))
     .filter((row): row is BusinessAccountRow => row !== null);
   allRowsCache = applyDeferredActionsToRows(allRowsCache);
+  allRowsCache = applyLocalAccountMetadataToRows(allRowsCache);
   allRowsCacheVersion = nextVersion;
 
   return allRowsCache;

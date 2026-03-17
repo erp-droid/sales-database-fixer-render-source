@@ -30,6 +30,12 @@ vi.mock("@/lib/read-model/accounts", () => ({
   replaceReadModelAccountRows: vi.fn(),
 }));
 
+vi.mock("@/lib/read-model/account-local-metadata", () => ({
+  applyLocalAccountMetadataToRow: vi.fn((row) => row),
+  applyLocalAccountMetadataToRows: vi.fn((rows) => rows),
+  saveAccountCompanyDescription: vi.fn(),
+}));
+
 vi.mock("@/lib/read-model/sync", () => ({
   maybeTriggerReadModelSync,
   readSyncStatus: vi.fn(() => ({
