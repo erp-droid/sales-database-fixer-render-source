@@ -15,6 +15,8 @@ Standalone internal app for viewing and editing business accounts/contacts with 
   - Last Modified
 - Search, sort, category filter, and pagination
 - Row details drawer with editable fields and notes
+- Manual RocketReach enhancement for missing contact name, job title, email, and phone in `/accounts`
+- Manual OpenAI web-research suggestion for missing Company Region, Category, Industry Type, and Sub-Category in `/accounts`
 - Save writes directly to Acumatica and then refreshes from Acumatica
 - Conflict protection using `expectedLastModified` (`409` on stale update)
 - Optional Canada Post AddressComplete validation for Canadian address edits
@@ -38,6 +40,7 @@ ACUMATICA_ENTITY_PATH=/entity/lightspeed/24.200.001
 ACUMATICA_COMPANY=MeadowBrook Live
 ACUMATICA_BRANCH=
 ACUMATICA_LOCALE=en-US
+ROCKETREACH_API_KEY=
 
 ADDRESS_COMPLETE_API_KEY=AA11-AA11-AA11-AA11
 ADDRESS_COMPLETE_FIND_URL=https://ws1.postescanada-canadapost.ca/AddressComplete/Interactive/Find/v2.10/json3.ws
@@ -138,4 +141,6 @@ docker run --rm -p 3000:3000 \
 ## Notes
 
 - Contact fields are read-only if Acumatica has no `PrimaryContact.ContactID`.
+- RocketReach enhancement is manual and draft-only. It fills only missing contact name, job title, email, or phone fields in the `/accounts` drawer, and nothing is written until you click `Save changes`.
+- OpenAI company attribute suggestion is manual and draft-only. It looks up public web information, uses MeadowBrook's postal-code region map, fills only missing Company Region, Category, Industry Type, or Sub-Category in the `/accounts` drawer, shows source links, and nothing is written until you click `Save changes`.
 - No local/offline save fallback: errors are returned directly from API/save flow.

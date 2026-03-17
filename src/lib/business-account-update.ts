@@ -80,6 +80,10 @@ export function isPrimaryOnlyUpdate(
       updateRequest.primaryContactName,
     ) &&
     sameNullableText(
+      currentRowForContactComparison.primaryContactJobTitle,
+      updateRequest.primaryContactJobTitle,
+    ) &&
+    sameNullableText(
       currentRowForContactComparison.primaryContactPhone,
       updateRequest.primaryContactPhone,
     ) &&
@@ -122,6 +126,7 @@ export function buildPrimaryOnlyUpdateRequest(
     week: currentAccountRow.week,
     companyPhone: resolveCompanyPhone(currentAccountRow),
     primaryContactName: currentRowForContactComparison.primaryContactName,
+    primaryContactJobTitle: currentRowForContactComparison.primaryContactJobTitle ?? null,
     primaryContactPhone: currentRowForContactComparison.primaryContactPhone,
     primaryContactExtension: currentRowForContactComparison.primaryContactExtension ?? null,
     primaryContactEmail: currentRowForContactComparison.primaryContactEmail,

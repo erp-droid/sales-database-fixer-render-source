@@ -85,6 +85,7 @@ describe("parseUpdatePayload", () => {
     country: "CA",
     companyPhone: "19055550100",
     primaryContactName: "Jorge Serrano",
+    primaryContactJobTitle: "Account Manager",
     primaryContactPhone: "4162304681",
     primaryContactEmail: "jserrano@meadowb.com",
     salesRepId: "109343",
@@ -98,6 +99,7 @@ describe("parseUpdatePayload", () => {
     const parsed = parseUpdatePayload({
       ...validPayload,
       primaryContactName: "",
+      primaryContactJobTitle: "",
       primaryContactPhone: "",
       primaryContactEmail: "",
       category: "",
@@ -105,6 +107,7 @@ describe("parseUpdatePayload", () => {
     });
 
     expect(parsed.primaryContactName).toBeNull();
+    expect(parsed.primaryContactJobTitle).toBeNull();
     expect(parsed.primaryContactPhone).toBeNull();
     expect(parsed.primaryContactEmail).toBeNull();
     expect(parsed.category).toBeNull();
@@ -205,6 +208,7 @@ describe("parseContactOnlyUpdatePayload", () => {
     companyRegion: null,
     week: null,
     primaryContactName: "Ashur Hanna",
+    primaryContactJobTitle: "Buyer",
     primaryContactPhone: "905-878-9000",
     primaryContactExtension: "120",
     primaryContactEmail: "ashur.hanna@freshstartfoods.com",
@@ -228,6 +232,7 @@ describe("parseContactOnlyUpdatePayload", () => {
     expect(parsed.country).toBe("CA");
     expect(parsed.targetContactId).toBe(157315);
     expect(parsed.primaryContactName).toBe("Ashur Hanna");
+    expect(parsed.primaryContactJobTitle).toBe("Buyer");
     expect(parsed.primaryContactPhone).toBe("905-878-9000");
     expect(parsed.primaryContactExtension).toBe("120");
     expect(parsed.primaryContactEmail).toBe("ashur.hanna@freshstartfoods.com");

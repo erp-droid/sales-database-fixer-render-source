@@ -84,6 +84,7 @@ export type BusinessAccountUpdateRequest = {
   week: string | null;
   companyPhone: string | null;
   primaryContactName: string | null;
+  primaryContactJobTitle?: string | null;
   primaryContactPhone: string | null;
   primaryContactExtension?: string | null;
   primaryContactEmail: string | null;

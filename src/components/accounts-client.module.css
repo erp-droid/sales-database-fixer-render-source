@@ -1299,8 +1299,102 @@
   color: var(--accounts-red);
 }
 
+.fieldErrorLabel {
+  color: var(--accounts-red);
+}
+
+.fieldErrorControl {
+  border-color: var(--accounts-red) !important;
+  box-shadow: 0 0 0 1px rgba(184, 54, 54, 0.18);
+}
+
+.fieldErrorText {
+  color: var(--accounts-red);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .saveNotice {
   color: var(--accounts-green);
+}
+
+.contactEnhanceSection {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 14px;
+  background: #f7fafc;
+}
+
+.contactEnhanceActions {
+  display: grid;
+  gap: 8px;
+}
+
+.contactEnhanceCandidates {
+  display: grid;
+  gap: 10px;
+}
+
+.contactEnhanceCandidate {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.contactEnhanceCandidateText {
+  display: grid;
+  gap: 4px;
+}
+
+.contactEnhanceCandidateText strong {
+  font-size: 14px;
+  color: var(--accounts-text);
+}
+
+.contactEnhanceCandidateText p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--accounts-text-secondary);
+}
+
+.companyAttributeSuggestionSection {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 14px;
+  background: #f7fafc;
+}
+
+.companyAttributeSuggestionActions {
+  display: grid;
+  gap: 8px;
+}
+
+.companyAttributeSuggestionResult {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.companyAttributeSuggestionResult p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--accounts-text-secondary);
+}
+
+.companyAttributeSuggestionSources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 
 .lookupSuggestions {

@@ -75,6 +75,15 @@ import {
   buildMailContactSuggestions,
   createLinkedContactFromRow,
 } from "@/lib/mail-ui";
+import {
+  buildBusinessAccountSaveErrorFeedback,
+  parseApiErrorMessage,
+  type BusinessAccountSaveErrorField,
+} from "@/lib/business-account-save-errors";
+import {
+  collectOptionalSaveWarningFields,
+  formatOptionalSaveWarningMessage,
+} from "@/lib/business-account-save-warnings";
 import type {
   ContactMergeResponse,
   MergeableContactCandidate,
@@ -88,6 +97,17 @@ import type {
   MeetingCreateResponse,
   MeetingSourceContext,
 } from "@/types/meeting-create";
+import type {
+  ContactEnhanceCandidate,
+  ContactEnhanceRequest,
+  ContactEnhanceResponse,
+  ContactEnhanceSuggestion,
+} from "@/types/contact-enhance";
+import type {
+  CompanyAttributeSuggestion,
+  CompanyAttributeSuggestionRequest,
+  CompanyAttributeSuggestionResponse,
+} from "@/types/company-attribute-suggestion";
 import {
   buildMeetingCreateOptionsFromRows,
   DEFAULT_MEETING_TIME_ZONE,
@@ -870,6 +890,7 @@ function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
     week: normalizeWeekValue(row.week),
     companyPhone: resolveCompanyPhone(row),
     primaryContactName: row.primaryContactName,
+    primaryContactJobTitle: row.primaryContactJobTitle ?? null,
     primaryContactPhone:
       parsedPhone.kind === "phone_with_extension"
         ? parsedPhone.phone
@@ -1010,82 +1031,18 @@ function sharesCompanyPhoneGroup(
 }
 
 function parseError(payload: unknown): string {
-  if (!payload || typeof payload !== "object") {
-    return "Request failed.";
+  return parseApiErrorMessage(payload);
+}
+
+type SaveFieldErrors = Partial<Record<BusinessAccountSaveErrorField, string>>;
+
+class SaveDraftError extends Error {
+  fieldErrors: SaveFieldErrors;
+
+  constructor(message: string, fieldErrors: SaveFieldErrors = {}) {
+    super(message);
+    this.fieldErrors = fieldErrors;
   }
-
-  function readText(value: unknown): string | null {
-    return typeof value === "string" && value.trim() ? value.trim() : null;
-  }
-
-  function readDetailsMessage(details: unknown): string | null {
-    if (!details || typeof details !== "object") {
-      return null;
-    }
-
-    const record = details as Record<string, unknown>;
-    const direct = [
-      record.message,
-      record.Message,
-      record.exceptionMessage,
-      record.ExceptionMessage,
-      record.detail,
-      record.Detail,
-      record.title,
-      record.Title,
-    ]
-      .map(readText)
-      .find((value) => Boolean(value));
-    if (direct) {
-      return direct;
-    }
-
-    const modelState = record.modelState;
-    if (modelState && typeof modelState === "object") {
-      const entries = Object.entries(modelState as Record<string, unknown>);
-      for (const [field, value] of entries) {
-        if (Array.isArray(value)) {
-          const first = value.map(readText).find((item) => Boolean(item));
-          if (first) {
-            return `${field}: ${first}`;
-          }
-        } else {
-          const single = readText(value);
-          if (single) {
-            return `${field}: ${single}`;
-          }
-        }
-      }
-    }
-
-    const nestedError = record.error;
-    if (nestedError && typeof nestedError === "object") {
-      return readDetailsMessage(nestedError);
-    }
-
-    return null;
-  }
-
-  const record = payload as Record<string, unknown>;
-  const errorValue = readText(record.error);
-  const detailsValue = readDetailsMessage(record.details);
-  const isGenericError =
-    (errorValue ?? "").toLowerCase() === "an error has occurred." ||
-    (errorValue ?? "").toLowerCase() === "an error has occurred";
-
-  if (errorValue && detailsValue && isGenericError) {
-    return detailsValue;
-  }
-
-  if (errorValue) {
-    return errorValue;
-  }
-
-  if (detailsValue) {
-    return detailsValue;
-  }
-
-  return "Request failed.";
 }
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
@@ -1111,6 +1068,327 @@ async function readJsonResponse<T>(response: Response): Promise<T | null> {
   }
 
   return (await response.json().catch(() => null)) as T | null;
+}
+
+function isContactEnhanceCandidate(value: unknown): value is ContactEnhanceCandidate {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === "number" &&
+    (record.name === null || typeof record.name === "string") &&
+    (record.currentTitle === null || typeof record.currentTitle === "string") &&
+    (record.currentEmployer === null || typeof record.currentEmployer === "string") &&
+    (record.location === null || typeof record.location === "string") &&
+    (record.linkedinUrl === null || typeof record.linkedinUrl === "string")
+  );
+}
+
+function isContactEnhanceSuggestion(value: unknown): value is ContactEnhanceSuggestion {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    (record.name === null || typeof record.name === "string") &&
+    (record.jobTitle === null || typeof record.jobTitle === "string") &&
+    (record.email === null || typeof record.email === "string") &&
+    (record.phone === null || typeof record.phone === "string")
+  );
+}
+
+function isContactEnhanceResponse(value: unknown): value is ContactEnhanceResponse {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.status === "ready") {
+    return (
+      isContactEnhanceSuggestion(record.suggestion) &&
+      Array.isArray(record.filledFieldKeys)
+    );
+  }
+
+  if (record.status === "needs_selection") {
+    return (
+      Array.isArray(record.candidates) &&
+      record.candidates.every((candidate) => isContactEnhanceCandidate(candidate))
+    );
+  }
+
+  if (record.status === "no_match" || record.status === "need_more_context") {
+    return typeof record.message === "string";
+  }
+
+  return false;
+}
+
+function hasMissingContactEnhanceField(draft: BusinessAccountUpdateRequest | null): boolean {
+  if (!draft) {
+    return false;
+  }
+
+  return (
+    readTextValue(draft.primaryContactName) === null ||
+    readTextValue(draft.primaryContactJobTitle) === null ||
+    readTextValue(draft.primaryContactEmail) === null ||
+    readTextValue(draft.primaryContactPhone) === null
+  );
+}
+
+function buildContactEnhanceRequest(
+  row: BusinessAccountRow,
+  draft: BusinessAccountUpdateRequest,
+  candidate: Pick<ContactEnhanceCandidate, "id" | "currentTitle"> | null = null,
+): ContactEnhanceRequest {
+  return {
+    companyName: readTextValue(draft.companyName),
+    businessAccountId:
+      readTextValue(draft.assignedBusinessAccountId) ??
+      readTextValue(row.businessAccountId),
+    contactName: readTextValue(draft.primaryContactName),
+    contactJobTitle: readTextValue(draft.primaryContactJobTitle),
+    candidateCurrentTitle: candidate?.currentTitle ?? null,
+    contactEmail: readTextValue(draft.primaryContactEmail),
+    contactPhone: readTextValue(draft.primaryContactPhone),
+    city: readTextValue(draft.city),
+    state: readTextValue(draft.state),
+    country: readTextValue(draft.country),
+    candidatePersonId: candidate?.id ?? null,
+  };
+}
+
+function buildContactEnhanceFingerprint(request: ContactEnhanceRequest | null): string | null {
+  if (!request) {
+    return null;
+  }
+
+  return JSON.stringify({
+    companyName: request.companyName,
+    businessAccountId: request.businessAccountId,
+    contactName: request.contactName,
+    contactJobTitle: request.contactJobTitle,
+    candidateCurrentTitle: request.candidateCurrentTitle,
+    contactEmail: request.contactEmail,
+    contactPhone: request.contactPhone,
+    city: request.city,
+    state: request.state,
+    country: request.country,
+  });
+}
+
+function applyContactEnhanceSuggestion(
+  draft: BusinessAccountUpdateRequest,
+  suggestion: ContactEnhanceSuggestion,
+): {
+  draft: BusinessAccountUpdateRequest;
+  appliedCount: number;
+} {
+  let appliedCount = 0;
+  let nextDraft = draft;
+
+  if (readTextValue(draft.primaryContactName) === null && readTextValue(suggestion.name) !== null) {
+    nextDraft = {
+      ...nextDraft,
+      primaryContactName: suggestion.name,
+    };
+    appliedCount += 1;
+  }
+
+  if (
+    readTextValue(draft.primaryContactJobTitle) === null &&
+    readTextValue(suggestion.jobTitle) !== null
+  ) {
+    nextDraft = {
+      ...nextDraft,
+      primaryContactJobTitle: suggestion.jobTitle,
+    };
+    appliedCount += 1;
+  }
+
+  if (readTextValue(draft.primaryContactEmail) === null && readTextValue(suggestion.email) !== null) {
+    nextDraft = {
+      ...nextDraft,
+      primaryContactEmail: suggestion.email,
+    };
+    appliedCount += 1;
+  }
+
+  if (readTextValue(draft.primaryContactPhone) === null && readTextValue(suggestion.phone) !== null) {
+    nextDraft = {
+      ...nextDraft,
+      primaryContactPhone: suggestion.phone,
+    };
+    appliedCount += 1;
+  }
+
+  return {
+    draft: nextDraft,
+    appliedCount,
+  };
+}
+
+function isCompanyAttributeSuggestionSource(
+  value: unknown,
+): value is CompanyAttributeSuggestion["sources"][number] {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.title === "string" &&
+    typeof record.url === "string" &&
+    (record.domain === null || typeof record.domain === "string")
+  );
+}
+
+function isCompanyAttributeSuggestion(value: unknown): value is CompanyAttributeSuggestion {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return (
+    (record.companyRegion === null || typeof record.companyRegion === "string") &&
+    (record.companyRegionLabel === null || typeof record.companyRegionLabel === "string") &&
+    (record.category === null || typeof record.category === "string") &&
+    (record.categoryLabel === null || typeof record.categoryLabel === "string") &&
+    (record.industryType === null || typeof record.industryType === "string") &&
+    (record.industryTypeLabel === null || typeof record.industryTypeLabel === "string") &&
+    (record.subCategory === null || typeof record.subCategory === "string") &&
+    (record.subCategoryLabel === null || typeof record.subCategoryLabel === "string") &&
+    (record.confidence === "low" ||
+      record.confidence === "medium" ||
+      record.confidence === "high") &&
+    typeof record.reasoning === "string" &&
+    Array.isArray(record.sources) &&
+    record.sources.every((source) => isCompanyAttributeSuggestionSource(source))
+  );
+}
+
+function isCompanyAttributeSuggestionResponse(
+  value: unknown,
+): value is CompanyAttributeSuggestionResponse {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.status === "ready") {
+    return (
+      isCompanyAttributeSuggestion(record.suggestion) &&
+      Array.isArray(record.filledFieldKeys)
+    );
+  }
+
+  if (record.status === "no_match" || record.status === "need_more_context") {
+    return typeof record.message === "string";
+  }
+
+  return false;
+}
+
+function hasMissingCompanyAttributeSuggestionField(
+  draft: BusinessAccountUpdateRequest | null,
+): boolean {
+  if (!draft) {
+    return false;
+  }
+
+  return (
+    readTextValue(draft.companyRegion) === null ||
+    readTextValue(draft.category) === null ||
+    readTextValue(draft.industryType) === null ||
+    readTextValue(draft.subCategory) === null
+  );
+}
+
+function buildCompanyAttributeSuggestionRequest(
+  row: BusinessAccountRow,
+  draft: BusinessAccountUpdateRequest,
+): CompanyAttributeSuggestionRequest {
+  return {
+    companyName: readTextValue(draft.companyName),
+    businessAccountId:
+      readTextValue(draft.assignedBusinessAccountId) ??
+      readTextValue(row.businessAccountId),
+    addressLine1: readTextValue(draft.addressLine1),
+    city: readTextValue(draft.city),
+    state: readTextValue(draft.state),
+    postalCode: readTextValue(draft.postalCode),
+    country: readTextValue(draft.country),
+    contactEmail: readTextValue(draft.primaryContactEmail),
+    companyRegion: readTextValue(draft.companyRegion),
+    industryType: readTextValue(draft.industryType),
+    subCategory: readTextValue(draft.subCategory),
+    category: readTextValue(draft.category),
+  };
+}
+
+function buildCompanyAttributeSuggestionFingerprint(
+  request: CompanyAttributeSuggestionRequest | null,
+): string | null {
+  if (!request) {
+    return null;
+  }
+
+  return JSON.stringify(request);
+}
+
+function applyCompanyAttributeSuggestion(
+  draft: BusinessAccountUpdateRequest,
+  suggestion: CompanyAttributeSuggestion,
+): {
+  draft: BusinessAccountUpdateRequest;
+  appliedCount: number;
+} {
+  let appliedCount = 0;
+  let nextDraft = draft;
+
+  if (
+    readTextValue(draft.companyRegion) === null &&
+    readTextValue(suggestion.companyRegion) !== null
+  ) {
+    nextDraft = {
+      ...nextDraft,
+      companyRegion: suggestion.companyRegion,
+    };
+    appliedCount += 1;
+  }
+
+  if (readTextValue(draft.category) === null && readTextValue(suggestion.category) !== null) {
+    nextDraft = {
+      ...nextDraft,
+      category: suggestion.category as Category,
+    };
+    appliedCount += 1;
+  }
+
+  if (readTextValue(draft.industryType) === null && readTextValue(suggestion.industryType) !== null) {
+    nextDraft = {
+      ...nextDraft,
+      industryType: suggestion.industryType,
+    };
+    appliedCount += 1;
+  }
+
+  if (readTextValue(draft.subCategory) === null && readTextValue(suggestion.subCategory) !== null) {
+    nextDraft = {
+      ...nextDraft,
+      subCategory: suggestion.subCategory,
+    };
+    appliedCount += 1;
+  }
+
+  return {
+    draft: nextDraft,
+    appliedCount,
+  };
 }
 
 function isBusinessAccountsResponse(payload: unknown): payload is BusinessAccountsResponse {
@@ -1761,9 +2039,13 @@ function buildPaginationNumbers(
 export function AccountsClient({
   acumaticaBaseUrl,
   acumaticaCompanyId,
+  openAiAttributeSuggestEnabled,
+  rocketReachEnabled,
 }: {
   acumaticaBaseUrl: string;
   acumaticaCompanyId: string;
+  openAiAttributeSuggestEnabled: boolean;
+  rocketReachEnabled: boolean;
 }) {
   const router = useRouter();
 
@@ -1835,7 +2117,28 @@ export function AccountsClient({
   const [columnDropTargetId, setColumnDropTargetId] = useState<SortBy | null>(null);
   const [drawerFocusTarget, setDrawerFocusTarget] = useState<"notes" | null>(null);
   const [draft, setDraft] = useState<BusinessAccountUpdateRequest | null>(null);
+  const [isEnhancingContact, setIsEnhancingContact] = useState(false);
+  const [contactEnhanceError, setContactEnhanceError] = useState<string | null>(null);
+  const [contactEnhanceNotice, setContactEnhanceNotice] = useState<string | null>(null);
+  const [contactEnhanceCandidates, setContactEnhanceCandidates] = useState<
+    ContactEnhanceCandidate[]
+  >([]);
+  const [contactEnhanceFingerprint, setContactEnhanceFingerprint] = useState<string | null>(
+    null,
+  );
+  const [isSuggestingCompanyAttributes, setIsSuggestingCompanyAttributes] = useState(false);
+  const [companyAttributeSuggestionError, setCompanyAttributeSuggestionError] = useState<
+    string | null
+  >(null);
+  const [companyAttributeSuggestionNotice, setCompanyAttributeSuggestionNotice] = useState<
+    string | null
+  >(null);
+  const [companyAttributeSuggestionResult, setCompanyAttributeSuggestionResult] =
+    useState<CompanyAttributeSuggestion | null>(null);
+  const [companyAttributeSuggestionFingerprint, setCompanyAttributeSuggestionFingerprint] =
+    useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveFieldErrors, setSaveFieldErrors] = useState<SaveFieldErrors>({});
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeletingContact, setIsDeletingContact] = useState(false);
@@ -1865,6 +2168,25 @@ export function AccountsClient({
   const employeesFetchAttemptedRef = useRef(false);
   const notesFieldRef = useRef<HTMLTextAreaElement | null>(null);
   const createMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const currentContactEnhanceRequest = useMemo(
+    () =>
+      selected && draft && selected.contactId
+        ? buildContactEnhanceRequest(selected, draft)
+        : null,
+    [draft, selected],
+  );
+  const currentContactEnhanceFingerprint = useMemo(
+    () => buildContactEnhanceFingerprint(currentContactEnhanceRequest),
+    [currentContactEnhanceRequest],
+  );
+  const currentCompanyAttributeSuggestionRequest = useMemo(
+    () => (selected && draft ? buildCompanyAttributeSuggestionRequest(selected, draft) : null),
+    [draft, selected],
+  );
+  const currentCompanyAttributeSuggestionFingerprint = useMemo(
+    () => buildCompanyAttributeSuggestionFingerprint(currentCompanyAttributeSuggestionRequest),
+    [currentCompanyAttributeSuggestionRequest],
+  );
 
   const displayRows = useMemo(
     () =>
@@ -2081,6 +2403,35 @@ export function AccountsClient({
     allRowsRef.current = allRows;
     allRowsCountRef.current = allRows.length;
   }, [allRows]);
+
+  useEffect(() => {
+    if (
+      contactEnhanceFingerprint !== null &&
+      currentContactEnhanceFingerprint !== null &&
+      contactEnhanceFingerprint !== currentContactEnhanceFingerprint
+    ) {
+      setContactEnhanceCandidates([]);
+      setContactEnhanceError(null);
+      setContactEnhanceNotice(null);
+      setContactEnhanceFingerprint(null);
+    }
+  }, [contactEnhanceFingerprint, currentContactEnhanceFingerprint]);
+
+  useEffect(() => {
+    if (
+      companyAttributeSuggestionFingerprint !== null &&
+      currentCompanyAttributeSuggestionFingerprint !== null &&
+      companyAttributeSuggestionFingerprint !== currentCompanyAttributeSuggestionFingerprint
+    ) {
+      setCompanyAttributeSuggestionError(null);
+      setCompanyAttributeSuggestionNotice(null);
+      setCompanyAttributeSuggestionResult(null);
+      setCompanyAttributeSuggestionFingerprint(null);
+    }
+  }, [
+    companyAttributeSuggestionFingerprint,
+    currentCompanyAttributeSuggestionFingerprint,
+  ]);
 
   useEffect(() => {
     if (!session?.authenticated) {
@@ -2439,6 +2790,19 @@ export function AccountsClient({
       !selected.businessAccountId.trim() &&
       (selected.contactId !== null ||
         (selected.primaryContactId !== null && selected.primaryContactId !== undefined)),
+  );
+  const canEnhanceSelectedContact = Boolean(
+    selected &&
+      draft &&
+      selected.contactId &&
+      rocketReachEnabled &&
+      hasMissingContactEnhanceField(draft),
+  );
+  const canSuggestSelectedCompanyAttributes = Boolean(
+    selected &&
+      draft &&
+      openAiAttributeSuggestEnabled &&
+      hasMissingCompanyAttributeSuggestionField(draft),
   );
 
   const paginationNumbers = useMemo(
@@ -4010,11 +4374,40 @@ export function AccountsClient({
     setDeleteQueueRows([]);
   }
 
+  function resetContactEnhanceState() {
+    setIsEnhancingContact(false);
+    setContactEnhanceError(null);
+    setContactEnhanceNotice(null);
+    setContactEnhanceCandidates([]);
+    setContactEnhanceFingerprint(null);
+  }
+
+  function resetCompanyAttributeSuggestionState() {
+    setIsSuggestingCompanyAttributes(false);
+    setCompanyAttributeSuggestionError(null);
+    setCompanyAttributeSuggestionNotice(null);
+    setCompanyAttributeSuggestionResult(null);
+    setCompanyAttributeSuggestionFingerprint(null);
+  }
+
+  function clearSaveFieldError(field: BusinessAccountSaveErrorField) {
+    setSaveFieldErrors((current) => {
+      if (!current[field]) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  }
+
   function closeDrawer(options?: { preserveNotice?: boolean }) {
     setSelected(null);
     setDraft(null);
     setDrawerFocusTarget(null);
     setSaveError(null);
+    setSaveFieldErrors({});
     if (!options?.preserveNotice) {
       setSaveNotice(null);
     }
@@ -4025,6 +4418,8 @@ export function AccountsClient({
     setAddressLookupArmed(false);
     setIsApplyingAddress(false);
     setDeleteQueueRows([]);
+    resetContactEnhanceState();
+    resetCompanyAttributeSuggestionState();
     if (employeeOptions.length === 0) {
       employeesFetchAttemptedRef.current = false;
     }
@@ -4068,6 +4463,7 @@ export function AccountsClient({
     setSelected(row);
     setDraft(buildDraft(row));
     setSaveError(null);
+    setSaveFieldErrors({});
     setSaveNotice(null);
     setIsDeletingContact(false);
     setAddressSuggestions([]);
@@ -4075,6 +4471,8 @@ export function AccountsClient({
     setIsAddressLookupLoading(false);
     setAddressLookupArmed(false);
     setIsApplyingAddress(false);
+    resetContactEnhanceState();
+    resetCompanyAttributeSuggestionState();
     setEmployeesError(null);
 
     try {
@@ -4255,6 +4653,7 @@ export function AccountsClient({
     const sourceRowKey = getRowKey(sourceRow);
     setIsSaving(true);
     setSaveError(null);
+    setSaveFieldErrors({});
     setSaveNotice(null);
 
     let saved = false;
@@ -4311,7 +4710,8 @@ export function AccountsClient({
       }
 
       if (!response.ok) {
-        throw new Error(parseError(payload));
+        const feedback = buildBusinessAccountSaveErrorFeedback(payload, effectiveDraft);
+        throw new SaveDraftError(feedback.message, feedback.fieldErrors);
       }
 
       if (!payload || typeof payload !== "object" || !("id" in payload)) {
@@ -4534,6 +4934,9 @@ export function AccountsClient({
       clearCachedMapData();
       saved = true;
     } catch (saveRequestError) {
+      setSaveFieldErrors(
+        saveRequestError instanceof SaveDraftError ? saveRequestError.fieldErrors : {},
+      );
       setSaveError(
         saveRequestError instanceof Error
           ? saveRequestError.message
@@ -4546,10 +4949,174 @@ export function AccountsClient({
     return saved;
   }
 
+  async function handleEnhanceContact(candidate: ContactEnhanceCandidate | null = null) {
+    if (!selected || !draft || !selected.contactId) {
+      return;
+    }
+
+    const requestBody = buildContactEnhanceRequest(selected, draft, candidate);
+    const requestFingerprint = buildContactEnhanceFingerprint(requestBody);
+
+    setIsEnhancingContact(true);
+    setContactEnhanceError(null);
+
+    try {
+      const response = await fetch(`/api/contacts/${selected.contactId}/enhance`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
+      const payload = await readJsonResponse<ContactEnhanceResponse | { error?: string }>(
+        response,
+      );
+
+      if (!response.ok) {
+        throw new Error(parseError(payload));
+      }
+
+      if (!isContactEnhanceResponse(payload)) {
+        throw new Error("Unexpected response while enhancing contact.");
+      }
+
+      setContactEnhanceFingerprint(requestFingerprint);
+
+      if (payload.status === "needs_selection") {
+        setContactEnhanceCandidates(payload.candidates);
+        setContactEnhanceNotice("RocketReach found multiple matches. Pick the correct contact.");
+        return;
+      }
+
+      if (payload.status === "need_more_context" || payload.status === "no_match") {
+        setContactEnhanceCandidates([]);
+        setContactEnhanceNotice(payload.message);
+        return;
+      }
+
+      setContactEnhanceCandidates([]);
+      let appliedCount = 0;
+      setDraft((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const result = applyContactEnhanceSuggestion(current, payload.suggestion);
+        appliedCount = result.appliedCount;
+        return result.draft;
+      });
+
+      if (appliedCount > 0) {
+        setContactEnhanceNotice(
+          `RocketReach filled ${appliedCount} missing field${appliedCount === 1 ? "" : "s"}. Click Save to persist.`,
+        );
+      } else {
+        setContactEnhanceNotice(
+          "RocketReach found a match but there was no new name, job title, email, or phone to add.",
+        );
+      }
+    } catch (error) {
+      setContactEnhanceCandidates([]);
+      setContactEnhanceNotice(null);
+      setContactEnhanceError(
+        error instanceof Error ? error.message : "Failed to enhance contact.",
+      );
+    } finally {
+      setIsEnhancingContact(false);
+    }
+  }
+
+  async function handleSuggestCompanyAttributes() {
+    if (!selected || !draft) {
+      return;
+    }
+
+    const requestBody = buildCompanyAttributeSuggestionRequest(selected, draft);
+    const requestFingerprint = buildCompanyAttributeSuggestionFingerprint(requestBody);
+
+    setIsSuggestingCompanyAttributes(true);
+    setCompanyAttributeSuggestionError(null);
+
+    try {
+      const response = await fetch(
+        `/api/business-accounts/${encodeURIComponent(selected.id)}/attribute-suggestion`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+        },
+      );
+      const payload = await readJsonResponse<
+        CompanyAttributeSuggestionResponse | { error?: string }
+      >(response);
+
+      if (!response.ok) {
+        throw new Error(parseError(payload));
+      }
+
+      if (!isCompanyAttributeSuggestionResponse(payload)) {
+        throw new Error("Unexpected response while suggesting company attributes.");
+      }
+
+      setCompanyAttributeSuggestionFingerprint(requestFingerprint);
+
+      if (payload.status === "need_more_context" || payload.status === "no_match") {
+        setCompanyAttributeSuggestionResult(null);
+        setCompanyAttributeSuggestionNotice(payload.message);
+        return;
+      }
+
+      setCompanyAttributeSuggestionResult(payload.suggestion);
+      let appliedCount = 0;
+      setDraft((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const result = applyCompanyAttributeSuggestion(current, payload.suggestion);
+        appliedCount = result.appliedCount;
+        return result.draft;
+      });
+
+      if (appliedCount > 0) {
+        const filledLabels = payload.filledFieldKeys
+          .map((field) =>
+            field === "companyRegion"
+              ? "Company Region"
+              : field === "industryType"
+                ? "Industry Type"
+                : field === "subCategory"
+                  ? "Sub-Category"
+                  : "Category",
+          )
+          .join(" and ");
+        setCompanyAttributeSuggestionNotice(
+          `OpenAI filled missing ${filledLabels}. Click Save to persist.`,
+        );
+      } else {
+        setCompanyAttributeSuggestionNotice(
+          "OpenAI found attribute suggestions, but there was no new Company Region, Category, Industry Type, or Sub-Category to add.",
+        );
+      }
+    } catch (error) {
+      setCompanyAttributeSuggestionResult(null);
+      setCompanyAttributeSuggestionNotice(null);
+      setCompanyAttributeSuggestionError(
+        error instanceof Error ? error.message : "Failed to suggest company attributes.",
+      );
+    } finally {
+      setIsSuggestingCompanyAttributes(false);
+    }
+  }
+
   async function handleSave() {
     if (!selected || !draft) {
       return;
     }
+
+    setSaveFieldErrors({});
 
     if (
       drawerNeedsCompanyAssignment &&
@@ -4585,6 +5152,12 @@ export function AccountsClient({
         setSaveError("Extension must use 1 to 5 digits.");
         return;
       }
+    }
+
+    const optionalWarningFields = collectOptionalSaveWarningFields(draft);
+    const optionalWarningMessage = formatOptionalSaveWarningMessage(optionalWarningFields);
+    if (optionalWarningMessage && !window.confirm(optionalWarningMessage)) {
+      return;
     }
 
     const saved = await saveRowDraft(selected, draft);
@@ -6242,6 +6815,20 @@ export function AccountsClient({
               />
             </label>
             <label>
+              Job Title
+              <input
+                disabled={!selected.contactId}
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current
+                      ? { ...current, primaryContactJobTitle: event.target.value }
+                      : current,
+                  )
+                }
+                value={draft.primaryContactJobTitle ?? ""}
+              />
+            </label>
+            <label>
               Phone
               <input
                 disabled={!selected.contactId}
@@ -6296,6 +6883,81 @@ export function AccountsClient({
                 value={draft.primaryContactEmail ?? ""}
               />
             </label>
+            <div className={styles.contactEnhanceSection}>
+              <div className={styles.contactEnhanceActions}>
+                <button
+                  className={styles.secondaryButton}
+                  disabled={
+                    isSaving ||
+                    isDeletingContact ||
+                    isEnhancingContact ||
+                    !canEnhanceSelectedContact
+                  }
+                  onClick={() => {
+                    void handleEnhanceContact();
+                  }}
+                  type="button"
+                >
+                  {isEnhancingContact ? "Enhancing..." : "Enhance with RocketReach"}
+                </button>
+                {!rocketReachEnabled ? (
+                  <p className={styles.lookupHint}>
+                    RocketReach enhancement is not configured for this environment.
+                  </p>
+                ) : !selected.contactId ? null : !hasMissingContactEnhanceField(draft) ? (
+                  <p className={styles.lookupHint}>
+                    RocketReach only fills missing contact name, job title, email, or phone fields.
+                  </p>
+                ) : (
+                  <p className={styles.lookupHint}>
+                    Enhance fills missing contact fields only. Click Save to persist any result.
+                  </p>
+                )}
+              </div>
+              {contactEnhanceError ? (
+                <p className={styles.lookupError}>{contactEnhanceError}</p>
+              ) : null}
+              {contactEnhanceNotice ? (
+                <p className={styles.lookupHint}>{contactEnhanceNotice}</p>
+              ) : null}
+              {contactEnhanceCandidates.length > 0 ? (
+                <div className={styles.contactEnhanceCandidates}>
+                  {contactEnhanceCandidates.map((candidate) => (
+                    <article
+                      className={styles.contactEnhanceCandidate}
+                      key={candidate.id}
+                    >
+                      <div className={styles.contactEnhanceCandidateText}>
+                        <strong>{candidate.name ?? `RocketReach contact ${candidate.id}`}</strong>
+                        {candidate.currentTitle ? <p>{candidate.currentTitle}</p> : null}
+                        {candidate.currentEmployer ? <p>{candidate.currentEmployer}</p> : null}
+                        {candidate.location ? <p>{candidate.location}</p> : null}
+                        {candidate.linkedinUrl ? (
+                          <a
+                            className={styles.recordLink}
+                            href={candidate.linkedinUrl}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            LinkedIn profile
+                          </a>
+                        ) : null}
+                      </div>
+                      <button
+                        className={styles.secondaryButton}
+                        disabled={isEnhancingContact}
+                        onClick={() => {
+                          void handleEnhanceContact(candidate);
+                        }}
+                        type="button"
+                      >
+                        Use this match
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <label className={styles.inlineCheckbox}>
               <input
                 checked={
@@ -6322,10 +6984,17 @@ export function AccountsClient({
             </label>
 
             <h3>Attributes</h3>
-            <label>
+            <label
+              className={saveFieldErrors.industryType ? styles.fieldErrorLabel : undefined}
+            >
               Industry Type
               <select
-                onChange={(event) =>
+                aria-invalid={Boolean(saveFieldErrors.industryType)}
+                className={saveFieldErrors.industryType ? styles.fieldErrorControl : undefined}
+                onChange={(event) => {
+                  clearSaveFieldError("industryType");
+                  setSaveError(null);
+                  setSaveNotice(null);
                   setDraft((current) =>
                     current
                       ? {
@@ -6333,8 +7002,8 @@ export function AccountsClient({
                           industryType: event.target.value || null,
                         }
                       : current,
-                  )
-                }
+                  );
+                }}
                 value={draft.industryType ?? ""}
               >
                 <option value="">Unassigned</option>
@@ -6344,12 +7013,22 @@ export function AccountsClient({
                   </option>
                 ))}
               </select>
+              {saveFieldErrors.industryType ? (
+                <span className={styles.fieldErrorText}>{saveFieldErrors.industryType}</span>
+              ) : null}
             </label>
 
-            <label>
+            <label
+              className={saveFieldErrors.subCategory ? styles.fieldErrorLabel : undefined}
+            >
               Sub-Category
               <select
-                onChange={(event) =>
+                aria-invalid={Boolean(saveFieldErrors.subCategory)}
+                className={saveFieldErrors.subCategory ? styles.fieldErrorControl : undefined}
+                onChange={(event) => {
+                  clearSaveFieldError("subCategory");
+                  setSaveError(null);
+                  setSaveNotice(null);
                   setDraft((current) =>
                     current
                       ? {
@@ -6357,8 +7036,8 @@ export function AccountsClient({
                           subCategory: event.target.value || null,
                         }
                       : current,
-                  )
-                }
+                  );
+                }}
                 value={draft.subCategory ?? ""}
               >
                 <option value="">Unassigned</option>
@@ -6368,60 +7047,22 @@ export function AccountsClient({
                   </option>
                 ))}
               </select>
+              {saveFieldErrors.subCategory ? (
+                <span className={styles.fieldErrorText}>{saveFieldErrors.subCategory}</span>
+              ) : null}
             </label>
 
-            <label>
-              Company Region
-              <select
-                onChange={(event) =>
-                  setDraft((current) =>
-                    current
-                      ? {
-                          ...current,
-                          companyRegion: event.target.value || null,
-                        }
-                      : current,
-                  )
-                }
-                value={draft.companyRegion ?? ""}
-              >
-                <option value="">Unassigned</option>
-                {companyRegionOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              Week
-              <select
-                onChange={(event) =>
-                  setDraft((current) =>
-                    current
-                      ? {
-                          ...current,
-                          week: event.target.value || null,
-                        }
-                      : current,
-                  )
-                }
-                value={draft.week ?? ""}
-              >
-                <option value="">Unassigned</option>
-                {weekOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
+            <label
+              className={saveFieldErrors.category ? styles.fieldErrorLabel : undefined}
+            >
               Category
               <select
-                onChange={(event) =>
+                aria-invalid={Boolean(saveFieldErrors.category)}
+                className={saveFieldErrors.category ? styles.fieldErrorControl : undefined}
+                onChange={(event) => {
+                  clearSaveFieldError("category");
+                  setSaveError(null);
+                  setSaveNotice(null);
                   setDraft((current) =>
                     current
                       ? {
@@ -6429,8 +7070,8 @@ export function AccountsClient({
                           category: (event.target.value || null) as Category | null,
                         }
                       : current,
-                  )
-                }
+                  );
+                }}
                 value={draft.category ?? ""}
               >
                 <option value="">Unassigned</option>
@@ -6440,6 +7081,149 @@ export function AccountsClient({
                   </option>
                 ))}
               </select>
+              {saveFieldErrors.category ? (
+                <span className={styles.fieldErrorText}>{saveFieldErrors.category}</span>
+              ) : null}
+            </label>
+
+            <label
+              className={saveFieldErrors.companyRegion ? styles.fieldErrorLabel : undefined}
+            >
+              Company Region
+              <select
+                aria-invalid={Boolean(saveFieldErrors.companyRegion)}
+                className={saveFieldErrors.companyRegion ? styles.fieldErrorControl : undefined}
+                onChange={(event) => {
+                  clearSaveFieldError("companyRegion");
+                  setSaveError(null);
+                  setSaveNotice(null);
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          companyRegion: event.target.value || null,
+                        }
+                      : current,
+                  );
+                }}
+                value={draft.companyRegion ?? ""}
+              >
+                <option value="">Unassigned</option>
+                {companyRegionOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {saveFieldErrors.companyRegion ? (
+                <span className={styles.fieldErrorText}>{saveFieldErrors.companyRegion}</span>
+              ) : null}
+            </label>
+
+            <div className={styles.companyAttributeSuggestionSection}>
+              <div className={styles.companyAttributeSuggestionActions}>
+                <button
+                  className={styles.secondaryButton}
+                  disabled={
+                    isSaving ||
+                    isDeletingContact ||
+                    isSuggestingCompanyAttributes ||
+                    !canSuggestSelectedCompanyAttributes
+                  }
+                  onClick={() => {
+                    void handleSuggestCompanyAttributes();
+                  }}
+                  type="button"
+                >
+                  {isSuggestingCompanyAttributes ? "Researching..." : "Suggest with OpenAI"}
+                </button>
+                {!openAiAttributeSuggestEnabled ? (
+                  <p className={styles.lookupHint}>
+                    OpenAI attribute suggestions are not configured for this environment.
+                  </p>
+                ) : !hasMissingCompanyAttributeSuggestionField(draft) ? (
+                  <p className={styles.lookupHint}>
+                    OpenAI only fills missing Company Region, Category, Industry Type, or Sub-Category.
+                  </p>
+                ) : (
+                  <p className={styles.lookupHint}>
+                    OpenAI looks online for company evidence and also uses MeadowBrook's postal-code region map.
+                  </p>
+                )}
+              </div>
+              {companyAttributeSuggestionError ? (
+                <p className={styles.lookupError}>{companyAttributeSuggestionError}</p>
+              ) : null}
+              {companyAttributeSuggestionNotice ? (
+                <p className={styles.lookupHint}>{companyAttributeSuggestionNotice}</p>
+              ) : null}
+              {companyAttributeSuggestionResult ? (
+                <div className={styles.companyAttributeSuggestionResult}>
+                  <p>
+                    Suggested values:
+                    {" "}
+                    {companyAttributeSuggestionResult.companyRegionLabel ?? "No region"}
+                    {" / "}
+                    {companyAttributeSuggestionResult.categoryLabel ?? "No category"}
+                    {" / "}
+                    {companyAttributeSuggestionResult.industryTypeLabel ?? "No industry type"}
+                    {" / "}
+                    {companyAttributeSuggestionResult.subCategoryLabel ?? "No sub-category"}
+                    {" "}
+                    ({companyAttributeSuggestionResult.confidence} confidence)
+                  </p>
+                  <p>{companyAttributeSuggestionResult.reasoning}</p>
+                  {companyAttributeSuggestionResult.sources.length > 0 ? (
+                    <div className={styles.companyAttributeSuggestionSources}>
+                      {companyAttributeSuggestionResult.sources.map((source) => (
+                        <a
+                          className={styles.recordLink}
+                          href={source.url}
+                          key={source.url}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          {source.title}
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            <label
+              className={saveFieldErrors.week ? styles.fieldErrorLabel : undefined}
+            >
+              Week
+              <select
+                aria-invalid={Boolean(saveFieldErrors.week)}
+                className={saveFieldErrors.week ? styles.fieldErrorControl : undefined}
+                onChange={(event) => {
+                  clearSaveFieldError("week");
+                  setSaveError(null);
+                  setSaveNotice(null);
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          week: event.target.value || null,
+                        }
+                      : current,
+                  );
+                }}
+                value={draft.week ?? ""}
+              >
+                <option value="">Unassigned</option>
+                {weekOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {saveFieldErrors.week ? (
+                <span className={styles.fieldErrorText}>{saveFieldErrors.week}</span>
+              ) : null}
             </label>
 
             <label>

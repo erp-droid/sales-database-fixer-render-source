@@ -10,6 +10,8 @@ export default function AccountsPage() {
     <AccountsClient
       acumaticaBaseUrl={env.ACUMATICA_BASE_URL}
       acumaticaCompanyId={env.ACUMATICA_COMPANY ?? "MeadowBrook Live"}
+      openAiAttributeSuggestEnabled={Boolean(env.OPENAI_API_KEY?.trim())}
+      rocketReachEnabled={Boolean(env.ROCKETREACH_API_KEY?.trim())}
     />
   );
 }

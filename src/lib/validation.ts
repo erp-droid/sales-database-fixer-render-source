@@ -191,6 +191,7 @@ export const updateRequestSchema = z.object({
   week: nullableStringSchema.default(null),
   companyPhone: nullablePhoneSchema.default(null),
   primaryContactName: nullableStringSchema,
+  primaryContactJobTitle: nullableStringSchema.default(null),
   primaryContactPhone: nullablePhoneSchema,
   primaryContactExtension: nullableExtensionSchema.default(null),
   primaryContactEmail: nullableEmailSchema,
@@ -234,6 +235,7 @@ const contactOnlyUpdateRequestSchema = z.object({
   week: nullableStringSchema.default(null),
   companyPhone: nullablePhoneSchema.default(null),
   primaryContactName: nullableStringSchema.default(null),
+  primaryContactJobTitle: nullableStringSchema.default(null),
   primaryContactPhone: nullablePhoneSchema.default(null),
   primaryContactExtension: nullableExtensionSchema.default(null),
   primaryContactEmail: nullableEmailSchema.default(null),
@@ -728,6 +730,8 @@ export function parseContactOnlyUpdatePayload(
     week: parsed.week ?? fallback?.week ?? null,
     companyPhone: parsed.companyPhone ?? fallback?.companyPhone ?? null,
     primaryContactName: parsed.primaryContactName ?? fallback?.primaryContactName ?? null,
+    primaryContactJobTitle:
+      parsed.primaryContactJobTitle ?? fallback?.primaryContactJobTitle ?? null,
     primaryContactPhone: parsed.primaryContactPhone ?? fallback?.primaryContactPhone ?? null,
     primaryContactExtension:
       parsed.primaryContactExtension ?? fallback?.primaryContactExtension ?? null,

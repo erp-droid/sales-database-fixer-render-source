@@ -1002,6 +1002,7 @@ describe("change detection helpers", () => {
         week: existing.week,
         companyPhone: existing.companyPhone ?? null,
         primaryContactName: "Changed",
+        primaryContactJobTitle: existing.primaryContactJobTitle,
         primaryContactPhone: existing.primaryContactPhone,
         primaryContactEmail: existing.primaryContactEmail,
         category: existing.category,
@@ -1034,8 +1035,42 @@ describe("change detection helpers", () => {
         week: existing.week,
         companyPhone: existing.companyPhone ?? null,
         primaryContactName: existing.primaryContactName,
+        primaryContactJobTitle: existing.primaryContactJobTitle,
         primaryContactPhone: existing.primaryContactPhone,
         primaryContactExtension: "3008",
+        primaryContactEmail: existing.primaryContactEmail,
+        category: existing.category,
+        notes: existing.notes,
+        expectedLastModified: existing.lastModifiedIso,
+      }),
+    ).toBe(true);
+  });
+
+  it("detects primary contact job title changes", () => {
+    expect(
+      hasPrimaryContactChanges(existing, {
+        companyName: existing.companyName,
+        assignedBusinessAccountRecordId: existing.accountRecordId ?? existing.id,
+        assignedBusinessAccountId: existing.businessAccountId,
+        addressLine1: existing.addressLine1,
+        addressLine2: existing.addressLine2,
+        city: existing.city,
+        state: existing.state,
+        postalCode: existing.postalCode,
+        country: existing.country,
+        targetContactId: existing.contactId ?? existing.primaryContactId ?? null,
+        setAsPrimaryContact: false,
+        primaryOnlyIntent: false,
+        salesRepId: existing.salesRepId,
+        salesRepName: existing.salesRepName,
+        industryType: existing.industryType,
+        subCategory: existing.subCategory,
+        companyRegion: existing.companyRegion,
+        week: existing.week,
+        companyPhone: existing.companyPhone ?? null,
+        primaryContactName: existing.primaryContactName,
+        primaryContactJobTitle: "Director of Purchasing",
+        primaryContactPhone: existing.primaryContactPhone,
         primaryContactEmail: existing.primaryContactEmail,
         category: existing.category,
         notes: existing.notes,
@@ -1229,6 +1264,69 @@ describe("business account merge helpers", () => {
     });
   });
 
+  it("omits blank optional category and week updates", () => {
+    const payload = buildBusinessAccountUpdatePayload(makePayload(), {
+      companyName: "Alpha Inc",
+      assignedBusinessAccountRecordId: "a1",
+      assignedBusinessAccountId: "AC-100",
+      addressLine1: "5579 McAdam Road",
+      addressLine2: "",
+      city: "Mississauga",
+      state: "ON",
+      postalCode: "L4Z 1N4",
+      country: "CA",
+      targetContactId: null,
+      setAsPrimaryContact: false,
+      primaryOnlyIntent: false,
+      salesRepId: "109343",
+      salesRepName: "Jorge Serrano",
+      industryType: "Distribution",
+      subCategory: "Pharmaceuticals",
+      companyRegion: "Region 1",
+      week: null,
+      companyPhone: "905-555-0100",
+      primaryContactName: "Jorge Serrano",
+      primaryContactPhone: "416-230-4681",
+      primaryContactEmail: "jorge@example.com",
+      category: null,
+      notes: "Contact-level note",
+      expectedLastModified: "2026-03-04T16:39:08.13+00:00",
+    });
+
+    expect(payload).toMatchObject({
+      Attributes: expect.arrayContaining([
+        expect.objectContaining({
+          AttributeID: { value: "INDUSTRY" },
+          Value: { value: "Distributi" },
+        }),
+        expect.objectContaining({
+          AttributeID: { value: "INDSUBCATE" },
+          Value: { value: "Manufactur" },
+        }),
+        expect.objectContaining({
+          AttributeID: { value: "REGION" },
+          Value: { value: "Region 1" },
+        }),
+      ]),
+    });
+    expect(payload).not.toMatchObject({
+      Attributes: expect.arrayContaining([
+        expect.objectContaining({
+          AttributeID: { value: "CLIENTTYPE" },
+          Value: { value: "" },
+        }),
+      ]),
+    });
+    expect(payload).not.toMatchObject({
+      Attributes: expect.arrayContaining([
+        expect.objectContaining({
+          AttributeID: { value: "WEEK" },
+          Value: { value: "" },
+        }),
+      ]),
+    });
+  });
+
   it("falls back to BusinessPhone and then Phone1 when saving company phone", () => {
     const businessPhonePayload = buildBusinessAccountUpdatePayload(
       makePayload({
@@ -1361,6 +1459,7 @@ describe("business account merge helpers", () => {
       week: "Week 1",
       companyPhone: "905-555-2222",
       primaryContactName: "Jorge Serrano",
+      primaryContactJobTitle: "Regional Sales Manager",
       primaryContactPhone: "416-230-4681",
       primaryContactExtension: "3008",
       primaryContactEmail: "jorge@example.com",
@@ -1370,6 +1469,9 @@ describe("business account merge helpers", () => {
     });
 
     expect(payload).toMatchObject({
+      JobTitle: {
+        value: "Regional Sales Manager",
+      },
       Phone1: {
         value: "416-230-4681",
       },

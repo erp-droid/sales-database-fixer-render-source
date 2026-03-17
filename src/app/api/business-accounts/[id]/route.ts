@@ -35,6 +35,11 @@ import {
   isPrimaryOnlyConflictRetryAllowed,
   isPrimaryOnlyUpdate,
 } from "@/lib/business-account-update";
+import {
+  applyOptimisticSavedUpdateToRow,
+  applyOptimisticSavedUpdateToRows,
+  responseRowMatchesSavedUpdate,
+} from "@/lib/business-account-save-verification";
 import { setBusinessAccountPrimaryContact } from "@/lib/contact-merge-server";
 import {
   shouldValidateWithAddressComplete,
@@ -210,6 +215,16 @@ function schedulePostSyncAccountRefresh(
   })();
 }
 
+async function waitForDelay(milliseconds: number): Promise<void> {
+  if (milliseconds <= 0) {
+    return;
+  }
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
 function isStandaloneContactRow(row: BusinessAccountRow | null): row is BusinessAccountRow {
   return (
     row !== null &&
@@ -242,6 +257,7 @@ function buildStandaloneContactFallback(
     week: row.week,
     companyPhone: resolveCompanyPhone(row),
     primaryContactName: row.primaryContactName,
+    primaryContactJobTitle: row.primaryContactJobTitle ?? null,
     primaryContactPhone: row.primaryContactPhone,
     primaryContactExtension: row.primaryContactExtension ?? null,
     primaryContactEmail: row.primaryContactEmail,
@@ -438,6 +454,7 @@ function buildContactOnlyUpdateRequestFromCurrentRow(
     week: currentRow.week,
     companyPhone: resolveCompanyPhone(currentRow),
     primaryContactName: currentRow.primaryContactName,
+    primaryContactJobTitle: currentRow.primaryContactJobTitle ?? null,
     primaryContactPhone: currentRow.primaryContactPhone,
     primaryContactExtension: currentRow.primaryContactExtension ?? null,
     primaryContactEmail: currentRow.primaryContactEmail,
@@ -448,6 +465,9 @@ function buildContactOnlyUpdateRequestFromCurrentRow(
 
   if (requestBodyHasOwnField(requestBody, "primaryContactName")) {
     nextRequest.primaryContactName = parsedRequest.primaryContactName;
+  }
+  if (requestBodyHasOwnField(requestBody, "primaryContactJobTitle")) {
+    nextRequest.primaryContactJobTitle = parsedRequest.primaryContactJobTitle ?? null;
   }
   if (requestBodyHasOwnField(requestBody, "primaryContactPhone")) {
     nextRequest.primaryContactPhone = parsedRequest.primaryContactPhone;
@@ -592,6 +612,60 @@ async function normalizeWithContactNotes(
 
     return baseRow;
   }
+}
+
+async function buildResponseRowFromRawAccount(
+  cookieValue: string,
+  rawAccount: unknown,
+  targetContactId: number | null,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<{
+  refreshedAccountRow: BusinessAccountRow;
+  responseRow: BusinessAccountRow;
+}> {
+  const refreshedAccountRow = await normalizeWithContactNotes(
+    cookieValue,
+    rawAccount,
+    authCookieRefresh,
+  );
+
+  let responseRow = refreshedAccountRow;
+  if (targetContactId !== null) {
+    try {
+      const refreshedTargetContact = await fetchContactById(
+        cookieValue,
+        targetContactId,
+        authCookieRefresh,
+      );
+      const normalizedTargetRow = normalizeBusinessAccount(
+        withPrimaryContact(rawAccount, refreshedTargetContact),
+      );
+      responseRow = {
+        ...refreshedAccountRow,
+        ...normalizedTargetRow,
+        id: refreshedAccountRow.id,
+        accountRecordId: refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id,
+        rowKey: `${refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id}:contact:${targetContactId}`,
+        contactId: targetContactId,
+        isPrimaryContact:
+          refreshedAccountRow.primaryContactId !== null &&
+          refreshedAccountRow.primaryContactId === targetContactId,
+        primaryContactId: refreshedAccountRow.primaryContactId,
+      };
+    } catch (contactError) {
+      if (
+        contactError instanceof HttpError &&
+        (contactError.status === 401 || contactError.status === 403)
+      ) {
+        throw contactError;
+      }
+    }
+  }
+
+  return {
+    refreshedAccountRow,
+    responseRow,
+  };
 }
 
 export async function GET(
@@ -1304,50 +1378,82 @@ export async function PUT(
       );
     }
 
-    const refreshedRaw = await fetchBusinessAccountById(
-      activeCookieValue,
-      resolvedRecordId,
-      activeAuthCookieRefresh,
-    );
-    const refreshedAccountRow = await normalizeWithContactNotes(
-      activeCookieValue,
-      refreshedRaw,
-      activeAuthCookieRefresh,
-    );
-
-    let responseRow = refreshedAccountRow;
     const responseTargetContactId =
-      effectiveTargetContactId ?? refreshedAccountRow.primaryContactId;
-    if (responseTargetContactId !== null) {
-      try {
-        const refreshedTargetContact = await fetchContactById(
-          activeCookieValue,
+      effectiveTargetContactId ?? currentAccountRow.primaryContactId;
+
+    const verificationDelaysMs = [0, 180, 450, 900];
+    let refreshedRaw: unknown = null;
+    let refreshedAccountRow: BusinessAccountRow | null = null;
+    let responseRow: BusinessAccountRow | null = null;
+    let verifiedResponse = false;
+
+    for (const delayMs of verificationDelaysMs) {
+      await waitForDelay(delayMs);
+
+      refreshedRaw = await fetchBusinessAccountById(
+        activeCookieValue,
+        resolvedRecordId,
+        activeAuthCookieRefresh,
+      );
+      const refreshedResult = await buildResponseRowFromRawAccount(
+        activeCookieValue,
+        refreshedRaw,
+        responseTargetContactId,
+        activeAuthCookieRefresh,
+      );
+      refreshedAccountRow = refreshedResult.refreshedAccountRow;
+      responseRow = refreshedResult.responseRow;
+
+      if (
+        responseRowMatchesSavedUpdate(
+          responseRow,
+          currentAccountRow,
+          effectiveUpdateRequest,
           responseTargetContactId,
-          activeAuthCookieRefresh,
-        );
-        const normalizedTargetRow = normalizeBusinessAccount(
-          withPrimaryContact(refreshedRaw, refreshedTargetContact),
-        );
-        responseRow = {
-          ...refreshedAccountRow,
-          ...normalizedTargetRow,
-          id: refreshedAccountRow.id,
-          accountRecordId: refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id,
-          rowKey: `${refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id}:contact:${responseTargetContactId}`,
-          contactId: responseTargetContactId,
-          isPrimaryContact:
-            refreshedAccountRow.primaryContactId !== null &&
-            refreshedAccountRow.primaryContactId === responseTargetContactId,
-          primaryContactId: refreshedAccountRow.primaryContactId,
-        };
-      } catch (contactError) {
-        if (
-          contactError instanceof HttpError &&
-          (contactError.status === 401 || contactError.status === 403)
-        ) {
-          throw contactError;
-        }
+        )
+      ) {
+        verifiedResponse = true;
+        break;
       }
+    }
+
+    if (!refreshedRaw || !refreshedAccountRow || !responseRow) {
+      throw new HttpError(502, "Unable to verify the saved account state.");
+    }
+
+    if (!verifiedResponse) {
+      const optimisticRows = applyOptimisticSavedUpdateToRows(
+        normalizeBusinessAccountRows(refreshedRaw),
+        currentAccountRow,
+        effectiveUpdateRequest,
+        responseTargetContactId,
+      );
+      responseRow = applyOptimisticSavedUpdateToRow(
+        responseRow,
+        currentAccountRow,
+        effectiveUpdateRequest,
+        responseTargetContactId,
+      );
+
+      console.warn("[business-account-update]", {
+        event: "save-verification-stale-response",
+        accountRecordId: resolvedRecordId,
+        targetContactId: responseTargetContactId,
+      });
+
+      if (getEnv().READ_MODEL_ENABLED) {
+        replaceReadModelAccountRows(
+          resolvedRecordId,
+          mergeResponseRowIntoRows(optimisticRows, responseRow),
+        );
+        schedulePostSyncAccountRefresh(
+          activeCookieValue,
+          resolvedRecordId,
+          responseTargetContactId,
+        );
+      }
+
+      return responseRow;
     }
 
     if (getEnv().READ_MODEL_ENABLED) {

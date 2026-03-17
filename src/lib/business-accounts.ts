@@ -1690,6 +1690,8 @@ export function hasPrimaryContactChanges(
   return (
     sanitizeNullableInput(incoming.primaryContactName) !==
       sanitizeNullableInput(existing.primaryContactName) ||
+    sanitizeNullableInput(incoming.primaryContactJobTitle) !==
+      sanitizeNullableInput(existing.primaryContactJobTitle) ||
     sanitizeNullableInput(incoming.primaryContactPhone) !==
       sanitizeNullableInput(existing.primaryContactPhone) ||
     sanitizeNullableInput(incoming.primaryContactExtension) !==
@@ -1743,16 +1745,20 @@ export function buildBusinessAccountUpdatePayload(
   const existingPrimary = getField(existingRawAccount, "PrimaryContact");
   const existingPrimaryRecordId = readRecordIdentity(existingPrimary);
   const attributes = [...readArrayField(existingRawAccount, "Attributes")];
-  const attributeUpdates: Array<{ id: string; value: string }> = [
-    { id: "CLIENTTYPE", value: update.category ?? "" },
+  const attributeUpdates: Array<{ id: string; value: string; skipWhenBlank?: boolean }> = [
+    { id: "CLIENTTYPE", value: update.category ?? "", skipWhenBlank: true },
     { id: "INDUSTRY", value: canonicalIndustryType(update.industryType) },
     { id: "INDSUBCATE", value: canonicalSubCategory(update.subCategory) },
     { id: "REGION", value: canonicalCompanyRegion(update.companyRegion) },
-    { id: "WEEK", value: canonicalWeek(update.week) },
+    { id: "WEEK", value: canonicalWeek(update.week), skipWhenBlank: true },
   ];
 
   let updatedAttributes = attributes;
   for (const attributeUpdate of attributeUpdates) {
+    if (attributeUpdate.skipWhenBlank && attributeUpdate.value.trim().length === 0) {
+      continue;
+    }
+
     const upsert = upsertAttributeValue(
       updatedAttributes,
       attributeUpdate.id,
@@ -1851,6 +1857,9 @@ export function buildPrimaryContactUpdatePayload(
       : {}),
     LastName: {
       value: name.lastName,
+    },
+    JobTitle: {
+      value: update.primaryContactJobTitle ?? "",
     },
     Phone1: {
       value: update.primaryContactPhone ?? "",

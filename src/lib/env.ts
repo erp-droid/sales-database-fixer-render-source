@@ -67,6 +67,7 @@ const schema = z.object({
   TWILIO_TWIML_APP_SID: z.string().min(1).optional(),
   TWILIO_CALLER_ID: z.string().min(1).optional(),
   TWILIO_EDGE: z.string().min(1).optional(),
+  ROCKETREACH_API_KEY: z.string().min(1).optional(),
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_TRANSCRIPTION_MODEL: z.string().min(1).default("gpt-4o-mini-transcribe"),
   OPENAI_SUMMARY_MODEL: z.string().min(1).default("gpt-4o-mini"),
@@ -145,6 +146,7 @@ export type AppEnv = {
   TWILIO_TWIML_APP_SID?: string;
   TWILIO_CALLER_ID?: string;
   TWILIO_EDGE?: string;
+  ROCKETREACH_API_KEY?: string;
   OPENAI_API_KEY?: string;
   OPENAI_TRANSCRIPTION_MODEL: string;
   OPENAI_SUMMARY_MODEL: string;
@@ -257,6 +259,7 @@ export function getEnv(): AppEnv {
     TWILIO_TWIML_APP_SID: emptyToUndefined(process.env.TWILIO_TWIML_APP_SID),
     TWILIO_CALLER_ID: emptyToUndefined(process.env.TWILIO_CALLER_ID),
     TWILIO_EDGE: emptyToUndefined(process.env.TWILIO_EDGE),
+    ROCKETREACH_API_KEY: emptyToUndefined(process.env.ROCKETREACH_API_KEY),
     OPENAI_API_KEY: emptyToUndefined(process.env.OPENAI_API_KEY),
     OPENAI_TRANSCRIPTION_MODEL: emptyToUndefined(process.env.OPENAI_TRANSCRIPTION_MODEL),
     OPENAI_SUMMARY_MODEL: emptyToUndefined(process.env.OPENAI_SUMMARY_MODEL),
