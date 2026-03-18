@@ -344,20 +344,28 @@ export function clearStoredLoginName(response: NextResponse): void {
   });
 }
 
-export function normalizeSessionUser(payload: unknown): {
+export function normalizeSessionIdentity(payload: unknown): {
   id: string;
   name: string;
+  employeeId: string | null;
 } | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
 
   const record = payload as Record<string, unknown>;
+  const nestedUser =
+    (record.user as Record<string, unknown> | undefined) ??
+    (record.User as Record<string, unknown> | undefined) ??
+    undefined;
+  const nestedEmployee =
+    (record.employee as Record<string, unknown> | undefined) ??
+    (record.Employee as Record<string, unknown> | undefined) ??
+    undefined;
 
   const idCandidate =
     record.id ??
-    (record.user as Record<string, unknown> | undefined)?.id ??
-    (record.User as Record<string, unknown> | undefined)?.id ??
+    nestedUser?.id ??
     record.employeeId;
 
   const nameCandidate =
@@ -366,19 +374,35 @@ export function normalizeSessionUser(payload: unknown): {
     record.fullName ??
     record.FullName ??
     record.name ??
-    (record.user as Record<string, unknown> | undefined)?.displayName ??
-    (record.user as Record<string, unknown> | undefined)?.DisplayName ??
-    (record.user as Record<string, unknown> | undefined)?.fullName ??
-    (record.user as Record<string, unknown> | undefined)?.FullName ??
-    (record.user as Record<string, unknown> | undefined)?.name ??
-    (record.User as Record<string, unknown> | undefined)?.displayName ??
-    (record.User as Record<string, unknown> | undefined)?.DisplayName ??
-    (record.User as Record<string, unknown> | undefined)?.fullName ??
-    (record.User as Record<string, unknown> | undefined)?.FullName ??
-    (record.User as Record<string, unknown> | undefined)?.name ??
+    nestedUser?.displayName ??
+    nestedUser?.DisplayName ??
+    nestedUser?.fullName ??
+    nestedUser?.FullName ??
+    nestedUser?.name ??
     record.username ??
     record.UserName ??
     record.login;
+  const employeeIdCandidate =
+    record.employeeId ??
+    record.EmployeeID ??
+    record.EmployeeId ??
+    record.employeeID ??
+    record.BAccountID ??
+    record.bAccountId ??
+    nestedUser?.employeeId ??
+    nestedUser?.EmployeeID ??
+    nestedUser?.EmployeeId ??
+    nestedUser?.employeeID ??
+    nestedUser?.BAccountID ??
+    nestedUser?.bAccountId ??
+    nestedEmployee?.id ??
+    nestedEmployee?.employeeId ??
+    nestedEmployee?.EmployeeID ??
+    nestedEmployee?.EmployeeId ??
+    nestedEmployee?.employeeID ??
+    nestedEmployee?.BAccountID ??
+    nestedEmployee?.bAccountId ??
+    null;
 
   if (idCandidate == null && nameCandidate == null) {
     return null;
@@ -387,5 +411,24 @@ export function normalizeSessionUser(payload: unknown): {
   return {
     id: String(idCandidate ?? "unknown"),
     name: String(nameCandidate ?? "Authenticated user"),
+    employeeId:
+      employeeIdCandidate == null || String(employeeIdCandidate).trim().length === 0
+        ? null
+        : String(employeeIdCandidate).trim(),
+  };
+}
+
+export function normalizeSessionUser(payload: unknown): {
+  id: string;
+  name: string;
+} | null {
+  const normalized = normalizeSessionIdentity(payload);
+  if (!normalized) {
+    return null;
+  }
+
+  return {
+    id: normalized.id,
+    name: normalized.name,
   };
 }

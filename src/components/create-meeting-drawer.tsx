@@ -19,6 +19,7 @@ import type {
   MeetingContactOption,
   MeetingCreateOptionsResponse,
   MeetingCreateResponse,
+  MeetingEmployeeOption,
   MeetingPriority,
   MeetingCreateRequest,
   MeetingSourceContext,
@@ -82,6 +83,10 @@ type AddressRetrieveResponse = {
   };
 };
 
+type EmployeeSearchResponse = {
+  items: MeetingEmployeeOption[];
+};
+
 type CalendarOauthWindowMessage =
   | {
       type: "mbcalendar.oauth";
@@ -92,6 +97,18 @@ type CalendarOauthWindowMessage =
       type: "mbcalendar.oauth";
       success: false;
       message?: string;
+    };
+
+type MeetingAttendeeSuggestion =
+  | {
+      key: string;
+      kind: "contact";
+      contact: MeetingContactOption;
+    }
+  | {
+      key: string;
+      kind: "employee";
+      employee: MeetingEmployeeOption;
     };
 
 const MEETING_PRIORITY_OPTIONS: MeetingPriority[] = ["Low", "Normal", "High"];
@@ -221,6 +238,31 @@ function isGoogleCalendarSessionResponse(
     (record.connectionError === null || typeof record.connectionError === "string") &&
     (record.expectedRedirectUri === null || typeof record.expectedRedirectUri === "string")
   );
+}
+
+function isMeetingEmployeeOption(payload: unknown): payload is MeetingEmployeeOption {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const record = payload as Record<string, unknown>;
+  return (
+    typeof record.key === "string" &&
+    typeof record.loginName === "string" &&
+    typeof record.employeeName === "string" &&
+    typeof record.email === "string" &&
+    (typeof record.contactId === "number" || record.contactId === null) &&
+    record.isInternal === true
+  );
+}
+
+function isEmployeeSearchResponse(payload: unknown): payload is EmployeeSearchResponse {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const record = payload as Record<string, unknown>;
+  return Array.isArray(record.items) && record.items.every((item) => isMeetingEmployeeOption(item));
 }
 
 function isCalendarOauthWindowMessage(
@@ -405,6 +447,22 @@ function matchMeetingContact(
     .includes(normalizedQuery);
 }
 
+function matchMeetingEmployee(
+  option: MeetingEmployeeOption,
+  query: string,
+): boolean {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  return [option.employeeName, option.email, option.loginName]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .includes(normalizedQuery);
+}
+
 function uniqueContactIds(ids: Array<number | null | undefined>): number[] {
   return [...new Set(ids.filter((value): value is number => typeof value === "number"))];
 }
@@ -476,10 +534,14 @@ export function CreateMeetingDrawer({
   const [attendeeEmails, setAttendeeEmails] = useState<string[]>([]);
   const [relatedContactSearchTerm, setRelatedContactSearchTerm] = useState("");
   const [attendeeSearchTerm, setAttendeeSearchTerm] = useState("");
+  const debouncedAttendeeSearchTerm = useDebouncedValue(attendeeSearchTerm, 220);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCreateContactOpen, setIsCreateContactOpen] = useState(false);
   const [localContacts, setLocalContacts] = useState<MeetingContactOption[]>([]);
+  const [remoteEmployeeMatches, setRemoteEmployeeMatches] = useState<MeetingEmployeeOption[]>([]);
+  const [remoteEmployeeSearchError, setRemoteEmployeeSearchError] = useState<string | null>(null);
+  const [isSearchingRemoteEmployees, setIsSearchingRemoteEmployees] = useState(false);
   const [includeOrganizerInAcumatica, setIncludeOrganizerInAcumatica] = useState(false);
   const [locationSuggestions, setLocationSuggestions] = useState<AddressLookupSuggestion[]>([]);
   const [locationLookupError, setLocationLookupError] = useState<string | null>(null);
@@ -514,6 +576,36 @@ export function CreateMeetingDrawer({
     });
     return map;
   }, [contactDirectory]);
+  const employeeDirectory = useMemo(() => {
+    const byKey = new Map<string, MeetingEmployeeOption>();
+
+    [...(options?.employees ?? []), ...remoteEmployeeMatches].forEach((employee) => {
+      const dedupeKey =
+        normalizeMeetingEmail(employee.email) ?? employee.loginName.trim().toLowerCase();
+      if (!dedupeKey || byKey.has(dedupeKey)) {
+        return;
+      }
+
+      byKey.set(dedupeKey, employee);
+    });
+
+    return [...byKey.values()].sort((left, right) =>
+      left.employeeName.localeCompare(right.employeeName, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      }),
+    );
+  }, [options?.employees, remoteEmployeeMatches]);
+  const employeeByEmail = useMemo(() => {
+    const map = new Map<string, MeetingEmployeeOption>();
+    employeeDirectory.forEach((employee) => {
+      const normalizedEmail = normalizeMeetingEmail(employee.email);
+      if (normalizedEmail) {
+        map.set(normalizedEmail, employee);
+      }
+    });
+    return map;
+  }, [employeeDirectory]);
   const viewerContact = useMemo(
     () => findMeetingContactByLoginName(contactDirectory, viewerLoginName),
     [contactDirectory, viewerLoginName],
@@ -543,6 +635,9 @@ export function CreateMeetingDrawer({
       setCalendarSession(null);
       setIsLoadingCalendarSession(false);
       setIsDisconnectingCalendar(false);
+      setRemoteEmployeeMatches([]);
+      setRemoteEmployeeSearchError(null);
+      setIsSearchingRemoteEmployees(false);
       return;
     }
 
@@ -568,6 +663,9 @@ export function CreateMeetingDrawer({
     setCalendarSession(null);
     setIsLoadingCalendarSession(false);
     setIsDisconnectingCalendar(false);
+    setRemoteEmployeeMatches([]);
+    setRemoteEmployeeSearchError(null);
+    setIsSearchingRemoteEmployees(false);
   }, [
     defaultTimeZone,
     isOpen,
@@ -716,6 +814,57 @@ export function CreateMeetingDrawer({
     return () => controller.abort();
   }, [debouncedLocationSearchTerm, isOpen, selectedLocationLookupId]);
 
+  useEffect(() => {
+    const normalizedSearchTerm = debouncedAttendeeSearchTerm.trim();
+    if (!isOpen || normalizedSearchTerm.length < 2) {
+      setRemoteEmployeeMatches([]);
+      setRemoteEmployeeSearchError(null);
+      setIsSearchingRemoteEmployees(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setIsSearchingRemoteEmployees(true);
+    setRemoteEmployeeSearchError(null);
+
+    fetch(`/api/employees/search?q=${encodeURIComponent(normalizedSearchTerm)}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload = await readJsonResponse<EmployeeSearchResponse | { error?: string }>(
+          response,
+        );
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+        if (!isEmployeeSearchResponse(payload)) {
+          throw new Error("Unexpected employee search response.");
+        }
+
+        if (!controller.signal.aborted) {
+          setRemoteEmployeeMatches(payload.items);
+        }
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setRemoteEmployeeMatches([]);
+        setRemoteEmployeeSearchError(
+          error instanceof Error ? error.message : "Unable to search employees.",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsSearchingRemoteEmployees(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [debouncedAttendeeSearchTerm, isOpen]);
+
   const relatedContactLocked = source?.contactId !== null && source?.contactId !== undefined;
   const createContactAccountOptions = useMemo(
     () =>
@@ -769,6 +918,10 @@ export function CreateMeetingDrawer({
       normalizedAttendeeEmails.filter((email) => !selectedAttendeeEmailSet.has(email)),
     [normalizedAttendeeEmails, selectedAttendeeEmailSet],
   );
+  const selectedInviteEmailSet = useMemo(
+    () => new Set([...selectedAttendeeEmailSet, ...selectedExternalAttendeeEmails]),
+    [selectedAttendeeEmailSet, selectedExternalAttendeeEmails],
+  );
   const relatedContact =
     relatedContactId !== null
       ? contactById.get(relatedContactId) ??
@@ -796,11 +949,59 @@ export function CreateMeetingDrawer({
       return [];
     }
 
-    return contactDirectory
+    const contactSuggestions: MeetingAttendeeSuggestion[] = contactDirectory
       .filter((contact) => !normalizedAttendeeIds.includes(contact.contactId))
       .filter((contact) => matchMeetingContact(contact, attendeeSearchTerm))
+      .map((contact) => ({
+        key: `contact:${contact.key}`,
+        kind: "contact",
+        contact,
+      }));
+
+    const employeeSuggestions: MeetingAttendeeSuggestion[] = employeeDirectory
+      .filter((employee) => {
+        const normalizedEmail = normalizeMeetingEmail(employee.email);
+        if (!normalizedEmail) {
+          return false;
+        }
+
+        if (selectedInviteEmailSet.has(normalizedEmail)) {
+          return false;
+        }
+
+        if (employee.contactId !== null && contactById.has(employee.contactId)) {
+          return false;
+        }
+
+        return matchMeetingEmployee(employee, attendeeSearchTerm);
+      })
+      .map((employee) => ({
+        key: `employee:${employee.key}`,
+        kind: "employee",
+        employee,
+      }));
+
+    return [...contactSuggestions, ...employeeSuggestions]
+      .sort((left, right) => {
+        const leftLabel =
+          left.kind === "contact" ? left.contact.contactName : left.employee.employeeName;
+        const rightLabel =
+          right.kind === "contact" ? right.contact.contactName : right.employee.employeeName;
+        return leftLabel.localeCompare(rightLabel, undefined, {
+          sensitivity: "base",
+          numeric: true,
+        });
+      })
       .slice(0, 10);
-  }, [attendeeSearchTerm, contactDirectory, isOpen, normalizedAttendeeIds]);
+  }, [
+    attendeeSearchTerm,
+    contactById,
+    contactDirectory,
+    employeeDirectory,
+    isOpen,
+    normalizedAttendeeIds,
+    selectedInviteEmailSet,
+  ]);
   const normalizedAttendeeSearchEmail = normalizeMeetingEmail(attendeeSearchTerm);
   const matchingDirectInviteContact = useMemo(
     () =>
@@ -957,6 +1158,17 @@ export function CreateMeetingDrawer({
 
   function handleAddAttendeeEmail(email: string) {
     const normalizedEmail = normalizeMeetingEmail(email);
+    if (!normalizedEmail) {
+      return;
+    }
+
+    setAttendeeEmails((current) => uniqueAttendeeEmails([...current, normalizedEmail]));
+    setAttendeeSearchTerm("");
+    setFormError(null);
+  }
+
+  function handleAddEmployeeAttendee(employee: MeetingEmployeeOption) {
+    const normalizedEmail = normalizeMeetingEmail(employee.email);
     if (!normalizedEmail) {
       return;
     }
@@ -1425,7 +1637,7 @@ export function CreateMeetingDrawer({
                 placeholder={
                   isOptionsPending
                     ? "Loading contacts..."
-                    : "Search name, account, email, or phone"
+                    : "Search name, account, employee, email, or phone"
                 }
                 value={attendeeSearchTerm}
               />
@@ -1433,25 +1645,47 @@ export function CreateMeetingDrawer({
 
             {attendeeSuggestions.length > 0 ? (
               <div className={styles.lookupSuggestions}>
-                {attendeeSuggestions.map((contact) => (
-                  <button
-                    className={styles.lookupSuggestionItem}
-                    key={contact.key}
-                    onClick={() => handleAddAttendee(contact)}
-                    type="button"
-                  >
-                    <span className={styles.lookupSuggestionTitle}>{contact.contactName}</span>
-                    <span className={styles.lookupSuggestionMeta}>
-                      {contact.companyName ?? "No account"}
-                    </span>
-                    <span className={styles.lookupSuggestionMeta}>
-                      {contact.email ?? "No email"}
-                    </span>
-                  </button>
-                ))}
+                {attendeeSuggestions.map((suggestion) =>
+                  suggestion.kind === "contact" ? (
+                    <button
+                      className={styles.lookupSuggestionItem}
+                      key={suggestion.key}
+                      onClick={() => handleAddAttendee(suggestion.contact)}
+                      type="button"
+                    >
+                      <span className={styles.lookupSuggestionTitle}>
+                        {suggestion.contact.contactName}
+                      </span>
+                      <span className={styles.lookupSuggestionMeta}>
+                        {suggestion.contact.companyName ?? "No account"}
+                      </span>
+                      <span className={styles.lookupSuggestionMeta}>
+                        {suggestion.contact.email ?? "No email"}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      className={styles.lookupSuggestionItem}
+                      key={suggestion.key}
+                      onClick={() => handleAddEmployeeAttendee(suggestion.employee)}
+                      type="button"
+                    >
+                      <span className={styles.lookupSuggestionTitle}>
+                        {suggestion.employee.employeeName}
+                      </span>
+                      <span className={styles.lookupSuggestionMeta}>MeadowBrook employee</span>
+                      <span className={styles.lookupSuggestionMeta}>
+                        {suggestion.employee.email}
+                      </span>
+                    </button>
+                  ),
+                )}
               </div>
-            ) : attendeeSearchTerm.trim() && !isOptionsPending ? (
+            ) : attendeeSearchTerm.trim() && !isOptionsPending && !isSearchingRemoteEmployees ? (
               <p className={styles.lookupHint}>No matching attendees were found.</p>
+            ) : null}
+            {remoteEmployeeSearchError ? (
+              <p className={styles.lookupHint}>{remoteEmployeeSearchError}</p>
             ) : null}
             {canInviteDirectEmail ? (
               <button
@@ -1501,10 +1735,19 @@ export function CreateMeetingDrawer({
               {selectedExternalAttendeeEmails.map((email) => (
                 <div className={styles.attendeeCard} key={email}>
                   <div>
-                    <strong>{email}</strong>
+                    <strong>{employeeByEmail.get(email)?.employeeName ?? email}</strong>
                     <div className={styles.attendeeMeta}>
-                      <span>Direct email invite</span>
-                      <span>Not linked to an Acumatica contact</span>
+                      <span>
+                        {employeeByEmail.has(email)
+                          ? "MeadowBrook employee"
+                          : "Direct email invite"}
+                      </span>
+                      <span>{email}</span>
+                      {employeeByEmail.has(email) ? (
+                        <span className={styles.badge}>Internal</span>
+                      ) : (
+                        <span>Not linked to an Acumatica contact</span>
+                      )}
                     </div>
                   </div>
                   <button

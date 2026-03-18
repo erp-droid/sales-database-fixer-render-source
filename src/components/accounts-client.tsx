@@ -1545,6 +1545,7 @@ function isMeetingCreateOptionsResponse(
   return Boolean(
     payload &&
       Array.isArray((payload as MeetingCreateOptionsResponse).contacts) &&
+      Array.isArray((payload as MeetingCreateOptionsResponse).employees) &&
       Array.isArray((payload as MeetingCreateOptionsResponse).accounts) &&
       typeof (payload as MeetingCreateOptionsResponse).defaultTimeZone === "string",
   );
@@ -2356,6 +2357,7 @@ export function AccountsClient({
 
     setIsLoadingMeetingOptions(true);
     if (force) {
+      setMeetingOptions(null);
       setMeetingOptionsError(null);
     }
 
@@ -4192,7 +4194,7 @@ export function AccountsClient({
     setSaveNotice(null);
     setMeetingSource(null);
     setIsCreateMeetingDrawerOpen(true);
-    void loadMeetingOptions();
+    void loadMeetingOptions(true);
   }
 
   function openCreateMeetingDrawerFromRow(row: BusinessAccountRow) {
@@ -4209,7 +4211,7 @@ export function AccountsClient({
     setSaveNotice(null);
     setMeetingSource(buildMeetingSourceFromRow(row));
     setIsCreateMeetingDrawerOpen(true);
-    void loadMeetingOptions();
+    void loadMeetingOptions(true);
   }
 
   function closeCreateMeetingDrawer() {
@@ -6523,7 +6525,7 @@ export function AccountsClient({
           void loadMeetingOptions(true);
         }}
         options={meetingOptions ?? fallbackMeetingOptions}
-        optionsError={meetingOptions ?? fallbackMeetingOptions ? null : meetingOptionsError}
+        optionsError={meetingOptionsError}
         source={meetingSource}
         viewerLoginName={session?.user?.id ?? null}
       />

@@ -673,6 +673,14 @@ export type EmployeeDirectoryItem = {
   id: string;
   name: string;
 };
+export type EmployeeProfileItem = {
+  employeeId: string;
+  contactId: number | null;
+  displayName: string;
+  email: string | null;
+  phone: string | null;
+  isActive: boolean;
+};
 export type BusinessAccountProfile = "sync" | "detail" | "list" | "map" | "quality";
 
 export type CreateActivityInput = {
@@ -705,6 +713,15 @@ export function readWrappedString(record: unknown, key: string): string {
 
   const value = (field as Record<string, unknown>).value;
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readNestedRecord(record: unknown, key: string): Record<string, unknown> | null {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  const value = (record as Record<string, unknown>)[key];
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
 export function readWrappedScalarString(record: unknown, key: string): string {
@@ -742,6 +759,34 @@ export function readWrappedNumber(record: unknown, key: string): number | null {
   const value = (field as Record<string, unknown>).value;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function readWrappedBoolean(record: unknown, key: string): boolean | null {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  const field = (record as Record<string, unknown>)[key];
+  if (!field || typeof field !== "object") {
+    return null;
+  }
+
+  const value = (field as Record<string, unknown>).value;
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+
+  return null;
 }
 
 export function readRecordIdentity(record: unknown): string | null {
@@ -1040,11 +1085,15 @@ function escapeODataStringLiteral(value: string): string {
 function buildEmployeeCollectionPath(resourcePath: string, options: {
   top: number;
   skip: number;
+  filter?: string;
 }): string {
   const query = new URLSearchParams({
     $top: String(options.top),
     $skip: String(options.skip),
   });
+  if (options.filter?.trim()) {
+    query.set("$filter", options.filter);
+  }
 
   return `${resourcePath}?${query.toString()}`;
 }
@@ -1689,8 +1738,9 @@ function composeEmployeeName(record: RawEmployee): string {
     return preferred;
   }
 
-  const firstName = readWrappedString(record, "FirstName");
-  const lastName = readWrappedString(record, "LastName");
+  const contactInfo = readNestedRecord(record, "ContactInfo");
+  const firstName = readWrappedString(record, "FirstName") || readWrappedString(contactInfo, "FirstName");
+  const lastName = readWrappedString(record, "LastName") || readWrappedString(contactInfo, "LastName");
   return [firstName, lastName].filter(Boolean).join(" ").trim();
 }
 
@@ -1706,6 +1756,63 @@ function readEmployeeId(record: RawEmployee): string {
   );
 }
 
+function readEmployeeEmail(record: RawEmployee): string | null {
+  const contactInfo = readNestedRecord(record, "ContactInfo");
+  return (
+    readWrappedString(record, "Email") ||
+    readWrappedString(record, "EMail") ||
+    readWrappedString(record, "ContactEmail") ||
+    readWrappedString(contactInfo, "Email") ||
+    readWrappedString(contactInfo, "EMail") ||
+    null
+  );
+}
+
+function readEmployeePhone(record: RawEmployee): string | null {
+  const contactInfo = readNestedRecord(record, "ContactInfo");
+  return (
+    readWrappedString(record, "Phone1") ||
+    readWrappedString(record, "Phone2") ||
+    readWrappedString(record, "Phone3") ||
+    readWrappedString(record, "Phone") ||
+    readWrappedString(contactInfo, "Phone1") ||
+    readWrappedString(contactInfo, "Phone2") ||
+    readWrappedString(contactInfo, "Phone3") ||
+    readWrappedString(contactInfo, "Phone") ||
+    null
+  );
+}
+
+function readEmployeeContactId(record: RawEmployee): number | null {
+  const numeric =
+    readWrappedNumber(record, "ContactID") ??
+    readWrappedNumber(record, "DefContactID") ??
+    (() => {
+      const scalar =
+        readWrappedScalarString(record, "ContactID") ||
+        readWrappedScalarString(record, "DefContactID");
+      const numeric = Number(scalar);
+      return Number.isFinite(numeric) ? numeric : null;
+    })();
+
+  return numeric && numeric > 0 ? numeric : null;
+}
+
+function readEmployeeIsActive(record: RawEmployee): boolean {
+  const wrappedBoolean =
+    readWrappedBoolean(record, "Active") ?? readWrappedBoolean(record, "IsActive");
+  if (wrappedBoolean !== null) {
+    return wrappedBoolean;
+  }
+
+  const status = readWrappedString(record, "Status");
+  if (status) {
+    return status.trim().toLowerCase() === "active";
+  }
+
+  return false;
+}
+
 function normalizeEmployeeRecord(record: RawEmployee): EmployeeDirectoryItem | null {
   const id = readEmployeeId(record);
   const name = composeEmployeeName(record);
@@ -1714,6 +1821,23 @@ function normalizeEmployeeRecord(record: RawEmployee): EmployeeDirectoryItem | n
   }
 
   return { id, name };
+}
+
+function normalizeEmployeeProfileRecord(record: RawEmployee): EmployeeProfileItem | null {
+  const employeeId = readEmployeeId(record);
+  const displayName = composeEmployeeName(record);
+  if (!employeeId || !displayName) {
+    return null;
+  }
+
+  return {
+    employeeId,
+    contactId: readEmployeeContactId(record),
+    displayName,
+    email: readEmployeeEmail(record),
+    phone: readEmployeePhone(record),
+    isActive: readEmployeeIsActive(record),
+  };
 }
 
 function collectUniqueEmployees(rows: RawEmployee[]): EmployeeDirectoryItem[] {
@@ -1730,6 +1854,90 @@ function collectUniqueEmployees(rows: RawEmployee[]): EmployeeDirectoryItem[] {
   return [...dedupedById.values()].sort((left, right) =>
     left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
   );
+}
+
+function collectUniqueEmployeeProfiles(rows: RawEmployee[]): EmployeeProfileItem[] {
+  const dedupedById = new Map<string, EmployeeProfileItem>();
+  for (const row of rows) {
+    const normalized = normalizeEmployeeProfileRecord(row);
+    if (!normalized) {
+      continue;
+    }
+
+    const existing = dedupedById.get(normalized.employeeId);
+    if (
+      !existing ||
+      (normalized.isActive && !existing.isActive) ||
+      (normalized.phone && !existing.phone) ||
+      (normalized.email && !existing.email) ||
+      (normalized.contactId !== null && existing.contactId === null)
+    ) {
+      dedupedById.set(normalized.employeeId, normalized);
+    }
+  }
+
+  return [...dedupedById.values()].sort((left, right) =>
+    left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" }),
+  );
+}
+
+function shouldHydrateEmployeeProfile(profile: EmployeeProfileItem): boolean {
+  return !profile.email || !profile.phone;
+}
+
+function shouldPreferEmployeeProfile(
+  candidate: EmployeeProfileItem,
+  existing: EmployeeProfileItem | undefined,
+): boolean {
+  if (!existing) {
+    return true;
+  }
+
+  return (
+    (candidate.isActive && !existing.isActive) ||
+    (Boolean(candidate.phone) && !existing.phone) ||
+    (Boolean(candidate.email) && !existing.email) ||
+    (candidate.contactId !== null && existing.contactId === null)
+  );
+}
+
+export async function fetchEmployeeProfileById(
+  cookieValue: string,
+  employeeId: string,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<EmployeeProfileItem | null> {
+  const trimmedEmployeeId = employeeId.trim();
+  if (!trimmedEmployeeId) {
+    return null;
+  }
+
+  const endpointCandidates = ["/Employee", "/EPEmployee"] as const;
+  for (const endpoint of endpointCandidates) {
+    try {
+      const payload = await requestAcumatica<RawEmployee>(
+        getActiveCookieValue(cookieValue, authCookieRefresh),
+        `${endpoint}/${encodeURIComponent(trimmedEmployeeId)}?$expand=ContactInfo`,
+        {
+          authCookieRefresh,
+        },
+      );
+
+      return normalizeEmployeeProfileRecord(payload);
+    } catch (error) {
+      if (
+        error instanceof HttpError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        throw error;
+      }
+
+      if (!(error instanceof HttpError) || error.status !== 404) {
+        break;
+      }
+    }
+  }
+
+  return null;
 }
 
 export async function fetchContactsByBusinessAccountIds(
@@ -1958,6 +2166,205 @@ export async function fetchEmployees(
   }
 
   return collectUniqueEmployees(collectedRows);
+}
+
+export async function searchEmployeesByDisplayName(
+  cookieValue: string,
+  displayName: string,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<EmployeeDirectoryItem[]> {
+  const trimmedDisplayName = displayName.trim();
+  if (!trimmedDisplayName) {
+    return [];
+  }
+
+  const escapedDisplayName = escapeODataStringLiteral(trimmedDisplayName);
+  const nameParts = trimmedDisplayName.split(/\s+/).filter(Boolean);
+  const filters = [
+    `DisplayName eq '${escapedDisplayName}'`,
+    `EmployeeName eq '${escapedDisplayName}'`,
+    `AcctName eq '${escapedDisplayName}'`,
+    `ContactName eq '${escapedDisplayName}'`,
+    `Description eq '${escapedDisplayName}'`,
+    `UserName eq '${escapedDisplayName}'`,
+    `Username eq '${escapedDisplayName}'`,
+  ];
+
+  if (nameParts.length >= 2) {
+    const firstName = escapeODataStringLiteral(nameParts[0] ?? "");
+    const lastName = escapeODataStringLiteral(nameParts[nameParts.length - 1] ?? "");
+    if (firstName && lastName) {
+      filters.push(`(FirstName eq '${firstName}' and LastName eq '${lastName}')`);
+    }
+  }
+
+  const filter = filters.join(" or ");
+  const endpointCandidates = ["/Employee", "/EPEmployee"] as const;
+  const collectedRows: RawEmployee[] = [];
+  const normalizedDisplayName = trimmedDisplayName.toLowerCase();
+
+  for (const endpoint of endpointCandidates) {
+    try {
+      const payload = await requestAcumatica<unknown>(
+        getActiveCookieValue(cookieValue, authCookieRefresh),
+        buildEmployeeCollectionPath(endpoint, {
+          top: 25,
+          skip: 0,
+          filter,
+        }),
+        {
+          authCookieRefresh,
+        },
+      );
+      collectedRows.push(...unwrapCollection<RawEmployee>(payload));
+    } catch (error) {
+      if (
+        error instanceof HttpError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  return collectUniqueEmployees(collectedRows).filter(
+    (employee) => employee.name.trim().toLowerCase() === normalizedDisplayName,
+  );
+}
+
+async function hydrateEmployeeProfiles(
+  cookieValue: string,
+  profiles: EmployeeProfileItem[],
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<EmployeeProfileItem[]> {
+  const hydratedById = new Map(
+    profiles.map((profile) => [profile.employeeId, profile] as const),
+  );
+  const profilesNeedingHydration = profiles.filter(shouldHydrateEmployeeProfile);
+
+  for (const batch of chunkArray(profilesNeedingHydration, 10)) {
+    const detailedResults = await Promise.allSettled(
+      batch.map((profile) =>
+        fetchEmployeeProfileById(cookieValue, profile.employeeId, authCookieRefresh),
+      ),
+    );
+
+    detailedResults.forEach((result, index) => {
+      if (result.status !== "fulfilled" || !result.value) {
+        return;
+      }
+
+      const fallback = batch[index];
+      if (!fallback) {
+        return;
+      }
+
+      if (shouldPreferEmployeeProfile(result.value, hydratedById.get(fallback.employeeId))) {
+        hydratedById.set(fallback.employeeId, result.value);
+      }
+    });
+  }
+
+  return [...hydratedById.values()].sort((left, right) =>
+    left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" }),
+  );
+}
+
+export async function searchEmployeeProfiles(
+  cookieValue: string,
+  options: {
+    filter: string;
+    top?: number;
+    skip?: number;
+  },
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<EmployeeProfileItem[]> {
+  const filter = options.filter.trim();
+  if (!filter) {
+    return [];
+  }
+
+  const endpointCandidates = ["/Employee", "/EPEmployee"] as const;
+  const collectedRows: RawEmployee[] = [];
+
+  for (const endpoint of endpointCandidates) {
+    try {
+      const payload = await requestAcumatica<unknown>(
+        getActiveCookieValue(cookieValue, authCookieRefresh),
+        buildEmployeeCollectionPath(endpoint, {
+          top: Math.max(1, Math.min(options.top ?? 25, 100)),
+          skip: Math.max(0, options.skip ?? 0),
+          filter,
+        }),
+        {
+          authCookieRefresh,
+        },
+      );
+      collectedRows.push(...unwrapCollection<RawEmployee>(payload));
+    } catch (error) {
+      if (
+        error instanceof HttpError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  return hydrateEmployeeProfiles(
+    cookieValue,
+    collectUniqueEmployeeProfiles(collectedRows),
+    authCookieRefresh,
+  );
+}
+
+export async function fetchEmployeeProfiles(
+  cookieValue: string,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<EmployeeProfileItem[]> {
+  const endpointCandidates = ["/Employee", "/EPEmployee"] as const;
+  const collectedRows: RawEmployee[] = [];
+
+  for (const endpoint of endpointCandidates) {
+    const batchSize = 200;
+
+    try {
+      for (let skip = 0; skip < 2000; skip += batchSize) {
+        const payload = await requestAcumatica<unknown>(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          buildEmployeeCollectionPath(endpoint, {
+            top: batchSize,
+            skip,
+          }),
+          {
+            authCookieRefresh,
+          },
+        );
+        const rows = unwrapCollection<RawEmployee>(payload);
+        if (rows.length === 0) {
+          break;
+        }
+
+        collectedRows.push(...rows);
+        if (rows.length < batchSize) {
+          break;
+        }
+      }
+    } catch (error) {
+      if (
+        error instanceof HttpError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  return hydrateEmployeeProfiles(
+    cookieValue,
+    collectUniqueEmployeeProfiles(collectedRows),
+    authCookieRefresh,
+  );
 }
 
 export async function updateBusinessAccount(

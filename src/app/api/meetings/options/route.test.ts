@@ -5,6 +5,10 @@ const requireAuthCookieValue = vi.fn(() => "cookie");
 const setAuthCookie = vi.fn();
 const fetchBusinessAccounts = vi.fn();
 const fetchContacts = vi.fn();
+const readCallEmployeeDirectory = vi.fn();
+const readCallEmployeeDirectoryMeta = vi.fn();
+const syncCallEmployeeDirectory = vi.fn();
+const readEmployeeDirectorySnapshot = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
   requireAuthCookieValue,
@@ -20,6 +24,18 @@ vi.mock("@/lib/acumatica", async () => {
   };
 });
 
+vi.mock("@/lib/call-analytics/employee-directory", async () => {
+  return {
+    readCallEmployeeDirectory,
+    readCallEmployeeDirectoryMeta,
+    syncCallEmployeeDirectory,
+  };
+});
+
+vi.mock("@/lib/read-model/employees", () => ({
+  readEmployeeDirectorySnapshot,
+}));
+
 function buildContact(input: {
   businessAccountId?: string;
   companyName?: string;
@@ -27,7 +43,7 @@ function buildContact(input: {
   displayName: string;
   email: string;
   id?: string;
-  phone?: string;
+  phone?: string | null;
 }): Record<string, unknown> {
   return {
     id: input.id ?? `contact-note-${input.contactId}`,
@@ -36,7 +52,28 @@ function buildContact(input: {
     Email: { value: input.email },
     BusinessAccount: { value: input.businessAccountId ?? "" },
     CompanyName: { value: input.companyName ?? "" },
-    Phone1: { value: input.phone ?? "905-555-0100" },
+    ...(input.phone === null
+      ? {}
+      : { Phone1: { value: input.phone ?? "905-555-0100" } }),
+  };
+}
+
+function buildEmployee(input: {
+  loginName: string;
+  contactId?: number | null;
+  displayName: string;
+  email?: string | null;
+  normalizedPhone?: string | null;
+}) {
+  return {
+    loginName: input.loginName,
+    contactId: input.contactId ?? null,
+    displayName: input.displayName,
+    email: input.email ?? "employee@meadowb.com",
+    normalizedPhone: input.normalizedPhone ?? "+14374233641",
+    callerIdPhone: input.normalizedPhone ?? "+14374233641",
+    isActive: true,
+    updatedAt: "2026-03-17T00:00:00.000Z",
   };
 }
 
@@ -68,6 +105,19 @@ describe("GET /api/meetings/options", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requireAuthCookieValue.mockReturnValue("cookie");
+    readCallEmployeeDirectory.mockReturnValue([]);
+    readCallEmployeeDirectoryMeta.mockReturnValue({
+      total: 0,
+      latestUpdatedAt: null,
+    });
+    readEmployeeDirectorySnapshot.mockReturnValue({
+      items: Array.from({ length: 165 }, (_, index) => ({
+        id: `E${index + 1}`,
+        name: `Employee ${index + 1}`,
+      })),
+      source: "acumatica_employees",
+      updatedAt: "2026-03-17T00:00:00.000Z",
+    });
   });
 
   it("returns a MeadowBrook-inclusive contact directory and filters vendors", async () => {
@@ -96,6 +146,7 @@ describe("GET /api/meetings/options", () => {
         contactId: 1001,
         displayName: "Internal Ops",
         email: "internal.ops@meadowb.com",
+        phone: null,
       }),
       buildContact({
         businessAccountId: "BA0002",
@@ -111,6 +162,26 @@ describe("GET /api/meetings/options", () => {
         displayName: "Vendor Person",
         email: "vendor@example.com",
       }),
+      buildContact({
+        contactId: 1004,
+        displayName: "Simon MeadowBrook",
+        email: "simon@meadowb.com",
+        phone: null,
+      }),
+    ]);
+    syncCallEmployeeDirectory.mockResolvedValue([
+      buildEmployee({
+        loginName: "internal.ops",
+        contactId: 1001,
+        displayName: "Internal Ops",
+        email: "internal.ops@meadowb.com",
+      }),
+      buildEmployee({
+        loginName: "sdoal",
+        contactId: 1004,
+        displayName: "Simon MeadowBrook",
+        email: "simon@meadowb.com",
+      }),
     ]);
 
     const { GET } = await import("@/app/api/meetings/options/route");
@@ -118,6 +189,7 @@ describe("GET /api/meetings/options", () => {
     const response = await GET(new NextRequest("http://localhost/api/meetings/options"));
     const payload = (await response.json()) as {
       accounts: Array<{ businessAccountId: string }>;
+      employees: Array<{ contactId: number | null; email: string; employeeName: string }>;
       contacts: Array<{ companyName: string | null; contactId: number; isInternal: boolean }>;
       defaultTimeZone: string;
     };
@@ -136,12 +208,32 @@ describe("GET /api/meetings/options", () => {
           isInternal: true,
         }),
         expect.objectContaining({
+          contactId: 1004,
+          companyName: "MeadowBrook Internal",
+          isInternal: true,
+        }),
+        expect.objectContaining({
           contactId: 1002,
           companyName: "Alpha Foods",
           isInternal: false,
         }),
       ]),
     );
+    expect(payload.employees).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          contactId: 1001,
+          employeeName: "Internal Ops",
+          email: "internal.ops@meadowb.com",
+        }),
+        expect.objectContaining({
+          contactId: 1004,
+          employeeName: "Simon MeadowBrook",
+          email: "simon@meadowb.com",
+        }),
+      ]),
+    );
     expect(payload.contacts.some((contact) => contact.contactId === 1003)).toBe(false);
+    expect(syncCallEmployeeDirectory).toHaveBeenCalledWith("cookie", expect.any(Object));
   });
 });

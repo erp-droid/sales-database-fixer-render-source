@@ -383,6 +383,7 @@ export function buildMeetingCreateOptionsFromRows(
 ): MeetingCreateOptionsResponse {
   return {
     contacts: buildMeetingContactOptionsFromRows(rows),
+    employees: [],
     accounts: buildMeetingAccountOptionsFromRows(rows),
     defaultTimeZone,
   };
@@ -407,6 +408,7 @@ export function mergeMeetingCreateOptions(
     defaultTimeZone: current.defaultTimeZone,
     accounts: [...accountMap.values()].sort(compareMeetingAccounts),
     contacts: [...contactMap.values()].sort(compareMeetingContacts),
+    employees: current.employees,
   };
 }
 

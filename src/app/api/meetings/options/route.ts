@@ -13,6 +13,13 @@ import {
 import { isAllowedBusinessAccountType } from "@/lib/business-account-region-resolution";
 import { normalizeBusinessAccountRows } from "@/lib/business-accounts";
 import {
+  readCallEmployeeDirectory,
+  readCallEmployeeDirectoryMeta,
+  syncCallEmployeeDirectory,
+} from "@/lib/call-analytics/employee-directory";
+import type { CallEmployeeDirectoryItem } from "@/lib/call-analytics/types";
+import { getEnv } from "@/lib/env";
+import {
   buildMeetingAccountOptionsFromRows,
   DEFAULT_MEETING_TIME_ZONE,
 } from "@/lib/meeting-create";
@@ -21,7 +28,11 @@ import {
   isExcludedInternalCompanyName,
   isExcludedInternalContactEmail,
 } from "@/lib/internal-records";
-import type { MeetingContactOption } from "@/types/meeting-create";
+import { readEmployeeDirectorySnapshot } from "@/lib/read-model/employees";
+import type {
+  MeetingContactOption,
+  MeetingEmployeeOption,
+} from "@/types/meeting-create";
 
 function isAllowedMeetingBusinessAccount(record: unknown): boolean {
   return isAllowedBusinessAccountType({
@@ -71,6 +82,29 @@ function readContactPhone(record: unknown): string | null {
 
 function normalizeBusinessAccountCode(value: string | null | undefined): string {
   return value?.trim().toUpperCase() ?? "";
+}
+
+function compareMeetingContacts(left: MeetingContactOption, right: MeetingContactOption): number {
+  const nameCompare = left.contactName.localeCompare(right.contactName, undefined, {
+    sensitivity: "base",
+    numeric: true,
+  });
+  if (nameCompare !== 0) {
+    return nameCompare;
+  }
+
+  const companyCompare = (left.companyName ?? "").localeCompare(right.companyName ?? "", undefined, {
+    sensitivity: "base",
+    numeric: true,
+  });
+  if (companyCompare !== 0) {
+    return companyCompare;
+  }
+
+  return (left.email ?? "").localeCompare(right.email ?? "", undefined, {
+    sensitivity: "base",
+    numeric: true,
+  });
 }
 
 function buildMeetingContactOptionsFromContacts(
@@ -145,28 +179,97 @@ function buildMeetingContactOptionsFromContacts(
     });
   });
 
-  return [...byContactId.values()].sort((left, right) => {
-    const nameCompare = left.contactName.localeCompare(right.contactName, undefined, {
-      sensitivity: "base",
-      numeric: true,
-    });
-    if (nameCompare !== 0) {
-      return nameCompare;
+  return [...byContactId.values()].sort(compareMeetingContacts);
+}
+
+function buildMeetingEmployeeOptions(
+  internalEmployees: CallEmployeeDirectoryItem[],
+): MeetingEmployeeOption[] {
+  return internalEmployees
+    .filter((employee) => typeof employee.email === "string" && employee.email.trim())
+    .map((employee) => ({
+      key: `employee:${employee.loginName}`,
+      loginName: employee.loginName,
+      employeeName: employee.displayName,
+      email: employee.email!.trim(),
+      contactId: employee.contactId,
+      isInternal: true,
+    }));
+}
+
+function buildInternalEmployeeContactOptions(
+  employees: MeetingEmployeeOption[],
+): MeetingContactOption[] {
+  return employees
+    .filter((employee): employee is MeetingEmployeeOption & { contactId: number } => employee.contactId !== null)
+    .map((employee) => ({
+      key: `${employee.contactId}:employee:${employee.loginName}`,
+      contactId: employee.contactId,
+      contactName: employee.employeeName,
+      email: employee.email,
+      phone: null,
+      businessAccountRecordId: null,
+      businessAccountId: null,
+      companyName: "MeadowBrook Internal",
+      isInternal: true,
+    }));
+}
+
+function mergeMeetingContactOptions(
+  contacts: MeetingContactOption[],
+  additionalContacts: MeetingContactOption[],
+): MeetingContactOption[] {
+  const byContactId = new Map<number, MeetingContactOption>();
+
+  [...contacts, ...additionalContacts].forEach((contact) => {
+    const existing = byContactId.get(contact.contactId);
+    if (!existing) {
+      byContactId.set(contact.contactId, contact);
+      return;
     }
 
-    const companyCompare = (left.companyName ?? "").localeCompare(right.companyName ?? "", undefined, {
-      sensitivity: "base",
-      numeric: true,
-    });
-    if (companyCompare !== 0) {
-      return companyCompare;
-    }
-
-    return (left.email ?? "").localeCompare(right.email ?? "", undefined, {
-      sensitivity: "base",
-      numeric: true,
+    byContactId.set(contact.contactId, {
+      ...existing,
+      contactName:
+        existing.contactName === `Contact ${contact.contactId}` &&
+        contact.contactName !== `Contact ${contact.contactId}`
+          ? contact.contactName
+          : existing.contactName,
+      email: existing.email ?? contact.email,
+      phone: existing.phone ?? contact.phone,
+      businessAccountRecordId: existing.businessAccountRecordId ?? contact.businessAccountRecordId,
+      businessAccountId: existing.businessAccountId ?? contact.businessAccountId,
+      companyName: existing.companyName ?? contact.companyName,
+      isInternal: existing.isInternal || contact.isInternal,
     });
   });
+
+  return [...byContactId.values()].sort(compareMeetingContacts);
+}
+
+function isFreshEmployeeDirectory(updatedAt: string | null): boolean {
+  if (!updatedAt) {
+    return false;
+  }
+
+  const updatedAtMs = Date.parse(updatedAt);
+  if (!Number.isFinite(updatedAtMs)) {
+    return false;
+  }
+
+  return Date.now() - updatedAtMs <= getEnv().CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS;
+}
+
+function isCompleteEnoughEmployeeDirectory(cachedCount: number): boolean {
+  const expectedEmployeeCount = readEmployeeDirectorySnapshot().items.length;
+  if (expectedEmployeeCount <= 0) {
+    return cachedCount > 0;
+  }
+
+  // Older caches built from the pre-hydration path can be "fresh" but still contain
+  // only a handful of employees. Trust the cache only once it reaches a reasonable
+  // floor relative to the known employee directory.
+  return cachedCount >= Math.min(expectedEmployeeCount, 25);
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -222,10 +325,24 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       rawContacts,
       allowedAccountsByBusinessId,
     );
+    const employeeDirectoryMeta = readCallEmployeeDirectoryMeta();
+    const cachedEmployeeDirectory = readCallEmployeeDirectory();
+    const internalEmployees =
+      cachedEmployeeDirectory.length > 0 &&
+      isFreshEmployeeDirectory(employeeDirectoryMeta.latestUpdatedAt) &&
+      isCompleteEnoughEmployeeDirectory(cachedEmployeeDirectory.length)
+        ? cachedEmployeeDirectory
+        : await syncCallEmployeeDirectory(cookieValue, authCookieRefresh);
+    const employees = buildMeetingEmployeeOptions(internalEmployees);
+    const mergedContacts = mergeMeetingContactOptions(
+      contacts,
+      buildInternalEmployeeContactOptions(employees),
+    );
 
     const response = NextResponse.json({
       accounts: accountOptions,
-      contacts,
+      contacts: mergedContacts,
+      employees,
       defaultTimeZone: DEFAULT_MEETING_TIME_ZONE,
     });
     if (authCookieRefresh.value) {

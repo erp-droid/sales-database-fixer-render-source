@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { formatPhoneForTwilioDial } from "@/lib/phone";
+import { formatPhoneForDisplay, formatPhoneForTwilioDial } from "@/lib/phone";
 
 import styles from "./twilio-call-provider.module.css";
 
@@ -29,6 +29,36 @@ type CallStatusResponse = {
   sessionId: string;
 };
 
+type CallerPhoneResponse = {
+  phoneNumber?: string | null;
+  error?: string;
+};
+
+type CallerVerificationResponse =
+  | {
+      status: "idle";
+      phoneNumber: null;
+    }
+  | {
+      status: "pending";
+      phoneNumber: string;
+      validationCode: string;
+      callSid: string;
+      updatedAt: string;
+    }
+  | {
+      status: "verified";
+      phoneNumber: string;
+      verifiedAt: string | null;
+      updatedAt: string;
+    }
+  | {
+      status: "failed";
+      phoneNumber: string;
+      message: string;
+      updatedAt: string;
+    };
+
 type StartCallContext = {
   sourcePage?: "accounts" | "map" | "tasks" | "quality";
   linkedBusinessAccountId?: string | null;
@@ -48,6 +78,28 @@ type TwilioCallContextValue = {
 
 const TwilioCallContext = createContext<TwilioCallContextValue | null>(null);
 
+function buildCallNumberLines(
+  userPhone: string | null,
+  targetPhone: string | null,
+  isInitializing: boolean,
+): {
+  userPhoneLine: string | null;
+  targetPhoneLine: string | null;
+} {
+  const formattedUserPhone = formatPhoneForDisplay(userPhone);
+  const formattedTargetPhone = formatPhoneForDisplay(targetPhone);
+
+  return {
+    userPhoneLine:
+      formattedUserPhone
+        ? `Your phone: ${formattedUserPhone}`
+        : isInitializing && formattedTargetPhone
+          ? "Your phone: resolving..."
+          : null,
+    targetPhoneLine: formattedTargetPhone ? `Calling: ${formattedTargetPhone}` : null,
+  };
+}
+
 function parseErrorMessage(payload: unknown): string {
   if (!payload || typeof payload !== "object") {
     return "Calling is unavailable right now.";
@@ -59,20 +111,62 @@ function parseErrorMessage(payload: unknown): string {
     : "Calling is unavailable right now.";
 }
 
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" ||
+      error.message.toLowerCase().includes("aborted"))
+  );
+}
+
+async function fetchJsonWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
 async function startServerCall(
   phone: string,
   context?: StartCallContext,
 ): Promise<StartCallResponse> {
-  const response = await fetch("/api/twilio/call", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      to: phone,
-      context,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetchJsonWithTimeout(
+      "/api/twilio/call",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          to: phone,
+          context,
+        }),
+      },
+      20000,
+    );
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(
+        "Call setup timed out while resolving the signed-in employee phone. Please retry.",
+      );
+    }
+    throw error;
+  }
   const payload = (await response.json().catch(() => null)) as
     | StartCallResponse
     | { error?: string }
@@ -102,13 +196,135 @@ async function endServerCall(callSid: string): Promise<void> {
   }
 }
 
+async function readCallerPhone(): Promise<string | null> {
+  const response = await fetch("/api/twilio/caller-profile", {
+    cache: "no-store",
+  });
+  const payload = (await response.json().catch(() => null)) as CallerPhoneResponse | null;
+  if (!response.ok) {
+    return null;
+  }
+
+  return typeof payload?.phoneNumber === "string" && payload.phoneNumber.trim()
+    ? payload.phoneNumber
+    : null;
+}
+
+async function saveCallerPhone(phoneNumber: string): Promise<string> {
+  const response = await fetch("/api/twilio/caller-profile", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      phoneNumber,
+    }),
+  });
+  const payload = (await response.json().catch(() => null)) as CallerPhoneResponse | null;
+  if (!response.ok || typeof payload?.phoneNumber !== "string" || !payload.phoneNumber.trim()) {
+    throw new Error(parseErrorMessage(payload));
+  }
+
+  return payload.phoneNumber;
+}
+
+async function startCallerVerificationRequest(): Promise<CallerVerificationResponse> {
+  const response = await fetch("/api/twilio/caller-verification", {
+    method: "POST",
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | CallerVerificationResponse
+    | { error?: string }
+    | null;
+
+  if (!response.ok || !payload || typeof (payload as { status?: string }).status !== "string") {
+    throw new Error(parseErrorMessage(payload));
+  }
+
+  return payload as CallerVerificationResponse;
+}
+
+async function readCallerVerificationStatus(): Promise<CallerVerificationResponse | null> {
+  const response = await fetch("/api/twilio/caller-verification", {
+    cache: "no-store",
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | CallerVerificationResponse
+    | { error?: string }
+    | null;
+
+  if (!response.ok) {
+    return null;
+  }
+
+  return payload && typeof (payload as { status?: string }).status === "string"
+    ? (payload as CallerVerificationResponse)
+    : null;
+}
+
+function shouldOfferCallerVerification(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized.includes("verify that employee number in twilio first") ||
+    normalized.includes("cannot present") ||
+    normalized.includes("caller id")
+  );
+}
+
+function shouldOfferCallerPhoneSetup(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized.includes("signed-in employee phone") ||
+    normalized.includes("phone can be read from acumatica") ||
+    normalized.includes("call setup timed out while resolving") ||
+    normalized.includes("your phone number is configured")
+  );
+}
+
 export function TwilioCallProvider({ children }: { children: ReactNode }) {
   const [callSid, setCallSid] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
   const [activeLabel, setActiveLabel] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
+  const [cachedCallerPhone, setCachedCallerPhone] = useState<string | null>(null);
+  const [activeUserPhone, setActiveUserPhone] = useState<string | null>(null);
+  const [activeTargetPhone, setActiveTargetPhone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [callerVerification, setCallerVerification] = useState<CallerVerificationResponse | null>(null);
+  const [isStartingCallerVerification, setIsStartingCallerVerification] = useState(false);
+  const [isSavingCallerPhone, setIsSavingCallerPhone] = useState(false);
+  const [lastCallRequest, setLastCallRequest] = useState<{
+    phone: string;
+    label?: string;
+    context?: StartCallContext;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void readCallerPhone()
+      .then((phoneNumber) => {
+        if (!cancelled) {
+          setCachedCallerPhone(phoneNumber);
+        }
+      })
+      .catch(() => undefined);
+    void readCallerVerificationStatus()
+      .then((verification) => {
+        if (!cancelled && verification && verification.status !== "idle") {
+          setCallerVerification(verification);
+          if (verification.phoneNumber) {
+            setCachedCallerPhone(verification.phoneNumber);
+          }
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function startCall(
     phone: string,
@@ -121,10 +337,18 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    setLastCallRequest({
+      phone,
+      label,
+      context,
+    });
     setError(null);
+    setCallerVerification(null);
     setIsInitializing(true);
     setActiveLabel(label ?? phone);
     setStatusText("Calling your phone...");
+    setActiveUserPhone(cachedCallerPhone);
+    setActiveTargetPhone(dialTarget);
 
     try {
       if (callSid) {
@@ -134,6 +358,11 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
       const payload = await startServerCall(dialTarget, context);
       setCallSid(payload.callSid);
       setSessionId(payload.sessionId ?? null);
+      setActiveUserPhone(payload.userPhone ?? cachedCallerPhone ?? null);
+      if (payload.userPhone) {
+        setCachedCallerPhone(payload.userPhone);
+      }
+      setActiveTargetPhone(payload.targetPhone ?? dialTarget);
       setStatusText("Answer your phone to connect the call.");
     } catch (callError) {
       setError(callError instanceof Error ? callError.message : "Calling failed.");
@@ -141,10 +370,127 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
       setSessionId(null);
       setActiveLabel(null);
       setStatusText(null);
+      setActiveUserPhone(null);
+      setActiveTargetPhone(null);
     } finally {
       setIsInitializing(false);
     }
   }
+
+  async function beginCallerVerification(): Promise<void> {
+    setIsStartingCallerVerification(true);
+    setError(null);
+
+    try {
+      const verification = await startCallerVerificationRequest();
+      setCallerVerification(verification);
+      if (verification.phoneNumber) {
+        setCachedCallerPhone(verification.phoneNumber);
+      }
+    } catch (verificationError) {
+      setError(
+        verificationError instanceof Error
+          ? verificationError.message
+          : "Unable to start phone verification.",
+      );
+    } finally {
+      setIsStartingCallerVerification(false);
+    }
+  }
+
+  async function configureCallerPhone(): Promise<void> {
+    const initialValue = formatPhoneForDisplay(cachedCallerPhone) ?? "";
+    const enteredPhone = window.prompt(
+      "Enter the phone number Twilio should ring for you.",
+      initialValue,
+    );
+    if (!enteredPhone?.trim()) {
+      return;
+    }
+
+    setIsSavingCallerPhone(true);
+    setError(null);
+
+    try {
+      const savedPhone = await saveCallerPhone(enteredPhone);
+      setCachedCallerPhone(savedPhone);
+      setActiveUserPhone(savedPhone);
+      await beginCallerVerification();
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Unable to save your phone number.",
+      );
+    } finally {
+      setIsSavingCallerPhone(false);
+    }
+  }
+
+  useEffect(() => {
+    if (callerVerification?.status !== "pending") {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function pollVerification(): Promise<void> {
+      try {
+        const verification = await readCallerVerificationStatus();
+        if (!verification || cancelled) {
+          return;
+        }
+
+        setCallerVerification(verification);
+        if (verification.phoneNumber) {
+          setCachedCallerPhone(verification.phoneNumber);
+        }
+      } catch {
+        // Keep polling on transient failures.
+      }
+    }
+
+    void pollVerification();
+    const intervalId = window.setInterval(() => {
+      void pollVerification();
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [callerVerification]);
+
+  useEffect(() => {
+    if (!activeLabel || activeUserPhone || !cachedCallerPhone) {
+      return;
+    }
+
+    setActiveUserPhone(cachedCallerPhone);
+  }, [activeLabel, activeUserPhone, cachedCallerPhone]);
+
+  useEffect(() => {
+    if (!activeLabel || activeUserPhone) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void readCallerPhone()
+      .then((phoneNumber) => {
+        if (cancelled || !phoneNumber) {
+          return;
+        }
+
+        setCachedCallerPhone(phoneNumber);
+        setActiveUserPhone(phoneNumber);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeLabel, activeUserPhone]);
 
   async function endCall(): Promise<void> {
     const activeCallSid = callSid;
@@ -152,6 +498,8 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
     setSessionId(null);
     setActiveLabel(null);
     setStatusText(null);
+    setActiveUserPhone(null);
+    setActiveTargetPhone(null);
 
     if (!activeCallSid) {
       return;
@@ -198,6 +546,8 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
         setSessionId(null);
         setActiveLabel(null);
         setStatusText(null);
+        setActiveUserPhone(null);
+        setActiveTargetPhone(null);
       } catch {
         // Ignore transient polling failures and keep the current dock state.
       }
@@ -213,6 +563,18 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
       window.clearInterval(intervalId);
     };
   }, [activeLabel, sessionId]);
+
+  const callNumberLines = buildCallNumberLines(
+    activeUserPhone,
+    activeTargetPhone,
+    isInitializing,
+  );
+  const shouldShowVerifyAction = Boolean(error && shouldOfferCallerVerification(error));
+  const shouldShowCallerPhoneSetup = Boolean(error && shouldOfferCallerPhoneSetup(error));
+  const verificationPhoneLine =
+    callerVerification?.phoneNumber
+      ? `Phone to verify: ${formatPhoneForDisplay(callerVerification.phoneNumber)}`
+      : null;
 
   return (
     <TwilioCallContext.Provider
@@ -233,6 +595,12 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
               <p className={styles.statusMeta}>
                 {statusText ?? "Answer your phone to connect the call."}
               </p>
+              {callNumberLines.userPhoneLine ? (
+                <p className={styles.callNumbers}>{callNumberLines.userPhoneLine}</p>
+              ) : null}
+              {callNumberLines.targetPhoneLine ? (
+                <p className={styles.callNumbers}>{callNumberLines.targetPhoneLine}</p>
+              ) : null}
             </div>
             <button
               className={styles.hangupButton}
@@ -252,6 +620,34 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
             <div>
               <p className={styles.statusLabel}>Call failed</p>
               <p className={styles.statusMeta}>{error}</p>
+              {shouldShowVerifyAction ? (
+                <div className={styles.actionRow}>
+                  <button
+                    className={styles.actionButton}
+                    disabled={isStartingCallerVerification}
+                    onClick={() => {
+                      void beginCallerVerification();
+                    }}
+                    type="button"
+                  >
+                    {isStartingCallerVerification ? "Starting..." : "Verify my number"}
+                  </button>
+                </div>
+              ) : null}
+              {shouldShowCallerPhoneSetup ? (
+                <div className={styles.actionRow}>
+                  <button
+                    className={styles.actionButton}
+                    disabled={isSavingCallerPhone}
+                    onClick={() => {
+                      void configureCallerPhone();
+                    }}
+                    type="button"
+                  >
+                    {isSavingCallerPhone ? "Saving..." : "Set my phone"}
+                  </button>
+                </div>
+              ) : null}
             </div>
             <button
               aria-label="Dismiss call error"
@@ -260,6 +656,78 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
               type="button"
             >
               x
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {callerVerification && callerVerification.status !== "idle" ? (
+        <div className={`${styles.dock} ${styles.verification}`}>
+          <div>
+            <p className={styles.statusLabel}>Verify your phone number</p>
+            {callerVerification.status === "pending" ? (
+              <>
+                <p className={styles.statusMeta}>
+                  Twilio is calling your employee phone now. Answer it and enter this code on the keypad.
+                </p>
+                <p className={styles.verificationCode}>{callerVerification.validationCode}</p>
+              </>
+            ) : null}
+            {callerVerification.status === "verified" ? (
+              <p className={styles.statusMeta}>
+                Your employee phone number is now verified in Twilio. Retry the call.
+              </p>
+            ) : null}
+            {callerVerification.status === "failed" ? (
+              <p className={styles.statusMeta}>{callerVerification.message}</p>
+            ) : null}
+            {verificationPhoneLine ? (
+              <p className={styles.callNumbers}>{verificationPhoneLine}</p>
+            ) : null}
+          </div>
+          <div className={styles.actionRow}>
+            {callerVerification.status === "pending" ? (
+              <button
+                className={styles.actionButton}
+                onClick={() => {
+                  void beginCallerVerification();
+                }}
+                type="button"
+              >
+                Call again
+              </button>
+            ) : null}
+            {callerVerification.status === "failed" ? (
+              <button
+                className={styles.actionButton}
+                onClick={() => {
+                  void beginCallerVerification();
+                }}
+                type="button"
+              >
+                Try again
+              </button>
+            ) : null}
+            {callerVerification.status === "verified" && lastCallRequest ? (
+              <button
+                className={styles.actionButton}
+                onClick={() => {
+                  void startCall(
+                    lastCallRequest.phone,
+                    lastCallRequest.label,
+                    lastCallRequest.context,
+                  );
+                }}
+                type="button"
+              >
+                Retry call
+              </button>
+            ) : null}
+            <button
+              className={styles.secondaryActionButton}
+              onClick={() => setCallerVerification(null)}
+              type="button"
+            >
+              Close
             </button>
           </div>
         </div>

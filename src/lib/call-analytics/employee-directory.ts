@@ -1,9 +1,20 @@
-import type { AuthCookieRefreshState, RawContact } from "@/lib/acumatica";
-import { fetchContacts } from "@/lib/acumatica";
+import type {
+  AuthCookieRefreshState,
+  EmployeeProfileItem,
+  RawContact,
+} from "@/lib/acumatica";
+import {
+  fetchContacts,
+  fetchEmployeeProfiles,
+  readWrappedNumber,
+  readWrappedString,
+} from "@/lib/acumatica";
 import { formatPhoneForTwilioDial } from "@/lib/phone";
 import { getReadModelDb } from "@/lib/read-model/db";
 import { INTERNAL_EMPLOYEE_EMAIL_DOMAINS } from "@/lib/internal-records";
 import type { CallEmployeeDirectoryItem } from "@/lib/call-analytics/types";
+
+let callEmployeeDirectorySyncPromise: Promise<CallEmployeeDirectoryItem[]> | null = null;
 
 type StoredEmployeeDirectoryRow = {
   login_name: string;
@@ -26,68 +37,6 @@ export type CallEmployeeDirectoryMeta = {
   latestUpdatedAt: string | null;
 };
 
-function readWrappedString(record: RawContact, key: string): string | null {
-  if (!record || typeof record !== "object") {
-    return null;
-  }
-
-  const field = record[key];
-  if (!field || typeof field !== "object") {
-    return null;
-  }
-
-  const value = (field as Record<string, unknown>).value;
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readWrappedNumber(record: RawContact, key: string): number | null {
-  if (!record || typeof record !== "object") {
-    return null;
-  }
-
-  const field = record[key];
-  if (!field || typeof field !== "object") {
-    return null;
-  }
-
-  const value = (field as Record<string, unknown>).value;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
-}
-
-function readWrappedBoolean(record: RawContact, key: string): boolean {
-  if (!record || typeof record !== "object") {
-    return false;
-  }
-
-  const field = record[key];
-  if (!field || typeof field !== "object") {
-    return false;
-  }
-
-  return Boolean((field as Record<string, unknown>).value);
-}
-
-function readContactPhone(record: RawContact): string | null {
-  return (
-    readWrappedString(record, "Phone1") ??
-    readWrappedString(record, "Phone2") ??
-    readWrappedString(record, "Phone3")
-  );
-}
-
-function readContactEmail(record: RawContact): string | null {
-  return readWrappedString(record, "Email") ?? readWrappedString(record, "EMail");
-}
-
-function readContactDisplayName(record: RawContact): string | null {
-  return (
-    readWrappedString(record, "DisplayName") ??
-    readWrappedString(record, "FullName") ??
-    readWrappedString(record, "ContactName")
-  );
-}
-
 function buildInternalContactFilter(): string {
   return INTERNAL_EMPLOYEE_EMAIL_DOMAINS.map(
     (domain) => `substringof('@${domain.replace(/'/g, "''")}',Email)`,
@@ -109,63 +58,187 @@ function normalizeLoginName(email: string | null): string | null {
   return local || null;
 }
 
-function normalizeInternalContact(record: RawContact): CallEmployeeDirectoryItem | null {
-  const email = readContactEmail(record);
-  const loginName = normalizeLoginName(email);
-  const displayName = readContactDisplayName(record) ?? loginName;
-  const normalizedPhone = formatPhoneForTwilioDial(readContactPhone(record));
+function isInternalEmployeeEmail(email: string | null): boolean {
+  const normalizedEmail = email?.trim().toLowerCase() ?? "";
+  return INTERNAL_EMPLOYEE_EMAIL_DOMAINS.some((domain) =>
+    normalizedEmail.endsWith(`@${domain}`),
+  );
+}
 
-  if (!loginName || !displayName || !normalizedPhone) {
+function buildInternalContactIdByEmail(contacts: RawContact[]): Map<string, number> {
+  const byEmail = new Map<string, number>();
+  for (const contact of contacts) {
+    const email =
+      readWrappedString(contact, "Email") || readWrappedString(contact, "EMail") || "";
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail || !isInternalEmployeeEmail(normalizedEmail)) {
+      continue;
+    }
+
+    const contactId = readWrappedNumber(contact, "ContactID");
+    if (contactId === null) {
+      continue;
+    }
+
+    if (!byEmail.has(normalizedEmail)) {
+      byEmail.set(normalizedEmail, contactId);
+    }
+  }
+
+  return byEmail;
+}
+
+function readContactDisplayName(contact: RawContact): string | null {
+  const explicit =
+    readWrappedString(contact, "DisplayName") ||
+    readWrappedString(contact, "FullName") ||
+    readWrappedString(contact, "ContactName") ||
+    readWrappedString(contact, "Attention");
+  if (explicit) {
+    return explicit.trim() || null;
+  }
+
+  const composite = [
+    readWrappedString(contact, "FirstName"),
+    readWrappedString(contact, "MiddleName"),
+    readWrappedString(contact, "LastName"),
+  ]
+    .filter((value) => value.trim().length > 0)
+    .join(" ")
+    .trim();
+
+  return composite || null;
+}
+
+function buildInternalContactByDisplayName(contacts: RawContact[]): Map<string, RawContact> {
+  const byDisplayName = new Map<string, RawContact>();
+  for (const contact of contacts) {
+    const displayName = readContactDisplayName(contact);
+    if (!displayName) {
+      continue;
+    }
+
+    const email =
+      readWrappedString(contact, "Email") || readWrappedString(contact, "EMail") || null;
+    if (!isInternalEmployeeEmail(email)) {
+      continue;
+    }
+
+    const key = normalizeComparable(displayName);
+    if (!byDisplayName.has(key)) {
+      byDisplayName.set(key, contact);
+    }
+  }
+
+  return byDisplayName;
+}
+
+function shouldReplaceDirectoryItem(
+  existing: CallEmployeeDirectoryItem | undefined,
+  candidate: CallEmployeeDirectoryItem,
+): boolean {
+  if (!existing) {
+    return true;
+  }
+
+  return (
+    (candidate.isActive && !existing.isActive) ||
+    (candidate.normalizedPhone !== null && existing.normalizedPhone === null) ||
+    (candidate.contactId !== null && existing.contactId === null)
+  );
+}
+
+function normalizeInternalEmployeeProfile(
+  profile: EmployeeProfileItem,
+  contactIdsByEmail: Map<string, number>,
+  contactsByDisplayName: Map<string, RawContact>,
+): CallEmployeeDirectoryItem | null {
+  const fallbackContact =
+    contactsByDisplayName.get(normalizeComparable(profile.displayName?.trim() || "")) ?? null;
+  const fallbackEmail =
+    readWrappedString(fallbackContact, "Email") ||
+    readWrappedString(fallbackContact, "EMail") ||
+    null;
+  const email = (profile.email?.trim().toLowerCase() ?? fallbackEmail?.trim().toLowerCase()) ?? null;
+  const loginName = normalizeLoginName(email);
+  const displayName = profile.displayName?.trim() || loginName;
+  const normalizedPhone = formatPhoneForTwilioDial(profile.phone);
+
+  if (!loginName || !displayName || !email || !isInternalEmployeeEmail(email)) {
     return null;
   }
 
   return {
     loginName,
-    contactId: readWrappedNumber(record, "ContactID"),
+    contactId:
+      profile.contactId ??
+      contactIdsByEmail.get(email) ??
+      readWrappedNumber(fallbackContact, "ContactID") ??
+      null,
     displayName,
     email,
     normalizedPhone,
     callerIdPhone: normalizedPhone,
-    isActive: readWrappedBoolean(record, "Active") || readWrappedBoolean(record, "IsActive"),
+    isActive: profile.isActive,
     updatedAt: new Date().toISOString(),
   };
+}
+
+export function buildCallEmployeeDirectoryFromEmployeeProfiles(
+  profiles: EmployeeProfileItem[],
+  internalContacts: RawContact[] = [],
+): CallEmployeeDirectoryItem[] {
+  const contactIdsByEmail = buildInternalContactIdByEmail(internalContacts);
+  const contactsByDisplayName = buildInternalContactByDisplayName(internalContacts);
+  const deduped = new Map<string, CallEmployeeDirectoryItem>();
+  for (const profile of profiles) {
+    const normalized = normalizeInternalEmployeeProfile(
+      profile,
+      contactIdsByEmail,
+      contactsByDisplayName,
+    );
+    if (!normalized) {
+      continue;
+    }
+
+    const existing = deduped.get(normalized.loginName);
+    if (shouldReplaceDirectoryItem(existing, normalized)) {
+      deduped.set(normalized.loginName, normalized);
+    }
+  }
+
+  return [...deduped.values()].sort((left, right) =>
+    normalizeComparable(left.displayName).localeCompare(normalizeComparable(right.displayName)),
+  );
 }
 
 export async function syncCallEmployeeDirectory(
   cookieValue: string,
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<CallEmployeeDirectoryItem[]> {
-  const contacts = await fetchContacts(
-    cookieValue,
-    {
-      batchSize: 200,
-      filter: buildInternalContactFilter(),
-    },
-    authCookieRefresh,
-  );
+  if (!callEmployeeDirectorySyncPromise) {
+    callEmployeeDirectorySyncPromise = (async () => {
+      const [profiles, contacts] = await Promise.all([
+        fetchEmployeeProfiles(cookieValue, authCookieRefresh),
+        fetchContacts(
+          cookieValue,
+          {
+            batchSize: 200,
+            filter: buildInternalContactFilter(),
+          },
+          authCookieRefresh,
+        ),
+      ]);
 
-  const deduped = new Map<string, CallEmployeeDirectoryItem>();
-  for (const contact of contacts) {
-    const normalized = normalizeInternalContact(contact);
-    if (!normalized) {
-      continue;
-    }
-
-    const existing = deduped.get(normalized.loginName);
-    if (
-      !existing ||
-      (normalized.isActive && !existing.isActive) ||
-      (normalized.contactId !== null && existing.contactId === null)
-    ) {
-      deduped.set(normalized.loginName, normalized);
-    }
+      const items = buildCallEmployeeDirectoryFromEmployeeProfiles(profiles, contacts);
+      replaceCallEmployeeDirectory(items);
+      return items;
+    })().finally(() => {
+      callEmployeeDirectorySyncPromise = null;
+    });
   }
 
-  const items = [...deduped.values()].sort((left, right) =>
-    normalizeComparable(left.displayName).localeCompare(normalizeComparable(right.displayName)),
-  );
-  replaceCallEmployeeDirectory(items);
-  return items;
+  return callEmployeeDirectorySyncPromise;
 }
 
 export function replaceCallEmployeeDirectory(items: CallEmployeeDirectoryItem[]): void {
@@ -203,6 +276,13 @@ export function replaceCallEmployeeDirectory(items: CallEmployeeDirectoryItem[])
   });
 
   replace(items);
+}
+
+export function upsertCallEmployeeDirectoryItem(item: CallEmployeeDirectoryItem): void {
+  const current = readCallEmployeeDirectory().filter(
+    (existing) => normalizeComparable(existing.loginName) !== normalizeComparable(item.loginName),
+  );
+  replaceCallEmployeeDirectory([...current, item]);
 }
 
 export function readCallEmployeeDirectory(): CallEmployeeDirectoryItem[] {

@@ -9,6 +9,7 @@ import {
   setAuthCookie,
 } from "@/lib/auth";
 import { type AuthCookieRefreshState, validateSessionWithAcumatica } from "@/lib/acumatica";
+import { resolveSignedInCallerIdentity } from "@/lib/caller-identity";
 import {
   createDeferredActionActor,
   hasRunnableDeferredActions,
@@ -60,6 +61,24 @@ function buildStoredUser(request: NextRequest): { id: string; name: string } | n
   };
 }
 
+function buildInvalidSessionResponse(): NextResponse {
+  const response = NextResponse.json({ authenticated: false, user: null });
+  clearAuthCookie(response);
+  clearStoredLoginName(response);
+  return response;
+}
+
+function runInBackground(task: () => Promise<void>): void {
+  try {
+    after(task);
+    return;
+  } catch {
+    queueMicrotask(() => {
+      void task().catch(() => undefined);
+    });
+  }
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const cookieValue = getAuthCookieValue(request);
   const authCookieRefresh: AuthCookieRefreshState = {
@@ -74,16 +93,35 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   try {
     const payload = await validateSessionWithTimeout(cookieValue, authCookieRefresh);
-    const normalizedUser = normalizeSessionUser(payload) ?? buildStoredUser(request);
+    const storedUser = buildStoredUser(request);
+    if (!storedUser?.id) {
+      return buildInvalidSessionResponse();
+    }
+
+    const normalizedUser = normalizeSessionUser(payload) ?? storedUser;
     const deferredActor = createDeferredActionActor({
       loginName: normalizedUser?.id ?? null,
       name: normalizedUser?.name ?? null,
     });
 
-    if (hasRunnableDeferredActions()) {
-      after(async () => {
+    const activeCookieValue = authCookieRefresh.value ?? cookieValue;
+    if (hasRunnableDeferredActions() || storedUser.id) {
+      runInBackground(async () => {
         try {
-          await runDueDeferredActions(cookieValue, deferredActor, { value: null });
+          await resolveSignedInCallerIdentity(
+            activeCookieValue,
+            storedUser.id,
+            { value: null },
+            { allowFullDirectorySync: false },
+          );
+        } catch (error) {
+          if (!(error instanceof HttpError) || ![403, 422].includes(error.status)) {
+            // Keep the session check resilient. Calling enforces caller identity.
+          }
+        }
+
+        try {
+          await runDueDeferredActions(activeCookieValue, deferredActor, { value: null });
         } catch {
           // Keep session validation responsive even if deferred execution fails.
         }
@@ -100,10 +138,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return response;
   } catch (error) {
     if (error instanceof HttpError && error.status === 401) {
-      const response = NextResponse.json({ authenticated: false, user: null });
-      clearAuthCookie(response);
-      clearStoredLoginName(response);
-      return response;
+      return buildInvalidSessionResponse();
     }
 
     if (

@@ -36,6 +36,10 @@ let cachedInventory:
     }
   | null = null;
 
+export function clearTwilioPhoneInventoryCache(): void {
+  cachedInventory = null;
+}
+
 export function getTwilioVoiceConfig(): TwilioVoiceConfig | null {
   const env = getEnv();
   if (
@@ -89,8 +93,12 @@ export function normalizeTwilioPhoneNumber(value: string | null | undefined): st
   return formatPhoneForTwilioDial(value);
 }
 
-export async function readTwilioPhoneInventory(): Promise<TwilioPhoneInventory> {
-  if (cachedInventory && cachedInventory.expiresAt > Date.now()) {
+export async function readTwilioPhoneInventory(
+  options?: {
+    forceRefresh?: boolean;
+  },
+): Promise<TwilioPhoneInventory> {
+  if (!options?.forceRefresh && cachedInventory && cachedInventory.expiresAt > Date.now()) {
     return cachedInventory.inventory;
   }
 

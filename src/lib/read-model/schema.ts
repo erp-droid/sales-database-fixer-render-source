@@ -114,6 +114,29 @@ CREATE INDEX IF NOT EXISTS idx_call_employee_directory_normalized_phone
 CREATE INDEX IF NOT EXISTS idx_call_employee_directory_caller_id_phone
   ON call_employee_directory(caller_id_phone);
 
+CREATE TABLE IF NOT EXISTS caller_phone_overrides (
+  login_name TEXT PRIMARY KEY,
+  phone_number TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_caller_phone_overrides_updated_at
+  ON caller_phone_overrides(updated_at);
+
+CREATE TABLE IF NOT EXISTS caller_id_verifications (
+  login_name TEXT PRIMARY KEY,
+  phone_number TEXT NOT NULL,
+  validation_code TEXT,
+  call_sid TEXT,
+  status TEXT NOT NULL,
+  failure_message TEXT,
+  verified_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_caller_id_verifications_phone_number
+  ON caller_id_verifications(phone_number);
+
 CREATE TABLE IF NOT EXISTS call_legs (
   sid TEXT PRIMARY KEY,
   parent_sid TEXT,

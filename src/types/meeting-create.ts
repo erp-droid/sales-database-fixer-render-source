@@ -21,6 +21,15 @@ export type MeetingContactOption = {
   isInternal: boolean;
 };
 
+export type MeetingEmployeeOption = {
+  key: string;
+  loginName: string;
+  employeeName: string;
+  email: string;
+  contactId: number | null;
+  isInternal: true;
+};
+
 export type MeetingSourceContext = {
   accountKey: string;
   accountRecordId: string | null;
@@ -34,6 +43,7 @@ export type MeetingSourceContext = {
 
 export type MeetingCreateOptionsResponse = {
   contacts: MeetingContactOption[];
+  employees: MeetingEmployeeOption[];
   accounts: MeetingAccountOption[];
   defaultTimeZone: string;
 };

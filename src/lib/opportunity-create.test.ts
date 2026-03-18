@@ -152,7 +152,7 @@ describe("opportunity create helpers", () => {
     expect(payload.note).toEqual({ value: "Bring drawings" });
   });
 
-  it("maps class, stage, location, and estimation from the request", async () => {
+  it("maps class, stage id, location, and estimation from the request", async () => {
     const { buildOpportunityCreatePayload } = await import("@/lib/opportunity-create");
 
     const payload = buildOpportunityCreatePayload({
@@ -175,8 +175,33 @@ describe("opportunity create helpers", () => {
     }) as Record<string, { value: string }>;
 
     expect(payload.ClassID).toEqual({ value: "SERVICE" });
-    expect(payload.Stage).toEqual({ value: "Qualified" });
+    expect(payload.StageID).toEqual({ value: "Qualified" });
     expect(payload.Location).toEqual({ value: "SECONDARY" });
     expect(payload.Estimation).toEqual({ value: "2026-03-12T00:00:00.000Z" });
+  });
+
+  it("falls back to the configured default stage when the request stage is blank", async () => {
+    const { buildOpportunityCreatePayload } = await import("@/lib/opportunity-create");
+
+    const payload = buildOpportunityCreatePayload({
+      request: {
+        businessAccountRecordId: "record-1",
+        businessAccountId: "02670D2595",
+        contactId: 157497,
+        subject: "Warehouse electrical upgrade",
+        classId: "SERVICE",
+        location: "SECONDARY",
+        stage: "   ",
+        estimationDate: "2026-03-12T00:00:00.000Z",
+        note: null,
+        willWinJob: "Yes",
+        linkToDrive: "https://drive.google.com/test",
+        projectType: "Electrical",
+        ownerId: null,
+        ownerName: "Estimator Default",
+      },
+    }) as Record<string, { value: string }>;
+
+    expect(payload.StageID).toEqual({ value: "Awaiting Estimate" });
   });
 });

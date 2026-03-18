@@ -4,18 +4,14 @@ import {
   buildStoredAuthCookieValueFromSetCookies,
   buildCookieHeader,
   clearStoredLoginName,
-  getAuthCookieValue,
   getSetCookieHeaders,
   setStoredLoginName,
   setAuthCookie,
 } from "@/lib/auth";
 import type { AppEnv } from "@/lib/env";
 import { getEnv } from "@/lib/env";
-import { type AuthCookieRefreshState, validateSessionWithAcumatica } from "@/lib/acumatica";
-import { HttpError } from "@/lib/errors";
 import { storeUserCredentials } from "@/lib/stored-user-credentials";
 
-const EXISTING_SESSION_TIMEOUT_MS = 6000;
 const UPSTREAM_LOGIN_TIMEOUT_MS = 30000;
 const LOGOUT_TIMEOUT_MS = 4000;
 
@@ -42,29 +38,6 @@ async function fetchWithTimeout(
       ...init,
       signal: controller.signal,
     });
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function validateSessionWithTimeout(
-  cookieValue: string,
-  authCookieRefresh: AuthCookieRefreshState,
-): Promise<unknown> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-  }, EXISTING_SESSION_TIMEOUT_MS);
-
-  try {
-    return await validateSessionWithAcumatica(cookieValue, authCookieRefresh, {
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (isAbortError(error)) {
-      throw new HttpError(504, "Session check timed out");
-    }
-    throw error;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -109,7 +82,7 @@ function normalizeUpstreamError(status: number, message: string): NextResponse {
   const normalizedMessage = message || "Authentication service is unavailable";
   const lower = normalizedMessage.toLowerCase();
 
-  if (isConcurrentLoginLimitMessage(lower)) {
+  if (status === 429 || isConcurrentLoginLimitMessage(lower)) {
     return NextResponse.json(
       {
         error:
@@ -153,12 +126,7 @@ function resolveLogoutUrl(env: AppEnv): string | null {
   return url ?? null;
 }
 
-async function logoutExistingSession(request: NextRequest, env: AppEnv): Promise<void> {
-  const existingCookie = request.cookies.get(env.AUTH_COOKIE_NAME)?.value;
-  if (!existingCookie) {
-    return;
-  }
-
+async function logoutCookieValue(cookieValue: string, env: AppEnv): Promise<void> {
   const logoutUrl = resolveLogoutUrl(env);
   if (!logoutUrl) {
     return;
@@ -169,7 +137,7 @@ async function logoutExistingSession(request: NextRequest, env: AppEnv): Promise
     {
       method: "POST",
       headers: {
-        Cookie: buildCookieHeader(existingCookie),
+        Cookie: buildCookieHeader(cookieValue),
         Accept: "application/json",
       },
       cache: "no-store",
@@ -178,6 +146,15 @@ async function logoutExistingSession(request: NextRequest, env: AppEnv): Promise
   ).catch(() => {
     // Best effort only. Login below still proceeds.
   });
+}
+
+async function logoutExistingSession(request: NextRequest, env: AppEnv): Promise<void> {
+  const existingCookie = request.cookies.get(env.AUTH_COOKIE_NAME)?.value;
+  if (!existingCookie) {
+    return;
+  }
+
+  await logoutCookieValue(existingCookie, env);
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -194,38 +171,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // If this browser already has a valid Acumatica session cookie, reuse it
-  // instead of creating a fresh login session.
-  const existingCookie = getAuthCookieValue(request);
-  if (existingCookie) {
-    const refreshState: AuthCookieRefreshState = { value: null };
-    try {
-      await validateSessionWithTimeout(existingCookie, refreshState);
-      const response = NextResponse.json({
-        ok: true,
-        reusedSession: true,
-      });
-      if (refreshState.value) {
-        setAuthCookie(response, refreshState.value);
-      }
-      setStoredLoginName(response, username);
-      if (env.AUTH_PROVIDER === "acumatica") {
-        storeUserCredentials({
-          loginName: username,
-          username,
-          password,
-        });
-      }
-      return response;
-    } catch (error) {
-      if (error instanceof HttpError && error.status !== 401) {
-        // The user explicitly submitted credentials. If the existing session
-        // cannot be verified quickly, continue to a best-effort logout + fresh
-        // login instead of blocking sign-in behind a slow health probe.
-      }
-    }
-  }
-
   const isCustomAuth = env.AUTH_PROVIDER === "custom";
   const loginUrl = isCustomAuth
     ? env.AUTH_LOGIN_URL
@@ -238,9 +183,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // Avoid accumulating extra Acumatica sessions from repeated sign-in attempts
-  // in the same browser instance.
-  await logoutExistingSession(request, env);
+  // Keep sign-in responsive. Any prior browser session is logged out in the
+  // background instead of blocking the explicit login submit.
+  void logoutExistingSession(request, env).catch(() => undefined);
 
   const loginPayload = isCustomAuth
     ? { username, password }

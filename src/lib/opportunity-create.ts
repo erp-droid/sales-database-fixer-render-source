@@ -149,6 +149,9 @@ export function buildOpportunityCreatePayload(input: {
 }): Record<string, unknown> {
   const ownerValue = readText(input.ownerValue);
   const note = readText(input.request.note);
+  const stageValue =
+    readText(input.request.stage) ??
+    buildOpportunityCreateOptions().defaultStage;
 
   return {
     ClassID: {
@@ -163,8 +166,8 @@ export function buildOpportunityCreatePayload(input: {
     ContactID: {
       value: String(input.request.contactId),
     },
-    Stage: {
-      value: input.request.stage,
+    StageID: {
+      value: stageValue,
     },
     Subject: {
       value: input.request.subject,

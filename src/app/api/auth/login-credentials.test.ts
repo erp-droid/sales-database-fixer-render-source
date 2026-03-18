@@ -120,4 +120,3 @@ describe("auth login credential persistence", () => {
     });
   });
 });
-

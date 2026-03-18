@@ -178,4 +178,41 @@ describe("ensureReadModelSchema", () => {
       ]),
     );
   });
+
+  it("creates the caller_phone_overrides table", () => {
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(caller_phone_overrides)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "login_name",
+        "phone_number",
+        "updated_at",
+      ]),
+    );
+  });
+
+  it("creates the caller_id_verifications table", () => {
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(caller_id_verifications)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "login_name",
+        "phone_number",
+        "validation_code",
+        "call_sid",
+        "status",
+        "failure_message",
+        "verified_at",
+        "updated_at",
+      ]),
+    );
+  });
 });

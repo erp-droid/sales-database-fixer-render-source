@@ -1,16 +1,14 @@
 import twilio from "twilio";
 
+import type { AuthCookieRefreshState } from "@/lib/acumatica";
+import { withServiceAcumaticaSession } from "@/lib/acumatica-service-auth";
 import {
-  type AuthCookieRefreshState,
-  findContactsByEmailSubstring,
-  type RawContact,
-} from "@/lib/acumatica";
+  readCallerPhoneOverride,
+  saveCallerPhoneOverride,
+} from "@/lib/caller-phone-overrides";
+import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
+import { resolveSignedInCallerIdentity } from "@/lib/caller-identity";
 import { HttpError } from "@/lib/errors";
-import { getEnv } from "@/lib/env";
-import {
-  isExcludedInternalCompanyName,
-  isExcludedInternalContactEmail,
-} from "@/lib/internal-records";
 import { createTwilioRestClient, normalizeTwilioPhoneNumber, readTwilioPhoneInventory } from "@/lib/twilio";
 
 export type ResolvedCallerProfile = {
@@ -32,160 +30,55 @@ export type StartedBridgeCall = {
   bridgeNumber: string;
 };
 
-function readWrappedString(record: RawContact, key: string): string | null {
-  if (!record || typeof record !== "object") {
+function readCachedCallerDirectoryItem(loginName: string): {
+  contactId: number | null;
+  displayName: string;
+  email: string | null;
+} | null {
+  const normalizedLoginName = loginName.trim().toLowerCase();
+  if (!normalizedLoginName) {
     return null;
   }
 
-  const field = record[key];
-  if (!field || typeof field !== "object") {
+  const item =
+    readCallEmployeeDirectory().find(
+      (candidate) => candidate.loginName.trim().toLowerCase() === normalizedLoginName,
+    ) ?? null;
+  if (!item) {
     return null;
   }
 
-  const value = (field as Record<string, unknown>).value;
-  return typeof value === "string" && value.trim() ? value.trim() : null;
+  return {
+    contactId: item.contactId ?? null,
+    displayName: item.displayName.trim() || normalizedLoginName,
+    email: item.email ?? null,
+  };
 }
-
-function readWrappedNumber(record: RawContact, key: string): number | null {
-  if (!record || typeof record !== "object") {
-    return null;
-  }
-
-  const field = record[key];
-  if (!field || typeof field !== "object") {
-    return null;
-  }
-
-  const value = (field as Record<string, unknown>).value;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
-}
-
-function readWrappedBoolean(record: RawContact, key: string): boolean {
-  if (!record || typeof record !== "object") {
-    return false;
-  }
-
-  const field = record[key];
-  if (!field || typeof field !== "object") {
-    return false;
-  }
-
-  return Boolean((field as Record<string, unknown>).value);
-}
-
-function readContactPhone(record: RawContact): string | null {
-  return (
-    readWrappedString(record, "Phone1") ??
-    readWrappedString(record, "Phone2") ??
-    readWrappedString(record, "Phone3")
-  );
-}
-
-function readContactEmail(record: RawContact): string | null {
-  return readWrappedString(record, "Email") ?? readWrappedString(record, "EMail");
-}
-
-function readContactDisplayName(record: RawContact): string | null {
-  return (
-    readWrappedString(record, "DisplayName") ??
-    readWrappedString(record, "FullName") ??
-    readWrappedString(record, "ContactName")
-  );
-}
-
-function readContactCompanyName(record: RawContact): string | null {
-  return readWrappedString(record, "CompanyName");
-}
-
-function readContactLocalPart(email: string | null): string {
-  if (!email) {
-    return "";
-  }
-
-  const trimmed = email.trim().toLowerCase();
-  const atIndex = trimmed.indexOf("@");
-  return atIndex >= 0 ? trimmed.slice(0, atIndex) : trimmed;
-}
-
-function scoreCandidate(record: RawContact, loginName: string): number {
-  const normalizedLogin = loginName.trim().toLowerCase();
-  const email = readContactEmail(record);
-  const companyName = readContactCompanyName(record);
-  const displayName = readContactDisplayName(record);
-  const phone = readContactPhone(record);
-
-  let score = 0;
-  if (isExcludedInternalContactEmail(email)) {
-    score += 100;
-  }
-  if (isExcludedInternalCompanyName(companyName)) {
-    score += 75;
-  }
-  if (readContactLocalPart(email) === normalizedLogin) {
-    score += 50;
-  }
-  if (displayName?.trim()) {
-    score += 10;
-  }
-  if (phone?.trim()) {
-    score += 10;
-  }
-  if (readWrappedBoolean(record, "Active")) {
-    score += 5;
-  }
-
-  return score;
-}
-
 
 export async function resolveCallerProfile(
   cookieValue: string,
   loginName: string,
   authCookieRefresh?: AuthCookieRefreshState,
+  options?: {
+    employeeId?: string | null;
+  },
 ): Promise<ResolvedCallerProfile> {
-  const normalizedLogin = loginName.trim().toLowerCase();
-  if (!normalizedLogin) {
-    throw new HttpError(401, "Signed-in username is unavailable. Sign out and sign in again.");
-  }
-
-  const contacts = await findContactsByEmailSubstring(
-    cookieValue,
-    normalizedLogin,
-    authCookieRefresh,
+  const normalizedLoginName = loginName.trim().toLowerCase();
+  const cachedOverridePhone = normalizeTwilioPhoneNumber(
+    readCallerPhoneOverride(normalizedLoginName)?.phoneNumber ?? null,
   );
-  if (contacts.length === 0) {
-    throw new HttpError(
-      404,
-      `No Acumatica contact was found for signed-in user '${normalizedLogin}'.`,
-    );
-  }
-
-  const bestCandidate = [...contacts]
-    .sort((left, right) => scoreCandidate(right, normalizedLogin) - scoreCandidate(left, normalizedLogin))
-    .find((record) => normalizeTwilioPhoneNumber(readContactPhone(record)) !== null);
-
-  if (!bestCandidate) {
-    throw new HttpError(
-      422,
-      `The signed-in user '${normalizedLogin}' does not have a valid phone number in Acumatica.`,
-    );
-  }
-
-  const userPhone = normalizeTwilioPhoneNumber(readContactPhone(bestCandidate));
-  if (!userPhone) {
-    throw new HttpError(
-      422,
-      `The signed-in user '${normalizedLogin}' does not have a valid phone number in Acumatica.`,
-    );
-  }
+  const cachedCallerIdentity = readCachedCallerDirectoryItem(normalizedLoginName);
+  let callerIdentity:
+    | Awaited<ReturnType<typeof resolveSignedInCallerIdentity>>
+    | null = null;
+  let callerIdentityError: unknown = null;
 
   const client = createTwilioRestClient();
   if (!client) {
     throw new HttpError(503, "Twilio outbound calling is not configured.");
   }
 
-  const inventory = await readTwilioPhoneInventory();
+  let inventory = await readTwilioPhoneInventory();
   const bridgeNumber = inventory.voiceNumbers[0] ?? null;
   if (!bridgeNumber) {
     throw new HttpError(
@@ -194,23 +87,108 @@ export async function resolveCallerProfile(
     );
   }
 
-  const callerId =
-    inventory.allowedCallerIds.has(userPhone)
-      ? userPhone
-      : normalizeTwilioPhoneNumber(getEnv().TWILIO_CALLER_ID);
-  if (!callerId) {
+  if (cachedOverridePhone) {
+    if (!inventory.allowedCallerIds.has(cachedOverridePhone)) {
+      inventory = await readTwilioPhoneInventory({ forceRefresh: true });
+    }
+    if (!inventory.allowedCallerIds.has(cachedOverridePhone)) {
+      throw new HttpError(
+        422,
+        `Twilio cannot present ${cachedOverridePhone} as caller ID for '${normalizedLoginName}'. Verify that employee number in Twilio first.`,
+      );
+    }
+
+    return {
+      loginName: normalizedLoginName,
+      contactId: cachedCallerIdentity?.contactId ?? null,
+      displayName: cachedCallerIdentity?.displayName ?? normalizedLoginName,
+      email: cachedCallerIdentity?.email ?? null,
+      userPhone: cachedOverridePhone,
+      callerId: cachedOverridePhone,
+      bridgeNumber,
+    };
+  }
+
+  try {
+    callerIdentity = await resolveSignedInCallerIdentity(
+      cookieValue,
+      loginName,
+      authCookieRefresh,
+      {
+        preferredEmployeeId: options?.employeeId ?? null,
+      },
+    );
+  } catch (error) {
+    callerIdentityError = error;
+    if (
+      error instanceof HttpError &&
+      [403, 422].includes(error.status)
+    ) {
+      try {
+        callerIdentity = await withServiceAcumaticaSession(
+          null,
+          (serviceCookieValue, serviceAuthCookieRefresh) =>
+            resolveSignedInCallerIdentity(
+              serviceCookieValue,
+              normalizedLoginName,
+              serviceAuthCookieRefresh,
+              {
+                allowFullDirectorySync: false,
+                preferredEmployeeId: options?.employeeId ?? null,
+              },
+            ),
+        );
+      } catch (serviceError) {
+        callerIdentityError = serviceError;
+      }
+    } else {
+      throw error;
+    }
+  }
+
+  if (!callerIdentity) {
+    if (callerIdentityError instanceof HttpError) {
+      throw callerIdentityError;
+    }
+
     throw new HttpError(
       422,
-      `Twilio cannot present ${userPhone} as caller ID. Verify that number in Twilio first.`,
+      "Calling is unavailable until the signed-in employee phone can be read from Acumatica.",
     );
   }
 
+  const resolvedUserPhone = normalizeTwilioPhoneNumber(callerIdentity.userPhone);
+  if (!resolvedUserPhone) {
+    throw new HttpError(
+      422,
+      `Calling is unavailable for '${normalizedLoginName}'. Internal employee '${callerIdentity.displayName}' does not have a valid phone number in Acumatica.`,
+    );
+  }
+  if (!inventory.allowedCallerIds.has(resolvedUserPhone)) {
+    inventory = await readTwilioPhoneInventory({ forceRefresh: true });
+  }
+  if (!inventory.allowedCallerIds.has(resolvedUserPhone)) {
+    throw new HttpError(
+      422,
+      `Twilio cannot present ${resolvedUserPhone} as caller ID for '${normalizedLoginName}'. Verify that employee number in Twilio first.`,
+    );
+  }
+  const callerId = resolvedUserPhone;
+
+  if (callerIdentity.userPhone) {
+    try {
+      saveCallerPhoneOverride(normalizedLoginName, callerIdentity.userPhone);
+    } catch {
+      // Keep outbound calling resilient even if the local cache write fails.
+    }
+  }
+
   return {
-    loginName: normalizedLogin,
-    contactId: readWrappedNumber(bestCandidate, "ContactID"),
-    displayName: readContactDisplayName(bestCandidate) ?? normalizedLogin,
-    email: readContactEmail(bestCandidate),
-    userPhone,
+    loginName: callerIdentity.loginName,
+    contactId: callerIdentity.contactId ?? null,
+    displayName: callerIdentity.displayName,
+    email: callerIdentity.email ?? null,
+    userPhone: resolvedUserPhone,
     callerId,
     bridgeNumber,
   };

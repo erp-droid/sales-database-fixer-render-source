@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import {
   getAuthCookieValue,
+  normalizeSessionIdentity,
   getStoredLoginName,
   setAuthCookie,
 } from "@/lib/auth";
@@ -34,6 +35,55 @@ type StartPayload = {
 type EndPayload = {
   callSid?: string;
 };
+
+function isEmployeePhoneResolutionError(message: string | null | undefined): boolean {
+  const normalized = message?.trim().toLowerCase() ?? "";
+  return (
+    normalized.includes("custom error module does not recognize this error") ||
+    normalized.includes("insufficient rights to access the employee") ||
+    normalized.includes("employee (ep203000)") ||
+    normalized.includes("valid phone number in acumatica")
+  );
+}
+
+function normalizeCallRouteError(error: unknown): HttpError | null {
+  if (error instanceof HttpError && isEmployeePhoneResolutionError(error.message)) {
+    return new HttpError(
+      422,
+      "Calling is unavailable until the signed-in employee phone can be read from Acumatica.",
+    );
+  }
+
+  if (error instanceof Error && isEmployeePhoneResolutionError(error.message)) {
+    return new HttpError(
+      422,
+      "Calling is unavailable until the signed-in employee phone can be read from Acumatica.",
+    );
+  }
+
+  return null;
+}
+
+function shouldRetryCallerProfileWithSession(error: unknown): boolean {
+  if (!(error instanceof HttpError)) {
+    return false;
+  }
+
+  if ([401, 403].includes(error.status)) {
+    return true;
+  }
+
+  if (error.status !== 422) {
+    return false;
+  }
+
+  const normalized = error.message.trim().toLowerCase();
+  return !(
+    normalized.includes("twilio cannot present") ||
+    normalized.includes("verify that employee number in twilio first") ||
+    normalized.includes("caller id")
+  );
+}
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const cookieValue = getAuthCookieValue(request);
@@ -78,8 +128,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh: AuthCookieRefreshState = { value: null };
 
   try {
-    await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
-
     const loginName = getStoredLoginName(request);
     if (!loginName) {
       throw new HttpError(401, "Signed-in username is unavailable. Sign out and sign in again.");
@@ -88,11 +136,27 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const body = (await request.json().catch(() => null)) as StartPayload | null;
     const targetPhone = typeof body?.to === "string" ? body.to : "";
     const sessionId = createCallSessionId();
-    const callerProfile = await resolveCallerProfile(
-      authCookieRefresh.value ?? cookieValue,
-      loginName,
-      authCookieRefresh,
-    );
+
+    let callerProfile;
+    try {
+      callerProfile = await resolveCallerProfile(cookieValue, loginName);
+    } catch (error) {
+      if (!shouldRetryCallerProfileWithSession(error)) {
+        throw error;
+      }
+
+      const sessionPayload = await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
+      const sessionIdentity = normalizeSessionIdentity(sessionPayload);
+      callerProfile = await resolveCallerProfile(
+        authCookieRefresh.value ?? cookieValue,
+        loginName,
+        authCookieRefresh,
+        {
+          employeeId: sessionIdentity?.employeeId ?? null,
+        },
+      );
+    }
+
     const callbacks = buildTwilioBridgeCallbacks(request, sessionId);
     const startedCall = await startBridgeCall(callerProfile, targetPhone, {
       parentStatusCallback: callbacks.parentStatusCallback,
@@ -128,10 +192,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     return response;
   } catch (error) {
+    const normalizedError = normalizeCallRouteError(error);
     const response =
-      error instanceof HttpError
-        ? NextResponse.json({ error: error.message, details: error.details }, { status: error.status })
-        : NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+      normalizedError instanceof HttpError
+        ? NextResponse.json(
+            { error: normalizedError.message, details: normalizedError.details },
+            { status: normalizedError.status },
+          )
+        : error instanceof HttpError
+          ? NextResponse.json({ error: error.message, details: error.details }, { status: error.status })
+          : NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
 
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);

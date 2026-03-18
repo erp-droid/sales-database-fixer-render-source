@@ -405,6 +405,240 @@ describe("Acumatica endpoint resolution", () => {
   });
 });
 
+describe("fetchEmployeeProfiles", () => {
+  const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    setAcumaticaEnv();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
+  });
+
+  it("hydrates missing employee email and phone from the employee detail endpoint", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes("/Employee?") && url.includes("top=200") && url.includes("skip=0")) {
+        return jsonResponse({
+          status: 200,
+          body: [
+            {
+              EmployeeID: { value: "E0000153" },
+              EmployeeName: { value: "Simon Doal" },
+              Status: { value: "Active" },
+            },
+          ],
+        });
+      }
+
+      if (url.includes("/Employee?") && url.includes("top=200") && url.includes("skip=200")) {
+        return jsonResponse({ status: 200, body: [] });
+      }
+
+      if (url.includes("/Employee/E0000153?$expand=ContactInfo")) {
+        return jsonResponse({
+          status: 200,
+          body: {
+            EmployeeID: { value: "E0000153" },
+            EmployeeName: { value: "Simon Doal" },
+            Status: { value: "Active" },
+            ContactInfo: {
+              Email: { value: "sdoal@meadowb.com" },
+              Phone1: { value: "4374233641" },
+            },
+          },
+        });
+      }
+
+      if (url.includes("/EPEmployee?") || url.includes("/EPEmployee/")) {
+        return jsonResponse({
+          status: 404,
+          body: { message: "Entity EPEmployee not found" },
+        });
+      }
+
+      return jsonResponse({ status: 200, body: [] });
+    });
+
+    const { fetchEmployeeProfiles } = await import("@/lib/acumatica");
+
+    await expect(fetchEmployeeProfiles("cookie")).resolves.toEqual([
+      {
+        employeeId: "E0000153",
+        contactId: null,
+        displayName: "Simon Doal",
+        email: "sdoal@meadowb.com",
+        phone: "4374233641",
+        isActive: true,
+      },
+    ]);
+  });
+});
+
+describe("searchEmployeesByDisplayName", () => {
+  const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    setAcumaticaEnv();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
+  });
+
+  it("queries employees by exact display name without loading the full directory", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes("/Employee?") && url.includes("%24filter=")) {
+        return jsonResponse({
+          status: 200,
+          body: [
+            {
+              EmployeeID: { value: "E0000153" },
+              EmployeeName: { value: "Simon Doal" },
+            },
+          ],
+        });
+      }
+
+      if (url.includes("/EPEmployee?")) {
+        return jsonResponse({
+          status: 404,
+          body: { message: "Entity EPEmployee not found" },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const { searchEmployeesByDisplayName } = await import("@/lib/acumatica");
+
+    await expect(searchEmployeesByDisplayName("cookie", "Simon Doal")).resolves.toEqual([
+      {
+        id: "E0000153",
+        name: "Simon Doal",
+      },
+    ]);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/Employee?");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("DisplayName+eq+%27Simon+Doal%27");
+  });
+});
+
+describe("searchEmployeeProfiles", () => {
+  const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    setAcumaticaEnv();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
+  });
+
+  it("queries employee profiles by exact email and hydrates missing phone from the detail endpoint", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes("/Employee?") && url.includes("Email+eq+%27jserrano%40meadowb.com%27")) {
+        return jsonResponse({
+          status: 200,
+          body: [
+            {
+              EmployeeID: { value: "E0000045" },
+              EmployeeName: { value: "Jorge Serrano" },
+              Email: { value: "jserrano@meadowb.com" },
+              Status: { value: "Active" },
+            },
+          ],
+        });
+      }
+
+      if (url.includes("/Employee/E0000045?$expand=ContactInfo")) {
+        return jsonResponse({
+          status: 200,
+          body: {
+            EmployeeID: { value: "E0000045" },
+            EmployeeName: { value: "Jorge Serrano" },
+            Status: { value: "Active" },
+            ContactInfo: {
+              Email: { value: "jserrano@meadowb.com" },
+              Phone1: { value: "4162304681" },
+            },
+          },
+        });
+      }
+
+      if (url.includes("/EPEmployee?") || url.includes("/EPEmployee/")) {
+        return jsonResponse({
+          status: 404,
+          body: { message: "Entity EPEmployee not found" },
+        });
+      }
+
+      return jsonResponse({ status: 200, body: [] });
+    });
+
+    const { searchEmployeeProfiles } = await import("@/lib/acumatica");
+
+    await expect(
+      searchEmployeeProfiles("cookie", {
+        filter: "Email eq 'jserrano@meadowb.com'",
+      }),
+    ).resolves.toEqual([
+      {
+        employeeId: "E0000045",
+        contactId: null,
+        displayName: "Jorge Serrano",
+        email: "jserrano@meadowb.com",
+        phone: "4162304681",
+        isActive: true,
+      },
+    ]);
+  });
+});
+
 describe("Acumatica environment and login payload", () => {
   const originalEnv = { ...process.env };
 
@@ -436,7 +670,17 @@ describe("Acumatica environment and login payload", () => {
     vi.resetModules();
     setAcumaticaEnv();
 
-    const fetchMock = vi.fn().mockResolvedValue(
+    vi.doMock("@/lib/caller-identity", () => ({
+      resolveSignedInCallerIdentity: vi.fn().mockResolvedValue({
+        loginName: "jorge",
+        contactId: 1,
+        displayName: "Jorge Serrano",
+        email: "jorge@meadowb.com",
+        userPhone: "+14165550100",
+      }),
+    }));
+
+    const fetchMock = vi.fn().mockImplementation(async () =>
       new Response(
         JSON.stringify({ ok: true }),
         {
