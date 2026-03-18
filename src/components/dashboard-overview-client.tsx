@@ -28,8 +28,14 @@ type ErrorPayload = {
   error?: string;
 };
 
+function formatCountWithTotalShare(count: number, total: number): string {
+  const share = total > 0 ? count / total : 0;
+  return `${count.toLocaleString()} · ${formatPercent(share)}`;
+}
+
 function buildPriorityCards(
   stats: DashboardSnapshotResponse["teamStats"],
+  meetingStats: DashboardSnapshotResponse["meetingStats"],
   emailStats: DashboardSnapshotResponse["emailStats"],
 ): Array<{ label: string; value: string; meta?: string }> {
   return [
@@ -37,6 +43,11 @@ function buildPriorityCards(
       label: "Calls",
       value: stats.totalCalls.toLocaleString(),
       meta: `${stats.outboundCalls.toLocaleString()} outbound • ${stats.inboundCalls.toLocaleString()} inbound`,
+    },
+    {
+      label: "Meetings booked",
+      value: meetingStats.totalMeetings.toLocaleString(),
+      meta: `${meetingStats.uniqueBookers.toLocaleString()} creators in the current range`,
     },
     { label: "Connection rate", value: formatPercent(stats.answerRate) },
     {
@@ -69,6 +80,78 @@ function buildSelectedEmployeeCards(
       meta: `${formatPercent(employee.answerRate)} connection rate`,
     },
   ];
+}
+
+function buildSelectedMeetingCards(
+  employee: DashboardSnapshotResponse["meetingLeaderboard"][number],
+  totalMeetings: number,
+): Array<{ label: string; value: string; meta?: string }> {
+  const shareOfTotal = totalMeetings > 0 ? employee.totalMeetings / totalMeetings : 0;
+  const inviteeValue =
+    employee.meetingsWithUnknownAttendeeCount > 0 && employee.totalAttendees === 0
+      ? "Unknown"
+      : employee.totalAttendees.toLocaleString();
+  const inviteeMeta =
+    employee.meetingsWithUnknownAttendeeCount > 0
+      ? `${employee.meetingsWithUnknownAttendeeCount.toLocaleString()} imported meeting${
+          employee.meetingsWithUnknownAttendeeCount === 1 ? "" : "s"
+        } with unknown attendee counts`
+      : `${employee.averageAttendees.toFixed(1)} avg invitees`;
+
+  return [
+    {
+      label: "Meetings booked",
+      value: employee.totalMeetings.toLocaleString(),
+      meta: `${formatPercent(shareOfTotal)} of total`,
+    },
+    {
+      label: "Invitees",
+      value: inviteeValue,
+      meta: inviteeMeta,
+    },
+    {
+      label: "Last booked",
+      value: employee.lastMeetingAt ? formatDateTime(employee.lastMeetingAt) : "No meetings",
+    },
+  ];
+}
+
+function buildMeetingActivityLabel(meeting: DashboardSnapshotResponse["recentMeetings"][number]): string {
+  return (
+    meeting.meetingSummary.trim() ||
+    meeting.companyName?.trim() ||
+    meeting.contactName?.trim() ||
+    "Meeting created"
+  );
+}
+
+function buildMeetingRecordLabel(meeting: DashboardSnapshotResponse["recentMeetings"][number]): string {
+  if (meeting.companyName && meeting.contactName) {
+    return `${meeting.companyName} / ${meeting.contactName}`;
+  }
+  return meeting.companyName ?? meeting.contactName ?? "No linked company or contact";
+}
+
+function buildMeetingSourceLabel(meeting: DashboardSnapshotResponse["recentMeetings"][number]): string {
+  return meeting.inviteAuthority === null && meeting.calendarInviteStatus === null
+    ? "Imported history"
+    : "App meeting";
+}
+
+function buildMeetingInviteeLabel(meeting: DashboardSnapshotResponse["recentMeetings"][number]): string {
+  if (meeting.attendeeCount === 0 && meeting.inviteAuthority === null && meeting.calendarInviteStatus === null) {
+    return "Invitees unknown";
+  }
+
+  return `${meeting.attendeeCount.toLocaleString()} invitee${meeting.attendeeCount === 1 ? "" : "s"}`;
+}
+
+function buildMeetingAuditHref(loginName: string): string {
+  const params = new URLSearchParams({
+    actionGroup: "meeting_create",
+    actor: loginName,
+  });
+  return `/audit?${params.toString()}`;
 }
 
 function buildEmailActivityLabel(email: DashboardSnapshotResponse["recentEmails"][number]): string {
@@ -118,14 +201,21 @@ function mergeFilters(filters: DashboardFilters, next: Partial<DashboardFilters>
   };
 }
 
-export function DashboardOverviewClient() {
+type DashboardOverviewClientProps = {
+  defaultNowIso: string;
+};
+
+export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClientProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const filters = useMemo(
-    () => parseDashboardFilters(new URLSearchParams(searchParams.toString())),
-    [searchParams],
+    () =>
+      parseDashboardFilters(new URLSearchParams(searchParams.toString()), {
+        now: defaultNowIso,
+      }),
+    [defaultNowIso, searchParams],
   );
   const currentQuery = searchParams.toString();
   const [snapshot, setSnapshot] = useState<DashboardSnapshotResponse | null>(null);
@@ -133,6 +223,7 @@ export function DashboardOverviewClient() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedEmployeeLoginName, setSelectedEmployeeLoginName] = useState<string | null>(null);
+  const [selectedMeetingEmployeeLoginName, setSelectedMeetingEmployeeLoginName] = useState<string | null>(null);
   const [showFiltersPanel, setShowFiltersPanel] = useState(false);
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [searchDraft, setSearchDraft] = useState(filters.search);
@@ -234,6 +325,20 @@ export function DashboardOverviewClient() {
       setSelectedEmployeeLoginName(snapshot.employeeLeaderboard[0]?.loginName ?? null);
     }
   }, [selectedEmployeeLoginName, snapshot]);
+
+  useEffect(() => {
+    if (!snapshot?.meetingLeaderboard.length) {
+      setSelectedMeetingEmployeeLoginName(null);
+      return;
+    }
+
+    const hasSelectedEmployee = snapshot.meetingLeaderboard.some(
+      (item) => item.loginName === selectedMeetingEmployeeLoginName,
+    );
+    if (!hasSelectedEmployee) {
+      setSelectedMeetingEmployeeLoginName(snapshot.meetingLeaderboard[0]?.loginName ?? null);
+    }
+  }, [selectedMeetingEmployeeLoginName, snapshot]);
 
   const useActiveRefresh = shouldUseActiveRefresh(snapshot);
 
@@ -382,6 +487,42 @@ export function DashboardOverviewClient() {
     return [...new Set([maxEmailVolume, midpoint, 0])].sort((left, right) => right - left);
   }, [maxEmailVolume]);
   const latestSelectedCall = selectedEmployeeRecentCalls[0] ?? null;
+  const meetingChartEmployees = useMemo(
+    () => snapshot?.meetingLeaderboard ?? [],
+    [snapshot?.meetingLeaderboard],
+  );
+  const maxEmployeeMeetings = useMemo(
+    () => Math.max(1, ...meetingChartEmployees.map((item) => item.totalMeetings)),
+    [meetingChartEmployees],
+  );
+  const meetingChartTicks = useMemo(() => {
+    const midpoint = Math.max(0, Math.ceil(maxEmployeeMeetings / 2));
+    return [...new Set([maxEmployeeMeetings, midpoint, 0])].sort((left, right) => right - left);
+  }, [maxEmployeeMeetings]);
+  const selectedMeetingEmployee =
+    snapshot?.meetingLeaderboard.find(
+      (item) => item.loginName === selectedMeetingEmployeeLoginName,
+    ) ?? null;
+  const latestSelectedMeeting = useMemo(() => {
+    if (!snapshot || !selectedMeetingEmployee) {
+      return null;
+    }
+
+    return (
+      snapshot.recentMeetings.find(
+        (meeting) => meeting.actorLoginName === selectedMeetingEmployee.loginName,
+      ) ?? null
+    );
+  }, [selectedMeetingEmployee, snapshot]);
+  const selectedMeetingEmployeeRecentMeetings = useMemo(() => {
+    if (!snapshot || !selectedMeetingEmployee) {
+      return [];
+    }
+
+    return snapshot.recentMeetings
+      .filter((meeting) => meeting.actorLoginName === selectedMeetingEmployee.loginName)
+      .slice(0, 5);
+  }, [selectedMeetingEmployee, snapshot]);
 
   function openExplorerForEmployee(loginName: string): void {
     const nextFilters = {
@@ -402,12 +543,16 @@ export function DashboardOverviewClient() {
     setSelectedEmployeeLoginName(loginName);
   }
 
+  function selectMeetingEmployee(loginName: string): void {
+    setSelectedMeetingEmployeeLoginName(loginName);
+  }
+
   return (
     <DashboardShell
       activeTab="overview"
       onRefresh={handleManualRefresh}
       refreshing={refreshing}
-      subtitle="A quieter view of calls and sent-email activity for the current range."
+      subtitle="A quieter view of calls, meetings booked, and sent-email activity for the current range."
       title="Dashboard"
     >
       <DashboardStatusBar
@@ -576,7 +721,7 @@ export function DashboardOverviewClient() {
       {snapshot ? (
         <>
           <section className={styles.priorityGrid}>
-            {buildPriorityCards(snapshot.teamStats, snapshot.emailStats).map((card) => (
+            {buildPriorityCards(snapshot.teamStats, snapshot.meetingStats, snapshot.emailStats).map((card) => (
               <article className={styles.priorityCard} key={card.label}>
                 <small>{card.label}</small>
                 <strong>{card.value}</strong>
@@ -856,6 +1001,167 @@ export function DashboardOverviewClient() {
                   <p className={styles.emptyState}>No email activity has been recorded for this range yet.</p>
                 )}
               </div>
+            </article>
+          </section>
+
+          <section className={styles.summarySection}>
+            <article className={styles.chartCard}>
+              <div className={styles.chartHeader}>
+                <div>
+                  <h2 className={styles.chartTitle}>Meetings booked</h2>
+                  <p className={styles.chartMeta}>
+                    Meetings attributed to known users for the current range, grouped by creator.
+                  </p>
+                </div>
+                {selectedMeetingEmployee ? (
+                  <span className={styles.softBadge}>{selectedMeetingEmployee.displayName}</span>
+                ) : null}
+              </div>
+
+              <div className={styles.chartLegend}>
+                <span className={styles.legendItem}>
+                  <span className={styles.legendSwatch} />
+                  Total meetings
+                </span>
+              </div>
+
+              {meetingChartEmployees.length ? (
+                <div className={styles.chartFrame}>
+                  <div aria-hidden="true" className={styles.chartYAxis}>
+                    {meetingChartTicks.map((tick) => (
+                      <span className={styles.chartYAxisValue} key={tick}>
+                        {tick.toLocaleString()}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className={styles.chartViewport}>
+                    <div className={styles.trendChart}>
+                      {meetingChartEmployees.map((item) => {
+                        const isActive = item.loginName === selectedMeetingEmployeeLoginName;
+                        const shareOfMeetings = snapshot.meetingStats.totalMeetings > 0
+                          ? item.totalMeetings / snapshot.meetingStats.totalMeetings
+                          : 0;
+
+                        return (
+                          <div className={styles.trendColumn} key={`meeting-${item.loginName}`}>
+                            <button
+                              className={`${styles.trendButton} ${isActive ? styles.trendButtonActive : ""}`}
+                              onClick={() => selectMeetingEmployee(item.loginName)}
+                              title={`${item.displayName}: ${formatCountWithTotalShare(
+                                item.totalMeetings,
+                                snapshot.meetingStats.totalMeetings,
+                              )} meetings booked`}
+                              type="button"
+                            >
+                              <span className={styles.trendValue}>
+                                {formatCountWithTotalShare(
+                                  item.totalMeetings,
+                                  snapshot.meetingStats.totalMeetings,
+                                )}
+                              </span>
+                              <div className={styles.trendBarTrack}>
+                                <div
+                                  className={styles.trendBarTotal}
+                                  style={{ height: `${(item.totalMeetings / maxEmployeeMeetings) * 100}%` }}
+                                />
+                              </div>
+                              <div className={styles.trendFooter}>
+                                <span className={styles.trendLabel}>{item.displayName}</span>
+                                <span className={styles.trendMeta}>
+                                  {item.meetingsWithUnknownAttendeeCount > 0 && item.totalAttendees === 0
+                                    ? `Invitees unknown · ${formatPercent(shareOfMeetings)}`
+                                    : `${item.totalAttendees.toLocaleString()} invitees · ${formatPercent(shareOfMeetings)}`}
+                                </span>
+                              </div>
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className={styles.emptyState}>No meetings were booked in the current range.</p>
+              )}
+
+              {selectedMeetingEmployee ? (
+                <div className={styles.selectionPanel}>
+                  <div className={styles.selectionHeader}>
+                    <div>
+                      <p className={styles.sectionKicker}>Selected</p>
+                      <h3 className={styles.selectionTitle}>{selectedMeetingEmployee.displayName}</h3>
+                    </div>
+                    <div className={styles.selectionFeed}>
+                      <a
+                        className={styles.summaryLink}
+                        href={buildMeetingAuditHref(selectedMeetingEmployee.loginName)}
+                      >
+                        Open meeting audit
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className={styles.selectionStats}>
+                    {buildSelectedMeetingCards(
+                      selectedMeetingEmployee,
+                      snapshot?.meetingStats.totalMeetings ?? 0,
+                    ).map((card) => (
+                      <div
+                        className={styles.selectionStat}
+                        key={`${selectedMeetingEmployee.loginName}-${card.label}`}
+                      >
+                        <small>{card.label}</small>
+                        <strong>{card.value}</strong>
+                        {card.meta ? <span>{card.meta}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className={styles.selectionFeed}>
+                    <div className={styles.selectionFeedItem}>
+                      <span className={styles.selectionFeedLabel}>Latest meeting</span>
+                      <span>
+                        {latestSelectedMeeting
+                          ? `${buildMeetingActivityLabel(latestSelectedMeeting)} · ${
+                              latestSelectedMeeting.companyName ??
+                              latestSelectedMeeting.contactName ??
+                              "Unknown account"
+                            } · ${formatDateTime(latestSelectedMeeting.occurredAt)}`
+                          : "No recent meetings in the current range."}
+                      </span>
+                    </div>
+                    <div className={styles.selectionFeedItem}>
+                      <span className={styles.selectionFeedLabel}>Linked record</span>
+                      <span>
+                        {latestSelectedMeeting
+                          ? buildMeetingRecordLabel(latestSelectedMeeting)
+                          : "No recent meetings in the current range."}
+                      </span>
+                    </div>
+                  </div>
+
+                  {selectedMeetingEmployeeRecentMeetings.length ? (
+                    <ul className={styles.summaryList}>
+                      {selectedMeetingEmployeeRecentMeetings.map((meeting) => (
+                        <li key={meeting.id}>
+                          <div className={styles.summaryRow}>
+                            <div className={styles.summaryCopy}>
+                              <strong>{buildMeetingActivityLabel(meeting)}</strong>
+                              <span>
+                                {buildMeetingRecordLabel(meeting)} • {buildMeetingSourceLabel(meeting)} • {buildMeetingInviteeLabel(meeting)}
+                              </span>
+                            </div>
+                            <div className={styles.summaryMeta}>
+                              <span>{formatDateTime(meeting.occurredAt)}</span>
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
             </article>
           </section>
         </>

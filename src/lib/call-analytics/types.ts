@@ -246,6 +246,39 @@ export type DashboardEmailActivityItem = {
   lastSentAt: string | null;
 };
 
+export type DashboardMeetingSummaryStats = {
+  totalMeetings: number;
+  uniqueBookers: number;
+  averagePerBooker: number;
+  totalAttendees: number;
+  meetingsWithGoogleInvite: number;
+};
+
+export type DashboardMeetingActivityItem = {
+  loginName: string;
+  displayName: string;
+  totalMeetings: number;
+  totalAttendees: number;
+  meetingsWithUnknownAttendeeCount: number;
+  googleInviteMeetings: number;
+  averageAttendees: number;
+  lastMeetingAt: string | null;
+};
+
+export type DashboardRecentMeeting = {
+  id: string;
+  occurredAt: string;
+  actorLoginName: string | null;
+  actorName: string | null;
+  displayName: string;
+  companyName: string | null;
+  contactName: string | null;
+  meetingSummary: string;
+  attendeeCount: number;
+  inviteAuthority: "google" | "acumatica" | null;
+  calendarInviteStatus: "created" | "updated" | "skipped" | "failed" | null;
+};
+
 export type DashboardRecentEmail = {
   id: string;
   occurredAt: string;
@@ -326,17 +359,20 @@ export type DashboardSnapshotResponse = {
     email: string | null;
   }>;
   teamStats: CallSummaryStats;
+  meetingStats: DashboardMeetingSummaryStats;
   emailStats: DashboardEmailSummaryStats;
   trend: DashboardTrendResponse;
   emailTrend: DashboardEmailTrendResponse;
   bucketDrilldowns: DashboardBucketDrilldown[];
   employeeLeaderboard: DashboardEmployeeActivityItem[];
+  meetingLeaderboard: DashboardMeetingActivityItem[];
   emailLeaderboard: DashboardEmailActivityItem[];
   activityGaps: DashboardActivityGapItem[];
   outcomeSummary: DashboardBreakdownItem[];
   sourceSummary: DashboardBreakdownItem[];
   companySummary: DashboardBreakdownItem[];
   recentCalls: DashboardRecentCall[];
+  recentMeetings: DashboardRecentMeeting[];
   recentEmails: DashboardRecentEmail[];
 };
 

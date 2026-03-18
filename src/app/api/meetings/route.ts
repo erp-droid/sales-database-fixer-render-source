@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
 import { getStoredLoginName, requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import { upsertMeetingAuditEvent } from "@/lib/audit-log-store";
 import {
   createEvent,
   fetchContactById,
@@ -25,6 +26,8 @@ import {
   deleteMeetingInviteFromGoogleCalendar,
   readGoogleCalendarInviteAuthority,
 } from "@/lib/google-calendar";
+import { upsertMeetingBooking } from "@/lib/meeting-bookings";
+import { readBusinessAccountDetailFromReadModel } from "@/lib/read-model/accounts";
 import { parseMeetingCreatePayload } from "@/lib/validation";
 import type { MeetingCreateResponse } from "@/types/meeting-create";
 
@@ -106,6 +109,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       attendeeContactIds: inviteContactIds,
       attendeeEmails,
     };
+    const meetingCompanyName = normalizedRequest.businessAccountRecordId
+      ? readBusinessAccountDetailFromReadModel(
+          normalizedRequest.businessAccountRecordId,
+          normalizedRequest.relatedContactId,
+        )?.row.companyName ?? null
+      : null;
     const meetingSyncKey = randomUUID();
     const contactIdsToResolve = uniqueContactIds([
       ...inviteContactIds,
@@ -196,7 +205,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         meetingSyncKey,
         attendees: googleInviteAttendees,
         businessAccountId: normalizedRequest.businessAccountId,
-        companyName: null,
+        companyName: meetingCompanyName,
         relatedContactId: normalizedRequest.relatedContactId,
         relatedContactName: relatedContact?.contactName ?? null,
         request: normalizedRequest,
@@ -287,6 +296,37 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       attendeeCount: inviteContactIds.length + attendeeEmails.length,
       warnings,
     };
+
+    try {
+      const storedBooking = upsertMeetingBooking({
+        eventId,
+        actorLoginName: storedLoginName,
+        actorName: organizerContact?.contactName ?? storedLoginName ?? null,
+        businessAccountRecordId: normalizedRequest.businessAccountRecordId,
+        businessAccountId: normalizedRequest.businessAccountId,
+        companyName: meetingCompanyName,
+        relatedContactId: normalizedRequest.relatedContactId,
+        relatedContactName: relatedContact?.contactName ?? null,
+        meetingSummary: normalizedRequest.summary,
+        attendeeCount: responseBody.attendeeCount,
+        attendees:
+          (inviteAuthority === "google" ? googleInviteAttendees : inviteAttendees).map((attendee) => ({
+            contactId: attendee.contactId,
+            contactName: attendee.contactName,
+            email: attendee.email,
+            businessAccountRecordId: null,
+            businessAccountId: null,
+            companyName: null,
+          })),
+        inviteAuthority,
+        calendarInviteStatus,
+      });
+      upsertMeetingAuditEvent(storedBooking, { notifyReason: "meeting-create" });
+    } catch (analyticsError) {
+      warnings.push(
+        `Meeting created, but dashboard analytics could not be updated: ${getErrorMessage(analyticsError)}`,
+      );
+    }
 
     const response = NextResponse.json(responseBody, { status: 201 });
     if (authCookieRefresh.value) {

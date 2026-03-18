@@ -247,6 +247,90 @@ describe("audit log query", () => {
     );
   });
 
+  it("bootstraps meeting booking rows into the audit log with company and contact context", async () => {
+    const { upsertMeetingBooking } = await import("@/lib/meeting-bookings");
+    const { queryAuditLog } = await import("@/lib/audit-log-query");
+
+    upsertMeetingBooking({
+      eventId: "EV1001",
+      actorLoginName: "sdoal",
+      actorName: "Simon Doal",
+      businessAccountRecordId: "AR0001",
+      businessAccountId: "BA0001",
+      companyName: "Alpha Foods",
+      relatedContactId: 501,
+      relatedContactName: "Jorge Serrano",
+      meetingSummary: "Quarterly review",
+      attendeeCount: 2,
+      attendees: [
+        {
+          contactId: 501,
+          contactName: "Jorge Serrano",
+          email: "jserrano@meadowb.com",
+          businessAccountRecordId: "AR0001",
+          businessAccountId: "BA0001",
+          companyName: "Alpha Foods",
+        },
+        {
+          contactId: null,
+          contactName: "Guest attendee",
+          email: "guest@example.com",
+          businessAccountRecordId: null,
+          businessAccountId: null,
+          companyName: null,
+        },
+      ],
+      inviteAuthority: "acumatica",
+      calendarInviteStatus: "skipped",
+      occurredAt: "2026-03-17T17:35:26.247Z",
+    });
+
+    const response = queryAuditLog({
+      q: "quarterly review",
+      itemType: "meeting",
+      actionGroup: "meeting_create",
+      result: "all",
+      actor: "sdoal",
+      dateFrom: null,
+      dateTo: null,
+      businessAccountRecordId: null,
+      contactId: null,
+      page: 1,
+      pageSize: 50,
+    });
+
+    expect(response.total).toBe(1);
+    expect(response.items[0]).toMatchObject({
+      itemType: "meeting",
+      actionGroup: "meeting_create",
+      actorLoginName: "sdoal",
+      actorName: "Simon Doal",
+      companyName: "Alpha Foods",
+      contactName: "Jorge Serrano",
+      summary: 'Booked meeting "Quarterly review" for Alpha Foods',
+    });
+    expect(response.items[0].links).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          linkType: "business_account",
+          role: "primary",
+          businessAccountRecordId: "AR0001",
+        }),
+        expect.objectContaining({
+          linkType: "contact",
+          role: "primary",
+          contactId: 501,
+          contactName: "Jorge Serrano",
+        }),
+        expect.objectContaining({
+          linkType: "contact",
+          role: "attendee",
+          contactName: "Guest attendee",
+        }),
+      ]),
+    );
+  });
+
   it("projects call audit rows and resolves related account filters", async () => {
     const { getReadModelDb } = await import("@/lib/read-model/db");
     const { upsertCallAuditEvent } = await import("@/lib/audit-log-store");

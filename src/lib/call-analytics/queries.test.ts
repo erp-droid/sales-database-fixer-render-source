@@ -64,6 +64,24 @@ describe("parseDashboardFilters", () => {
       search: "4163153228",
     });
   });
+
+  it("uses the provided fallback time when dates are omitted", () => {
+    const params = new URLSearchParams();
+
+    expect(
+      parseDashboardFilters(params, {
+        now: "2026-03-18T19:22:45.000Z",
+      }),
+    ).toEqual({
+      start: "2026-02-16T19:22:45.000Z",
+      end: "2026-03-18T19:22:45.000Z",
+      employees: [],
+      direction: "all",
+      outcome: "all",
+      source: "all",
+      search: "",
+    });
+  });
 });
 
 describe("filterCallSessions", () => {

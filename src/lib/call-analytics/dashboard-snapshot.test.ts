@@ -15,6 +15,7 @@ const readCallEmployeeDirectoryMock = vi.fn<
     updatedAt: string;
   }>
 >();
+const listMeetingBookingsMock = vi.fn();
 
 vi.mock("@/lib/call-analytics/sessionize", () => ({
   readCallSessions: readCallSessionsMock,
@@ -22,6 +23,10 @@ vi.mock("@/lib/call-analytics/sessionize", () => ({
 
 vi.mock("@/lib/call-analytics/employee-directory", () => ({
   readCallEmployeeDirectory: readCallEmployeeDirectoryMock,
+}));
+
+vi.mock("@/lib/meeting-bookings", () => ({
+  listMeetingBookings: listMeetingBookingsMock,
 }));
 
 function setSnapshotEnv(): void {
@@ -91,6 +96,8 @@ describe("dashboard snapshot builder and cache", () => {
     vi.resetModules();
     readCallSessionsMock.mockReset();
     readCallEmployeeDirectoryMock.mockReset();
+    listMeetingBookingsMock.mockReset();
+    listMeetingBookingsMock.mockReturnValue([]);
     setSnapshotEnv();
   });
 
@@ -142,9 +149,36 @@ describe("dashboard snapshot builder and cache", () => {
         { loginName: "dcowell", displayName: "Derek Cowell", email: null },
         { loginName: "jlee", displayName: "Jacky Lee", email: null },
       ],
+      undefined,
+      undefined,
+      undefined,
+      [
+        {
+          id: "meeting:event-1",
+          eventId: "event-1",
+          actorLoginName: "jserrano",
+          actorName: "Jorge Serrano",
+          businessAccountRecordId: "record-1",
+          businessAccountId: "B2001",
+          companyName: "Northwind",
+          relatedContactId: 91,
+          relatedContactName: "Alex Prospect",
+          meetingSummary: "Intro meeting",
+          attendeeCount: 3,
+          attendees: [],
+          inviteAuthority: "google",
+          calendarInviteStatus: "created",
+          occurredAt: "2026-03-08T15:00:00.000Z",
+          createdAt: "2026-03-08T15:00:00.000Z",
+          updatedAt: "2026-03-08T15:00:00.000Z",
+        },
+      ],
     );
 
     expect(snapshot.teamStats.totalCalls).toBe(3);
+    expect(snapshot.meetingStats.totalMeetings).toBe(1);
+    expect(snapshot.meetingLeaderboard[0]?.loginName).toBe("jserrano");
+    expect(snapshot.recentMeetings[0]?.meetingSummary).toBe("Intro meeting");
     expect(snapshot.teamStats.outboundCalls).toBe(3);
     expect(snapshot.employeeLeaderboard[0]?.loginName).toBe("jserrano");
     expect(snapshot.activityGaps[0]?.loginName).toBe("jlee");
@@ -155,6 +189,7 @@ describe("dashboard snapshot builder and cache", () => {
 
   it("returns warm cache hits without rereading call sessions", async () => {
     readCallSessionsMock.mockReturnValue([buildSession({ sessionId: "cached-1" })]);
+    listMeetingBookingsMock.mockReturnValue([]);
     readCallEmployeeDirectoryMock.mockReturnValue([
       {
         loginName: "jserrano",
@@ -179,6 +214,7 @@ describe("dashboard snapshot builder and cache", () => {
 
   it("expires cached snapshots after the ttl", async () => {
     readCallSessionsMock.mockReturnValue([buildSession({ sessionId: "ttl-1" })]);
+    listMeetingBookingsMock.mockReturnValue([]);
     readCallEmployeeDirectoryMock.mockReturnValue([
       {
         loginName: "jserrano",
@@ -209,6 +245,7 @@ describe("dashboard snapshot builder and cache", () => {
       () =>
         [buildSession({ sessionId: "in-flight-1" })],
     );
+    listMeetingBookingsMock.mockReturnValue([]);
     readCallEmployeeDirectoryMock.mockReturnValue([
       {
         loginName: "jserrano",
@@ -234,6 +271,7 @@ describe("dashboard snapshot builder and cache", () => {
 
   it("recomputes after explicit cache invalidation", async () => {
     readCallSessionsMock.mockReturnValue([buildSession({ sessionId: "invalidate-1" })]);
+    listMeetingBookingsMock.mockReturnValue([]);
     readCallEmployeeDirectoryMock.mockReturnValue([
       {
         loginName: "jserrano",

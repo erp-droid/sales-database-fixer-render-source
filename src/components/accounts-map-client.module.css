@@ -9,7 +9,7 @@
   --accent-strong: var(--app-green);
   --shadow: var(--app-shadow);
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -67,6 +67,125 @@
   background: #fff;
   color: var(--ink);
   padding: 8px 10px;
+}
+
+.headerFilters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.filtersBar {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.filtersBarCopy {
+  display: grid;
+  gap: 2px;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.filtersBarCopy strong {
+  color: var(--ink-strong);
+  font-size: 14px;
+}
+
+.salesRepFilterMenu {
+  position: relative;
+}
+
+.salesRepFilterSummary {
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink-strong);
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.salesRepFilterSummary::-webkit-details-marker {
+  display: none;
+}
+
+.salesRepFilterMenu[open] .salesRepFilterSummary {
+  border-color: #8cbbe8;
+  background: #e9f4ff;
+  color: #1f5f9f;
+}
+
+.salesRepFilterPanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(320px, 82vw);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 14px 24px rgba(19, 35, 63, 0.18);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  z-index: 20;
+}
+
+.salesRepFilterActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.salesRepFilterActions button {
+  border: 1px solid #b9c8dc;
+  border-radius: 8px;
+  background: #f3f7fc;
+  color: #274765;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.salesRepFilterActions button:hover {
+  border-color: #8ea8c6;
+  background: #eaf1f8;
+}
+
+.salesRepFilterSearch {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px 9px;
+  font-size: 13px;
+}
+
+.salesRepFilterList {
+  max-height: 260px;
+  overflow-y: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.salesRepFilterEmpty {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 13px;
 }
 
 .navButton {
@@ -488,7 +607,25 @@
     justify-content: flex-start;
   }
 
+  .filtersBar {
+    align-items: stretch;
+  }
+
+  .filtersBarCopy {
+    width: 100%;
+  }
+
+  .headerFilters {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .searchInput {
+    width: 100%;
+  }
+
+  .salesRepFilterPanel {
+    position: static;
     width: 100%;
   }
 

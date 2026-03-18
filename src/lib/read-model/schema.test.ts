@@ -100,6 +100,36 @@ describe("ensureReadModelSchema", () => {
     );
   });
 
+  it("creates the meeting_bookings table", () => {
+    ensureReadModelSchema(db);
+
+    const columns = db.prepare("PRAGMA table_info(meeting_bookings)").all() as Array<{
+      name: string;
+    }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "id",
+        "event_id",
+        "actor_login_name",
+        "actor_name",
+        "business_account_record_id",
+        "business_account_id",
+        "company_name",
+        "related_contact_id",
+        "related_contact_name",
+        "meeting_summary",
+        "attendee_count",
+        "attendee_details_json",
+        "invite_authority",
+        "calendar_invite_status",
+        "occurred_at",
+        "created_at",
+        "updated_at",
+      ]),
+    );
+  });
+
   it("creates the mail_send_jobs table", () => {
     ensureReadModelSchema(db);
 

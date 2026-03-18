@@ -14,6 +14,7 @@ import { invalidateReadModelCaches } from "@/lib/read-model/cache";
 import { syncCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
 import { withServiceAcumaticaSession } from "@/lib/acumatica-service-auth";
 import { getEnv } from "@/lib/env";
+import { syncMeetingBookings } from "@/lib/meeting-bookings";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type { SyncRunResponse, SyncStatusResponse } from "@/types/sync";
 
@@ -252,6 +253,36 @@ async function runFullSync(
     } catch (error) {
       console.warn("[sync]", {
         event: "employee_cache_failed",
+        startedAt,
+        phase: currentPhase,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    currentPhase = "meetings";
+    writeSyncState({
+      status: "running",
+      phase: "meetings",
+      rows_count: counts.rowsCount,
+      accounts_count: counts.accountsCount,
+      contacts_count: counts.contactsCount,
+      progress_json: JSON.stringify({
+        fetchedAccounts: counts.accountsCount,
+        fetchedContacts: counts.contactsCount,
+        totalAccounts: counts.accountsCount,
+        totalContacts: counts.contactsCount,
+      }),
+    });
+    try {
+      try {
+        await withServiceAcumaticaSession(null, (serviceCookieValue, serviceRefresh) =>
+          syncMeetingBookings(serviceCookieValue, serviceRefresh),
+        );
+      } catch {
+        await syncMeetingBookings(cookieValue, authCookieRefresh);
+      }
+    } catch (error) {
+      console.warn("[sync]", {
+        event: "meeting_cache_failed",
         startedAt,
         phase: currentPhase,
         error: error instanceof Error ? error.message : String(error),

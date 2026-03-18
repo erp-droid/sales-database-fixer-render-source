@@ -3,6 +3,7 @@ import type { MailComposePayload, MailRecipient, MailSendResponse } from "@/type
 import type { BusinessAccountRow } from "@/types/business-account";
 import type { StoredDeferredActionRecord } from "@/lib/deferred-actions-store";
 import type { CallSessionRecord } from "@/lib/call-analytics/types";
+import type { StoredMeetingBooking } from "@/lib/meeting-bookings";
 
 import { publishAuditLogChanged } from "@/lib/audit-log-live";
 import type {
@@ -641,6 +642,107 @@ function summarizeMailSend(
     return `Sent ${subjectLabel} to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}, but Acumatica activity sync failed`;
   }
   return `Sent ${subjectLabel} to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}`;
+}
+
+function summarizeMeetingCreate(booking: StoredMeetingBooking): string {
+  const summary = cleanString(booking.meetingSummary) ?? "Meeting";
+  const recordLabel =
+    cleanString(booking.companyName) ??
+    cleanString(booking.relatedContactName) ??
+    null;
+
+  if (booking.inviteAuthority === null && booking.calendarInviteStatus === null) {
+    return recordLabel
+      ? `Imported historical meeting "${summary}" for ${recordLabel}`
+      : `Imported historical meeting "${summary}"`;
+  }
+
+  return recordLabel ? `Booked meeting "${summary}" for ${recordLabel}` : `Booked meeting "${summary}"`;
+}
+
+export function upsertMeetingAuditEvent(
+  booking: StoredMeetingBooking,
+  options: WriteOptions = {},
+): void {
+  const attendeeLinks = booking.attendees
+    .map((attendee) => {
+      const resolved =
+        attendee.contactId !== null
+          ? resolveStoredAccountLink({
+              contactId: attendee.contactId,
+              businessAccountId: attendee.businessAccountId,
+              companyName: attendee.companyName,
+            })
+          : {
+              businessAccountRecordId: attendee.businessAccountRecordId,
+              businessAccountId: attendee.businessAccountId,
+              companyName: attendee.companyName,
+              contactId: null,
+              contactName: null,
+            };
+
+      return buildContactLink("attendee", {
+        businessAccountRecordId:
+          resolved.businessAccountRecordId ?? attendee.businessAccountRecordId,
+        businessAccountId: resolved.businessAccountId ?? attendee.businessAccountId,
+        companyName: resolved.companyName ?? attendee.companyName,
+        contactId: attendee.contactId,
+        contactName: attendee.contactName ?? attendee.email,
+      });
+    })
+    .filter((link): link is AuditLogLink => link !== null);
+
+  const links = [
+    buildAccountLink("primary", {
+      businessAccountRecordId: booking.businessAccountRecordId,
+      businessAccountId: booking.businessAccountId,
+      companyName: booking.companyName,
+    }),
+    buildContactLink("primary", {
+      businessAccountRecordId: booking.businessAccountRecordId,
+      businessAccountId: booking.businessAccountId,
+      companyName: booking.companyName,
+      contactId: booking.relatedContactId,
+      contactName: booking.relatedContactName,
+    }),
+    ...attendeeLinks,
+  ].filter((link): link is AuditLogLink => link !== null);
+
+  const affectedFields: AuditAffectedField[] = [
+    { key: "meeting_summary", label: "Meeting summary" },
+    ...(booking.relatedContactName || booking.relatedContactId !== null
+      ? [{ key: "related_contact", label: "Related contact" } satisfies AuditAffectedField]
+      : []),
+    ...(booking.companyName ? [{ key: "company", label: "Company" } satisfies AuditAffectedField] : []),
+    ...(booking.attendees.length > 0
+      ? [{ key: "attendees", label: "Attendees" } satisfies AuditAffectedField]
+      : []),
+  ];
+
+  writeAuditEvent(
+    {
+      id: `meeting:${booking.eventId}`,
+      occurredAt: booking.occurredAt,
+      itemType: "meeting",
+      actionGroup: "meeting_create",
+      resultCode: booking.calendarInviteStatus === "failed" ? "partial" : "succeeded",
+      actorLoginName: booking.actorLoginName,
+      actorName: booking.actorName,
+      sourceSurface:
+        booking.inviteAuthority === null && booking.calendarInviteStatus === null
+          ? "historical_import"
+          : "accounts",
+      summary: summarizeMeetingCreate(booking),
+      businessAccountRecordId: booking.businessAccountRecordId,
+      businessAccountId: booking.businessAccountId,
+      companyName: booking.companyName,
+      contactId: booking.relatedContactId,
+      contactName: booking.relatedContactName,
+      affectedFields,
+      links,
+    },
+    options,
+  );
 }
 
 export function logMailSendAudit(input: {

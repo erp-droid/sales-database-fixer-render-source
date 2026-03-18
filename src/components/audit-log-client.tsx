@@ -24,6 +24,7 @@ type ErrorPayload = {
 const ITEM_TYPE_LABELS: Record<AuditItemType, string> = {
   call: "Call",
   email: "Email",
+  meeting: "Meeting",
   contact: "Contact",
   business_account: "Business account",
 };
@@ -31,6 +32,7 @@ const ITEM_TYPE_LABELS: Record<AuditItemType, string> = {
 const ACTION_LABELS: Record<AuditActionGroup, string> = {
   call: "Call",
   email_send: "Email sent",
+  meeting_create: "Meeting booked",
   contact_create: "Contact created",
   contact_delete: "Contact deleted",
   contact_merge: "Contact merged",
@@ -212,6 +214,7 @@ export function AuditLogClient() {
     setItemType(
       itemTypeParam === "call" ||
         itemTypeParam === "email" ||
+        itemTypeParam === "meeting" ||
         itemTypeParam === "contact" ||
         itemTypeParam === "business_account"
         ? itemTypeParam
@@ -220,6 +223,7 @@ export function AuditLogClient() {
     setActionGroup(
       actionGroupParam === "call" ||
         actionGroupParam === "email_send" ||
+        actionGroupParam === "meeting_create" ||
         actionGroupParam === "contact_create" ||
         actionGroupParam === "contact_delete" ||
         actionGroupParam === "contact_merge" ||
@@ -411,7 +415,7 @@ export function AuditLogClient() {
   return (
     <AppChrome
       contentClassName={styles.pageContent}
-      subtitle="Review who changed what, when it happened, and which account, contact, email, or call was affected."
+      subtitle="Review who changed what, when it happened, and which account, contact, call, email, or meeting was affected."
       title="Audit Log"
       userName={session?.user?.name ?? "Signed in"}
     >
@@ -451,6 +455,7 @@ export function AuditLogClient() {
             <option value="all">All items</option>
             <option value="call">Calls</option>
             <option value="email">Emails</option>
+            <option value="meeting">Meetings</option>
             <option value="contact">Contacts</option>
             <option value="business_account">Business accounts</option>
           </select>
@@ -469,6 +474,7 @@ export function AuditLogClient() {
             <option value="all">All actions</option>
             <option value="call">Call</option>
             <option value="email_send">Email sent</option>
+            <option value="meeting_create">Meeting booked</option>
             <option value="contact_create">Contact created</option>
             <option value="contact_delete">Contact deleted</option>
             <option value="contact_merge">Contact merged</option>
@@ -706,26 +712,42 @@ export function AuditLogClient() {
               <h3>Related Records</h3>
               {selectedItem.links.length > 0 ? (
                 <div className={styles.relatedList}>
-                  {selectedItem.links.map((link, index) => (
-                    <button
-                      className={styles.relatedButton}
-                      key={`${selectedItem.id}-${link.role}-${index}`}
-                      onClick={() =>
-                        applyRecordFilter({
-                          businessAccountRecordId: link.businessAccountRecordId,
-                          contactId: link.contactId,
-                        })
-                      }
-                      type="button"
-                    >
-                      <strong>{link.companyName ?? link.contactName ?? "Record"}</strong>
-                      <span>
-                        {link.role.replace(/_/g, " ")}
-                        {link.businessAccountId ? ` • ${link.businessAccountId}` : ""}
-                        {link.contactId ? ` • Contact ${link.contactId}` : ""}
-                      </span>
-                    </button>
-                  ))}
+                  {selectedItem.links.map((link, index) => {
+                    const content = (
+                      <>
+                        <strong>{link.companyName ?? link.contactName ?? "Record"}</strong>
+                        <span>
+                          {link.role.replace(/_/g, " ")}
+                          {link.businessAccountId ? ` • ${link.businessAccountId}` : ""}
+                          {link.contactId ? ` • Contact ${link.contactId}` : ""}
+                        </span>
+                      </>
+                    );
+                    const isFilterable = Boolean(link.businessAccountRecordId || link.contactId);
+
+                    return isFilterable ? (
+                      <button
+                        className={styles.relatedButton}
+                        key={`${selectedItem.id}-${link.role}-${index}`}
+                        onClick={() =>
+                          applyRecordFilter({
+                            businessAccountRecordId: link.businessAccountRecordId,
+                            contactId: link.contactId,
+                          })
+                        }
+                        type="button"
+                      >
+                        {content}
+                      </button>
+                    ) : (
+                      <div
+                        className={styles.relatedButton}
+                        key={`${selectedItem.id}-${link.role}-${index}`}
+                      >
+                        {content}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <p className={styles.emptyState}>No related records were captured for this event.</p>

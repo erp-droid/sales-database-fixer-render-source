@@ -39,6 +39,33 @@ function normalizeText(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function buildSalesRepFilterKey(
+  salesRepId: string | null | undefined,
+  salesRepName: string | null | undefined,
+): string {
+  if (hasText(salesRepId)) {
+    return `id:${normalizeText(salesRepId)}`;
+  }
+
+  if (hasText(salesRepName)) {
+    return `name:${normalizeText(salesRepName)}`;
+  }
+
+  return "unassigned";
+}
+
+function matchesSalesRepFilters(
+  salesRepId: string | null | undefined,
+  salesRepName: string | null | undefined,
+  normalizedSalesRepFilters: Set<string>,
+): boolean {
+  if (normalizedSalesRepFilters.size === 0) {
+    return true;
+  }
+
+  return normalizedSalesRepFilters.has(buildSalesRepFilterKey(salesRepId, salesRepName));
+}
+
 function normalizeAccountType(value: unknown): string {
   if (!value || typeof value !== "object") {
     return "";
@@ -195,6 +222,10 @@ function pickRepresentativeRow(rows: BusinessAccountRow[]): BusinessAccountRow {
   return rows.find((row) => hasText(row.addressLine1) && hasText(row.city)) ?? rows[0];
 }
 
+function pickSalesRepRow(rows: BusinessAccountRow[]): BusinessAccountRow {
+  return rows.find((row) => hasText(row.salesRepId) || hasText(row.salesRepName)) ?? rows[0];
+}
+
 async function mapLimit<T, R>(
   items: T[],
   concurrency: number,
@@ -229,9 +260,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const authCookieRefresh: AuthCookieRefreshState = { value: null };
 
     const q = request.nextUrl.searchParams.get("q")?.trim() ?? "";
+    const normalizedSalesRepFilters = new Set(
+      request.nextUrl.searchParams
+        .getAll("salesRep")
+        .map((value) => normalizeText(value))
+        .filter(Boolean),
+    );
     const syncedAt = request.nextUrl.searchParams.get("syncedAt")?.trim() ?? "";
     const normalizedSearch = normalizeText(q);
-    const cacheKey = `all|${normalizedSearch}|${syncedAt}`;
+    const salesRepCacheToken = [...normalizedSalesRepFilters].sort().join(",");
+    const cacheKey = `all|${normalizedSearch}|${salesRepCacheToken}|${syncedAt}`;
 
     const cachedPayload = mapPayloadCache.get(cacheKey);
     if (cachedPayload && Date.now() - cachedPayload.createdAt <= MAP_PAYLOAD_CACHE_TTL_MS) {
@@ -266,10 +304,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             const candidates = [...grouped.entries()]
               .map(([accountKey, rows]) => {
                 const representativeRow = pickRepresentativeRow(rows);
+                const salesRepRow = pickSalesRepRow(rows);
                 const contacts = buildContactsFromRows(rows);
                 const haystack = [
                   representativeRow.companyName,
                   representativeRow.businessAccountId,
+                  salesRepRow.salesRepName,
                   representativeRow.address,
                   contacts
                     .map((contact) =>
@@ -284,12 +324,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                 return {
                   accountKey,
                   representativeRow,
+                  salesRepRow,
                   contacts,
                   haystack,
                 };
               })
               .filter((candidate) =>
                 normalizedSearch ? candidate.haystack.includes(normalizedSearch) : true,
+              )
+              .filter((candidate) =>
+                matchesSalesRepFilters(
+                  candidate.salesRepRow.salesRepId,
+                  candidate.salesRepRow.salesRepName,
+                  normalizedSalesRepFilters,
+                ),
               )
               .filter((candidate) =>
                 Boolean(
@@ -313,6 +361,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                 accountRecordId: row.accountRecordId,
                 businessAccountId: row.businessAccountId,
                 companyName: row.companyName,
+                salesRepId: candidate.salesRepRow.salesRepId,
+                salesRepName: candidate.salesRepRow.salesRepName,
                 fullAddress:
                   row.address ||
                   toFullAddress({
@@ -380,6 +430,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                 [
                   row.companyName,
                   row.businessAccountId,
+                  row.salesRepName,
                   row.address,
                   row.primaryContactName,
                   row.primaryContactEmail,
@@ -391,7 +442,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
               )
             : normalizedRows;
 
-          const candidates = filteredRows;
+          const salesRepFilteredRows = filteredRows.filter((row) =>
+            matchesSalesRepFilters(
+              row.salesRepId,
+              row.salesRepName,
+              normalizedSalesRepFilters,
+            ),
+          );
+
+          const candidates = salesRepFilteredRows;
           const pointsOrNull = await mapLimit(candidates, 10, async (row) => {
             const key = buildAddressKey(row);
             let geocode = mapGeocodeCache.get(key);
@@ -418,6 +477,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
               id: row.id,
               businessAccountId: row.businessAccountId,
               companyName: row.companyName,
+              salesRepId: row.salesRepId,
+              salesRepName: row.salesRepName,
               fullAddress:
                 row.address ||
                 toFullAddress({
@@ -460,7 +521,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           };
           if (process.env.NODE_ENV !== "production") {
             console.info(
-              `[map] q="${normalizedSearch}" scope=all candidates=${nextPayload.totalCandidates} mapped=${nextPayload.geocodedCount} unmapped=${nextPayload.unmappedCount}`,
+              `[map] q="${normalizedSearch}" salesRep="${salesRepCacheToken}" scope=all candidates=${nextPayload.totalCandidates} mapped=${nextPayload.geocodedCount} unmapped=${nextPayload.unmappedCount}`,
             );
           }
           mapPayloadCache.set(cacheKey, {

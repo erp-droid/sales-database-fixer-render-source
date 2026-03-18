@@ -1,7 +1,8 @@
 import type { AuditActorOption, AuditLogLink, AuditLogResponse, AuditLogRow, AuditQuery } from "@/lib/audit-log-types";
 import { readCallSessions } from "@/lib/call-analytics/sessionize";
 import { listStoredDeferredActionRecords } from "@/lib/deferred-actions-store";
-import { upsertCallAuditEvent, upsertDeferredActionAuditEvents } from "@/lib/audit-log-store";
+import { upsertCallAuditEvent, upsertDeferredActionAuditEvents, upsertMeetingAuditEvent } from "@/lib/audit-log-store";
+import { listMeetingBookings } from "@/lib/meeting-bookings";
 import { getReadModelDb } from "@/lib/read-model/db";
 
 type StoredAuditEventRow = {
@@ -99,17 +100,19 @@ function buildAuditLogRow(
 }
 
 function ensureAuditBootstrap(): void {
-  if (bootstrapChecked) {
-    return;
+  if (!bootstrapChecked) {
+    bootstrapChecked = true;
+    for (const session of readCallSessions()) {
+      upsertCallAuditEvent(session);
+    }
+
+    for (const record of listStoredDeferredActionRecords()) {
+      upsertDeferredActionAuditEvents(record);
+    }
   }
 
-  bootstrapChecked = true;
-  for (const session of readCallSessions()) {
-    upsertCallAuditEvent(session);
-  }
-
-  for (const record of listStoredDeferredActionRecords()) {
-    upsertDeferredActionAuditEvents(record);
+  for (const booking of listMeetingBookings()) {
+    upsertMeetingAuditEvent(booking);
   }
 }
 

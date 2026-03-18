@@ -71,14 +71,21 @@ function mergeFilters(filters: DashboardFilters, next: Partial<DashboardFilters>
   };
 }
 
-export function DashboardExplorerClient() {
+type DashboardExplorerClientProps = {
+  defaultNowIso: string;
+};
+
+export function DashboardExplorerClient({ defaultNowIso }: DashboardExplorerClientProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const filters = useMemo(
-    () => parseDashboardFilters(new URLSearchParams(searchParams.toString())),
-    [searchParams],
+    () =>
+      parseDashboardFilters(new URLSearchParams(searchParams.toString()), {
+        now: defaultNowIso,
+      }),
+    [defaultNowIso, searchParams],
   );
   const currentQuery = searchParams.toString();
   const page = parsePositiveInteger(searchParams.get("page"), 1);

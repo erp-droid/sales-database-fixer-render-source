@@ -1,6 +1,7 @@
 import {
   enforceSinglePrimaryPerAccountRows,
 } from "@/lib/business-accounts";
+import type { ContactMergeFieldKey } from "@/types/contact-merge";
 import type { BusinessAccountRow } from "@/types/business-account";
 
 export type DeferredDeleteContactPreview = {
@@ -9,12 +10,18 @@ export type DeferredDeleteContactPreview = {
   rowKey: string | null;
 };
 
+export type DeferredMergeContactsFieldSnapshot = Partial<
+  Record<ContactMergeFieldKey, string | null>
+>;
+
 export type DeferredMergeContactsPreview = {
   actionType: "mergeContacts";
   keepContactId: number;
   loserContactIds: number[];
   setKeptAsPrimary: boolean;
+  mergedFields?: DeferredMergeContactsFieldSnapshot | null;
   mergedPrimaryContactName: string | null;
+  mergedPrimaryContactJobTitle?: string | null;
   mergedPrimaryContactPhone: string | null;
   mergedPrimaryContactEmail: string | null;
   mergedNotes: string | null;
@@ -101,6 +108,26 @@ export function applyDeferredMergeContactsToRows(
   rows: BusinessAccountRow[],
   preview: DeferredMergeContactsPreview,
 ): BusinessAccountRow[] {
+  const mergedDisplayName =
+    preview.mergedFields && Object.prototype.hasOwnProperty.call(preview.mergedFields, "displayName")
+      ? (preview.mergedFields.displayName ?? null)
+      : (preview.mergedPrimaryContactName ?? null);
+  const mergedJobTitle =
+    preview.mergedFields && Object.prototype.hasOwnProperty.call(preview.mergedFields, "jobTitle")
+      ? (preview.mergedFields.jobTitle ?? null)
+      : (preview.mergedPrimaryContactJobTitle ?? null);
+  const mergedPhone =
+    preview.mergedFields && Object.prototype.hasOwnProperty.call(preview.mergedFields, "phone1")
+      ? (preview.mergedFields.phone1 ?? null)
+      : (preview.mergedPrimaryContactPhone ?? null);
+  const mergedEmail =
+    preview.mergedFields && Object.prototype.hasOwnProperty.call(preview.mergedFields, "email")
+      ? (preview.mergedFields.email ?? null)
+      : (preview.mergedPrimaryContactEmail ?? null);
+  const mergedNotes =
+    preview.mergedFields && Object.prototype.hasOwnProperty.call(preview.mergedFields, "notes")
+      ? (preview.mergedFields.notes ?? null)
+      : (preview.mergedNotes ?? null);
   const loserIds = new Set(preview.loserContactIds);
   const remainingRows = rows.filter((row) => {
     const contactId = row.contactId ?? null;
@@ -123,13 +150,11 @@ export function applyDeferredMergeContactsToRows(
     const nextRow: BusinessAccountRow = isKeeper
       ? {
           ...row,
-          primaryContactName:
-            preview.mergedPrimaryContactName ?? row.primaryContactName ?? null,
-          primaryContactPhone:
-            preview.mergedPrimaryContactPhone ?? row.primaryContactPhone ?? null,
-          primaryContactEmail:
-            preview.mergedPrimaryContactEmail ?? row.primaryContactEmail ?? null,
-          notes: preview.mergedNotes ?? row.notes ?? null,
+          primaryContactName: mergedDisplayName ?? row.primaryContactName ?? null,
+          primaryContactJobTitle: mergedJobTitle ?? row.primaryContactJobTitle ?? null,
+          primaryContactPhone: mergedPhone ?? row.primaryContactPhone ?? null,
+          primaryContactEmail: mergedEmail ?? row.primaryContactEmail ?? null,
+          notes: mergedNotes ?? row.notes ?? null,
         }
       : row;
 

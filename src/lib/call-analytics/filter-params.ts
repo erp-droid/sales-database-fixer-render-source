@@ -5,8 +5,34 @@ import type {
   DashboardFilters,
 } from "@/lib/call-analytics/types";
 
+type ParseDashboardFiltersOptions = {
+  now?: number | string | Date;
+};
+
 function toIso(value: number): string {
   return new Date(value).toISOString();
+}
+
+function resolveNow(value: ParseDashboardFiltersOptions["now"]): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  if (value instanceof Date) {
+    const numeric = value.getTime();
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+  }
+
+  return Date.now();
 }
 
 function parseDateParam(value: string | null, fallback: number): string {
@@ -24,8 +50,11 @@ function parseEmployees(searchParams: URLSearchParams): string[] {
   return [...new Set(combined.map((value) => value.trim().toLowerCase()).filter(Boolean))];
 }
 
-export function parseDashboardFilters(searchParams: URLSearchParams): DashboardFilters {
-  const now = Date.now();
+export function parseDashboardFilters(
+  searchParams: URLSearchParams,
+  options?: ParseDashboardFiltersOptions,
+): DashboardFilters {
+  const now = resolveNow(options?.now);
   const defaultStart = now - 30 * 24 * 60 * 60 * 1000;
 
   const directionValue = searchParams.get("direction");

@@ -289,20 +289,9 @@ export function buildSelectedMergeFieldMap(
   );
 }
 
-export function buildMergedContactPayload(
-  selectedRawContacts: RawContact[],
-  keepContactId: number,
-  fieldChoices: ContactMergeFieldChoice[],
+export function buildMergedContactPayloadFromFieldMap(
+  mergedFields: ContactMergeFieldMap,
 ): Record<string, unknown> {
-  const selectedContacts = selectedRawContacts.map((rawContact) =>
-    normalizeRawContactForMerge(rawContact),
-  );
-  const mergedFields = buildSelectedMergeFieldMap(
-    selectedContacts,
-    keepContactId,
-    fieldChoices,
-  );
-
   return {
     FirstName: {
       value: mergedFields.firstName ?? "",
@@ -338,6 +327,22 @@ export function buildMergedContactPayload(
       value: mergedFields.notes ?? "",
     },
   };
+}
+
+export function buildMergedContactPayload(
+  selectedRawContacts: RawContact[],
+  keepContactId: number,
+  fieldChoices: ContactMergeFieldChoice[],
+): Record<string, unknown> {
+  const selectedContacts = selectedRawContacts.map((rawContact) =>
+    normalizeRawContactForMerge(rawContact),
+  );
+  const mergedFields = buildSelectedMergeFieldMap(
+    selectedContacts,
+    keepContactId,
+    fieldChoices,
+  );
+  return buildMergedContactPayloadFromFieldMap(mergedFields);
 }
 
 export function derivePrimaryRecommendation(

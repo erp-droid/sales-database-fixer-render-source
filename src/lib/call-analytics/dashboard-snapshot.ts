@@ -10,14 +10,18 @@ import type {
   DashboardEmailSummaryStats,
   DashboardEmailTrendPoint,
   DashboardFilters,
+  DashboardMeetingActivityItem,
+  DashboardMeetingSummaryStats,
   DashboardRecentCall,
   DashboardRecentEmail,
+  DashboardRecentMeeting,
   DashboardSnapshotResponse,
   DashboardTrendPoint,
   DashboardEmployeeActivityItem,
   CallSummaryStats,
 } from "@/lib/call-analytics/types";
 import { getEnv } from "@/lib/env";
+import { listMeetingBookings, type StoredMeetingBooking } from "@/lib/meeting-bookings";
 import { getReadModelDb } from "@/lib/read-model/db";
 
 const TREND_BUCKET = "day";
@@ -27,8 +31,10 @@ const MAX_ACTIVITY_GAP_ITEMS = 8;
 const MAX_DRILLDOWN_ITEMS = 5;
 const MAX_DRILLDOWN_CALLS = 6;
 const MAX_RECENT_CALLS = 8;
+const MAX_RECENT_MEETINGS = 30;
 const MAX_RECENT_EMAILS = 6;
 const MAX_EMAIL_LEADERBOARD_ITEMS = 6;
+const MAX_MEETING_LEADERBOARD_ITEMS = 8;
 
 type EmployeeDirectoryOption = {
   loginName: string;
@@ -76,6 +82,17 @@ type EmployeeAggregate = {
   unansweredCalls: number;
   talkSeconds: number;
   lastCallAt: string | null;
+};
+
+type MeetingBookerAggregate = {
+  key: string;
+  loginName: string;
+  displayName: string;
+  totalMeetings: number;
+  totalAttendees: number;
+  meetingsWithUnknownAttendeeCount: number;
+  googleInviteMeetings: number;
+  lastMeetingAt: string | null;
 };
 
 function buildSnapshotCacheKey(filters: DashboardFilters): string {
@@ -311,6 +328,176 @@ function buildEmailAnalytics(
       .slice(-MAX_TREND_BUCKETS),
     leaderboard,
     recentEmails,
+  };
+}
+
+function filterMeetingBookings(
+  rows: StoredMeetingBooking[],
+  filters: DashboardFilters,
+): StoredMeetingBooking[] {
+  const lowerSearch = filters.search.trim().toLowerCase();
+
+  return rows.filter((row) => {
+    const occurredAtMs = Date.parse(row.occurredAt);
+    if (!Number.isFinite(occurredAtMs)) {
+      return false;
+    }
+    if (occurredAtMs < Date.parse(filters.start) || occurredAtMs > Date.parse(filters.end)) {
+      return false;
+    }
+
+    if (filters.employees.length > 0) {
+      const actorLogin = row.actorLoginName?.trim().toLowerCase() ?? "";
+      if (!filters.employees.includes(actorLogin)) {
+        return false;
+      }
+    }
+
+    if (!lowerSearch) {
+      return true;
+    }
+
+    return [
+      row.actorLoginName,
+      row.actorName,
+      row.companyName,
+      row.relatedContactName,
+      row.meetingSummary,
+      row.businessAccountId,
+    ]
+      .filter((value): value is string => Boolean(value && value.trim()))
+      .join(" ")
+      .toLowerCase()
+      .includes(lowerSearch);
+  });
+}
+
+function resolveMeetingBookerDisplayName(
+  row: Pick<StoredMeetingBooking, "actorLoginName" | "actorName">,
+  employeesByLogin: Map<string, EmployeeDirectoryOption>,
+): {
+  loginName: string;
+  displayName: string;
+} {
+  const loginName = row.actorLoginName?.trim().toLowerCase() || "unknown";
+  if (loginName !== "unknown") {
+    const employee = employeesByLogin.get(loginName);
+    return {
+      loginName,
+      displayName: employee?.displayName ?? row.actorName?.trim() ?? loginName,
+    };
+  }
+
+  return {
+    loginName: "unknown",
+    displayName: row.actorName?.trim() || "Unknown booker",
+  };
+}
+
+function compareMeetingLeaderboard(
+  left: DashboardMeetingActivityItem,
+  right: DashboardMeetingActivityItem,
+): number {
+  if (right.totalMeetings !== left.totalMeetings) {
+    return right.totalMeetings - left.totalMeetings;
+  }
+  if (right.totalAttendees !== left.totalAttendees) {
+    return right.totalAttendees - left.totalAttendees;
+  }
+  return compareByDisplayName(left, right);
+}
+
+function buildMeetingAnalytics(
+  filters: DashboardFilters,
+  employees: EmployeeDirectoryOption[],
+  rowsOverride?: StoredMeetingBooking[],
+): {
+  stats: DashboardMeetingSummaryStats;
+  leaderboard: DashboardMeetingActivityItem[];
+  recentMeetings: DashboardRecentMeeting[];
+} {
+  const rows = filterMeetingBookings(rowsOverride ?? listMeetingBookings(), filters);
+  const employeesByLogin = new Map(employees.map((employee) => [employee.loginName, employee]));
+  const aggregates = new Map<string, MeetingBookerAggregate>();
+  let totalAttendees = 0;
+  let meetingsWithGoogleInvite = 0;
+
+  for (const row of rows) {
+    const actor = resolveMeetingBookerDisplayName(row, employeesByLogin);
+    const aggregate = aggregates.get(actor.loginName) ?? {
+      key: actor.loginName,
+      loginName: actor.loginName,
+      displayName: actor.displayName,
+      totalMeetings: 0,
+      totalAttendees: 0,
+      meetingsWithUnknownAttendeeCount: 0,
+      googleInviteMeetings: 0,
+      lastMeetingAt: null,
+    };
+
+    aggregate.totalMeetings += 1;
+    aggregate.totalAttendees += Math.max(0, row.attendeeCount);
+    if (row.attendeeCount === 0 && row.inviteAuthority === null && row.calendarInviteStatus === null) {
+      aggregate.meetingsWithUnknownAttendeeCount += 1;
+    }
+    if (row.inviteAuthority === "google") {
+      aggregate.googleInviteMeetings += 1;
+      meetingsWithGoogleInvite += 1;
+    }
+    totalAttendees += Math.max(0, row.attendeeCount);
+
+    const currentTime = aggregate.lastMeetingAt
+      ? Date.parse(aggregate.lastMeetingAt)
+      : Number.NEGATIVE_INFINITY;
+    const nextTime = Date.parse(row.occurredAt);
+    if (Number.isFinite(nextTime) && nextTime > currentTime) {
+      aggregate.lastMeetingAt = row.occurredAt;
+    }
+
+    aggregates.set(actor.loginName, aggregate);
+  }
+
+  const leaderboard = [...aggregates.values()]
+    .map((item) => ({
+      loginName: item.loginName,
+      displayName: item.displayName,
+      totalMeetings: item.totalMeetings,
+      totalAttendees: item.totalAttendees,
+      meetingsWithUnknownAttendeeCount: item.meetingsWithUnknownAttendeeCount,
+      googleInviteMeetings: item.googleInviteMeetings,
+      averageAttendees: item.totalMeetings > 0 ? item.totalAttendees / item.totalMeetings : 0,
+      lastMeetingAt: item.lastMeetingAt,
+    }))
+    .sort(compareMeetingLeaderboard)
+    .slice(0, MAX_MEETING_LEADERBOARD_ITEMS);
+
+  const recentMeetings = rows.slice(0, MAX_RECENT_MEETINGS).map((row) => {
+    const actor = resolveMeetingBookerDisplayName(row, employeesByLogin);
+    return {
+      id: row.id,
+      occurredAt: row.occurredAt,
+      actorLoginName: row.actorLoginName,
+      actorName: row.actorName,
+      displayName: actor.displayName,
+      companyName: row.companyName,
+      contactName: row.relatedContactName,
+      meetingSummary: row.meetingSummary,
+      attendeeCount: row.attendeeCount,
+      inviteAuthority: row.inviteAuthority,
+      calendarInviteStatus: row.calendarInviteStatus,
+    } satisfies DashboardRecentMeeting;
+  });
+
+  return {
+    stats: {
+      totalMeetings: rows.length,
+      uniqueBookers: aggregates.size,
+      averagePerBooker: aggregates.size > 0 ? rows.length / aggregates.size : 0,
+      totalAttendees,
+      meetingsWithGoogleInvite,
+    },
+    leaderboard,
+    recentMeetings,
   };
 }
 
@@ -655,6 +842,7 @@ function buildSnapshotFromSessions(
   generatedAt: string,
   cacheExpiresAt: string,
   emailRows?: StoredEmailAuditRow[],
+  meetingRows?: StoredMeetingBooking[],
 ): DashboardSnapshotResponse {
   const teamStats = buildSummaryStats(sessions);
   const trendGroups = new Map<string, DashboardTrendPoint>();
@@ -700,6 +888,7 @@ function buildSnapshotFromSessions(
   const breakdowns = buildBreakdownsForSessions(sessions);
   const employeeAnalytics = buildEmployeeAnalytics(filters, sessions, employees);
   const emailAnalytics = buildEmailAnalytics(filters, employees, emailRows);
+  const meetingAnalytics = buildMeetingAnalytics(filters, employees, meetingRows);
 
   return {
     filters,
@@ -724,6 +913,7 @@ function buildSnapshotFromSessions(
     },
     employees,
     teamStats,
+    meetingStats: meetingAnalytics.stats,
     emailStats: emailAnalytics.stats,
     trend: {
       filters,
@@ -737,12 +927,14 @@ function buildSnapshotFromSessions(
     },
     bucketDrilldowns: buildBucketDrilldowns(trendItems, visibleBucketSessions),
     employeeLeaderboard: employeeAnalytics.leaderboard,
+    meetingLeaderboard: meetingAnalytics.leaderboard,
     emailLeaderboard: emailAnalytics.leaderboard,
     activityGaps: employeeAnalytics.activityGaps,
     outcomeSummary: breakdowns.outcomes.slice(0, MAX_LEADERBOARD_ITEMS),
     sourceSummary: breakdowns.sources.slice(0, MAX_LEADERBOARD_ITEMS),
     companySummary: breakdowns.companies.slice(0, MAX_LEADERBOARD_ITEMS),
     recentCalls: sessions.slice(0, MAX_RECENT_CALLS).map(toRecentCall),
+    recentMeetings: meetingAnalytics.recentMeetings,
     recentEmails: emailAnalytics.recentEmails,
   };
 }
@@ -769,7 +961,15 @@ export async function getDashboardSnapshot(filters: DashboardFilters): Promise<D
       email: item.email,
     }));
     const sessions = filterCallSessions(readCallSessions(), filters);
-    const snapshot = buildSnapshotFromSessions(filters, sessions, employees, generatedAt, cacheExpiresAt);
+    const snapshot = buildSnapshotFromSessions(
+      filters,
+      sessions,
+      employees,
+      generatedAt,
+      cacheExpiresAt,
+      undefined,
+      listMeetingBookings(),
+    );
     writeCachedDashboardSnapshot(cacheKey, snapshot, now + getEnv().CALL_ANALYTICS_STALE_AFTER_MS);
     return snapshot;
   }).finally(() => {
@@ -787,8 +987,17 @@ export function buildDashboardSnapshotForTests(
   generatedAt = "2026-03-09T00:00:00.000Z",
   cacheExpiresAt = "2026-03-09T00:05:00.000Z",
   emailRows: StoredEmailAuditRow[] = [],
+  meetingRows: StoredMeetingBooking[] = [],
 ): DashboardSnapshotResponse {
-  return buildSnapshotFromSessions(filters, sessions, employees, generatedAt, cacheExpiresAt, emailRows);
+  return buildSnapshotFromSessions(
+    filters,
+    sessions,
+    employees,
+    generatedAt,
+    cacheExpiresAt,
+    emailRows,
+    meetingRows,
+  );
 }
 
 export function buildEmptyEmployeeActivityForTests(employee: EmployeeDirectoryOption): DashboardEmployeeActivityItem {

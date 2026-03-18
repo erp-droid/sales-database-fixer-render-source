@@ -148,4 +148,72 @@ describe("deferred actions store", () => {
     const items = listStoredDeferredActionRecords();
     expect(items.find((item) => item.id === "legacy-action")?.reason).toBeNull();
   });
+
+  it("dedupes active merge actions for the same keep and loser contacts", async () => {
+    const {
+      enqueueDeferredMergeContactsAction,
+      listStoredDeferredActionRecords,
+    } = await import("@/lib/deferred-actions-store");
+
+    const input = {
+      sourceSurface: "merge",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "BA0001",
+      companyName: "Alpha Foods",
+      keptContactId: 157497,
+      keptContactName: "Jorge Serrano",
+      loserContactIds: [157499, 157498],
+      loserContactNames: ["Duplicate A", "Duplicate B"],
+      affectedFields: ["Phone 1", "Email"],
+      actor: {
+        loginName: "jserrano",
+        name: "Jorge Serrano",
+      },
+      payloadJson: JSON.stringify({
+        businessAccountRecordId: "record-1",
+        businessAccountId: "BA0001",
+        keepContactId: 157497,
+        selectedContactIds: [157497, 157498, 157499],
+        setKeptAsPrimary: false,
+        expectedAccountLastModified: "2026-03-12T12:00:00.000Z",
+        expectedContactLastModifieds: [
+          { contactId: 157497, lastModified: "2026-03-12T12:00:00.000Z" },
+          { contactId: 157498, lastModified: "2026-03-12T12:00:00.000Z" },
+          { contactId: 157499, lastModified: "2026-03-12T12:00:00.000Z" },
+        ],
+        fieldChoices: [{ field: "displayName", sourceContactId: 157497 }],
+      }),
+      preview: {
+        actionType: "mergeContacts" as const,
+        keepContactId: 157497,
+        loserContactIds: [157499, 157498],
+        setKeptAsPrimary: false,
+        mergedFields: {
+          displayName: "Jorge Serrano",
+          phone1: "416-230-4681",
+          email: "jserrano@meadowb.com",
+        },
+        mergedPrimaryContactName: "Jorge Serrano",
+        mergedPrimaryContactJobTitle: "Sales Manager",
+        mergedPrimaryContactPhone: "416-230-4681",
+        mergedPrimaryContactEmail: "jserrano@meadowb.com",
+        mergedNotes: "Merged notes",
+      },
+    };
+
+    const first = enqueueDeferredMergeContactsAction(input);
+    const second = enqueueDeferredMergeContactsAction({
+      ...input,
+      loserContactIds: [157498, 157499],
+      preview: {
+        ...input.preview,
+        loserContactIds: [157498, 157499],
+      },
+    });
+
+    expect(second).toEqual(first);
+    expect(
+      listStoredDeferredActionRecords().filter((record) => record.actionType === "mergeContacts"),
+    ).toHaveLength(1);
+  });
 });

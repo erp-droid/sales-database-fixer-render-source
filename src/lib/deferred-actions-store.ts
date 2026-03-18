@@ -4,9 +4,11 @@ import { upsertDeferredActionAuditEvents } from "@/lib/audit-log-store";
 import {
   applyDeferredContactOperationToRows,
   getDeferredActionAccountKey,
+  type DeferredMergeContactsFieldSnapshot,
   type DeferredContactOperationPreview,
 } from "@/lib/deferred-contact-operations";
 import { publishDeferredActionsChanged } from "@/lib/deferred-actions-live";
+import { CONTACT_MERGE_FIELD_KEYS } from "@/types/contact-merge";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type {
   DeferredActionCounts,
@@ -25,6 +27,12 @@ const ACTIVE_PREVIEW_STATUSES = new Set<DeferredActionStatus>([
   "approved",
   "executing",
   "failed",
+]);
+
+const ACTIVE_QUEUE_STATUSES = new Set<DeferredActionStatus>([
+  "pending_review",
+  "approved",
+  "executing",
 ]);
 
 type DeferredActionActor = {
@@ -183,6 +191,24 @@ function parsePreview(
       return null;
     }
 
+    const mergedFields =
+      record.mergedFields && typeof record.mergedFields === "object"
+        ? (Object.fromEntries(
+            CONTACT_MERGE_FIELD_KEYS.flatMap((field) => {
+              if (!Object.prototype.hasOwnProperty.call(record.mergedFields, field)) {
+                return [];
+              }
+
+              const value = (record.mergedFields as Record<string, unknown>)[field];
+              if (typeof value !== "string" && value !== null) {
+                return [];
+              }
+
+              return [[field, value ?? null] as const];
+            }),
+          ) as DeferredMergeContactsFieldSnapshot)
+        : null;
+
     return {
       actionType: "mergeContacts",
       keepContactId,
@@ -192,9 +218,14 @@ function parsePreview(
             .filter((value) => Number.isInteger(value) && value > 0)
         : [],
       setKeptAsPrimary: record.setKeptAsPrimary === true,
+      mergedFields,
       mergedPrimaryContactName:
         typeof record.mergedPrimaryContactName === "string"
           ? record.mergedPrimaryContactName
+          : null,
+      mergedPrimaryContactJobTitle:
+        typeof record.mergedPrimaryContactJobTitle === "string"
+          ? record.mergedPrimaryContactJobTitle
           : null,
       mergedPrimaryContactPhone:
         typeof record.mergedPrimaryContactPhone === "string"
@@ -808,12 +839,49 @@ export function enqueueDeferredContactDeleteAction(
   };
 }
 
+function normalizeContactIdSet(contactIds: number[]): number[] {
+  return [...new Set(contactIds.filter((value) => Number.isInteger(value) && value > 0))].sort(
+    (left, right) => left - right,
+  );
+}
+
+function findMatchingActiveMergeAction(
+  input: EnqueueDeferredMergeContactsInput,
+): StoredDeferredActionRecord | null {
+  const normalizedLoserIds = normalizeContactIdSet(input.loserContactIds);
+  return readStoredActions().find((record) => {
+    if (
+      record.actionType !== "mergeContacts" ||
+      !ACTIVE_QUEUE_STATUSES.has(record.status) ||
+      record.businessAccountRecordId !== input.businessAccountRecordId ||
+      record.keptContactId !== input.keptContactId
+    ) {
+      return false;
+    }
+
+    const recordLoserIds = normalizeContactIdSet(record.loserContactIds);
+    if (recordLoserIds.length !== normalizedLoserIds.length) {
+      return false;
+    }
+
+    return recordLoserIds.every((contactId, index) => contactId === normalizedLoserIds[index]);
+  }) ?? null;
+}
+
 export function enqueueDeferredMergeContactsAction(
   input: EnqueueDeferredMergeContactsInput,
 ): {
   id: string;
   executeAfterAt: string;
 } {
+  const existing = findMatchingActiveMergeAction(input);
+  if (existing) {
+    return {
+      id: existing.id,
+      executeAfterAt: existing.executeAfterAt,
+    };
+  }
+
   const db = getReadModelDb();
   const id = buildActionId();
   const now = new Date().toISOString();

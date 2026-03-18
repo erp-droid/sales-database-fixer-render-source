@@ -706,6 +706,13 @@ type FetchContactsOptions = {
   filter?: string;
 };
 
+type FetchEventsOptions = {
+  maxRecords?: number;
+  batchSize?: number;
+  initialSkip?: number;
+  filter?: string;
+};
+
 export function readWrappedString(record: unknown, key: string): string {
   if (!record || typeof record !== "object") {
     return "";
@@ -1105,6 +1112,26 @@ function buildEmployeeCollectionPath(resourcePath: string, options: {
   }
 
   return `${resourcePath}?${query.toString()}`;
+}
+
+function buildEventCollectionPath(options: {
+  top: number;
+  skip: number;
+  filter?: string;
+  expandAttendees?: boolean;
+}): string {
+  const query = new URLSearchParams({
+    $top: String(options.top),
+    $skip: String(options.skip),
+  });
+  if (options.filter?.trim()) {
+    query.set("$filter", options.filter);
+  }
+  if (options.expandAttendees) {
+    query.set("$expand", "Attendees");
+  }
+
+  return `/Event?${query.toString()}`;
 }
 
 function readBusinessAccountIdentity(record: RawBusinessAccount): string {
@@ -1646,6 +1673,88 @@ export async function createEvent(
   }
 
   throw new HttpError(500, "Failed to create event in Acumatica.");
+}
+
+export async function fetchEvents(
+  cookieValue: string,
+  options?: FetchEventsOptions,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawEvent[]> {
+  const hasMaxRecords =
+    typeof options?.maxRecords === "number" &&
+    Number.isFinite(options.maxRecords);
+  const maxRecords = hasMaxRecords
+    ? Math.max(1, Math.trunc(options?.maxRecords as number))
+    : null;
+  const initialSkip = Math.max(0, Math.trunc(options?.initialSkip ?? 0));
+  const batchSize = Math.max(1, Math.min(options?.batchSize ?? 200, 500));
+  const filter = options?.filter;
+  const allRows: RawEvent[] = [];
+  let expandAttendees = true;
+
+  for (
+    let skip = initialSkip;
+    maxRecords === null || allRows.length < maxRecords;
+    skip += batchSize
+  ) {
+    const top = maxRecords === null ? batchSize : Math.min(batchSize, maxRecords - allRows.length);
+    if (top <= 0) {
+      break;
+    }
+
+    let payload: unknown;
+    try {
+      payload = await requestAcumatica<unknown>(
+        getActiveCookieValue(cookieValue, authCookieRefresh),
+        buildEventCollectionPath({
+          top,
+          skip,
+          filter,
+          expandAttendees,
+        }),
+        {
+          authCookieRefresh,
+        },
+      );
+    } catch (error) {
+      const message = error instanceof HttpError ? error.message : "";
+      const canRetryWithoutExpand =
+        expandAttendees &&
+        error instanceof HttpError &&
+        (error.status === 400 ||
+          error.status === 404 ||
+          /attendees|\$expand|not found in the endpoint|entity not found/i.test(message));
+
+      if (!canRetryWithoutExpand) {
+        throw error;
+      }
+
+      expandAttendees = false;
+      payload = await requestAcumatica<unknown>(
+        getActiveCookieValue(cookieValue, authCookieRefresh),
+        buildEventCollectionPath({
+          top,
+          skip,
+          filter,
+          expandAttendees: false,
+        }),
+        {
+          authCookieRefresh,
+        },
+      );
+    }
+    const rows = unwrapCollection<RawEvent>(payload);
+    if (rows.length === 0) {
+      break;
+    }
+
+    allRows.push(...rows);
+    if (rows.length < top) {
+      break;
+    }
+  }
+
+  return allRows;
 }
 
 export async function fetchContacts(

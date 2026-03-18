@@ -4,7 +4,7 @@ import {
   type AuthCookieRefreshState,
 } from "@/lib/acumatica";
 import { normalizeBusinessAccountRows } from "@/lib/business-accounts";
-import { executeContactMergeRequest } from "@/lib/contact-merge-execution";
+import { executeDeferredContactMergeRequest } from "@/lib/contact-merge-execution";
 import {
   DEFAULT_DEFERRED_ACTION_MAX_ATTEMPTS,
   listDueApprovedDeferredActions,
@@ -127,7 +127,16 @@ async function executeDeferredMergeContacts(
 ): Promise<void> {
   const parsed = JSON.parse(record.payloadJson);
   const payload = parseContactMergePayload(parsed);
-  await executeContactMergeRequest(cookieValue, payload, authCookieRefresh);
+  if (record.preview.actionType !== "mergeContacts") {
+    throw new Error("Queued merge action preview is invalid.");
+  }
+
+  await executeDeferredContactMergeRequest(
+    cookieValue,
+    payload,
+    record.preview,
+    authCookieRefresh,
+  );
 }
 
 function recoverStaleExecutingDeferredActions(actor: DeferredActionActor): void {

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const deleteContactMock = vi.fn();
 const fetchBusinessAccountByIdMock = vi.fn();
-const executeContactMergeRequestMock = vi.fn();
+const executeDeferredContactMergeRequestMock = vi.fn();
 const normalizeBusinessAccountRowsMock = vi.fn(() => []);
 const removeReadModelRowsByContactIdMock = vi.fn();
 const replaceReadModelAccountRowsMock = vi.fn();
@@ -17,7 +17,7 @@ vi.mock("@/lib/acumatica", () => ({
 }));
 
 vi.mock("@/lib/contact-merge-execution", () => ({
-  executeContactMergeRequest: executeContactMergeRequestMock,
+  executeDeferredContactMergeRequest: executeDeferredContactMergeRequestMock,
 }));
 
 vi.mock("@/lib/business-accounts", () => ({
@@ -285,5 +285,91 @@ describe("deferred actions executor", () => {
     const record = getStoredDeferredActionById(queued.id);
     expect(record?.status).toBe("executed");
     expect(record?.attemptCount).toBe(1);
+  });
+
+  it("passes queued merge previews to the deferred merge executor", async () => {
+    const {
+      approveDeferredActions,
+      enqueueDeferredMergeContactsAction,
+      getStoredDeferredActionById,
+    } = await import("@/lib/deferred-actions-store");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const { runDueDeferredActions } = await import("@/lib/deferred-actions-executor");
+
+    const actor = { loginName: "jserrano", name: "Jorge Serrano" };
+    const queued = enqueueDeferredMergeContactsAction({
+      sourceSurface: "merge",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "BA0001",
+      companyName: "Alpha Foods",
+      keptContactId: 157497,
+      keptContactName: "Jorge Serrano",
+      loserContactIds: [157498],
+      loserContactNames: ["Jorge Serrano Duplicate"],
+      affectedFields: ["Phone 1"],
+      actor,
+      payloadJson: JSON.stringify({
+        businessAccountRecordId: "record-1",
+        businessAccountId: "BA0001",
+        keepContactId: 157497,
+        selectedContactIds: [157497, 157498],
+        setKeptAsPrimary: false,
+        expectedAccountLastModified: "2026-03-10T12:00:00.000Z",
+        expectedContactLastModifieds: [
+          { contactId: 157497, lastModified: "2026-03-10T12:00:00.000Z" },
+          { contactId: 157498, lastModified: "2026-03-10T12:00:00.000Z" },
+        ],
+        fieldChoices: [{ field: "displayName", sourceContactId: 157497 }],
+      }),
+      preview: {
+        actionType: "mergeContacts",
+        keepContactId: 157497,
+        loserContactIds: [157498],
+        setKeptAsPrimary: false,
+        mergedFields: {
+          displayName: "Jorge Serrano",
+          phone1: "416-230-4681",
+        },
+        mergedPrimaryContactName: "Jorge Serrano",
+        mergedPrimaryContactJobTitle: "Sales Manager",
+        mergedPrimaryContactPhone: "416-230-4681",
+        mergedPrimaryContactEmail: "jserrano@meadowb.com",
+        mergedNotes: "Merged notes",
+      },
+    });
+    approveDeferredActions([queued.id], actor);
+
+    const db = getReadModelDb();
+    db.prepare("UPDATE deferred_actions SET execute_after_at = ? WHERE id = ?").run(
+      new Date().toISOString(),
+      queued.id,
+    );
+
+    executeDeferredContactMergeRequestMock.mockResolvedValueOnce(undefined);
+
+    const result = await runDueDeferredActions("cookie", actor, { value: null });
+    expect(result).toEqual({
+      executedCount: 1,
+      failedCount: 0,
+    });
+    expect(executeDeferredContactMergeRequestMock).toHaveBeenCalledWith(
+      "cookie",
+      expect.objectContaining({
+        keepContactId: 157497,
+        selectedContactIds: [157497, 157498],
+      }),
+      expect.objectContaining({
+        actionType: "mergeContacts",
+        keepContactId: 157497,
+        loserContactIds: [157498],
+        mergedFields: expect.objectContaining({
+          displayName: "Jorge Serrano",
+        }),
+      }),
+      { value: null },
+    );
+
+    const record = getStoredDeferredActionById(queued.id);
+    expect(record?.status).toBe("executed");
   });
 });

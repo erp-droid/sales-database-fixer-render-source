@@ -113,6 +113,8 @@ export type BusinessAccountMapPoint = {
   accountRecordId?: string;
   businessAccountId: string;
   companyName: string;
+  salesRepId: string | null;
+  salesRepName: string | null;
   fullAddress: string;
   addressLine1: string;
   addressLine2: string;

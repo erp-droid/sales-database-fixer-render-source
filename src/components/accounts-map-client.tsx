@@ -44,7 +44,7 @@ type SessionResponse = {
 };
 
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
-const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v3";
+const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v4";
 const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
 
 const MAP_DETAIL_FIELD_KEYS = [
@@ -105,6 +105,12 @@ type MapContactDraft = {
   notes: string;
 };
 
+type SalesRepFilterOption = {
+  key: string;
+  label: string;
+  count: number;
+};
+
 type DetailFieldDefinition = {
   key: MapDetailFieldKey;
   label: string;
@@ -144,6 +150,90 @@ const DETAIL_FIELD_DEFINITIONS: DetailFieldDefinition[] = [
     label: "Notes",
   },
 ];
+
+function normalizeTextToken(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+
+  return value.trim().toLowerCase();
+}
+
+function buildSalesRepFilterKey(point: Pick<BusinessAccountMapPoint, "salesRepId" | "salesRepName">): string {
+  if (hasText(point.salesRepId)) {
+    return `id:${normalizeTextToken(point.salesRepId)}`;
+  }
+
+  if (hasText(point.salesRepName)) {
+    return `name:${normalizeTextToken(point.salesRepName)}`;
+  }
+
+  return "unassigned";
+}
+
+function renderSalesRepLabel(value: string | null | undefined): string {
+  return hasText(value) ? value.trim() : "Unassigned";
+}
+
+function buildSalesRepFilterSummary(
+  selectedKeys: string[],
+  options: SalesRepFilterOption[],
+): string {
+  if (selectedKeys.length === 0) {
+    return "All";
+  }
+
+  if (selectedKeys.length === 1) {
+    return options.find((option) => option.key === selectedKeys[0])?.label ?? "1 selected";
+  }
+
+  return `${selectedKeys.length} selected`;
+}
+
+function buildSalesRepFilterOptionsFromRows(
+  rows: BusinessAccountRow[],
+): SalesRepFilterOption[] {
+  const grouped = new Map<
+    string,
+    SalesRepFilterOption & {
+      accountKeys: Set<string>;
+    }
+  >();
+
+  for (const row of rows) {
+    const key = buildSalesRepFilterKey(row);
+    const accountKey = readRowAccountKey(row);
+    const existing = grouped.get(key);
+    if (existing) {
+      if (!existing.accountKeys.has(accountKey)) {
+        existing.accountKeys.add(accountKey);
+        existing.count += 1;
+      }
+      continue;
+    }
+
+    grouped.set(key, {
+      key,
+      label: renderSalesRepLabel(row.salesRepName ?? row.salesRepId),
+      count: 1,
+      accountKeys: new Set([accountKey]),
+    });
+  }
+
+  return [...grouped.values()]
+    .map(({ accountKeys: _accountKeys, ...option }) => option)
+    .sort((left, right) => {
+      if (left.label === "Unassigned" && right.label !== "Unassigned") {
+        return 1;
+      }
+
+      if (right.label === "Unassigned" && left.label !== "Unassigned") {
+        return -1;
+      }
+
+      return left.label.localeCompare(right.label, undefined, { sensitivity: "base" });
+    });
+}
 
 function parseError(payload: unknown): string {
   if (!payload || typeof payload !== "object") {
@@ -267,6 +357,10 @@ function pickRepresentativeRow(rows: BusinessAccountRow[]): BusinessAccountRow {
     (row) => hasText(row.addressLine1) && hasText(row.city),
   );
   return withAddress ?? rows[0];
+}
+
+function pickSalesRepRow(rows: BusinessAccountRow[]): BusinessAccountRow {
+  return rows.find((row) => hasText(row.salesRepId) || hasText(row.salesRepName)) ?? rows[0];
 }
 
 function rowBelongsToPoint(row: BusinessAccountRow, point: BusinessAccountMapPoint): boolean {
@@ -449,6 +543,7 @@ function buildPointFromRows(
   }
 
   const representativeRow = pickRepresentativeRow(rows);
+  const salesRepRow = pickSalesRepRow(rows);
   const primaryRow = rows.find((row) => row.isPrimaryContact) ?? representativeRow;
 
   return {
@@ -457,6 +552,8 @@ function buildPointFromRows(
       representativeRow.accountRecordId ?? representativeRow.id ?? point.accountRecordId,
     businessAccountId: representativeRow.businessAccountId || point.businessAccountId,
     companyName: representativeRow.companyName || point.companyName,
+    salesRepId: salesRepRow.salesRepId ?? point.salesRepId,
+    salesRepName: salesRepRow.salesRepName ?? point.salesRepName,
     fullAddress: representativeRow.address || point.fullAddress,
     addressLine1: representativeRow.addressLine1 || point.addressLine1,
     addressLine2: representativeRow.addressLine2 || point.addressLine2,
@@ -818,8 +915,11 @@ export function AccountsMapClient({
 }) {
   const router = useRouter();
 
+  const [cachedDatasetRows, setCachedDatasetRows] = useState<BusinessAccountRow[]>([]);
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [q, setQ] = useState("");
+  const [salesRepFilterQuery, setSalesRepFilterQuery] = useState("");
+  const [selectedSalesRepKeys, setSelectedSalesRepKeys] = useState<string[]>([]);
   const [points, setPoints] = useState<BusinessAccountMapPoint[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [totalCandidates, setTotalCandidates] = useState(0);
@@ -847,10 +947,71 @@ export function AccountsMapClient({
   const regionsLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const markersLayerRef = useRef<import("leaflet").LayerGroup | null>(null);
   const leafletRef = useRef<LeafletModule | null>(null);
+  const viewportFitSignatureRef = useRef<string | null>(null);
 
+  const selectedSalesRepFilterKeys = useMemo(
+    () => [...selectedSalesRepKeys].sort(),
+    [selectedSalesRepKeys],
+  );
+  const salesRepOptions = useMemo(() => {
+    if (cachedDatasetRows.length > 0) {
+      return buildSalesRepFilterOptionsFromRows(cachedDatasetRows);
+    }
+
+    const grouped = new Map<string, SalesRepFilterOption>();
+
+    for (const point of points) {
+      const key = buildSalesRepFilterKey(point);
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.count += 1;
+        continue;
+      }
+
+      grouped.set(key, {
+        key,
+        label: renderSalesRepLabel(point.salesRepName ?? point.salesRepId),
+        count: 1,
+      });
+    }
+
+    return [...grouped.values()].sort((left, right) => {
+      if (left.label === "Unassigned" && right.label !== "Unassigned") {
+        return 1;
+      }
+
+      if (right.label === "Unassigned" && left.label !== "Unassigned") {
+        return -1;
+      }
+
+      return left.label.localeCompare(right.label, undefined, { sensitivity: "base" });
+    });
+  }, [cachedDatasetRows, points]);
+  const visibleSalesRepOptions = useMemo(() => {
+    const normalizedQuery = normalizeTextToken(salesRepFilterQuery);
+    if (!normalizedQuery) {
+      return salesRepOptions;
+    }
+
+    return salesRepOptions.filter((option) =>
+      option.label.toLowerCase().includes(normalizedQuery),
+    );
+  }, [salesRepFilterQuery, salesRepOptions]);
+  const filteredPoints = useMemo(() => {
+    if (selectedSalesRepKeys.length === 0) {
+      return points;
+    }
+
+    const selectedKeys = new Set(selectedSalesRepKeys);
+    return points.filter((point) => selectedKeys.has(buildSalesRepFilterKey(point)));
+  }, [points, selectedSalesRepKeys]);
+  const salesRepFilterSummary = useMemo(
+    () => buildSalesRepFilterSummary(selectedSalesRepKeys, salesRepOptions),
+    [salesRepOptions, selectedSalesRepKeys],
+  );
   const selectedPoint = useMemo(
-    () => points.find((point) => point.id === selectedId) ?? points[0] ?? null,
-    [points, selectedId],
+    () => filteredPoints.find((point) => point.id === selectedId) ?? filteredPoints[0] ?? null,
+    [filteredPoints, selectedId],
   );
   const selectedContacts = useMemo(() => {
     if (!selectedPoint) {
@@ -962,12 +1123,30 @@ export function AccountsMapClient({
   }, [panelPreferences, selectedContacts.length, selectedPoint]);
 
   useEffect(() => {
+    function syncCachedDatasetRows() {
+      setCachedDatasetRows(readDatasetEntry()?.dataset.rows ?? []);
+    }
+
+    syncCachedDatasetRows();
+    window.addEventListener("businessAccounts:dataset-updated", syncCachedDatasetRows);
+
+    return () => {
+      window.removeEventListener("businessAccounts:dataset-updated", syncCachedDatasetRows);
+    };
+  }, []);
+
+  useEffect(() => {
     setUpdatingContactRowKey(null);
     setContactActionMode(null);
     setEditingContactRowKey(null);
     setContactDrafts({});
     setContactActionError(null);
-  }, [selectedId]);
+  }, [selectedPoint?.id]);
+
+  useEffect(() => {
+    const optionKeys = new Set(salesRepOptions.map((option) => option.key));
+    setSelectedSalesRepKeys((current) => current.filter((key) => optionKeys.has(key)));
+  }, [salesRepOptions]);
 
   useEffect(() => {
     setPanelPreferences(readMapPanelPreferences());
@@ -1028,7 +1207,8 @@ export function AccountsMapClient({
       try {
         const normalizedQuery = q.trim().toLowerCase();
         const lastSyncedAt = readDatasetSyncStamp() ?? "unsynced";
-        const cacheKey = `${lastSyncedAt}|scope:all|${normalizedQuery}`;
+        const salesRepCacheToken = selectedSalesRepFilterKeys.join(",");
+        const cacheKey = `${lastSyncedAt}|scope:all|${normalizedQuery}|sales-reps:${salesRepCacheToken}`;
         const cached = readMapCache(cacheKey);
         if (cached) {
           setPoints(cached.items);
@@ -1046,6 +1226,9 @@ export function AccountsMapClient({
         const params = new URLSearchParams();
         if (normalizedQuery) {
           params.set("q", normalizedQuery);
+        }
+        for (const salesRepKey of selectedSalesRepFilterKeys) {
+          params.append("salesRep", salesRepKey);
         }
         if (lastSyncedAt !== "unsynced") {
           params.set("syncedAt", lastSyncedAt);
@@ -1099,7 +1282,7 @@ export function AccountsMapClient({
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [q, session]);
+  }, [q, selectedSalesRepFilterKeys, session]);
 
   useEffect(() => {
     if (!session?.authenticated) {
@@ -1198,6 +1381,7 @@ export function AccountsMapClient({
       mapRef.current = null;
       regionsLayerRef.current = null;
       markersLayerRef.current = null;
+      viewportFitSignatureRef.current = null;
     };
   }, []);
 
@@ -1240,11 +1424,11 @@ export function AccountsMapClient({
 
     markerLayer.clearLayers();
 
-    if (points.length === 0) {
+    if (filteredPoints.length === 0) {
       return;
     }
 
-    for (const point of points) {
+    for (const point of filteredPoints) {
       const isSelected = selectedPoint?.id === point.id;
       const circle = L.circleMarker([point.latitude, point.longitude], {
         radius: isSelected ? 10 : 8,
@@ -1263,7 +1447,7 @@ export function AccountsMapClient({
       });
       circle.addTo(markerLayer);
     }
-  }, [points, selectedPoint]);
+  }, [filteredPoints, selectedPoint]);
 
   useEffect(() => {
     const L = leafletRef.current;
@@ -1272,7 +1456,22 @@ export function AccountsMapClient({
       return;
     }
 
-    if (points.length === 0) {
+    const nextViewportSignature =
+      filteredPoints.length > 0
+        ? filteredPoints
+            .map((point) => `${point.id}:${point.latitude}:${point.longitude}`)
+            .join("|")
+        : `regions:${postalRegions
+            .map((region) => `${region.id}:${region.polygons.length}`)
+            .join("|")}`;
+
+    if (viewportFitSignatureRef.current === nextViewportSignature) {
+      return;
+    }
+
+    viewportFitSignatureRef.current = nextViewportSignature;
+
+    if (filteredPoints.length === 0) {
       if (postalRegions.length > 0) {
         const regionBounds = L.latLngBounds([]);
         for (const region of postalRegions) {
@@ -1295,16 +1494,16 @@ export function AccountsMapClient({
 
     const bounds = L.latLngBounds([]);
 
-    for (const point of points) {
+    for (const point of filteredPoints) {
       bounds.extend([point.latitude, point.longitude]);
     }
 
-    if (points.length === 1) {
-      map.setView([points[0].latitude, points[0].longitude], 12);
+    if (filteredPoints.length === 1) {
+      map.setView([filteredPoints[0].latitude, filteredPoints[0].longitude], 12);
     } else {
       map.fitBounds(bounds.pad(0.18));
     }
-  }, [points, postalRegions]);
+  }, [filteredPoints, postalRegions]);
 
   function startEditingContact(contact: MapContactSummary) {
     setContactActionError(null);
@@ -1367,6 +1566,20 @@ export function AccountsMapClient({
 
   function applyAllDetailsView() {
     setPanelPreferences((current) => buildAllDetailPreferences(current));
+  }
+
+  function toggleSalesRepFilter(key: string) {
+    setSelectedSalesRepKeys((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    );
+  }
+
+  function clearSalesRepFilters() {
+    setSelectedSalesRepKeys([]);
+  }
+
+  function selectAllVisibleSalesRepFilters() {
+    setSelectedSalesRepKeys(visibleSalesRepOptions.map((option) => option.key));
   }
 
   async function handleSaveContactEdits(contact: MapContactSummary) {
@@ -1682,14 +1895,6 @@ export function AccountsMapClient({
   return (
     <AppChrome
       contentClassName={styles.pageContent}
-      headerActions={
-        <input
-          className={styles.searchInput}
-          onChange={(event) => setQ(event.target.value)}
-          placeholder="Search company, contact, address"
-          value={q}
-        />
-      }
       subtitle="Sales MeadowBrook Map"
       title="Contacts Location View"
       userName={session?.user?.name ?? "Signed in"}
@@ -1721,6 +1926,60 @@ export function AccountsMapClient({
             : []
         }
       />
+
+      <section className={styles.filtersBar}>
+        <div className={styles.filtersBarCopy}>
+          <strong>Map filters</strong>
+          <span>Filter visible companies before you pan the map.</span>
+        </div>
+        <div className={styles.headerFilters}>
+          <input
+            className={styles.searchInput}
+            onChange={(event) => setQ(event.target.value)}
+            placeholder="Search company, contact, address"
+            value={q}
+          />
+          <details className={styles.salesRepFilterMenu}>
+            <summary className={styles.salesRepFilterSummary}>
+              Sales reps: {salesRepFilterSummary}
+            </summary>
+            <div className={styles.salesRepFilterPanel}>
+              <div className={styles.salesRepFilterActions}>
+                <button onClick={selectAllVisibleSalesRepFilters} type="button">
+                  All visible
+                </button>
+                <button onClick={clearSalesRepFilters} type="button">
+                  Clear
+                </button>
+              </div>
+              <input
+                className={styles.salesRepFilterSearch}
+                onChange={(event) => setSalesRepFilterQuery(event.target.value)}
+                placeholder="Filter sales reps"
+                value={salesRepFilterQuery}
+              />
+              <div className={styles.salesRepFilterList}>
+                {visibleSalesRepOptions.length > 0 ? (
+                  visibleSalesRepOptions.map((option) => (
+                    <label className={styles.viewOptionItem} key={option.key}>
+                      <input
+                        checked={selectedSalesRepKeys.includes(option.key)}
+                        onChange={() => toggleSalesRepFilter(option.key)}
+                        type="checkbox"
+                      />
+                      <span>
+                        {option.label} ({option.count})
+                      </span>
+                    </label>
+                  ))
+                ) : (
+                  <p className={styles.salesRepFilterEmpty}>No sales reps match this search.</p>
+                )}
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
 
       <section className={styles.mapShell}>
         <div className={styles.mapCanvas} ref={mapContainerRef} />
@@ -1784,6 +2043,7 @@ export function AccountsMapClient({
             <div className={styles.stats}>
               <span>Account Candidates: {totalCandidates}</span>
               <span>Mapped Accounts: {geocodedCount}</span>
+              <span>Visible Pins: {filteredPoints.length}</span>
               <span>Unmapped Accounts: {unmappedCount}</span>
               <span>Postal Regions: {postalRegions.length}</span>
             </div>
@@ -1794,7 +2054,11 @@ export function AccountsMapClient({
           {postalRegionsError ? <p className={styles.errorText}>{postalRegionsError}</p> : null}
 
           {!loading && !error && !selectedPoint ? (
-            <p className={styles.loadingText}>No mapped business accounts found for this filter.</p>
+            <p className={styles.loadingText}>
+              {points.length > 0 && selectedSalesRepKeys.length > 0
+                ? "No mapped business accounts match the selected sales rep filter."
+                : "No mapped business accounts found for this filter."}
+            </p>
           ) : null}
 
           {selectedPoint ? (

@@ -1,6 +1,7 @@
 export const AUDIT_ITEM_TYPES = [
   "call",
   "email",
+  "meeting",
   "contact",
   "business_account",
 ] as const;
@@ -10,6 +11,7 @@ export type AuditItemType = (typeof AUDIT_ITEM_TYPES)[number];
 export const AUDIT_ACTION_GROUPS = [
   "call",
   "email_send",
+  "meeting_create",
   "contact_create",
   "contact_delete",
   "contact_merge",
@@ -41,6 +43,7 @@ export const AUDIT_LINK_ROLES = [
   "linked_contact",
   "matched_contact",
   "recipient",
+  "attendee",
   "merged_from",
   "merged_into",
 ] as const;

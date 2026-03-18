@@ -260,6 +260,35 @@ CREATE INDEX IF NOT EXISTS idx_call_activity_sync_status
 CREATE INDEX IF NOT EXISTS idx_call_activity_sync_recording_sid
   ON call_activity_sync(recording_sid);
 
+CREATE TABLE IF NOT EXISTS meeting_bookings (
+  id TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL,
+  actor_login_name TEXT,
+  actor_name TEXT,
+  business_account_record_id TEXT,
+  business_account_id TEXT,
+  company_name TEXT,
+  related_contact_id INTEGER,
+  related_contact_name TEXT,
+  meeting_summary TEXT NOT NULL,
+  attendee_count INTEGER NOT NULL,
+  attendee_details_json TEXT NOT NULL DEFAULT '[]',
+  invite_authority TEXT,
+  calendar_invite_status TEXT,
+  occurred_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meeting_bookings_event_id
+  ON meeting_bookings(event_id);
+CREATE INDEX IF NOT EXISTS idx_meeting_bookings_occurred_at
+  ON meeting_bookings(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meeting_bookings_actor_login_name
+  ON meeting_bookings(actor_login_name);
+CREATE INDEX IF NOT EXISTS idx_meeting_bookings_business_account_id
+  ON meeting_bookings(business_account_id);
+
 CREATE TABLE IF NOT EXISTS mail_send_jobs (
   id TEXT PRIMARY KEY,
   requested_by_login_name TEXT,
@@ -484,6 +513,18 @@ export function ensureReadModelSchema(db: Database.Database): void {
   );
   if (!hasLastAttemptAtColumn) {
     db.exec("ALTER TABLE deferred_actions ADD COLUMN last_attempt_at TEXT");
+  }
+
+  const meetingBookingColumns = db
+    .prepare("PRAGMA table_info(meeting_bookings)")
+    .all() as Array<{ name: string }>;
+  const hasMeetingAttendeeDetailsColumn = meetingBookingColumns.some(
+    (column) => column.name === "attendee_details_json",
+  );
+  if (!hasMeetingAttendeeDetailsColumn) {
+    db.exec(
+      "ALTER TABLE meeting_bookings ADD COLUMN attendee_details_json TEXT NOT NULL DEFAULT '[]'",
+    );
   }
 
   db.prepare(
