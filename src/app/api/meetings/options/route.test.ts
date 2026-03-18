@@ -8,11 +8,17 @@ const fetchContacts = vi.fn();
 const readCallEmployeeDirectory = vi.fn();
 const readCallEmployeeDirectoryMeta = vi.fn();
 const syncCallEmployeeDirectory = vi.fn();
+const readAllAccountRowsFromReadModel = vi.fn();
 const readEmployeeDirectorySnapshot = vi.fn();
+const withServiceAcumaticaSession = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
   requireAuthCookieValue,
   setAuthCookie,
+}));
+
+vi.mock("@/lib/acumatica-service-auth", () => ({
+  withServiceAcumaticaSession,
 }));
 
 vi.mock("@/lib/acumatica", async () => {
@@ -32,7 +38,13 @@ vi.mock("@/lib/call-analytics/employee-directory", async () => {
   };
 });
 
+vi.mock("@/lib/read-model/accounts", () => ({
+  readAllAccountRowsFromReadModel,
+}));
+
 vi.mock("@/lib/read-model/employees", () => ({
+  hasDetailedEmployeeDirectory: (items: Array<{ email?: string | null }>) =>
+    items.filter((item) => item.email?.trim()).length >= Math.min(items.length, 25),
   readEmployeeDirectorySnapshot,
 }));
 
@@ -105,11 +117,13 @@ describe("GET /api/meetings/options", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requireAuthCookieValue.mockReturnValue("cookie");
+    readAllAccountRowsFromReadModel.mockReturnValue([]);
     readCallEmployeeDirectory.mockReturnValue([]);
     readCallEmployeeDirectoryMeta.mockReturnValue({
       total: 0,
       latestUpdatedAt: null,
     });
+    readAllAccountRowsFromReadModel.mockReturnValue([]);
     readEmployeeDirectorySnapshot.mockReturnValue({
       items: Array.from({ length: 165 }, (_, index) => ({
         id: `E${index + 1}`,
@@ -118,56 +132,67 @@ describe("GET /api/meetings/options", () => {
       source: "acumatica_employees",
       updatedAt: "2026-03-17T00:00:00.000Z",
     });
+    withServiceAcumaticaSession.mockImplementation(async (_preferredLoginName, operation) =>
+      operation("service-cookie", { value: null }),
+    );
   });
 
   it("returns a MeadowBrook-inclusive contact directory and filters vendors", async () => {
-    fetchBusinessAccounts.mockResolvedValue([
-      buildAccount({
+    readAllAccountRowsFromReadModel.mockReturnValue([
+      {
+        id: "row-1",
+        accountRecordId: "record-1",
         businessAccountId: "BA0001",
         companyName: "MeadowBrook Operations",
-        contacts: [],
-      }),
-      buildAccount({
+        address: "5579 McAdam Road, Mississauga, ON, CA",
+        addressLine1: "5579 McAdam Road",
+        addressLine2: "",
+        city: "Mississauga",
+        state: "ON",
+        postalCode: "L4Z 1N4",
+        country: "CA",
+        phoneNumber: null,
+        salesRepId: null,
+        salesRepName: null,
+        industryType: null,
+        subCategory: null,
+        companyRegion: null,
+        week: null,
+        primaryContactName: "Internal Ops",
+        primaryContactPhone: null,
+        primaryContactEmail: "internal.ops@meadowb.com",
+        primaryContactId: 1001,
+        category: null,
+        notes: null,
+        lastModifiedIso: null,
+      },
+      {
+        id: "row-2",
+        accountRecordId: "record-2",
         businessAccountId: "BA0002",
         companyName: "Alpha Foods",
-        contacts: [],
-      }),
-      buildAccount({
-        businessAccountId: "VEN0001",
-        companyName: "Supply Vendor",
-        type: "Vendor",
-        contacts: [],
-      }),
-    ]);
-    fetchContacts.mockResolvedValue([
-      buildContact({
-        businessAccountId: "BA0001",
-        companyName: "MeadowBrook Operations",
-        contactId: 1001,
-        displayName: "Internal Ops",
-        email: "internal.ops@meadowb.com",
-        phone: null,
-      }),
-      buildContact({
-        businessAccountId: "BA0002",
-        companyName: "Alpha Foods",
-        contactId: 1002,
-        displayName: "Amy Vega",
-        email: "amy.vega@alphafoods.com",
-      }),
-      buildContact({
-        businessAccountId: "VEN0001",
-        companyName: "Supply Vendor",
-        contactId: 1003,
-        displayName: "Vendor Person",
-        email: "vendor@example.com",
-      }),
-      buildContact({
-        contactId: 1004,
-        displayName: "Simon MeadowBrook",
-        email: "simon@meadowb.com",
-        phone: null,
-      }),
+        address: "1 Alpha Way, Toronto, ON, CA",
+        addressLine1: "1 Alpha Way",
+        addressLine2: "",
+        city: "Toronto",
+        state: "ON",
+        postalCode: "M5V 1A1",
+        country: "CA",
+        phoneNumber: null,
+        salesRepId: null,
+        salesRepName: null,
+        industryType: null,
+        subCategory: null,
+        companyRegion: null,
+        week: null,
+        primaryContactName: "Amy Vega",
+        primaryContactPhone: "905-555-0100",
+        primaryContactEmail: "amy.vega@alphafoods.com",
+        primaryContactId: 1002,
+        category: null,
+        notes: null,
+        lastModifiedIso: null,
+      },
     ]);
     syncCallEmployeeDirectory.mockResolvedValue([
       buildEmployee({
@@ -234,6 +259,56 @@ describe("GET /api/meetings/options", () => {
       ]),
     );
     expect(payload.contacts.some((contact) => contact.contactId === 1003)).toBe(false);
-    expect(syncCallEmployeeDirectory).toHaveBeenCalledWith("cookie", expect.any(Object));
+    expect(fetchBusinessAccounts).not.toHaveBeenCalled();
+    expect(fetchContacts).not.toHaveBeenCalled();
+    expect(withServiceAcumaticaSession).toHaveBeenCalledTimes(1);
+    expect(syncCallEmployeeDirectory).toHaveBeenCalledWith(
+      "service-cookie",
+      expect.any(Object),
+    );
+  });
+
+  it("returns employees directly from the rich cached employee directory", async () => {
+    readEmployeeDirectorySnapshot.mockReturnValue({
+      items: Array.from({ length: 30 }, (_, index) => ({
+        id: `E${index + 1}`,
+        name: `Employee ${index + 1}`,
+        loginName: `employee${index + 1}`,
+        email: `employee${index + 1}@meadowb.com`,
+        contactId: index + 1,
+      })),
+      source: "acumatica_employees",
+      updatedAt: "2026-03-17T00:00:00.000Z",
+    });
+    fetchBusinessAccounts.mockResolvedValue([
+      buildAccount({
+        businessAccountId: "BA0002",
+        companyName: "Alpha Foods",
+        contacts: [],
+      }),
+    ]);
+    fetchContacts.mockResolvedValue([]);
+
+    const { GET } = await import("@/app/api/meetings/options/route");
+    const response = await GET(new NextRequest("http://localhost/api/meetings/options"));
+    const payload = (await response.json()) as {
+      employees: Array<{ employeeName: string; email: string }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.employees).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          employeeName: "Employee 1",
+          email: "employee1@meadowb.com",
+        }),
+        expect.objectContaining({
+          employeeName: "Employee 30",
+          email: "employee30@meadowb.com",
+        }),
+      ]),
+    );
+    expect(syncCallEmployeeDirectory).not.toHaveBeenCalled();
+    expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
   });
 });

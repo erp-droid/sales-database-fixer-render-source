@@ -75,8 +75,18 @@ describe("GET /api/employees", () => {
   it("reuses the cached full directory when it is already fresh", async () => {
     readEmployeeDirectorySnapshot.mockReturnValue({
       items: [
-        { id: "109343", name: "Jorge Serrano" },
-        { id: "124894", name: "Brock Koczka" },
+        {
+          id: "109343",
+          name: "Jorge Serrano",
+          loginName: "jserrano",
+          email: "jserrano@meadowb.com",
+        },
+        {
+          id: "124894",
+          name: "Brock Koczka",
+          loginName: "bkoczka",
+          email: "bkoczka@meadowb.com",
+        },
       ],
       source: "acumatica_employees",
       updatedAt: "2026-03-12T13:30:00.000Z",
@@ -92,9 +102,57 @@ describe("GET /api/employees", () => {
     expect(fetchEmployees).not.toHaveBeenCalled();
     expect(replaceEmployeeDirectory).not.toHaveBeenCalled();
     expect(payload.items).toEqual([
+      {
+        id: "109343",
+        name: "Jorge Serrano",
+        loginName: "jserrano",
+        email: "jserrano@meadowb.com",
+      },
+      {
+        id: "124894",
+        name: "Brock Koczka",
+        loginName: "bkoczka",
+        email: "bkoczka@meadowb.com",
+      },
+    ]);
+  });
+
+  it("refreshes a fresh but thin cached directory in the background", async () => {
+    readEmployeeDirectorySnapshot.mockReturnValue({
+      items: [
+        { id: "109343", name: "Jorge Serrano" },
+        { id: "124894", name: "Brock Koczka" },
+      ],
+      source: "acumatica_employees",
+      updatedAt: "2026-03-12T13:30:00.000Z",
+    });
+    fetchEmployees.mockResolvedValue([
+      {
+        id: "109343",
+        name: "Jorge Serrano",
+        loginName: "jserrano",
+        email: "jserrano@meadowb.com",
+      },
+      {
+        id: "124894",
+        name: "Brock Koczka",
+        loginName: "bkoczka",
+        email: "bkoczka@meadowb.com",
+      },
+    ]);
+
+    const { GET } = await import("@/app/api/employees/route");
+    const response = await GET(new NextRequest("http://localhost/api/employees"));
+    const payload = (await response.json()) as {
+      items: Array<{ id: string; name: string }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.items).toEqual([
       { id: "109343", name: "Jorge Serrano" },
       { id: "124894", name: "Brock Koczka" },
     ]);
+    expect(fetchEmployees).toHaveBeenCalledWith("cookie", expect.any(Object));
   });
 
   it("waits for a live refresh when there is no cached directory yet", async () => {

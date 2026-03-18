@@ -11,6 +11,7 @@ import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import {
   FULL_EMPLOYEE_DIRECTORY_SOURCE,
+  hasDetailedEmployeeDirectory,
   readEmployeeDirectorySnapshot,
   replaceEmployeeDirectory,
 } from "@/lib/read-model/employees";
@@ -63,9 +64,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       const snapshot = readEmployeeDirectorySnapshot();
       const hasFullDirectory =
         snapshot.source === FULL_EMPLOYEE_DIRECTORY_SOURCE && snapshot.items.length > 0;
+      const hasDetailedDirectory = hasDetailedEmployeeDirectory(snapshot.items);
       const hasAnyCachedDirectory = snapshot.items.length > 0;
 
-      if (hasFullDirectory && isFreshEmployeeDirectory(snapshot.updatedAt)) {
+      if (
+        hasFullDirectory &&
+        hasDetailedDirectory &&
+        isFreshEmployeeDirectory(snapshot.updatedAt)
+      ) {
         items = snapshot.items;
       } else if (hasAnyCachedDirectory) {
         items = snapshot.items;

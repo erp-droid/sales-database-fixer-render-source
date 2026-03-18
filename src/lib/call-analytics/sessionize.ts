@@ -1,5 +1,6 @@
 import { getReadModelDb } from "@/lib/read-model/db";
 import { formatPhoneForTwilioDial } from "@/lib/phone";
+import { readAllCallerPhoneOverrides } from "@/lib/caller-phone-overrides";
 import {
   buildPhoneMatchIndex,
   matchPhoneToAccountWithIndex,
@@ -127,11 +128,52 @@ function parseLegMetadata(rawJson: string): ParsedLegMetadata {
 }
 
 function buildEmployeeIndex(items: CallEmployeeDirectoryItem[]): EmployeeIndex {
+  const mergedByLogin = new Map<string, CallEmployeeDirectoryItem>();
+
+  for (const item of items) {
+    mergedByLogin.set(item.loginName, item);
+  }
+
+  for (const override of readAllCallerPhoneOverrides()) {
+    const normalizedLoginName = override.loginName.trim().toLowerCase();
+    if (!normalizedLoginName) {
+      continue;
+    }
+
+    const normalizedPhone = formatPhoneForTwilioDial(override.phoneNumber);
+    if (!normalizedPhone) {
+      continue;
+    }
+
+    const existing = mergedByLogin.get(normalizedLoginName);
+    if (existing) {
+      mergedByLogin.set(normalizedLoginName, {
+        ...existing,
+        normalizedPhone: normalizedPhone,
+        callerIdPhone: normalizedPhone,
+        updatedAt:
+          override.updatedAt > existing.updatedAt ? override.updatedAt : existing.updatedAt,
+      });
+      continue;
+    }
+
+    mergedByLogin.set(normalizedLoginName, {
+      loginName: normalizedLoginName,
+      contactId: null,
+      displayName: normalizedLoginName,
+      email: null,
+      normalizedPhone,
+      callerIdPhone: normalizedPhone,
+      isActive: true,
+      updatedAt: override.updatedAt,
+    });
+  }
+
   const byLogin = new Map<string, CallEmployeeDirectoryItem>();
   const byNormalizedPhone = new Map<string, CallEmployeeDirectoryItem[]>();
   const byCallerIdPhone = new Map<string, CallEmployeeDirectoryItem[]>();
 
-  for (const item of items) {
+  for (const item of mergedByLogin.values()) {
     byLogin.set(item.loginName, item);
 
     const normalizedPhone = formatPhoneForTwilioDial(item.normalizedPhone);

@@ -179,6 +179,29 @@ describe("ensureReadModelSchema", () => {
     );
   });
 
+  it("creates the rich employee_directory columns", () => {
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(employee_directory)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "employee_id",
+        "name",
+        "login_name",
+        "email",
+        "contact_id",
+        "normalized_phone",
+        "is_active",
+        "sort_name",
+        "source",
+        "updated_at",
+      ]),
+    );
+  });
+
   it("creates the caller_phone_overrides table", () => {
     ensureReadModelSchema(db);
 

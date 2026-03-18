@@ -7,6 +7,7 @@ import {
   fetchBusinessAccounts,
   fetchContacts,
   readRecordIdentity,
+  type EmployeeDirectoryItem,
   readWrappedNumber,
   readWrappedString,
 } from "@/lib/acumatica";
@@ -18,9 +19,11 @@ import {
   syncCallEmployeeDirectory,
 } from "@/lib/call-analytics/employee-directory";
 import type { CallEmployeeDirectoryItem } from "@/lib/call-analytics/types";
+import { withServiceAcumaticaSession } from "@/lib/acumatica-service-auth";
 import { getEnv } from "@/lib/env";
 import {
   buildMeetingAccountOptionsFromRows,
+  buildMeetingContactOptionsFromRows,
   DEFAULT_MEETING_TIME_ZONE,
 } from "@/lib/meeting-create";
 import { HttpError, getErrorMessage } from "@/lib/errors";
@@ -28,7 +31,11 @@ import {
   isExcludedInternalCompanyName,
   isExcludedInternalContactEmail,
 } from "@/lib/internal-records";
-import { readEmployeeDirectorySnapshot } from "@/lib/read-model/employees";
+import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
+import {
+  hasDetailedEmployeeDirectory,
+  readEmployeeDirectorySnapshot,
+} from "@/lib/read-model/employees";
 import type {
   MeetingContactOption,
   MeetingEmployeeOption,
@@ -197,6 +204,42 @@ function buildMeetingEmployeeOptions(
     }));
 }
 
+function buildMeetingEmployeeOptionsFromDirectoryItems(
+  employees: EmployeeDirectoryItem[],
+): MeetingEmployeeOption[] {
+  return employees
+    .map((employee) => {
+      const email = employee.email?.trim().toLowerCase() ?? null;
+      if (!email || !employee.name.trim() || !isExcludedInternalContactEmail(email)) {
+        return null;
+      }
+
+      const loginName =
+        employee.loginName?.trim().toLowerCase() ??
+        email.split("@")[0]?.trim().toLowerCase() ??
+        "";
+      if (!loginName) {
+        return null;
+      }
+
+      return {
+        key: `employee:${loginName}`,
+        loginName,
+        employeeName: employee.name.trim(),
+        email,
+        contactId: employee.contactId ?? null,
+        isInternal: true,
+      } satisfies MeetingEmployeeOption;
+    })
+    .filter((employee): employee is MeetingEmployeeOption => employee !== null)
+    .sort((left, right) =>
+      left.employeeName.localeCompare(right.employeeName, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      }),
+    );
+}
+
 function buildInternalEmployeeContactOptions(
   employees: MeetingEmployeeOption[],
 ): MeetingContactOption[] {
@@ -272,6 +315,26 @@ function isCompleteEnoughEmployeeDirectory(cachedCount: number): boolean {
   return cachedCount >= Math.min(expectedEmployeeCount, 25);
 }
 
+function isCompleteEnoughMeetingEmployeeOptions(
+  optionCount: number,
+  employeeCount: number,
+): boolean {
+  if (employeeCount <= 0) {
+    return optionCount > 0;
+  }
+
+  return optionCount >= Math.min(employeeCount, 25);
+}
+
+async function refreshMeetingEmployeeDirectory(
+  cookieValue: string,
+  authCookieRefresh?: { value: string | null },
+): Promise<CallEmployeeDirectoryItem[]> {
+  return withServiceAcumaticaSession(null, (serviceCookieValue, serviceRefresh) =>
+    syncCallEmployeeDirectory(serviceCookieValue, serviceRefresh),
+  ).catch(() => syncCallEmployeeDirectory(cookieValue, authCookieRefresh));
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh = {
     value: null as string | null,
@@ -279,61 +342,95 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   try {
     const cookieValue = requireAuthCookieValue(request);
-    const [rawAccounts, rawContacts] = await Promise.all([
-      fetchBusinessAccounts(
-        cookieValue,
-        {
-          batchSize: 300,
-          ensureMainAddress: true,
-        },
-        authCookieRefresh,
-      ),
-      fetchContacts(
-        cookieValue,
-        {
-          batchSize: 300,
-        },
-        authCookieRefresh,
-      ),
-    ]);
-    const accountRows = rawAccounts
-      .filter((account) => isAllowedMeetingBusinessAccount(account))
-      .flatMap((account) => normalizeBusinessAccountRows(account));
-    const accountOptions = buildMeetingAccountOptionsFromRows(accountRows);
-    const allowedAccountsByBusinessId = new Map(
-      rawAccounts
+    const cachedRows = readAllAccountRowsFromReadModel();
+    let accountOptions = buildMeetingAccountOptionsFromRows(cachedRows);
+    let contacts = buildMeetingContactOptionsFromRows(cachedRows);
+
+    if (accountOptions.length === 0 && contacts.length === 0) {
+      const [rawAccounts, rawContacts] = await Promise.all([
+        fetchBusinessAccounts(
+          cookieValue,
+          {
+            batchSize: 300,
+            ensureMainAddress: true,
+          },
+          authCookieRefresh,
+        ),
+        fetchContacts(
+          cookieValue,
+          {
+            batchSize: 300,
+          },
+          authCookieRefresh,
+        ),
+      ]);
+      const accountRows = rawAccounts
         .filter((account) => isAllowedMeetingBusinessAccount(account))
-        .map((account) => {
-          const businessAccountId =
-            readWrappedString(account, "BusinessAccountID") ||
-            readWrappedString(account, "BAccountID");
-          return [
-            normalizeBusinessAccountCode(businessAccountId),
-            {
-              businessAccountId: businessAccountId.trim(),
-              businessAccountRecordId: readRecordIdentity(account),
-              companyName:
-                readWrappedString(account, "Name") ||
-                readWrappedString(account, "CompanyName") ||
-                null,
-            },
-          ] as const;
-        })
-        .filter(([businessAccountId]) => businessAccountId.length > 0),
-    );
-    const contacts = buildMeetingContactOptionsFromContacts(
-      rawContacts,
-      allowedAccountsByBusinessId,
-    );
+        .flatMap((account) => normalizeBusinessAccountRows(account));
+      accountOptions = buildMeetingAccountOptionsFromRows(accountRows);
+      const allowedAccountsByBusinessId = new Map(
+        rawAccounts
+          .filter((account) => isAllowedMeetingBusinessAccount(account))
+          .map((account) => {
+            const businessAccountId =
+              readWrappedString(account, "BusinessAccountID") ||
+              readWrappedString(account, "BAccountID");
+            return [
+              normalizeBusinessAccountCode(businessAccountId),
+              {
+                businessAccountId: businessAccountId.trim(),
+                businessAccountRecordId: readRecordIdentity(account),
+                companyName:
+                  readWrappedString(account, "Name") ||
+                  readWrappedString(account, "CompanyName") ||
+                  null,
+              },
+            ] as const;
+          })
+          .filter(([businessAccountId]) => businessAccountId.length > 0),
+      );
+      contacts = buildMeetingContactOptionsFromContacts(
+        rawContacts,
+        allowedAccountsByBusinessId,
+      );
+    }
+    const employeeDirectorySnapshot = readEmployeeDirectorySnapshot();
     const employeeDirectoryMeta = readCallEmployeeDirectoryMeta();
     const cachedEmployeeDirectory = readCallEmployeeDirectory();
-    const internalEmployees =
-      cachedEmployeeDirectory.length > 0 &&
+    const cachedMeetingEmployeesFromDirectory = hasDetailedEmployeeDirectory(
+      employeeDirectorySnapshot.items,
+    )
+      ? buildMeetingEmployeeOptionsFromDirectoryItems(employeeDirectorySnapshot.items)
+      : [];
+    const cachedMeetingEmployeesFromCallDirectory = buildMeetingEmployeeOptions(
+      cachedEmployeeDirectory,
+    );
+    const cachedMeetingEmployees =
+      cachedMeetingEmployeesFromCallDirectory.length >= cachedMeetingEmployeesFromDirectory.length
+        ? cachedMeetingEmployeesFromCallDirectory
+        : cachedMeetingEmployeesFromDirectory;
+    const expectedEmployeeCount = Math.max(
+      employeeDirectorySnapshot.items.length,
+      employeeDirectoryMeta.total,
+    );
+    const shouldTrustCachedEmployees =
+      cachedMeetingEmployees.length > 0 &&
+      isCompleteEnoughMeetingEmployeeOptions(
+        cachedMeetingEmployees.length,
+        expectedEmployeeCount,
+      );
+    const callEmployeeDirectoryIsFresh =
       isFreshEmployeeDirectory(employeeDirectoryMeta.latestUpdatedAt) &&
-      isCompleteEnoughEmployeeDirectory(cachedEmployeeDirectory.length)
-        ? cachedEmployeeDirectory
-        : await syncCallEmployeeDirectory(cookieValue, authCookieRefresh);
-    const employees = buildMeetingEmployeeOptions(internalEmployees);
+      isCompleteEnoughEmployeeDirectory(cachedEmployeeDirectory.length);
+
+    let employees = cachedMeetingEmployees;
+    if (!shouldTrustCachedEmployees && !callEmployeeDirectoryIsFresh && cachedMeetingEmployees.length > 0) {
+      void refreshMeetingEmployeeDirectory(cookieValue, { value: null }).catch(() => undefined);
+    } else if (cachedMeetingEmployees.length === 0) {
+      employees = buildMeetingEmployeeOptions(
+        await refreshMeetingEmployeeDirectory(cookieValue, authCookieRefresh),
+      );
+    }
     const mergedContacts = mergeMeetingContactOptions(
       contacts,
       buildInternalEmployeeContactOptions(employees),

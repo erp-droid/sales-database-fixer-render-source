@@ -1657,7 +1657,9 @@ export function CreateMeetingDrawer({
                         {suggestion.contact.contactName}
                       </span>
                       <span className={styles.lookupSuggestionMeta}>
-                        {suggestion.contact.companyName ?? "No account"}
+                        {suggestion.contact.isInternal
+                          ? "MeadowBrook employee"
+                          : suggestion.contact.companyName ?? "No account"}
                       </span>
                       <span className={styles.lookupSuggestionMeta}>
                         {suggestion.contact.email ?? "No email"}
@@ -1711,7 +1713,11 @@ export function CreateMeetingDrawer({
                     <div>
                       <strong>{attendee.contactName}</strong>
                       <div className={styles.attendeeMeta}>
-                        <span>{attendee.companyName ?? "No account"}</span>
+                        <span>
+                          {attendee.isInternal
+                            ? "MeadowBrook employee"
+                            : attendee.companyName ?? "No account"}
+                        </span>
                         <span>{attendee.email ?? "No email"}</span>
                         {attendee.isInternal ? (
                           <span className={styles.badge}>Internal</span>

@@ -490,6 +490,99 @@ describe("fetchEmployeeProfiles", () => {
   });
 });
 
+describe("fetchEmployees", () => {
+  const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    setAcumaticaEnv();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
+  });
+
+  it("keeps richer employee records when derived sales-rep rows are merged in later", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes("/Employee?") && url.includes("top=200") && url.includes("skip=0")) {
+        return jsonResponse({
+          status: 200,
+          body: [
+            {
+              EmployeeID: { value: "E0000142" },
+              EmployeeName: { value: "Jacky Lee" },
+              Status: { value: "Active" },
+              ContactID: { value: 142 },
+              ContactInfo: {
+                Email: { value: "jlee@meadowb.com" },
+                Phone1: { value: "3653411781" },
+              },
+            },
+          ],
+        });
+      }
+
+      if (url.includes("/Employee?") && url.includes("top=200") && url.includes("skip=200")) {
+        return jsonResponse({ status: 200, body: [] });
+      }
+
+      if (url.includes("/EPEmployee?")) {
+        return jsonResponse({
+          status: 404,
+          body: { message: 'Entity "EPEmployee" not found in the endpoint' },
+        });
+      }
+
+      if (url.includes("/BusinessAccount?") && url.includes("top=200") && url.includes("skip=0")) {
+        return jsonResponse({
+          status: 200,
+          body: [
+            {
+              BusinessAccountID: { value: "BA0001" },
+              Owner: { value: "E0000142" },
+              OwnerEmployeeName: { value: "Jacky Lee" },
+            },
+          ],
+        });
+      }
+
+      if (url.includes("/BusinessAccount?") && url.includes("top=200") && url.includes("skip=200")) {
+        return jsonResponse({ status: 200, body: [] });
+      }
+
+      return jsonResponse({ status: 200, body: [] });
+    });
+
+    const { fetchEmployees } = await import("@/lib/acumatica");
+
+    await expect(fetchEmployees("cookie")).resolves.toEqual([
+      {
+        id: "E0000142",
+        name: "Jacky Lee",
+        loginName: "jlee",
+        email: "jlee@meadowb.com",
+        contactId: 142,
+        phone: "3653411781",
+        isActive: true,
+      },
+    ]);
+  });
+});
+
 describe("searchEmployeesByDisplayName", () => {
   const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
   const originalEnv = { ...process.env };
@@ -546,6 +639,11 @@ describe("searchEmployeesByDisplayName", () => {
       {
         id: "E0000153",
         name: "Simon Doal",
+        loginName: null,
+        email: null,
+        contactId: null,
+        phone: null,
+        isActive: false,
       },
     ]);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/Employee?");

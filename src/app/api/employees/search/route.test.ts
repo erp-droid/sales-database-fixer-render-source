@@ -7,8 +7,10 @@ const withServiceAcumaticaSession = vi.fn();
 const fetchEmployees = vi.fn();
 const fetchEmployeeProfileById = vi.fn();
 const findContactsByDisplayName = vi.fn();
+const searchContacts = vi.fn();
 const readEmployeeDirectorySnapshot = vi.fn();
 const replaceEmployeeDirectory = vi.fn();
+const readCallEmployeeDirectory = vi.fn();
 const upsertCallEmployeeDirectoryItem = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
@@ -27,6 +29,7 @@ vi.mock("@/lib/acumatica", async () => {
     fetchEmployees,
     fetchEmployeeProfileById,
     findContactsByDisplayName,
+    searchContacts,
   };
 });
 
@@ -43,6 +46,7 @@ vi.mock("@/lib/read-model/employees", async () => {
 });
 
 vi.mock("@/lib/call-analytics/employee-directory", () => ({
+  readCallEmployeeDirectory,
   upsertCallEmployeeDirectoryItem,
 }));
 
@@ -53,6 +57,7 @@ describe("GET /api/employees/search", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-17T17:00:00.000Z"));
     requireAuthCookieValue.mockReturnValue("user-cookie");
+    readCallEmployeeDirectory.mockReturnValue([]);
     readEmployeeDirectorySnapshot.mockReturnValue({
       items: [],
       source: null,
@@ -128,6 +133,108 @@ describe("GET /api/employees/search", () => {
     );
   });
 
+  it("returns cached rich employee matches immediately without a live refresh", async () => {
+    readEmployeeDirectorySnapshot.mockReturnValue({
+      items: [
+        {
+          id: "E0000153",
+          name: "Simon Doal",
+          loginName: "sdoal",
+          email: "sdoal@meadowb.com",
+          contactId: 153,
+          phone: "+14374233641",
+          isActive: true,
+        },
+      ],
+      source: "acumatica_employees",
+      updatedAt: "2026-03-17T16:00:00.000Z",
+    });
+
+    const { GET } = await import("@/app/api/employees/search/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/employees/search?q=simon%20d"),
+    );
+    const payload = (await response.json()) as {
+      items: Array<{
+        key: string;
+        loginName: string;
+        employeeName: string;
+        email: string;
+        contactId: number | null;
+        isInternal: true;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.items).toEqual([
+      {
+        key: "employee:sdoal",
+        loginName: "sdoal",
+        employeeName: "Simon Doal",
+        email: "sdoal@meadowb.com",
+        contactId: 153,
+        isInternal: true,
+      },
+    ]);
+    expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
+    expect(fetchEmployees).not.toHaveBeenCalled();
+    expect(fetchEmployeeProfileById).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a broader internal contact search when Acumatica contact display names differ", async () => {
+    fetchEmployees.mockResolvedValue([{ id: "E0000153", name: "Simon Doal" }]);
+    fetchEmployeeProfileById.mockResolvedValueOnce({
+      employeeId: "E0000153",
+      contactId: null,
+      displayName: "Simon Doal",
+      email: null,
+      phone: null,
+      isActive: true,
+    });
+    findContactsByDisplayName.mockResolvedValueOnce([]);
+    searchContacts.mockResolvedValueOnce([
+      {
+        ContactID: { value: 153 },
+        DisplayName: { value: "Simon S. Doal" },
+        Email: { value: "sdoal@meadowb.com" },
+      },
+    ]);
+
+    const { GET } = await import("@/app/api/employees/search/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/employees/search?q=simon%20d"),
+    );
+    const payload = (await response.json()) as {
+      items: Array<{
+        loginName: string;
+        employeeName: string;
+        email: string;
+        contactId: number | null;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(searchContacts).toHaveBeenCalledWith(
+      "service-cookie",
+      expect.objectContaining({
+        filter: expect.stringContaining("substringof('simon'"),
+        top: 10,
+        skip: 0,
+      }),
+      expect.any(Object),
+    );
+    expect(payload.items).toEqual([
+      {
+        key: "employee:sdoal",
+        loginName: "sdoal",
+        employeeName: "Simon Doal",
+        email: "sdoal@meadowb.com",
+        contactId: 153,
+        isInternal: true,
+      },
+    ]);
+  });
+
   it("returns an empty list for short queries", async () => {
     const { GET } = await import("@/app/api/employees/search/route");
     const response = await GET(new NextRequest("http://localhost/api/employees/search?q=s"));
@@ -137,5 +244,49 @@ describe("GET /api/employees/search", () => {
     expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
     expect(fetchEmployees).not.toHaveBeenCalled();
     expect(payload.items).toEqual([]);
+  });
+
+  it("returns cached call-directory employees immediately without hydrating Acumatica again", async () => {
+    readCallEmployeeDirectory.mockReturnValue([
+      {
+        loginName: "jlee",
+        contactId: 142,
+        displayName: "Jacky Lee",
+        email: "jlee@meadowb.com",
+        normalizedPhone: "+13653411781",
+        callerIdPhone: "+13653411781",
+        isActive: true,
+        updatedAt: "2026-03-17T17:00:00.000Z",
+      },
+    ]);
+
+    const { GET } = await import("@/app/api/employees/search/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/employees/search?q=jacky"),
+    );
+    const payload = (await response.json()) as {
+      items: Array<{
+        key: string;
+        loginName: string;
+        employeeName: string;
+        email: string;
+        contactId: number | null;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.items).toEqual([
+      {
+        key: "employee:jlee",
+        loginName: "jlee",
+        employeeName: "Jacky Lee",
+        email: "jlee@meadowb.com",
+        contactId: 142,
+        isInternal: true,
+      },
+    ]);
+    expect(withServiceAcumaticaSession).toHaveBeenCalledTimes(1);
+    expect(fetchEmployees).not.toHaveBeenCalled();
+    expect(fetchEmployeeProfileById).not.toHaveBeenCalled();
   });
 });

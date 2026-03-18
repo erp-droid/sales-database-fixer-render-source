@@ -672,6 +672,11 @@ export type RawEvent = Record<string, unknown>;
 export type EmployeeDirectoryItem = {
   id: string;
   name: string;
+  loginName?: string | null;
+  email?: string | null;
+  contactId?: number | null;
+  phone?: string | null;
+  isActive?: boolean;
 };
 export type EmployeeProfileItem = {
   employeeId: string;
@@ -1086,6 +1091,7 @@ function buildEmployeeCollectionPath(resourcePath: string, options: {
   top: number;
   skip: number;
   filter?: string;
+  expand?: string;
 }): string {
   const query = new URLSearchParams({
     $top: String(options.top),
@@ -1093,6 +1099,9 @@ function buildEmployeeCollectionPath(resourcePath: string, options: {
   });
   if (options.filter?.trim()) {
     query.set("$filter", options.filter);
+  }
+  if (options.expand?.trim()) {
+    query.set("$expand", options.expand);
   }
 
   return `${resourcePath}?${query.toString()}`;
@@ -1820,7 +1829,34 @@ function normalizeEmployeeRecord(record: RawEmployee): EmployeeDirectoryItem | n
     return null;
   }
 
-  return { id, name };
+  const email = readEmployeeEmail(record);
+
+  return {
+    id,
+    name,
+    loginName: email?.split("@")[0]?.trim().toLowerCase() ?? null,
+    email,
+    contactId: readEmployeeContactId(record),
+    phone: readEmployeePhone(record),
+    isActive: readEmployeeIsActive(record),
+  };
+}
+
+function shouldPreferEmployeeDirectoryItem(
+  candidate: EmployeeDirectoryItem,
+  existing: EmployeeDirectoryItem | undefined,
+): boolean {
+  if (!existing) {
+    return true;
+  }
+
+  return (
+    (candidate.isActive && !existing.isActive) ||
+    (Boolean(candidate.phone) && !existing.phone) ||
+    (Boolean(candidate.email) && !existing.email) ||
+    (candidate.contactId !== null && existing.contactId === null) ||
+    (Boolean(candidate.loginName) && !existing.loginName)
+  );
 }
 
 function normalizeEmployeeProfileRecord(record: RawEmployee): EmployeeProfileItem | null {
@@ -1848,7 +1884,10 @@ function collectUniqueEmployees(rows: RawEmployee[]): EmployeeDirectoryItem[] {
       continue;
     }
 
-    dedupedById.set(normalized.id, normalized);
+    const existing = dedupedById.get(normalized.id);
+    if (shouldPreferEmployeeDirectoryItem(normalized, existing)) {
+      dedupedById.set(normalized.id, normalized);
+    }
   }
 
   return [...dedupedById.values()].sort((left, right) =>
@@ -2115,6 +2154,7 @@ export async function fetchEmployees(
           buildEmployeeCollectionPath(endpoint, {
             top: batchSize,
             skip,
+            expand: "ContactInfo",
           }),
           {
             authCookieRefresh,
@@ -2295,6 +2335,7 @@ export async function searchEmployeeProfiles(
           top: Math.max(1, Math.min(options.top ?? 25, 100)),
           skip: Math.max(0, options.skip ?? 0),
           filter,
+          expand: "ContactInfo",
         }),
         {
           authCookieRefresh,
@@ -2335,6 +2376,7 @@ export async function fetchEmployeeProfiles(
           buildEmployeeCollectionPath(endpoint, {
             top: batchSize,
             skip,
+            expand: "ContactInfo",
           }),
           {
             authCookieRefresh,

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildCallEmployeeDirectoryFromEmployeeProfiles } from "@/lib/call-analytics/employee-directory";
+import {
+  buildCallEmployeeDirectoryFromEmployeeProfiles,
+  buildEmployeeDirectoryFromEmployeeProfiles,
+} from "@/lib/call-analytics/employee-directory";
 
 function buildEmployee(input: {
   employeeId?: string;
@@ -129,6 +132,41 @@ describe("buildCallEmployeeDirectoryFromEmployeeProfiles", () => {
         normalizedPhone: null,
         callerIdPhone: null,
       }),
+    ]);
+  });
+});
+
+describe("buildEmployeeDirectoryFromEmployeeProfiles", () => {
+  it("keeps the richer employee id, login, email, contact, and phone fields for cached lookup", () => {
+    const directory = buildEmployeeDirectoryFromEmployeeProfiles(
+      [
+        buildEmployee({
+          employeeId: "E000153",
+          contactId: 101,
+          displayName: "Simon MeadowBrook",
+          email: "simon@meadowb.com",
+          phone: "4374233641",
+        }),
+      ],
+      [
+        buildContact({
+          contactId: 101,
+          email: "simon@meadowb.com",
+          phone: "905-555-0100",
+        }),
+      ],
+    );
+
+    expect(directory).toEqual([
+      {
+        id: "E000153",
+        name: "Simon MeadowBrook",
+        loginName: "simon",
+        email: "simon@meadowb.com",
+        contactId: 101,
+        phone: "+14374233641",
+        isActive: true,
+      },
     ]);
   });
 });

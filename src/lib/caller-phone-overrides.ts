@@ -45,6 +45,29 @@ export function readCallerPhoneOverride(loginName: string): CallerPhoneOverride 
   };
 }
 
+export function readAllCallerPhoneOverrides(): CallerPhoneOverride[] {
+  const db = getReadModelDb();
+  const rows = db
+    .prepare(
+      `
+      SELECT login_name, phone_number, updated_at
+      FROM caller_phone_overrides
+      ORDER BY login_name ASC
+      `,
+    )
+    .all() as Array<{
+      login_name: string;
+      phone_number: string;
+      updated_at: string;
+    }>;
+
+  return rows.map((row) => ({
+    loginName: row.login_name,
+    phoneNumber: row.phone_number,
+    updatedAt: row.updated_at,
+  }));
+}
+
 export function saveCallerPhoneOverride(loginName: string, phoneNumber: string): CallerPhoneOverride {
   const normalizedLoginName = normalizeLoginName(loginName);
   const normalizedPhoneNumber = formatPhoneForTwilioDial(phoneNumber);

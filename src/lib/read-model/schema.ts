@@ -62,6 +62,11 @@ CREATE INDEX IF NOT EXISTS idx_account_local_metadata_business_account_id
 CREATE TABLE IF NOT EXISTS employee_directory (
   employee_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  login_name TEXT,
+  email TEXT,
+  contact_id INTEGER,
+  normalized_phone TEXT,
+  is_active INTEGER,
   sort_name TEXT NOT NULL,
   source TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -410,6 +415,46 @@ CREATE INDEX IF NOT EXISTS idx_audit_event_links_contact_id
 
 export function ensureReadModelSchema(db: Database.Database): void {
   db.exec(SCHEMA_SQL);
+
+  const employeeDirectoryColumns = db
+    .prepare("PRAGMA table_info(employee_directory)")
+    .all() as Array<{ name: string }>;
+  const hasEmployeeLoginNameColumn = employeeDirectoryColumns.some(
+    (column) => column.name === "login_name",
+  );
+  if (!hasEmployeeLoginNameColumn) {
+    db.exec("ALTER TABLE employee_directory ADD COLUMN login_name TEXT");
+  }
+  const hasEmployeeEmailColumn = employeeDirectoryColumns.some(
+    (column) => column.name === "email",
+  );
+  if (!hasEmployeeEmailColumn) {
+    db.exec("ALTER TABLE employee_directory ADD COLUMN email TEXT");
+  }
+  const hasEmployeeContactIdColumn = employeeDirectoryColumns.some(
+    (column) => column.name === "contact_id",
+  );
+  if (!hasEmployeeContactIdColumn) {
+    db.exec("ALTER TABLE employee_directory ADD COLUMN contact_id INTEGER");
+  }
+  const hasEmployeeNormalizedPhoneColumn = employeeDirectoryColumns.some(
+    (column) => column.name === "normalized_phone",
+  );
+  if (!hasEmployeeNormalizedPhoneColumn) {
+    db.exec("ALTER TABLE employee_directory ADD COLUMN normalized_phone TEXT");
+  }
+  const hasEmployeeIsActiveColumn = employeeDirectoryColumns.some(
+    (column) => column.name === "is_active",
+  );
+  if (!hasEmployeeIsActiveColumn) {
+    db.exec("ALTER TABLE employee_directory ADD COLUMN is_active INTEGER");
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_employee_directory_login_name ON employee_directory(login_name)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_employee_directory_email ON employee_directory(email)",
+  );
 
   const deferredActionColumns = db
     .prepare("PRAGMA table_info(deferred_actions)")

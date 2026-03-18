@@ -10,14 +10,22 @@ import {
   fetchEmployeeProfileById,
   fetchEmployees,
   findContactsByDisplayName,
+  searchContacts,
   readWrappedNumber,
   readWrappedString,
 } from "@/lib/acumatica";
-import { upsertCallEmployeeDirectoryItem } from "@/lib/call-analytics/employee-directory";
+import {
+  readCallEmployeeDirectory,
+  upsertCallEmployeeDirectoryItem,
+} from "@/lib/call-analytics/employee-directory";
 import { HttpError, getErrorMessage } from "@/lib/errors";
-import { isExcludedInternalContactEmail } from "@/lib/internal-records";
+import {
+  INTERNAL_EMPLOYEE_EMAIL_DOMAINS,
+  isExcludedInternalContactEmail,
+} from "@/lib/internal-records";
 import {
   FULL_EMPLOYEE_DIRECTORY_SOURCE,
+  hasDetailedEmployeeDirectory,
   readEmployeeDirectorySnapshot,
   replaceEmployeeDirectory,
 } from "@/lib/read-model/employees";
@@ -38,6 +46,77 @@ function tokenizeSearch(value: string): string[] {
     .replace(/[^a-z0-9]+/g, " ")
     .split(/\s+/)
     .filter(Boolean);
+}
+
+function escapeODataStringLiteral(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+function buildInternalContactFilter(): string {
+  return INTERNAL_EMPLOYEE_EMAIL_DOMAINS.map(
+    (domain) => `substringof('@${domain.replace(/'/g, "''")}',Email)`,
+  ).join(" or ");
+}
+
+function readContactDisplayName(record: unknown): string | null {
+  return (
+    readWrappedString(record, "DisplayName") ||
+    readWrappedString(record, "FullName") ||
+    readWrappedString(record, "ContactName") ||
+    readWrappedString(record, "Attention") ||
+    [
+      readWrappedString(record, "FirstName"),
+      readWrappedString(record, "MiddleName"),
+      readWrappedString(record, "LastName"),
+    ]
+      .filter((value) => value.trim().length > 0)
+      .join(" ")
+      .trim() ||
+    null
+  );
+}
+
+function buildInternalContactNameSearchFilter(query: string): string | null {
+  const tokens = tokenizeSearch(query);
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  const tokenClauses = tokens.map((token) => {
+    const escaped = escapeODataStringLiteral(token);
+    return `(
+      substringof('${escaped}',DisplayName) or
+      substringof('${escaped}',FullName) or
+      substringof('${escaped}',ContactName) or
+      substringof('${escaped}',Attention) or
+      substringof('${escaped}',FirstName) or
+      substringof('${escaped}',LastName) or
+      substringof('${escaped}',Email)
+    )`;
+  });
+
+  return `(${tokenClauses.join(" and ")}) and (${buildInternalContactFilter()})`;
+}
+
+function scoreInternalContactMatch(contact: unknown, employeeName: string): number {
+  const normalizedEmployeeName = normalizeComparable(employeeName);
+  const employeeTokens = tokenizeSearch(employeeName);
+  const displayName = normalizeComparable(readContactDisplayName(contact));
+  const email = normalizeComparable(readContactEmail(contact));
+  let score = 0;
+
+  if (displayName === normalizedEmployeeName) {
+    score += 100;
+  }
+  if (email && email.includes("@")) {
+    const local = email.split("@")[0] ?? "";
+    if (employeeTokens.every((token) => local.includes(token))) {
+      score += 50;
+    }
+  }
+
+  score += employeeTokens.filter((token) => displayName.includes(token)).length * 10;
+  return score;
 }
 
 function isFreshEmployeeDirectory(updatedAt: string | null): boolean {
@@ -99,15 +178,14 @@ async function refreshEmployeeDirectory(
 async function loadEmployeeDirectory(
   cookieValue: string,
   authCookieRefresh: AuthCookieRefreshState,
-  query: string,
 ): Promise<EmployeeDirectoryItem[]> {
   const snapshot = readEmployeeDirectorySnapshot();
-  const cachedMatches = filterEmployeesByQuery(snapshot.items, query);
   const hasFreshFullDirectory =
     snapshot.source === FULL_EMPLOYEE_DIRECTORY_SOURCE &&
-    isFreshEmployeeDirectory(snapshot.updatedAt);
+    isFreshEmployeeDirectory(snapshot.updatedAt) &&
+    hasDetailedEmployeeDirectory(snapshot.items);
 
-  if (hasFreshFullDirectory && cachedMatches.length > 0) {
+  if (hasFreshFullDirectory) {
     return snapshot.items;
   }
 
@@ -130,18 +208,104 @@ async function findBestInternalContactByName(
   employeeName: string,
   authCookieRefresh: AuthCookieRefreshState,
 ): Promise<unknown | null> {
-  const contacts = await findContactsByDisplayName(cookieValue, employeeName, authCookieRefresh).catch(
-    (error) => {
-      if (error instanceof HttpError && [401, 403].includes(error.status)) {
-        return [];
-      }
-      throw error;
-    },
-  );
+  const exactContacts = await findContactsByDisplayName(
+    cookieValue,
+    employeeName,
+    authCookieRefresh,
+  ).catch((error) => {
+    if (error instanceof HttpError && [401, 403].includes(error.status)) {
+      return [];
+    }
+    throw error;
+  });
 
-  return (
-    contacts.find((contact) => isExcludedInternalContactEmail(readContactEmail(contact))) ?? null
-  );
+  const exactInternal =
+    exactContacts.find((contact) => isExcludedInternalContactEmail(readContactEmail(contact))) ?? null;
+  if (exactInternal) {
+    return exactInternal;
+  }
+
+  const searchFilter = buildInternalContactNameSearchFilter(employeeName);
+  if (!searchFilter) {
+    return null;
+  }
+
+  const candidates = await searchContacts(
+    cookieValue,
+    {
+      filter: searchFilter,
+      top: 10,
+      skip: 0,
+    },
+    authCookieRefresh,
+  ).catch((error) => {
+    if (error instanceof HttpError && [401, 403].includes(error.status)) {
+      return [];
+    }
+    throw error;
+  });
+
+  return candidates
+    .filter((contact) => isExcludedInternalContactEmail(readContactEmail(contact)))
+    .sort(
+      (left, right) =>
+        scoreInternalContactMatch(right, employeeName) -
+        scoreInternalContactMatch(left, employeeName),
+    )[0] ?? null;
+}
+
+function buildCachedMeetingEmployeeOption(
+  employee: EmployeeDirectoryItem,
+): MeetingEmployeeOption | null {
+  const employeeName = employee.name.trim();
+  const emailCandidate = employee.email?.trim().toLowerCase() ?? null;
+  if (!employeeName || !emailCandidate || !isExcludedInternalContactEmail(emailCandidate)) {
+    return null;
+  }
+
+  const loginName =
+    employee.loginName?.trim().toLowerCase() ??
+    emailCandidate.split("@")[0]?.trim().toLowerCase() ??
+    "";
+  if (!loginName) {
+    return null;
+  }
+
+  return {
+    key: `employee:${loginName}`,
+    loginName,
+    employeeName,
+    email: emailCandidate,
+    contactId: employee.contactId ?? null,
+    isInternal: true,
+  };
+}
+
+function buildMeetingEmployeeOptionFromCachedDirectoryItem(
+  employee: ReturnType<typeof readCallEmployeeDirectory>[number],
+): MeetingEmployeeOption | null {
+  const employeeName = employee.displayName.trim();
+  const emailCandidate = employee.email?.trim().toLowerCase() ?? null;
+  if (!employeeName || !emailCandidate || !isExcludedInternalContactEmail(emailCandidate)) {
+    return null;
+  }
+
+  const loginName =
+    employee.loginName?.trim().toLowerCase() ??
+    emailCandidate.split("@")[0]?.trim().toLowerCase() ??
+    "";
+  if (!loginName) {
+    return null;
+  }
+
+  return {
+    key: `employee:${loginName}`,
+    loginName,
+    employeeName,
+    email: emailCandidate,
+    contactId: employee.contactId ?? null,
+    isInternal: true,
+  };
 }
 
 async function buildMeetingEmployeeOption(
@@ -149,6 +313,22 @@ async function buildMeetingEmployeeOption(
   employee: EmployeeDirectoryItem,
   authCookieRefresh: AuthCookieRefreshState,
 ): Promise<MeetingEmployeeOption | null> {
+  const cachedOption = buildCachedMeetingEmployeeOption(employee);
+  if (cachedOption) {
+    const normalizedPhone = normalizeTwilioPhoneNumber(employee.phone ?? null);
+    upsertCallEmployeeDirectoryItem({
+      loginName: cachedOption.loginName,
+      contactId: cachedOption.contactId,
+      displayName: cachedOption.employeeName,
+      email: cachedOption.email,
+      normalizedPhone,
+      callerIdPhone: normalizedPhone,
+      isActive: employee.isActive ?? true,
+      updatedAt: new Date().toISOString(),
+    });
+    return cachedOption;
+  }
+
   const displayName = employee.name.trim();
   if (!displayName) {
     return null;
@@ -223,12 +403,57 @@ function dedupeMeetingEmployeeOptions(items: MeetingEmployeeOption[]): MeetingEm
   );
 }
 
+function searchCachedEmployeeOptions(query: string): MeetingEmployeeOption[] | null {
+  const snapshot = readEmployeeDirectorySnapshot();
+  const hasFreshDetailedDirectory =
+    snapshot.source === FULL_EMPLOYEE_DIRECTORY_SOURCE &&
+    isFreshEmployeeDirectory(snapshot.updatedAt) &&
+    hasDetailedEmployeeDirectory(snapshot.items);
+  if (!hasFreshDetailedDirectory) {
+    return null;
+  }
+
+  return dedupeMeetingEmployeeOptions(
+    filterEmployeesByQuery(snapshot.items, query)
+      .slice(0, MAX_RESULTS)
+      .map((employee) => buildCachedMeetingEmployeeOption(employee))
+      .filter((employee): employee is MeetingEmployeeOption => employee !== null),
+  );
+}
+
+function searchCachedCallEmployeeDirectory(query: string): MeetingEmployeeOption[] {
+  const tokens = tokenizeSearch(query);
+  if (tokens.length === 0) {
+    return [];
+  }
+
+  return dedupeMeetingEmployeeOptions(
+    readCallEmployeeDirectory()
+      .filter((employee) => {
+        const haystacks = [
+          normalizeComparable(employee.displayName),
+          normalizeComparable(employee.email),
+          normalizeComparable(employee.loginName),
+        ];
+        return tokens.every((token) => haystacks.some((haystack) => haystack.includes(token)));
+      })
+      .map((employee) => buildMeetingEmployeeOptionFromCachedDirectoryItem(employee))
+      .filter((employee): employee is MeetingEmployeeOption => employee !== null)
+      .slice(0, MAX_RESULTS),
+  );
+}
+
 async function searchEmployeeOptions(
   cookieValue: string,
   authCookieRefresh: AuthCookieRefreshState,
   query: string,
 ): Promise<MeetingEmployeeOption[]> {
-  const directory = await loadEmployeeDirectory(cookieValue, authCookieRefresh, query);
+  const cachedCallDirectoryMatches = searchCachedCallEmployeeDirectory(query);
+  if (cachedCallDirectoryMatches.length > 0) {
+    return cachedCallDirectoryMatches;
+  }
+
+  const directory = await loadEmployeeDirectory(cookieValue, authCookieRefresh);
   const matches = filterEmployeesByQuery(directory, query).slice(0, MAX_RESULTS);
   if (matches.length === 0) {
     return [];
@@ -257,6 +482,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     if (query.length < 2) {
       return NextResponse.json({ items: [] });
+    }
+
+    const cachedItems = searchCachedEmployeeOptions(query);
+    if (cachedItems !== null) {
+      return NextResponse.json({ items: cachedItems });
     }
 
     let items: MeetingEmployeeOption[] = [];

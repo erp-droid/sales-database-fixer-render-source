@@ -556,14 +556,19 @@
 .trendFooter {
   display: grid;
   gap: 4px;
+  min-height: 34px;
 }
 
 .trendLabel {
   color: var(--ink-strong);
   font-size: 12px;
   font-weight: 600;
-  min-height: 32px;
+  display: block;
   line-height: 1.35;
+  min-height: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .trendMeta {

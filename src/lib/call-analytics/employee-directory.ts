@@ -1,5 +1,6 @@
 import type {
   AuthCookieRefreshState,
+  EmployeeDirectoryItem,
   EmployeeProfileItem,
   RawContact,
 } from "@/lib/acumatica";
@@ -11,6 +12,10 @@ import {
 } from "@/lib/acumatica";
 import { formatPhoneForTwilioDial } from "@/lib/phone";
 import { getReadModelDb } from "@/lib/read-model/db";
+import {
+  FULL_EMPLOYEE_DIRECTORY_SOURCE,
+  replaceEmployeeDirectory,
+} from "@/lib/read-model/employees";
 import { INTERNAL_EMPLOYEE_EMAIL_DOMAINS } from "@/lib/internal-records";
 import type { CallEmployeeDirectoryItem } from "@/lib/call-analytics/types";
 
@@ -30,6 +35,18 @@ type StoredEmployeeDirectoryRow = {
 type CallEmployeeDirectoryMetaRow = {
   total: number;
   latest_updated_at: string | null;
+};
+
+type NormalizedInternalEmployeeProfile = {
+  employeeId: string;
+  loginName: string;
+  contactId: number | null;
+  displayName: string;
+  email: string;
+  normalizedPhone: string | null;
+  callerIdPhone: string | null;
+  isActive: boolean;
+  updatedAt: string;
 };
 
 export type CallEmployeeDirectoryMeta = {
@@ -134,8 +151,8 @@ function buildInternalContactByDisplayName(contacts: RawContact[]): Map<string, 
 }
 
 function shouldReplaceDirectoryItem(
-  existing: CallEmployeeDirectoryItem | undefined,
-  candidate: CallEmployeeDirectoryItem,
+  existing: NormalizedInternalEmployeeProfile | undefined,
+  candidate: NormalizedInternalEmployeeProfile,
 ): boolean {
   if (!existing) {
     return true;
@@ -152,7 +169,12 @@ function normalizeInternalEmployeeProfile(
   profile: EmployeeProfileItem,
   contactIdsByEmail: Map<string, number>,
   contactsByDisplayName: Map<string, RawContact>,
-): CallEmployeeDirectoryItem | null {
+): NormalizedInternalEmployeeProfile | null {
+  const employeeId = profile.employeeId.trim();
+  if (!employeeId) {
+    return null;
+  }
+
   const fallbackContact =
     contactsByDisplayName.get(normalizeComparable(profile.displayName?.trim() || "")) ?? null;
   const fallbackEmail =
@@ -169,6 +191,7 @@ function normalizeInternalEmployeeProfile(
   }
 
   return {
+    employeeId,
     loginName,
     contactId:
       profile.contactId ??
@@ -184,13 +207,13 @@ function normalizeInternalEmployeeProfile(
   };
 }
 
-export function buildCallEmployeeDirectoryFromEmployeeProfiles(
+function buildNormalizedInternalEmployeeProfiles(
   profiles: EmployeeProfileItem[],
   internalContacts: RawContact[] = [],
-): CallEmployeeDirectoryItem[] {
+): NormalizedInternalEmployeeProfile[] {
   const contactIdsByEmail = buildInternalContactIdByEmail(internalContacts);
   const contactsByDisplayName = buildInternalContactByDisplayName(internalContacts);
-  const deduped = new Map<string, CallEmployeeDirectoryItem>();
+  const deduped = new Map<string, NormalizedInternalEmployeeProfile>();
   for (const profile of profiles) {
     const normalized = normalizeInternalEmployeeProfile(
       profile,
@@ -212,6 +235,37 @@ export function buildCallEmployeeDirectoryFromEmployeeProfiles(
   );
 }
 
+export function buildCallEmployeeDirectoryFromEmployeeProfiles(
+  profiles: EmployeeProfileItem[],
+  internalContacts: RawContact[] = [],
+): CallEmployeeDirectoryItem[] {
+  return buildNormalizedInternalEmployeeProfiles(profiles, internalContacts).map((profile) => ({
+    loginName: profile.loginName,
+    contactId: profile.contactId,
+    displayName: profile.displayName,
+    email: profile.email,
+    normalizedPhone: profile.normalizedPhone,
+    callerIdPhone: profile.callerIdPhone,
+    isActive: profile.isActive,
+    updatedAt: profile.updatedAt,
+  }));
+}
+
+export function buildEmployeeDirectoryFromEmployeeProfiles(
+  profiles: EmployeeProfileItem[],
+  internalContacts: RawContact[] = [],
+): EmployeeDirectoryItem[] {
+  return buildNormalizedInternalEmployeeProfiles(profiles, internalContacts).map((profile) => ({
+    id: profile.employeeId,
+    name: profile.displayName,
+    loginName: profile.loginName,
+    email: profile.email,
+    contactId: profile.contactId,
+    phone: profile.normalizedPhone,
+    isActive: profile.isActive,
+  }));
+}
+
 export async function syncCallEmployeeDirectory(
   cookieValue: string,
   authCookieRefresh?: AuthCookieRefreshState,
@@ -230,7 +284,12 @@ export async function syncCallEmployeeDirectory(
         ),
       ]);
 
+      const employeeDirectoryItems = buildEmployeeDirectoryFromEmployeeProfiles(
+        profiles,
+        contacts,
+      );
       const items = buildCallEmployeeDirectoryFromEmployeeProfiles(profiles, contacts);
+      replaceEmployeeDirectory(employeeDirectoryItems, FULL_EMPLOYEE_DIRECTORY_SOURCE);
       replaceCallEmployeeDirectory(items);
       try {
         const { rebuildCallSessions } = await import("@/lib/call-analytics/sessionize");

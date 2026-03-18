@@ -11,6 +11,7 @@ import { geocodePendingAddresses, queueGeocodesForRows } from "@/lib/read-model/
 import { getReadModelDb } from "@/lib/read-model/db";
 import { replaceAllAccountRows, readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import { invalidateReadModelCaches } from "@/lib/read-model/cache";
+import { syncCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
 import { getEnv } from "@/lib/env";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type { SyncRunResponse, SyncStatusResponse } from "@/types/sync";
@@ -224,6 +225,30 @@ async function runFullSync(
         buildEmployeeDirectoryFromRows(rows),
         DERIVED_EMPLOYEE_DIRECTORY_SOURCE,
       );
+    }
+    currentPhase = "employee-cache";
+    writeSyncState({
+      status: "running",
+      phase: "employee-cache",
+      rows_count: counts.rowsCount,
+      accounts_count: counts.accountsCount,
+      contacts_count: counts.contactsCount,
+      progress_json: JSON.stringify({
+        fetchedAccounts: counts.accountsCount,
+        fetchedContacts: counts.contactsCount,
+        totalAccounts: counts.accountsCount,
+        totalContacts: counts.contactsCount,
+      }),
+    });
+    try {
+      await syncCallEmployeeDirectory(cookieValue, authCookieRefresh);
+    } catch (error) {
+      console.warn("[sync]", {
+        event: "employee_cache_failed",
+        startedAt,
+        phase: currentPhase,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     queueGeocodesForRows(rows);
 
