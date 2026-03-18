@@ -1690,7 +1690,7 @@ export function AccountsMapClient({
           value={q}
         />
       }
-      subtitle="Business Accounts Map"
+      subtitle="Sales MeadowBrook Map"
       title="Contacts Location View"
       userName={session?.user?.name ?? "Signed in"}
     >

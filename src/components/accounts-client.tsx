@@ -5916,7 +5916,7 @@ export function AccountsClient({
           </>
         )
       }
-      title="Business Accounts & Contacts"
+      title="Sales MeadowBrook"
       userName={session?.user?.name ?? "Signed in"}
     >
 
