@@ -16,6 +16,7 @@ import {
 } from "@/lib/acumatica";
 import {
   readCallEmployeeDirectory,
+  syncCallEmployeeDirectory,
   upsertCallEmployeeDirectoryItem,
 } from "@/lib/call-analytics/employee-directory";
 import { HttpError, getErrorMessage } from "@/lib/errors";
@@ -27,7 +28,6 @@ import {
   FULL_EMPLOYEE_DIRECTORY_SOURCE,
   hasDetailedEmployeeDirectory,
   readEmployeeDirectorySnapshot,
-  replaceEmployeeDirectory,
 } from "@/lib/read-model/employees";
 import { normalizeTwilioPhoneNumber } from "@/lib/twilio";
 import type { MeetingEmployeeOption } from "@/types/meeting-create";
@@ -164,9 +164,18 @@ async function refreshEmployeeDirectory(
 ): Promise<EmployeeDirectoryItem[]> {
   if (!employeeDirectoryRefreshPromise) {
     employeeDirectoryRefreshPromise = (async () => {
-      const items = await fetchEmployees(cookieValue, authCookieRefresh);
-      replaceEmployeeDirectory(items, FULL_EMPLOYEE_DIRECTORY_SOURCE);
-      return items;
+      await syncCallEmployeeDirectory(cookieValue, authCookieRefresh);
+      const detailedSnapshot = readEmployeeDirectorySnapshot();
+      if (
+        detailedSnapshot.source === FULL_EMPLOYEE_DIRECTORY_SOURCE &&
+        hasDetailedEmployeeDirectory(detailedSnapshot.items)
+      ) {
+        return detailedSnapshot.items;
+      }
+
+      // Fall back to the lightweight employee list only for this request. Do not
+      // overwrite the richer synced directory with sparse list results.
+      return fetchEmployees(cookieValue, authCookieRefresh);
     })().finally(() => {
       employeeDirectoryRefreshPromise = null;
     });

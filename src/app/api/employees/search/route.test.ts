@@ -9,8 +9,8 @@ const fetchEmployeeProfileById = vi.fn();
 const findContactsByDisplayName = vi.fn();
 const searchContacts = vi.fn();
 const readEmployeeDirectorySnapshot = vi.fn();
-const replaceEmployeeDirectory = vi.fn();
 const readCallEmployeeDirectory = vi.fn();
+const syncCallEmployeeDirectory = vi.fn();
 const upsertCallEmployeeDirectoryItem = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
@@ -41,12 +41,12 @@ vi.mock("@/lib/read-model/employees", async () => {
   return {
     ...actual,
     readEmployeeDirectorySnapshot,
-    replaceEmployeeDirectory,
   };
 });
 
 vi.mock("@/lib/call-analytics/employee-directory", () => ({
   readCallEmployeeDirectory,
+  syncCallEmployeeDirectory,
   upsertCallEmployeeDirectoryItem,
 }));
 
@@ -58,6 +58,7 @@ describe("GET /api/employees/search", () => {
     vi.setSystemTime(new Date("2026-03-17T17:00:00.000Z"));
     requireAuthCookieValue.mockReturnValue("user-cookie");
     readCallEmployeeDirectory.mockReturnValue([]);
+    syncCallEmployeeDirectory.mockResolvedValue([]);
     readEmployeeDirectorySnapshot.mockReturnValue({
       items: [],
       source: null,
@@ -68,26 +69,45 @@ describe("GET /api/employees/search", () => {
     );
   });
 
-  it("returns matching internal employees from a refreshed directory and falls back to an internal contact email", async () => {
-    fetchEmployees.mockResolvedValue([
-      { id: "E0000153", name: "Simon Doal" },
-      { id: "E0000045", name: "Jorge Serrano" },
-    ]);
-    fetchEmployeeProfileById.mockResolvedValueOnce({
-      employeeId: "E0000153",
-      contactId: null,
-      displayName: "Simon Doal",
-      email: null,
-      phone: null,
-      isActive: true,
-    });
-    findContactsByDisplayName.mockResolvedValueOnce([
-      {
-        ContactID: { value: 153 },
-        DisplayName: { value: "Simon Doal" },
-        Email: { value: "sdoal@meadowb.com" },
-      },
-    ]);
+  it("returns matching internal employees from the synced detailed directory without overwriting it with sparse list data", async () => {
+    readEmployeeDirectorySnapshot
+      .mockReturnValueOnce({
+        items: [],
+        source: null,
+        updatedAt: null,
+      })
+      .mockReturnValueOnce({
+        items: [
+          { id: "E0000153", name: "Simon Doal" },
+          { id: "E0000045", name: "Jorge Serrano" },
+        ],
+        source: "acumatica_employees",
+        updatedAt: "2026-03-17T16:55:00.000Z",
+      })
+      .mockReturnValueOnce({
+        items: [
+          {
+            id: "E0000153",
+            name: "Simon Doal",
+            loginName: "sdoal",
+            email: "sdoal@meadowb.com",
+            contactId: 153,
+            phone: "+14374233641",
+            isActive: true,
+          },
+          {
+            id: "E0000045",
+            name: "Jorge Serrano",
+            loginName: "jserrano",
+            email: "jserrano@meadowb.com",
+            contactId: 45,
+            phone: "+14162304681",
+            isActive: true,
+          },
+        ],
+        source: "acumatica_employees",
+        updatedAt: "2026-03-17T16:55:00.000Z",
+      });
 
     const { GET } = await import("@/app/api/employees/search/route");
     const response = await GET(
@@ -106,14 +126,10 @@ describe("GET /api/employees/search", () => {
 
     expect(response.status).toBe(200);
     expect(withServiceAcumaticaSession).toHaveBeenCalledTimes(1);
-    expect(fetchEmployees).toHaveBeenCalledWith("service-cookie", expect.any(Object));
-    expect(replaceEmployeeDirectory).toHaveBeenCalledWith(
-      [
-        { id: "E0000153", name: "Simon Doal" },
-        { id: "E0000045", name: "Jorge Serrano" },
-      ],
-      "acumatica_employees",
-    );
+    expect(syncCallEmployeeDirectory).toHaveBeenCalledWith("service-cookie", expect.any(Object));
+    expect(fetchEmployees).not.toHaveBeenCalled();
+    expect(fetchEmployeeProfileById).not.toHaveBeenCalled();
+    expect(findContactsByDisplayName).not.toHaveBeenCalled();
     expect(payload.items).toEqual([
       {
         key: "employee:sdoal",

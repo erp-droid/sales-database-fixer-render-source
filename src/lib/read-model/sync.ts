@@ -12,6 +12,7 @@ import { getReadModelDb } from "@/lib/read-model/db";
 import { replaceAllAccountRows, readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import { invalidateReadModelCaches } from "@/lib/read-model/cache";
 import { syncCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
+import { withServiceAcumaticaSession } from "@/lib/acumatica-service-auth";
 import { getEnv } from "@/lib/env";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type { SyncRunResponse, SyncStatusResponse } from "@/types/sync";
@@ -241,7 +242,13 @@ async function runFullSync(
       }),
     });
     try {
-      await syncCallEmployeeDirectory(cookieValue, authCookieRefresh);
+      try {
+        await withServiceAcumaticaSession(null, (serviceCookieValue, serviceRefresh) =>
+          syncCallEmployeeDirectory(serviceCookieValue, serviceRefresh),
+        );
+      } catch {
+        await syncCallEmployeeDirectory(cookieValue, authCookieRefresh);
+      }
     } catch (error) {
       console.warn("[sync]", {
         event: "employee_cache_failed",

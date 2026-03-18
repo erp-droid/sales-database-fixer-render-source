@@ -2185,6 +2185,7 @@ export function AccountsClient({
   const resolvedPrimaryAccountIdsRef = useRef(new Set<string>());
   const resolvingSalesRepAccountIdsRef = useRef(new Set<string>());
   const resolvedSalesRepAccountIdsRef = useRef(new Set<string>());
+  const meetingOptionsPrefetchKeyRef = useRef<string | null>(null);
   const employeesFetchAttemptedRef = useRef(false);
   const employeesFetchRequestRef = useRef(0);
   const notesFieldRef = useRef<HTMLTextAreaElement | null>(null);
@@ -2387,6 +2388,32 @@ export function AccountsClient({
       setIsLoadingMeetingOptions(false);
     }
   }
+
+  useEffect(() => {
+    if (
+      !session?.authenticated ||
+      allRows.length === 0 ||
+      isCreateMeetingDrawerOpen ||
+      isLoadingMeetingOptions
+    ) {
+      return;
+    }
+
+    const prefetchKey = lastSyncedAt ?? "__initial__";
+    if (meetingOptionsPrefetchKeyRef.current === prefetchKey) {
+      return;
+    }
+
+    meetingOptionsPrefetchKeyRef.current = prefetchKey;
+    void loadMeetingOptions(Boolean(meetingOptions));
+  }, [
+    allRows.length,
+    isCreateMeetingDrawerOpen,
+    isLoadingMeetingOptions,
+    lastSyncedAt,
+    meetingOptions,
+    session?.authenticated,
+  ]);
 
   function openMailComposer(initialState: GmailComposeInitialState | null) {
     closeTransientMenus();
