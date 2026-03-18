@@ -232,6 +232,12 @@ export async function syncCallEmployeeDirectory(
 
       const items = buildCallEmployeeDirectoryFromEmployeeProfiles(profiles, contacts);
       replaceCallEmployeeDirectory(items);
+      try {
+        const { rebuildCallSessions } = await import("@/lib/call-analytics/sessionize");
+        rebuildCallSessions();
+      } catch {
+        // Keep employee syncing resilient even if the historical call repair step fails.
+      }
       return items;
     })().finally(() => {
       callEmployeeDirectorySyncPromise = null;

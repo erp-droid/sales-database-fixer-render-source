@@ -192,4 +192,56 @@ describe("syncCallEmployeeDirectory", () => {
     expect(fetchContacts).toHaveBeenCalledTimes(1);
     expect(left).toEqual(right);
   });
+
+  it("rebuilds historical call sessions after refreshing the employee directory", async () => {
+    const fetchEmployeeProfiles = vi.fn(async () => [
+      buildEmployee({
+        employeeId: "E000153",
+        contactId: 101,
+        displayName: "Simon MeadowBrook",
+        email: "simon@meadowb.com",
+        phone: "4374233641",
+      }),
+    ]);
+    const fetchContacts = vi.fn(async () => [
+      buildContact({
+        contactId: 101,
+        email: "simon@meadowb.com",
+      }),
+    ]);
+    const rebuildCallSessions = vi.fn();
+
+    vi.doMock("@/lib/acumatica", () => ({
+      fetchEmployeeProfiles,
+      fetchContacts,
+      readWrappedNumber: (record: Record<string, { value?: unknown }>, field: string) => {
+        const value = record[field]?.value;
+        return typeof value === "number" ? value : null;
+      },
+      readWrappedString: (record: Record<string, { value?: unknown }>, field: string) => {
+        const value = record[field]?.value;
+        return typeof value === "string" ? value : "";
+      },
+    }));
+
+    vi.doMock("@/lib/call-analytics/sessionize", () => ({
+      rebuildCallSessions,
+    }));
+
+    vi.doMock("@/lib/read-model/db", () => ({
+      getReadModelDb: () => ({
+        transaction: <T extends (...args: unknown[]) => unknown>(callback: T) => callback,
+        prepare: () => ({
+          run: () => undefined,
+          all: () => [],
+        }),
+      }),
+    }));
+
+    const module = await import("@/lib/call-analytics/employee-directory");
+
+    await module.syncCallEmployeeDirectory("cookie");
+
+    expect(rebuildCallSessions).toHaveBeenCalledTimes(1);
+  });
 });
