@@ -5,7 +5,10 @@ import {
   matchPhoneToAccountWithIndex,
   type PhoneMatchIndex,
 } from "@/lib/call-analytics/phone-match";
-import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
+import {
+  readCallEmployeeDirectory,
+  readCallEmployeeDirectoryMeta,
+} from "@/lib/call-analytics/employee-directory";
 import { publishAuditLogChanged } from "@/lib/audit-log-live";
 import { upsertCallAuditEvent } from "@/lib/audit-log-store";
 import type {
@@ -71,6 +74,8 @@ type EmployeeIndex = {
 type SessionizeOptions = {
   bridgeNumbers?: string[];
 };
+
+let repairingCallSessionsFromEmployeeDirectory = false;
 
 function normalizeStoredCallLeg(row: StoredCallLegRow): CallLegRecord {
   return {
@@ -840,6 +845,7 @@ function normalizeCallSessionRow(row: StoredCallSessionRow): CallSessionRecord {
 }
 
 export function readCallSessions(): CallSessionRecord[] {
+  maybeRepairCallSessionsFromEmployeeDirectory();
   const db = getReadModelDb();
   const rows = db
     .prepare(
@@ -889,6 +895,7 @@ export function readCallSessions(): CallSessionRecord[] {
 }
 
 export function readCallSessionById(sessionId: string): CallSessionRecord | null {
+  maybeRepairCallSessionsFromEmployeeDirectory();
   const db = getReadModelDb();
   const row = db
     .prepare(
@@ -970,4 +977,40 @@ export function readCallLegsBySessionId(sessionId: string): CallLegRecord[] {
     .all(sessionId.trim()) as StoredCallLegRow[];
 
   return rows.map(normalizeStoredCallLeg);
+}
+
+function maybeRepairCallSessionsFromEmployeeDirectory(): void {
+  if (repairingCallSessionsFromEmployeeDirectory) {
+    return;
+  }
+
+  const directoryMeta = readCallEmployeeDirectoryMeta();
+  if (!directoryMeta.latestUpdatedAt) {
+    return;
+  }
+
+  const db = getReadModelDb();
+  const staleUnattributedRow = db
+    .prepare(
+      `
+      SELECT session_id
+      FROM call_sessions
+      WHERE employee_login_name IS NULL
+        AND recipient_employee_login_name IS NULL
+        AND updated_at < ?
+      LIMIT 1
+      `,
+    )
+    .get(directoryMeta.latestUpdatedAt) as { session_id: string } | undefined;
+
+  if (!staleUnattributedRow) {
+    return;
+  }
+
+  repairingCallSessionsFromEmployeeDirectory = true;
+  try {
+    rebuildCallSessions();
+  } finally {
+    repairingCallSessionsFromEmployeeDirectory = false;
+  }
 }
