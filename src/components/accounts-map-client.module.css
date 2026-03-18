@@ -74,7 +74,8 @@
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  width: 100%;
 }
 
 .filtersBar {
@@ -102,46 +103,34 @@
   font-size: 14px;
 }
 
-.salesRepFilterMenu {
-  position: relative;
-}
-
-.salesRepFilterSummary {
-  list-style: none;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: #fff;
-  color: var(--ink-strong);
-  padding: 8px 10px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.salesRepFilterSummary::-webkit-details-marker {
-  display: none;
-}
-
-.salesRepFilterMenu[open] .salesRepFilterSummary {
-  border-color: #8cbbe8;
-  background: #e9f4ff;
-  color: #1f5f9f;
-}
-
-.salesRepFilterPanel {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  width: min(320px, 82vw);
+.salesRepFilterCard {
+  width: min(420px, 100%);
   border: 1px solid var(--border);
   border-radius: 12px;
   background: #fff;
-  box-shadow: 0 14px 24px rgba(19, 35, 63, 0.18);
   padding: 10px;
   display: grid;
   gap: 10px;
-  z-index: 20;
+}
+
+.salesRepFilterCardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.salesRepFilterCardCopy {
+  display: grid;
+  gap: 2px;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.salesRepFilterCardCopy strong {
+  color: var(--ink-strong);
+  font-size: 14px;
 }
 
 .salesRepFilterActions {
@@ -624,8 +613,7 @@
     width: 100%;
   }
 
-  .salesRepFilterPanel {
-    position: static;
+  .salesRepFilterCard {
     width: 100%;
   }
 

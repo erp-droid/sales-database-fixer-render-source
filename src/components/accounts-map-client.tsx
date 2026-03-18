@@ -1939,45 +1939,46 @@ export function AccountsMapClient({
             placeholder="Search company, contact, address"
             value={q}
           />
-          <details className={styles.salesRepFilterMenu}>
-            <summary className={styles.salesRepFilterSummary}>
-              Sales reps: {salesRepFilterSummary}
-            </summary>
-            <div className={styles.salesRepFilterPanel}>
-              <div className={styles.salesRepFilterActions}>
-                <button onClick={selectAllVisibleSalesRepFilters} type="button">
-                  All visible
-                </button>
-                <button onClick={clearSalesRepFilters} type="button">
-                  Clear
-                </button>
-              </div>
-              <input
-                className={styles.salesRepFilterSearch}
-                onChange={(event) => setSalesRepFilterQuery(event.target.value)}
-                placeholder="Filter sales reps"
-                value={salesRepFilterQuery}
-              />
-              <div className={styles.salesRepFilterList}>
-                {visibleSalesRepOptions.length > 0 ? (
-                  visibleSalesRepOptions.map((option) => (
-                    <label className={styles.viewOptionItem} key={option.key}>
-                      <input
-                        checked={selectedSalesRepKeys.includes(option.key)}
-                        onChange={() => toggleSalesRepFilter(option.key)}
-                        type="checkbox"
-                      />
-                      <span>
-                        {option.label} ({option.count})
-                      </span>
-                    </label>
-                  ))
-                ) : (
-                  <p className={styles.salesRepFilterEmpty}>No sales reps match this search.</p>
-                )}
-              </div>
+        </div>
+        <div className={styles.salesRepFilterCard}>
+          <div className={styles.salesRepFilterCardHeader}>
+            <div className={styles.salesRepFilterCardCopy}>
+              <strong>Sales reps</strong>
+              <span>{salesRepFilterSummary}</span>
             </div>
-          </details>
+            <div className={styles.salesRepFilterActions}>
+              <button onClick={selectAllVisibleSalesRepFilters} type="button">
+                All visible
+              </button>
+              <button onClick={clearSalesRepFilters} type="button">
+                Clear
+              </button>
+            </div>
+          </div>
+          <input
+            className={styles.salesRepFilterSearch}
+            onChange={(event) => setSalesRepFilterQuery(event.target.value)}
+            placeholder="Filter sales reps"
+            value={salesRepFilterQuery}
+          />
+          <div className={styles.salesRepFilterList}>
+            {visibleSalesRepOptions.length > 0 ? (
+              visibleSalesRepOptions.map((option) => (
+                <label className={styles.viewOptionItem} key={option.key}>
+                  <input
+                    checked={selectedSalesRepKeys.includes(option.key)}
+                    onChange={() => toggleSalesRepFilter(option.key)}
+                    type="checkbox"
+                  />
+                  <span>
+                    {option.label} ({option.count})
+                  </span>
+                </label>
+              ))
+            ) : (
+              <p className={styles.salesRepFilterEmpty}>No sales reps match this search.</p>
+            )}
+          </div>
         </div>
       </section>
 
