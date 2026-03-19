@@ -171,8 +171,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       callerId: startedCall.callerId,
       userPhone: startedCall.userPhone,
       targetPhone: startedCall.targetPhone,
+      callerEmployeeId: callerProfile.employeeId ?? null,
+      callerContactId: callerProfile.contactId ?? null,
       callerDisplayName: callerProfile.displayName,
       callerLoginName: callerProfile.loginName,
+      callerEmail: callerProfile.email ?? null,
       context: body?.context ?? undefined,
     });
 

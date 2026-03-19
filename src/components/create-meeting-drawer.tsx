@@ -352,7 +352,10 @@ function formatWallClockTime(date: Date): string {
   return `${hour}:${minute}`;
 }
 
-function buildDefaultMeetingSlot(timeZone: string): Pick<
+function buildDefaultMeetingSlot(
+  timeZone: string,
+  category: MeetingCategory,
+): Pick<
   MeetingFormState,
   "endDate" | "endTime" | "startDate" | "startTime"
 > {
@@ -372,7 +375,8 @@ function buildDefaultMeetingSlot(timeZone: string): Pick<
   wallClockNow.setUTCMinutes(roundedMinutes, 0, 0);
 
   const start = wallClockNow;
-  const end = new Date(start.getTime() + 60 * 60 * 1000);
+  const durationMinutes = category === "Drop Off" ? 15 : 60;
+  const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
 
   return {
     startDate: formatWallClockDate(start),
@@ -420,7 +424,7 @@ function buildFallbackSourceContactOption(
 }
 
 function buildEmptyMeetingForm(timeZone: string, category: MeetingCategory): MeetingFormState {
-  const defaults = buildDefaultMeetingSlot(timeZone);
+  const defaults = buildDefaultMeetingSlot(timeZone, category);
 
   return {
     category,

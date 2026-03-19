@@ -18,6 +18,10 @@ import {
   saveCallerPhoneOverride,
 } from "@/lib/caller-phone-overrides";
 import type { CallEmployeeDirectoryItem } from "@/lib/call-analytics/types";
+import {
+  readCallerIdentityProfile,
+  saveCallerIdentityProfile,
+} from "@/lib/caller-identity-cache";
 import { getEnv } from "@/lib/env";
 import { HttpError } from "@/lib/errors";
 import {
@@ -29,6 +33,7 @@ import { normalizeTwilioPhoneNumber } from "@/lib/twilio";
 
 export type ResolvedSignedInCallerIdentity = {
   loginName: string;
+  employeeId: string | null;
   contactId: number | null;
   displayName: string;
   email: string | null;
@@ -307,18 +312,31 @@ function readDerivedEmployeeIdForLogin(loginName: string): string | null {
 function buildResolvedIdentity(
   normalizedLogin: string,
   directoryItem: CallEmployeeDirectoryItem,
+  options?: {
+    employeeId?: string | null;
+  },
 ): ResolvedSignedInCallerIdentity {
+  const existingProfile = readCallerIdentityProfile(normalizedLogin);
   const resolvedDirectoryPhone = normalizeTwilioPhoneNumber(
     directoryItem.normalizedPhone ?? directoryItem.callerIdPhone,
   );
+  const canonicalPhone = normalizeTwilioPhoneNumber(existingProfile?.phoneNumber ?? null);
   const overridePhone = normalizeTwilioPhoneNumber(
     readCallerPhoneOverride(normalizedLogin)?.phoneNumber ?? null,
   );
-  const userPhone = resolvedDirectoryPhone ?? overridePhone;
+  const userPhone = resolvedDirectoryPhone ?? canonicalPhone ?? overridePhone;
+  const displayName =
+    existingProfile?.displayName?.trim() ||
+    directoryItem.displayName.trim() ||
+    normalizedLogin;
+  const email = existingProfile?.email ?? directoryItem.email ?? null;
+  const contactId = existingProfile?.contactId ?? directoryItem.contactId ?? null;
+  const employeeId =
+    options?.employeeId?.trim() || existingProfile?.employeeId || null;
   if (!userPhone) {
     throw buildMissingPhoneError(
       normalizedLogin,
-      directoryItem.displayName.trim() || normalizedLogin,
+      displayName,
     );
   }
 
@@ -330,11 +348,30 @@ function buildResolvedIdentity(
     }
   }
 
+  const cachedDirectoryItem: CallEmployeeDirectoryItem = {
+    ...directoryItem,
+    contactId,
+    displayName,
+    email,
+    normalizedPhone: resolvedDirectoryPhone ?? canonicalPhone ?? overridePhone,
+    callerIdPhone: resolvedDirectoryPhone ?? canonicalPhone ?? overridePhone,
+  };
+  upsertCallEmployeeDirectoryItem(cachedDirectoryItem);
+  saveCallerIdentityProfile({
+    loginName: normalizedLogin,
+    employeeId,
+    contactId,
+    displayName,
+    email,
+    phoneNumber: userPhone,
+  });
+
   return {
     loginName: normalizedLogin,
-    contactId: directoryItem.contactId ?? null,
-    displayName: directoryItem.displayName.trim() || normalizedLogin,
-    email: directoryItem.email ?? null,
+    employeeId,
+    contactId,
+    displayName,
+    email,
     userPhone,
   };
 }
@@ -423,8 +460,9 @@ async function resolveSignedInCallerIdentityByEmployeeId(
       isActive: profile.isActive,
     });
 
-    upsertCallEmployeeDirectoryItem(directoryItem);
-    return buildResolvedIdentity(normalizedLogin, directoryItem);
+    return buildResolvedIdentity(normalizedLogin, directoryItem, {
+      employeeId: trimmedEmployeeId,
+    });
   }
 
   const matchingContact = await findExactInternalContact(
@@ -460,8 +498,9 @@ async function resolveSignedInCallerIdentityByEmployeeId(
     isActive: profile.isActive,
   });
 
-  upsertCallEmployeeDirectoryItem(directoryItem);
-  return buildResolvedIdentity(normalizedLogin, directoryItem);
+  return buildResolvedIdentity(normalizedLogin, directoryItem, {
+    employeeId: trimmedEmployeeId,
+  });
 }
 
 async function resolveSignedInCallerIdentityDirect(
@@ -478,7 +517,6 @@ async function resolveSignedInCallerIdentityDirect(
     ? buildDirectoryItemFromExactInternalContact(normalizedLogin, matchingContact)
     : null;
   if (exactInternalContact && (exactInternalContact.normalizedPhone || exactInternalContact.callerIdPhone)) {
-    upsertCallEmployeeDirectoryItem(exactInternalContact);
     return buildResolvedIdentity(normalizedLogin, exactInternalContact);
   }
   const employeeProfiles = await searchEmployeeProfiles(
@@ -489,37 +527,47 @@ async function resolveSignedInCallerIdentityDirect(
     },
     authCookieRefresh,
   );
+  const matchingByEmployeeEmailCandidates = employeeProfiles
+    .filter(
+      (profile) =>
+        extractEmailLocalPart(profile.email) === normalizedLogin &&
+        isExcludedInternalContactEmail(profile.email),
+    )
+    .map((profile) => ({
+      employeeId: profile.employeeId,
+      item: buildDirectoryItemFromProfile(normalizedLogin, {
+        contactId:
+          profile.contactId ??
+          readWrappedNumber(matchingContact, "ContactID") ??
+          null,
+        displayName:
+          profile.displayName ||
+          readContactDisplayName(matchingContact) ||
+          normalizedLogin,
+        email:
+          profile.email ??
+          readWrappedString(matchingContact, "Email") ??
+          readWrappedString(matchingContact, "EMail") ??
+          null,
+        phone: profile.phone ?? readContactPhone(matchingContact),
+        isActive: profile.isActive,
+      }),
+    }))
+    .filter(
+      (candidate): candidate is { employeeId: string; item: CallEmployeeDirectoryItem } =>
+        candidate.item !== null,
+    );
   const matchingByEmployeeEmail = selectBestDirectoryItem(
-    employeeProfiles
-      .filter(
-        (profile) =>
-          extractEmailLocalPart(profile.email) === normalizedLogin &&
-          isExcludedInternalContactEmail(profile.email),
-      )
-      .map((profile) =>
-        buildDirectoryItemFromProfile(normalizedLogin, {
-          contactId:
-            profile.contactId ??
-            readWrappedNumber(matchingContact, "ContactID") ??
-            null,
-          displayName:
-            profile.displayName ||
-            readContactDisplayName(matchingContact) ||
-            normalizedLogin,
-          email:
-            profile.email ??
-            readWrappedString(matchingContact, "Email") ??
-            readWrappedString(matchingContact, "EMail") ??
-            null,
-          phone: profile.phone ?? readContactPhone(matchingContact),
-          isActive: profile.isActive,
-        }),
-      )
-      .filter((item): item is CallEmployeeDirectoryItem => item !== null),
+    matchingByEmployeeEmailCandidates.map((candidate) => candidate.item),
   );
   if (matchingByEmployeeEmail) {
-    upsertCallEmployeeDirectoryItem(matchingByEmployeeEmail);
-    return buildResolvedIdentity(normalizedLogin, matchingByEmployeeEmail);
+    const matchingProfile =
+      matchingByEmployeeEmailCandidates.find(
+        (candidate) => candidate.item === matchingByEmployeeEmail,
+      ) ?? null;
+    return buildResolvedIdentity(normalizedLogin, matchingByEmployeeEmail, {
+      employeeId: matchingProfile?.employeeId ?? null,
+    });
   }
 
   if (!matchingContact) {
@@ -545,7 +593,10 @@ async function resolveSignedInCallerIdentityDirect(
     return null;
   }
 
-  const matchedDirectoryItems: CallEmployeeDirectoryItem[] = [];
+  const matchedDirectoryItems: Array<{
+    employeeId: string;
+    item: CallEmployeeDirectoryItem;
+  }> = [];
   for (const employee of employees) {
     const profile = await fetchEmployeeProfileById(cookieValue, employee.id, authCookieRefresh);
     if (!profile) {
@@ -576,11 +627,16 @@ async function resolveSignedInCallerIdentityDirect(
     });
 
     if (directoryItem) {
-      matchedDirectoryItems.push(directoryItem);
+      matchedDirectoryItems.push({
+        employeeId: employee.id,
+        item: directoryItem,
+      });
     }
   }
 
-  const directoryItem = selectBestDirectoryItem(matchedDirectoryItems);
+  const directoryItem = selectBestDirectoryItem(
+    matchedDirectoryItems.map((candidate) => candidate.item),
+  );
   if (!directoryItem) {
     const contactFallback = buildDirectoryItemFromProfile(normalizedLogin, {
       contactId: contactId ?? null,
@@ -597,12 +653,14 @@ async function resolveSignedInCallerIdentityDirect(
       return null;
     }
 
-    upsertCallEmployeeDirectoryItem(contactFallback);
     return buildResolvedIdentity(normalizedLogin, contactFallback);
   }
 
-  upsertCallEmployeeDirectoryItem(directoryItem);
-  return buildResolvedIdentity(normalizedLogin, directoryItem);
+  const matchedDirectoryItem =
+    matchedDirectoryItems.find((candidate) => candidate.item === directoryItem) ?? null;
+  return buildResolvedIdentity(normalizedLogin, directoryItem, {
+    employeeId: matchedDirectoryItem?.employeeId ?? null,
+  });
 }
 
 export async function resolveSignedInCallerIdentity(

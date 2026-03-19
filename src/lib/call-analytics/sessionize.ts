@@ -1,6 +1,7 @@
 import { getReadModelDb } from "@/lib/read-model/db";
 import { formatPhoneForTwilioDial } from "@/lib/phone";
 import { readAllCallerPhoneOverrides } from "@/lib/caller-phone-overrides";
+import { readAllCallerIdentityProfiles } from "@/lib/caller-identity-cache";
 import {
   buildPhoneMatchIndex,
   matchPhoneToAccountWithIndex,
@@ -48,7 +49,10 @@ type ParsedLegMetadata = {
   appContext?: {
     sessionId?: string;
     loginName?: string;
+    employeeId?: string | null;
+    employeeContactId?: number | null;
     displayName?: string;
+    email?: string | null;
     userPhone?: string;
     callerId?: string;
     bridgeNumber?: string;
@@ -130,7 +134,8 @@ function parseLegMetadata(rawJson: string): ParsedLegMetadata {
 
 function buildEmployeeIndex(items: CallEmployeeDirectoryItem[]): EmployeeIndex {
   const mergedByLogin = new Map<string, CallEmployeeDirectoryItem>();
-  const overrideLoginByPhone = new Map<string, string>();
+  const preferredLoginByPhone = new Map<string, string>();
+  const canonicalProfiles = readAllCallerIdentityProfiles();
 
   for (const override of readAllCallerPhoneOverrides()) {
     const normalizedLoginName = override.loginName.trim().toLowerCase();
@@ -143,7 +148,17 @@ function buildEmployeeIndex(items: CallEmployeeDirectoryItem[]): EmployeeIndex {
       continue;
     }
 
-    overrideLoginByPhone.set(normalizedPhone, normalizedLoginName);
+    preferredLoginByPhone.set(normalizedPhone, normalizedLoginName);
+  }
+
+  for (const profile of canonicalProfiles) {
+    const normalizedLoginName = profile.loginName.trim().toLowerCase();
+    const normalizedPhone = formatPhoneForTwilioDial(profile.phoneNumber);
+    if (!normalizedLoginName || !normalizedPhone) {
+      continue;
+    }
+
+    preferredLoginByPhone.set(normalizedPhone, normalizedLoginName);
   }
 
   function looksLikePhoneLoginName(value: string): boolean {
@@ -158,13 +173,16 @@ function buildEmployeeIndex(items: CallEmployeeDirectoryItem[]): EmployeeIndex {
     if (
       looksLikePhoneLoginName(normalizedLoginName) &&
       normalizedItemPhone &&
-      overrideLoginByPhone.has(normalizedItemPhone) &&
-      overrideLoginByPhone.get(normalizedItemPhone) !== normalizedLoginName
+      preferredLoginByPhone.has(normalizedItemPhone) &&
+      preferredLoginByPhone.get(normalizedItemPhone) !== normalizedLoginName
     ) {
       continue;
     }
 
-    mergedByLogin.set(item.loginName, item);
+    mergedByLogin.set(normalizedLoginName, {
+      ...item,
+      loginName: normalizedLoginName,
+    });
   }
 
   for (const override of readAllCallerPhoneOverrides()) {
@@ -202,12 +220,44 @@ function buildEmployeeIndex(items: CallEmployeeDirectoryItem[]): EmployeeIndex {
     });
   }
 
+  for (const profile of canonicalProfiles) {
+    const normalizedLoginName = profile.loginName.trim().toLowerCase();
+    if (!normalizedLoginName) {
+      continue;
+    }
+
+    const normalizedPhone = formatPhoneForTwilioDial(profile.phoneNumber);
+    const existing = mergedByLogin.get(normalizedLoginName);
+    mergedByLogin.set(normalizedLoginName, {
+      loginName: normalizedLoginName,
+      contactId: profile.contactId ?? existing?.contactId ?? null,
+      displayName: profile.displayName.trim() || existing?.displayName || normalizedLoginName,
+      email: profile.email ?? existing?.email ?? null,
+      normalizedPhone:
+        normalizedPhone ??
+        formatPhoneForTwilioDial(existing?.normalizedPhone) ??
+        formatPhoneForTwilioDial(existing?.callerIdPhone),
+      callerIdPhone:
+        normalizedPhone ??
+        formatPhoneForTwilioDial(existing?.callerIdPhone) ??
+        formatPhoneForTwilioDial(existing?.normalizedPhone),
+      isActive: existing?.isActive ?? true,
+      updatedAt:
+        existing && existing.updatedAt > profile.updatedAt
+          ? existing.updatedAt
+          : profile.updatedAt,
+    });
+  }
+
   const byLogin = new Map<string, CallEmployeeDirectoryItem>();
   const byNormalizedPhone = new Map<string, CallEmployeeDirectoryItem[]>();
   const byCallerIdPhone = new Map<string, CallEmployeeDirectoryItem[]>();
 
   for (const item of mergedByLogin.values()) {
-    byLogin.set(item.loginName, item);
+    byLogin.set(item.loginName.trim().toLowerCase(), {
+      ...item,
+      loginName: item.loginName.trim().toLowerCase(),
+    });
 
     const normalizedPhone = formatPhoneForTwilioDial(item.normalizedPhone);
     if (normalizedPhone) {
@@ -222,6 +272,18 @@ function buildEmployeeIndex(items: CallEmployeeDirectoryItem[]): EmployeeIndex {
       list.push(item);
       byCallerIdPhone.set(callerIdPhone, list);
     }
+  }
+
+  for (const profile of canonicalProfiles) {
+    const normalizedLoginName = profile.loginName.trim().toLowerCase();
+    const canonicalItem = byLogin.get(normalizedLoginName);
+    const normalizedPhone = formatPhoneForTwilioDial(profile.phoneNumber);
+    if (!canonicalItem || !normalizedPhone) {
+      continue;
+    }
+
+    byNormalizedPhone.set(normalizedPhone, [canonicalItem]);
+    byCallerIdPhone.set(normalizedPhone, [canonicalItem]);
   }
 
   return { byLogin, byNormalizedPhone, byCallerIdPhone };
@@ -570,10 +632,15 @@ function buildSessionRecord(
     ringDurationSeconds:
       primaryLeg?.ringDurationSeconds ??
       computeRingDuration(startedAt, answeredAt, endedAt, outcomeData.answered),
-    employeeLoginName: attribution.employee?.loginName ?? appContext?.loginName ?? null,
-    employeeDisplayName: attribution.employee?.displayName ?? appContext?.displayName ?? null,
-    employeeContactId: attribution.employee?.contactId ?? null,
-    employeePhone: attribution.employee?.normalizedPhone ?? formatPhoneForTwilioDial(appContext?.userPhone) ?? null,
+    employeeLoginName:
+      (appContext?.loginName?.trim() || attribution.employee?.loginName) ?? null,
+    employeeDisplayName:
+      (appContext?.displayName?.trim() || attribution.employee?.displayName) ?? null,
+    employeeContactId: appContext?.employeeContactId ?? attribution.employee?.contactId ?? null,
+    employeePhone:
+      formatPhoneForTwilioDial(appContext?.userPhone) ??
+      attribution.employee?.normalizedPhone ??
+      null,
     recipientEmployeeLoginName: attribution.recipientEmployee?.loginName ?? null,
     recipientEmployeeDisplayName: attribution.recipientEmployee?.displayName ?? null,
     presentedCallerId: readPresentedCallerId(primaryLeg, appContext),

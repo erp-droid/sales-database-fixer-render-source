@@ -7,6 +7,10 @@ import {
   saveCallerPhoneOverride,
 } from "@/lib/caller-phone-overrides";
 import {
+  readCallerIdentityProfile,
+  saveCallerIdentityProfile,
+} from "@/lib/caller-identity-cache";
+import {
   readCallEmployeeDirectory,
   upsertCallEmployeeDirectoryItem,
 } from "@/lib/call-analytics/employee-directory";
@@ -16,6 +20,7 @@ import { createTwilioRestClient, normalizeTwilioPhoneNumber, readTwilioPhoneInve
 
 export type ResolvedCallerProfile = {
   loginName: string;
+  employeeId: string | null;
   contactId: number | null;
   displayName: string;
   email: string | null;
@@ -34,32 +39,43 @@ export type StartedBridgeCall = {
 };
 
 function readCachedCallerDirectoryItem(loginName: string): {
+  employeeId: string | null;
   contactId: number | null;
   displayName: string;
   email: string | null;
+  userPhone: string | null;
 } | null {
   const normalizedLoginName = loginName.trim().toLowerCase();
   if (!normalizedLoginName) {
     return null;
   }
 
+  const canonicalIdentity = readCallerIdentityProfile(normalizedLoginName);
   const item =
     readCallEmployeeDirectory().find(
       (candidate) => candidate.loginName.trim().toLowerCase() === normalizedLoginName,
     ) ?? null;
-  if (!item) {
+  if (!item && !canonicalIdentity) {
     return null;
   }
 
   return {
-    contactId: item.contactId ?? null,
-    displayName: item.displayName.trim() || normalizedLoginName,
-    email: item.email ?? null,
+    employeeId: canonicalIdentity?.employeeId ?? null,
+    contactId: canonicalIdentity?.contactId ?? item?.contactId ?? null,
+    displayName:
+      canonicalIdentity?.displayName?.trim() ||
+      item?.displayName.trim() ||
+      normalizedLoginName,
+    email: canonicalIdentity?.email ?? item?.email ?? null,
+    userPhone:
+      normalizeTwilioPhoneNumber(canonicalIdentity?.phoneNumber ?? null) ??
+      normalizeTwilioPhoneNumber(item?.normalizedPhone ?? item?.callerIdPhone ?? null),
   };
 }
 
 function cacheResolvedCallerDirectoryItem(input: {
   loginName: string;
+  employeeId: string | null;
   contactId: number | null;
   displayName: string;
   email: string | null;
@@ -72,6 +88,14 @@ function cacheResolvedCallerDirectoryItem(input: {
   }
 
   try {
+    saveCallerIdentityProfile({
+      loginName: normalizedLoginName,
+      employeeId: input.employeeId,
+      contactId: input.contactId,
+      displayName: input.displayName,
+      email: input.email,
+      phoneNumber: normalizedUserPhone,
+    });
     upsertCallEmployeeDirectoryItem({
       loginName: normalizedLoginName,
       contactId: input.contactId ?? null,
@@ -132,6 +156,7 @@ export async function resolveCallerProfile(
 
     cacheResolvedCallerDirectoryItem({
       loginName: normalizedLoginName,
+      employeeId: cachedCallerIdentity?.employeeId ?? null,
       contactId: cachedCallerIdentity?.contactId ?? null,
       displayName: cachedCallerIdentity?.displayName ?? normalizedLoginName,
       email: cachedCallerIdentity?.email ?? null,
@@ -140,6 +165,7 @@ export async function resolveCallerProfile(
 
     return {
       loginName: normalizedLoginName,
+      employeeId: cachedCallerIdentity?.employeeId ?? null,
       contactId: cachedCallerIdentity?.contactId ?? null,
       displayName: cachedCallerIdentity?.displayName ?? normalizedLoginName,
       email: cachedCallerIdentity?.email ?? null,
@@ -225,6 +251,7 @@ export async function resolveCallerProfile(
 
   cacheResolvedCallerDirectoryItem({
     loginName: callerIdentity.loginName,
+    employeeId: callerIdentity.employeeId ?? null,
     contactId: callerIdentity.contactId ?? null,
     displayName: callerIdentity.displayName,
     email: callerIdentity.email ?? null,
@@ -233,6 +260,7 @@ export async function resolveCallerProfile(
 
   return {
     loginName: callerIdentity.loginName,
+    employeeId: callerIdentity.employeeId ?? null,
     contactId: callerIdentity.contactId ?? null,
     displayName: callerIdentity.displayName,
     email: callerIdentity.email ?? null,
