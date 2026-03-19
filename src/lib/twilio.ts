@@ -29,6 +29,12 @@ export type TwilioPhoneInventory = {
   voiceNumbers: string[];
 };
 
+export type TwilioVerifiedCallerIdentity = {
+  loginName: string;
+  displayName: string;
+  phoneNumber: string;
+};
+
 let cachedInventory:
   | {
       expiresAt: number;
@@ -36,8 +42,16 @@ let cachedInventory:
     }
   | null = null;
 
+let cachedVerifiedCallerDirectory:
+  | {
+      expiresAt: number;
+      items: TwilioVerifiedCallerIdentity[];
+    }
+  | null = null;
+
 export function clearTwilioPhoneInventoryCache(): void {
   cachedInventory = null;
+  cachedVerifiedCallerDirectory = null;
 }
 
 export function getTwilioVoiceConfig(): TwilioVoiceConfig | null {
@@ -143,6 +157,81 @@ export async function readTwilioPhoneInventory(
   };
 
   return inventory;
+}
+
+function normalizeTwilioFriendlyName(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    return null;
+  }
+
+  const normalizedWhitespace = trimmed.replace(/\s+/g, " ");
+  if (normalizedWhitespace === normalizedWhitespace.toLowerCase()) {
+    return normalizedWhitespace.replace(/\b[a-z]/g, (character) => character.toUpperCase());
+  }
+
+  return normalizedWhitespace;
+}
+
+function buildTwilioFriendlyLoginName(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  if (!normalized) {
+    return null;
+  }
+
+  const localPart = normalized.includes("@")
+    ? normalized.slice(0, normalized.indexOf("@"))
+    : normalized;
+  const sanitized = localPart.replace(/[^a-z0-9]+/g, "");
+  return sanitized || null;
+}
+
+export async function readTwilioVerifiedCallerDirectory(
+  options?: {
+    forceRefresh?: boolean;
+  },
+): Promise<TwilioVerifiedCallerIdentity[]> {
+  if (
+    !options?.forceRefresh &&
+    cachedVerifiedCallerDirectory &&
+    cachedVerifiedCallerDirectory.expiresAt > Date.now()
+  ) {
+    return cachedVerifiedCallerDirectory.items;
+  }
+
+  const client = createTwilioRestClient();
+  if (!client) {
+    throw new Error("Twilio outbound calling is not configured.");
+  }
+
+  const outgoingCallerIds = await client.outgoingCallerIds.list({ limit: 1000 });
+  const deduped = new Map<string, TwilioVerifiedCallerIdentity>();
+
+  for (const outgoingCallerId of outgoingCallerIds) {
+    const phoneNumber = normalizeTwilioPhoneNumber(outgoingCallerId.phoneNumber);
+    const displayName = normalizeTwilioFriendlyName(outgoingCallerId.friendlyName);
+    const loginName = buildTwilioFriendlyLoginName(outgoingCallerId.friendlyName);
+    if (!phoneNumber || !displayName || !loginName) {
+      continue;
+    }
+
+    deduped.set(phoneNumber, {
+      loginName,
+      displayName,
+      phoneNumber,
+    });
+  }
+
+  const items = [...deduped.values()].sort((left, right) =>
+    left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" }),
+  );
+
+  cachedVerifiedCallerDirectory = {
+    expiresAt: Date.now() + 5 * 60_000,
+    items,
+  };
+
+  return items;
 }
 
 export function buildTwilioIdentity(user: SessionUser): string {

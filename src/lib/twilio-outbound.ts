@@ -6,7 +6,10 @@ import {
   readCallerPhoneOverride,
   saveCallerPhoneOverride,
 } from "@/lib/caller-phone-overrides";
-import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
+import {
+  readCallEmployeeDirectory,
+  upsertCallEmployeeDirectoryItem,
+} from "@/lib/call-analytics/employee-directory";
 import { resolveSignedInCallerIdentity } from "@/lib/caller-identity";
 import { HttpError } from "@/lib/errors";
 import { createTwilioRestClient, normalizeTwilioPhoneNumber, readTwilioPhoneInventory } from "@/lib/twilio";
@@ -55,6 +58,35 @@ function readCachedCallerDirectoryItem(loginName: string): {
   };
 }
 
+function cacheResolvedCallerDirectoryItem(input: {
+  loginName: string;
+  contactId: number | null;
+  displayName: string;
+  email: string | null;
+  userPhone: string;
+}): void {
+  const normalizedLoginName = input.loginName.trim().toLowerCase();
+  const normalizedUserPhone = normalizeTwilioPhoneNumber(input.userPhone);
+  if (!normalizedLoginName || !normalizedUserPhone) {
+    return;
+  }
+
+  try {
+    upsertCallEmployeeDirectoryItem({
+      loginName: normalizedLoginName,
+      contactId: input.contactId ?? null,
+      displayName: input.displayName.trim() || normalizedLoginName,
+      email: input.email ?? null,
+      normalizedPhone: normalizedUserPhone,
+      callerIdPhone: normalizedUserPhone,
+      isActive: true,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch {
+    // Keep outbound calling resilient even if the local cache write fails.
+  }
+}
+
 export async function resolveCallerProfile(
   cookieValue: string,
   loginName: string,
@@ -97,6 +129,14 @@ export async function resolveCallerProfile(
         `Twilio cannot present ${cachedOverridePhone} as caller ID for '${normalizedLoginName}'. Verify that employee number in Twilio first.`,
       );
     }
+
+    cacheResolvedCallerDirectoryItem({
+      loginName: normalizedLoginName,
+      contactId: cachedCallerIdentity?.contactId ?? null,
+      displayName: cachedCallerIdentity?.displayName ?? normalizedLoginName,
+      email: cachedCallerIdentity?.email ?? null,
+      userPhone: cachedOverridePhone,
+    });
 
     return {
       loginName: normalizedLoginName,
@@ -182,6 +222,14 @@ export async function resolveCallerProfile(
       // Keep outbound calling resilient even if the local cache write fails.
     }
   }
+
+  cacheResolvedCallerDirectoryItem({
+    loginName: callerIdentity.loginName,
+    contactId: callerIdentity.contactId ?? null,
+    displayName: callerIdentity.displayName,
+    email: callerIdentity.email ?? null,
+    userPhone: resolvedUserPhone,
+  });
 
   return {
     loginName: callerIdentity.loginName,

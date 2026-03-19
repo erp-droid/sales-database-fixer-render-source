@@ -8,6 +8,7 @@ const readCallEmployeeDirectoryMeta = vi.fn();
 const readAllCallerPhoneOverrides = vi.fn();
 const publishAuditLogChanged = vi.fn();
 const upsertCallAuditEvent = vi.fn();
+const invalidateDashboardSnapshotCache = vi.fn();
 
 vi.mock("@/lib/call-analytics/employee-directory", () => ({
   readCallEmployeeDirectory,
@@ -32,6 +33,10 @@ vi.mock("@/lib/call-analytics/phone-match", () => ({
 
 vi.mock("@/lib/audit-log-live", () => ({
   publishAuditLogChanged,
+}));
+
+vi.mock("@/lib/call-analytics/dashboard-cache", () => ({
+  invalidateDashboardSnapshotCache,
 }));
 
 vi.mock("@/lib/audit-log-store", () => ({
@@ -156,6 +161,16 @@ describe("rebuildCallSessions", () => {
 
     readCallEmployeeDirectory.mockReturnValue([
       {
+        loginName: "4162304681",
+        contactId: null,
+        displayName: "(416) 230-4681",
+        email: null,
+        normalizedPhone: "+14162304681",
+        callerIdPhone: "+14162304681",
+        isActive: true,
+        updatedAt: "2026-03-18T16:40:27.333Z",
+      },
+      {
         loginName: "jserrano",
         contactId: 45,
         displayName: "Jorge Serrano",
@@ -197,6 +212,7 @@ describe("rebuildCallSessions", () => {
       }),
     );
     expect(upsertCallAuditEvent).toHaveBeenCalledTimes(1);
+    expect(invalidateDashboardSnapshotCache).toHaveBeenCalledTimes(1);
     expect(publishAuditLogChanged).toHaveBeenCalledWith("call-sessions-rebuilt");
   });
 });

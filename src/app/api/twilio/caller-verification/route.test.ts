@@ -14,6 +14,8 @@ const saveVerifiedCallerIdVerification = vi.fn();
 const saveFailedCallerIdVerification = vi.fn();
 const readCallerPhoneOverride = vi.fn();
 const saveCallerPhoneOverride = vi.fn();
+const readCallEmployeeDirectory = vi.fn();
+const upsertCallEmployeeDirectoryItem = vi.fn();
 const createTwilioRestClient = vi.fn();
 const readTwilioPhoneInventory = vi.fn();
 const clearTwilioPhoneInventoryCache = vi.fn();
@@ -49,6 +51,11 @@ vi.mock("@/lib/caller-phone-overrides", () => ({
   saveCallerPhoneOverride,
 }));
 
+vi.mock("@/lib/call-analytics/employee-directory", () => ({
+  readCallEmployeeDirectory,
+  upsertCallEmployeeDirectoryItem,
+}));
+
 vi.mock("@/lib/twilio", () => ({
   createTwilioRestClient,
   readTwilioPhoneInventory,
@@ -67,6 +74,7 @@ describe("twilio caller verification route", () => {
       employeeId: "E0000142",
     });
     readCallerPhoneOverride.mockReturnValue(null);
+    readCallEmployeeDirectory.mockReturnValue([]);
     validateSessionWithAcumatica.mockResolvedValue({ ok: true });
     withServiceAcumaticaSession.mockImplementation(async (_preferredLoginName, operation) =>
       operation("service-cookie", { value: null }),
@@ -137,6 +145,16 @@ describe("twilio caller verification route", () => {
       callSid: "CA123",
     });
     expect(saveCallerPhoneOverride).toHaveBeenCalledWith("jlee", "+14167293474");
+    expect(upsertCallEmployeeDirectoryItem).toHaveBeenCalledWith({
+      loginName: "jlee",
+      contactId: 123,
+      displayName: "Jacky Lee",
+      email: "jlee@meadowb.com",
+      normalizedPhone: "+14167293474",
+      callerIdPhone: "+14167293474",
+      isActive: true,
+      updatedAt: expect.any(String),
+    });
   });
 
   it("returns verified immediately when the employee number is already allowed in Twilio", async () => {
@@ -182,6 +200,16 @@ describe("twilio caller verification route", () => {
       phoneNumber: "+14167293474",
     });
     expect(saveCallerPhoneOverride).toHaveBeenCalledWith("jlee", "+14167293474");
+    expect(upsertCallEmployeeDirectoryItem).toHaveBeenCalledWith({
+      loginName: "jlee",
+      contactId: 123,
+      displayName: "Jacky Lee",
+      email: "jlee@meadowb.com",
+      normalizedPhone: "+14167293474",
+      callerIdPhone: "+14167293474",
+      isActive: true,
+      updatedAt: expect.any(String),
+    });
     expect(clearTwilioPhoneInventoryCache).toHaveBeenCalled();
   });
 
@@ -229,6 +257,16 @@ describe("twilio caller verification route", () => {
       phoneNumber: "+14167293474",
     });
     expect(saveCallerPhoneOverride).toHaveBeenCalledWith("jlee", "+14167293474");
+    expect(upsertCallEmployeeDirectoryItem).toHaveBeenCalledWith({
+      loginName: "jlee",
+      contactId: null,
+      displayName: "jlee",
+      email: null,
+      normalizedPhone: "+14167293474",
+      callerIdPhone: "+14167293474",
+      isActive: true,
+      updatedAt: expect.any(String),
+    });
     expect(clearTwilioPhoneInventoryCache).toHaveBeenCalled();
   });
 

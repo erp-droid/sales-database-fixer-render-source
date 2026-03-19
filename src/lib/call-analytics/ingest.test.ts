@@ -130,4 +130,53 @@ describe("call analytics refresh gating", () => {
       ),
     ).toBe(true);
   });
+
+  it("merges verified Twilio caller IDs into the call employee directory without duplicating known phones", async () => {
+    const { mergeVerifiedCallerDirectoryEntries } = await import("@/lib/call-analytics/ingest");
+
+    const merged = mergeVerifiedCallerDirectoryEntries(
+      [
+        {
+          loginName: "jlee",
+          contactId: 159842,
+          displayName: "Jacky Lee",
+          email: "jlee@meadowb.com",
+          normalizedPhone: null,
+          callerIdPhone: null,
+          isActive: true,
+          updatedAt: "2026-03-19T10:00:00.000Z",
+        },
+      ],
+      [
+        {
+          loginName: "jackylee",
+          displayName: "Jacky Lee",
+          phoneNumber: "+13653411781",
+        },
+        {
+          loginName: "kallen",
+          displayName: "Kallen",
+          phoneNumber: "+16473023891",
+        },
+      ],
+    );
+
+    expect(merged).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          loginName: "jlee",
+          displayName: "Jacky Lee",
+          normalizedPhone: "+13653411781",
+          callerIdPhone: "+13653411781",
+        }),
+        expect.objectContaining({
+          loginName: "kallen",
+          displayName: "Kallen",
+          normalizedPhone: "+16473023891",
+          callerIdPhone: "+16473023891",
+        }),
+      ]),
+    );
+    expect(merged).toHaveLength(2);
+  });
 });

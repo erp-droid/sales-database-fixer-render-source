@@ -14,6 +14,10 @@ import {
   readCallerPhoneOverride,
   saveCallerPhoneOverride,
 } from "@/lib/caller-phone-overrides";
+import {
+  readCallEmployeeDirectory,
+  upsertCallEmployeeDirectoryItem,
+} from "@/lib/call-analytics/employee-directory";
 import { resolveSignedInCallerIdentity } from "@/lib/caller-identity";
 import {
   getAuthCookieValue,
@@ -117,6 +121,38 @@ function buildResponse(record: ReturnType<typeof readCallerIdVerification>): Ver
   };
 }
 
+function cacheVerifiedCallerDirectoryItem(input: {
+  loginName: string;
+  phoneNumber: string;
+  displayName?: string | null;
+  email?: string | null;
+  contactId?: number | null;
+}): void {
+  const normalizedLoginName = input.loginName.trim().toLowerCase();
+  if (!normalizedLoginName) {
+    return;
+  }
+
+  const existing =
+    readCallEmployeeDirectory().find(
+      (item) => item.loginName.trim().toLowerCase() === normalizedLoginName,
+    ) ?? null;
+
+  upsertCallEmployeeDirectoryItem({
+    loginName: normalizedLoginName,
+    contactId: input.contactId ?? existing?.contactId ?? null,
+    displayName:
+      input.displayName?.trim() ||
+      existing?.displayName?.trim() ||
+      normalizedLoginName,
+    email: input.email ?? existing?.email ?? null,
+    normalizedPhone: input.phoneNumber,
+    callerIdPhone: input.phoneNumber,
+    isActive: true,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const cookieValue = getAuthCookieValue(request);
   const loginName = getStoredLoginName(request);
@@ -131,6 +167,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       if (inventory.allowedCallerIds.has(record.phoneNumber)) {
         clearTwilioPhoneInventoryCache();
         saveCallerPhoneOverride(loginName, record.phoneNumber);
+        cacheVerifiedCallerDirectoryItem({
+          loginName,
+          phoneNumber: record.phoneNumber,
+        });
         record = saveVerifiedCallerIdVerification({
           loginName,
           phoneNumber: record.phoneNumber,
@@ -176,6 +216,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       resolvedPhoneNumber = callerIdentity.userPhone;
       callerDisplayName = callerIdentity.displayName;
       saveCallerPhoneOverride(loginName, callerIdentity.userPhone);
+      cacheVerifiedCallerDirectoryItem({
+        loginName: callerIdentity.loginName,
+        phoneNumber: callerIdentity.userPhone,
+        displayName: callerIdentity.displayName,
+        email: callerIdentity.email ?? null,
+        contactId: callerIdentity.contactId ?? null,
+      });
     }
 
     if (!resolvedPhoneNumber) {
@@ -188,6 +235,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const inventory = await readTwilioPhoneInventory({ forceRefresh: true });
     if (inventory.allowedCallerIds.has(resolvedPhoneNumber)) {
       clearTwilioPhoneInventoryCache();
+      cacheVerifiedCallerDirectoryItem({
+        loginName,
+        phoneNumber: resolvedPhoneNumber,
+        displayName: callerDisplayName,
+      });
       const verified = saveVerifiedCallerIdVerification({
         loginName,
         phoneNumber: resolvedPhoneNumber,

@@ -8,6 +8,7 @@ const createTwilioRestClient = vi.fn();
 const readTwilioPhoneInventory = vi.fn();
 const normalizeTwilioPhoneNumber = vi.fn((value: string | null | undefined) => value ?? null);
 const readCallEmployeeDirectory = vi.fn();
+const upsertCallEmployeeDirectoryItem = vi.fn();
 
 vi.mock("@/lib/caller-identity", () => ({
   resolveSignedInCallerIdentity,
@@ -24,6 +25,7 @@ vi.mock("@/lib/acumatica-service-auth", () => ({
 
 vi.mock("@/lib/call-analytics/employee-directory", () => ({
   readCallEmployeeDirectory,
+  upsertCallEmployeeDirectoryItem,
 }));
 
 vi.mock("@/lib/twilio", () => ({
@@ -56,6 +58,7 @@ describe("resolveCallerProfile", () => {
     readTwilioPhoneInventory.mockReset();
     normalizeTwilioPhoneNumber.mockClear();
     readCallEmployeeDirectory.mockReset();
+    upsertCallEmployeeDirectoryItem.mockReset();
     setTestEnv();
     createTwilioRestClient.mockReturnValue({});
     readCallerPhoneOverride.mockReturnValue(null);
@@ -114,6 +117,16 @@ describe("resolveCallerProfile", () => {
       },
     );
     expect(saveCallerPhoneOverride).toHaveBeenCalledWith("jserrano", "+14162304681");
+    expect(upsertCallEmployeeDirectoryItem).toHaveBeenCalledWith({
+      loginName: "jserrano",
+      contactId: 157497,
+      displayName: "Jorge Serrano",
+      email: "jserrano@meadowb.com",
+      normalizedPhone: "+14162304681",
+      callerIdPhone: "+14162304681",
+      isActive: true,
+      updatedAt: expect.any(String),
+    });
   });
 
   it("uses the cached caller phone override before going back to Acumatica", async () => {
@@ -148,6 +161,16 @@ describe("resolveCallerProfile", () => {
     });
     expect(resolveSignedInCallerIdentity).not.toHaveBeenCalled();
     expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
+    expect(upsertCallEmployeeDirectoryItem).toHaveBeenCalledWith({
+      loginName: "jlee",
+      contactId: 159842,
+      displayName: "Jacky Lee",
+      email: "jlee@meadowb.com",
+      normalizedPhone: "+13653411781",
+      callerIdPhone: "+13653411781",
+      isActive: true,
+      updatedAt: expect.any(String),
+    });
   });
 
   it("fails when the employee phone is not verified in Twilio for caller ID", async () => {

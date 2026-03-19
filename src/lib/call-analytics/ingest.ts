@@ -5,10 +5,22 @@ import type { AuthCookieRefreshState } from "@/lib/acumatica";
 import { getEnv } from "@/lib/env";
 import { HttpError } from "@/lib/errors";
 import { getReadModelDb } from "@/lib/read-model/db";
-import { createTwilioRestClient, getTwilioRestConfig, normalizeTwilioPhoneNumber, readTwilioPhoneInventory } from "@/lib/twilio";
+import {
+  createTwilioRestClient,
+  getTwilioRestConfig,
+  normalizeTwilioPhoneNumber,
+  readTwilioPhoneInventory,
+  readTwilioVerifiedCallerDirectory,
+  type TwilioVerifiedCallerIdentity,
+} from "@/lib/twilio";
 import { readCallLegsBySessionId, readCallSessionById, rebuildCallSessions } from "@/lib/call-analytics/sessionize";
-import type { CallSessionRecord } from "@/lib/call-analytics/types";
-import { readCallEmployeeDirectoryMeta, syncCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
+import type { CallEmployeeDirectoryItem, CallSessionRecord } from "@/lib/call-analytics/types";
+import {
+  readCallEmployeeDirectory,
+  readCallEmployeeDirectoryMeta,
+  replaceCallEmployeeDirectory,
+  syncCallEmployeeDirectory,
+} from "@/lib/call-analytics/employee-directory";
 import { invalidateDashboardSnapshotCache } from "@/lib/call-analytics/dashboard-cache";
 import type { CallAnalyticsSource, CallIngestState } from "@/lib/call-analytics/types";
 
@@ -261,6 +273,145 @@ function parseDurationSeconds(value: string | number | null | undefined): number
 
   const numeric = Number(value);
   return Number.isFinite(numeric) ? Math.max(0, Math.trunc(numeric)) : null;
+}
+
+function pickLaterIso(current: string | null, next: string | null): string | null {
+  if (!current) {
+    return next;
+  }
+  if (!next) {
+    return current;
+  }
+  return Date.parse(next) > Date.parse(current) ? next : current;
+}
+
+function pickEarlierIso(current: string | null, next: string | null): string | null {
+  if (!current) {
+    return next;
+  }
+  if (!next) {
+    return current;
+  }
+  return Date.parse(next) < Date.parse(current) ? next : current;
+}
+
+function normalizeComparable(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+export function mergeVerifiedCallerDirectoryEntries(
+  current: CallEmployeeDirectoryItem[],
+  verifiedCallers: TwilioVerifiedCallerIdentity[],
+): CallEmployeeDirectoryItem[] {
+  const byLogin = new Map<string, CallEmployeeDirectoryItem>();
+  const loginByPhone = new Map<string, string>();
+  const loginByDisplayName = new Map<string, string>();
+
+  for (const item of current) {
+    const loginKey = normalizeComparable(item.loginName);
+    if (!loginKey) {
+      continue;
+    }
+
+    byLogin.set(loginKey, item);
+
+    const normalizedPhone = normalizeTwilioPhoneNumber(item.normalizedPhone);
+    if (normalizedPhone) {
+      loginByPhone.set(normalizedPhone, loginKey);
+    }
+
+    const callerIdPhone = normalizeTwilioPhoneNumber(item.callerIdPhone);
+    if (callerIdPhone) {
+      loginByPhone.set(callerIdPhone, loginKey);
+    }
+
+    const displayNameKey = normalizeComparable(item.displayName);
+    if (!displayNameKey) {
+      continue;
+    }
+    if (!loginByDisplayName.has(displayNameKey)) {
+      loginByDisplayName.set(displayNameKey, loginKey);
+      continue;
+    }
+    if (loginByDisplayName.get(displayNameKey) !== loginKey) {
+      loginByDisplayName.delete(displayNameKey);
+    }
+  }
+
+  for (const caller of verifiedCallers) {
+    const loginKey = normalizeComparable(caller.loginName);
+    if (!loginKey) {
+      continue;
+    }
+
+    const phoneNumber = normalizeTwilioPhoneNumber(caller.phoneNumber);
+    if (!phoneNumber) {
+      continue;
+    }
+
+    const displayNameKey = normalizeComparable(caller.displayName);
+    const existingKey =
+      (byLogin.has(loginKey) ? loginKey : null) ??
+      loginByPhone.get(phoneNumber) ??
+      (displayNameKey ? loginByDisplayName.get(displayNameKey) ?? null : null);
+    const existing = existingKey ? byLogin.get(existingKey) ?? null : null;
+    const displayName =
+      existing?.displayName?.trim() && normalizeComparable(existing.displayName) !== normalizeComparable(existing.loginName)
+        ? existing.displayName.trim()
+        : caller.displayName;
+
+    const merged: CallEmployeeDirectoryItem = existing
+      ? {
+          ...existing,
+          displayName,
+          normalizedPhone: existing.normalizedPhone ?? phoneNumber,
+          callerIdPhone: existing.callerIdPhone ?? phoneNumber,
+          isActive: existing.isActive,
+          updatedAt: new Date().toISOString(),
+        }
+      : {
+          loginName: caller.loginName,
+          contactId: null,
+          displayName,
+          email: null,
+          normalizedPhone: phoneNumber,
+          callerIdPhone: phoneNumber,
+          isActive: true,
+          updatedAt: new Date().toISOString(),
+        };
+
+    const mergedKey = normalizeComparable(merged.loginName);
+    byLogin.set(mergedKey, merged);
+    loginByPhone.set(phoneNumber, mergedKey);
+    if (displayNameKey) {
+      loginByDisplayName.set(displayNameKey, mergedKey);
+    }
+  }
+
+  return [...byLogin.values()].sort((left, right) => {
+    const leftDisplay = left.displayName || left.loginName;
+    const rightDisplay = right.displayName || right.loginName;
+    const byDisplay = leftDisplay.localeCompare(rightDisplay, undefined, {
+      sensitivity: "base",
+    });
+    if (byDisplay !== 0) {
+      return byDisplay;
+    }
+    return left.loginName.localeCompare(right.loginName, undefined, {
+      sensitivity: "base",
+    });
+  });
+}
+
+async function syncVerifiedTwilioCallersIntoDirectory(): Promise<void> {
+  const verifiedCallers = await readTwilioVerifiedCallerDirectory();
+  if (verifiedCallers.length === 0) {
+    return;
+  }
+
+  const currentDirectory = readCallEmployeeDirectory();
+  const mergedDirectory = mergeVerifiedCallerDirectoryEntries(currentDirectory, verifiedCallers);
+  replaceCallEmployeeDirectory(mergedDirectory);
 }
 
 function computeAnswered(
@@ -763,8 +914,8 @@ async function runRecentReconcile(bridgeNumbers: string[]): Promise<CallIngestSt
   return writeCallIngestState({
     status: current.fullHistoryComplete ? "complete" : "idle",
     lastRecentSyncAt: new Date().toISOString(),
-    latestSeenStartTime: current.latestSeenStartTime ?? bounds.latestSeenStartTime,
-    oldestSeenStartTime: current.oldestSeenStartTime ?? bounds.oldestSeenStartTime,
+    latestSeenStartTime: pickLaterIso(current.latestSeenStartTime, bounds.latestSeenStartTime),
+    oldestSeenStartTime: pickEarlierIso(current.oldestSeenStartTime, bounds.oldestSeenStartTime),
     lastError: null,
     progress: {
       phase: "recent_reconcile",
@@ -809,8 +960,8 @@ async function runHistoricalBackfill(bridgeNumbers: string[]): Promise<CallInges
   return writeCallIngestState({
     status: fullHistoryComplete ? "complete" : "idle",
     lastFullBackfillAt: new Date().toISOString(),
-    oldestSeenStartTime: bounds.oldestSeenStartTime ?? current.oldestSeenStartTime,
-    latestSeenStartTime: current.latestSeenStartTime ?? bounds.latestSeenStartTime,
+    oldestSeenStartTime: pickEarlierIso(current.oldestSeenStartTime, bounds.oldestSeenStartTime),
+    latestSeenStartTime: pickLaterIso(current.latestSeenStartTime, bounds.latestSeenStartTime),
     fullHistoryComplete,
     lastError: null,
     progress: {
@@ -849,6 +1000,7 @@ export async function refreshCallAnalytics(
     if (shouldRefreshDirectory) {
       await syncCallEmployeeDirectory(cookieValue, authCookieRefresh);
     }
+    await syncVerifiedTwilioCallersIntoDirectory();
 
     const current = readCallIngestState();
     let nextState = current;

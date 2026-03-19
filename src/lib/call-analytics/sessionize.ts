@@ -11,6 +11,7 @@ import {
   readCallEmployeeDirectoryMeta,
 } from "@/lib/call-analytics/employee-directory";
 import { publishAuditLogChanged } from "@/lib/audit-log-live";
+import { invalidateDashboardSnapshotCache } from "@/lib/call-analytics/dashboard-cache";
 import { upsertCallAuditEvent } from "@/lib/audit-log-store";
 import type {
   CallAnalyticsDirection,
@@ -129,8 +130,40 @@ function parseLegMetadata(rawJson: string): ParsedLegMetadata {
 
 function buildEmployeeIndex(items: CallEmployeeDirectoryItem[]): EmployeeIndex {
   const mergedByLogin = new Map<string, CallEmployeeDirectoryItem>();
+  const overrideLoginByPhone = new Map<string, string>();
+
+  for (const override of readAllCallerPhoneOverrides()) {
+    const normalizedLoginName = override.loginName.trim().toLowerCase();
+    if (!normalizedLoginName) {
+      continue;
+    }
+
+    const normalizedPhone = formatPhoneForTwilioDial(override.phoneNumber);
+    if (!normalizedPhone) {
+      continue;
+    }
+
+    overrideLoginByPhone.set(normalizedPhone, normalizedLoginName);
+  }
+
+  function looksLikePhoneLoginName(value: string): boolean {
+    return /^\d{10,15}$/.test(value.trim());
+  }
 
   for (const item of items) {
+    const normalizedLoginName = item.loginName.trim().toLowerCase();
+    const normalizedItemPhone =
+      formatPhoneForTwilioDial(item.normalizedPhone) ??
+      formatPhoneForTwilioDial(item.callerIdPhone);
+    if (
+      looksLikePhoneLoginName(normalizedLoginName) &&
+      normalizedItemPhone &&
+      overrideLoginByPhone.has(normalizedItemPhone) &&
+      overrideLoginByPhone.get(normalizedItemPhone) !== normalizedLoginName
+    ) {
+      continue;
+    }
+
     mergedByLogin.set(item.loginName, item);
   }
 
@@ -785,6 +818,7 @@ export function rebuildCallSessions(options: SessionizeOptions = {}): CallSessio
   sessions.forEach((session) => {
     upsertCallAuditEvent(session);
   });
+  invalidateDashboardSnapshotCache();
   publishAuditLogChanged("call-sessions-rebuilt");
   return sessions;
 }
