@@ -4,6 +4,8 @@ const resolveSignedInCallerIdentity = vi.fn();
 const withServiceAcumaticaSession = vi.fn();
 const readCallerPhoneOverride = vi.fn();
 const saveCallerPhoneOverride = vi.fn();
+const readCallerIdentityProfile = vi.fn();
+const saveCallerIdentityProfile = vi.fn();
 const createTwilioRestClient = vi.fn();
 const readTwilioPhoneInventory = vi.fn();
 const normalizeTwilioPhoneNumber = vi.fn((value: string | null | undefined) => value ?? null);
@@ -17,6 +19,11 @@ vi.mock("@/lib/caller-identity", () => ({
 vi.mock("@/lib/caller-phone-overrides", () => ({
   readCallerPhoneOverride,
   saveCallerPhoneOverride,
+}));
+
+vi.mock("@/lib/caller-identity-cache", () => ({
+  readCallerIdentityProfile,
+  saveCallerIdentityProfile,
 }));
 
 vi.mock("@/lib/acumatica-service-auth", () => ({
@@ -54,6 +61,8 @@ describe("resolveCallerProfile", () => {
     withServiceAcumaticaSession.mockReset();
     readCallerPhoneOverride.mockReset();
     saveCallerPhoneOverride.mockReset();
+    readCallerIdentityProfile.mockReset();
+    saveCallerIdentityProfile.mockReset();
     createTwilioRestClient.mockReset();
     readTwilioPhoneInventory.mockReset();
     normalizeTwilioPhoneNumber.mockClear();
@@ -62,6 +71,7 @@ describe("resolveCallerProfile", () => {
     setTestEnv();
     createTwilioRestClient.mockReturnValue({});
     readCallerPhoneOverride.mockReturnValue(null);
+    readCallerIdentityProfile.mockReturnValue(null);
     readCallEmployeeDirectory.mockReturnValue([]);
     withServiceAcumaticaSession.mockImplementation(async (_preferredLoginName, operation) =>
       operation("service-cookie", { value: null }),
@@ -91,6 +101,7 @@ describe("resolveCallerProfile", () => {
   it("uses the matched signed-in user phone from the shared caller identity", async () => {
     resolveSignedInCallerIdentity.mockResolvedValue({
       loginName: "jserrano",
+      employeeId: "E0000045",
       contactId: 157497,
       displayName: "Jorge Serrano",
       email: "jserrano@meadowb.com",
@@ -101,6 +112,7 @@ describe("resolveCallerProfile", () => {
 
     await expect(resolveCallerProfile("cookie", "jserrano")).resolves.toEqual({
       loginName: "jserrano",
+      employeeId: "E0000045",
       contactId: 157497,
       displayName: "Jorge Serrano",
       email: "jserrano@meadowb.com",
@@ -152,6 +164,7 @@ describe("resolveCallerProfile", () => {
 
     await expect(resolveCallerProfile("cookie", "jlee")).resolves.toEqual({
       loginName: "jlee",
+      employeeId: null,
       contactId: 159842,
       displayName: "Jacky Lee",
       email: "jlee@meadowb.com",
@@ -176,6 +189,7 @@ describe("resolveCallerProfile", () => {
   it("fails when the employee phone is not verified in Twilio for caller ID", async () => {
     resolveSignedInCallerIdentity.mockResolvedValue({
       loginName: "jserrano",
+      employeeId: "E0000045",
       contactId: 157497,
       displayName: "Jorge Serrano",
       email: "jserrano@meadowb.com",
@@ -198,6 +212,7 @@ describe("resolveCallerProfile", () => {
       )
       .mockResolvedValueOnce({
         loginName: "bkoczka",
+        employeeId: "E0000142",
         contactId: 154327,
         displayName: "Brock Koczka",
         email: "bkoczka@meadowb.com",
@@ -234,6 +249,7 @@ describe("resolveCallerProfile", () => {
     );
     expect(result).toEqual({
       loginName: "bkoczka",
+      employeeId: "E0000142",
       contactId: 154327,
       displayName: "Brock Koczka",
       email: "bkoczka@meadowb.com",

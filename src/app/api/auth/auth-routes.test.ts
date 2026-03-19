@@ -100,6 +100,7 @@ describe("auth route timeouts", () => {
     resolveSignedInCallerIdentity.mockReset();
     resolveSignedInCallerIdentity.mockResolvedValue({
       loginName: "jserrano",
+      employeeId: "E0000045",
       contactId: 12,
       displayName: "Jorge Serrano",
       email: "jserrano@meadowb.com",

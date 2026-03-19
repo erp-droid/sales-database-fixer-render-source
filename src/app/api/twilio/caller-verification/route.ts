@@ -15,6 +15,10 @@ import {
   saveCallerPhoneOverride,
 } from "@/lib/caller-phone-overrides";
 import {
+  readCallerIdentityProfile,
+  saveCallerIdentityProfile,
+} from "@/lib/caller-identity-cache";
+import {
   readCallEmployeeDirectory,
   upsertCallEmployeeDirectoryItem,
 } from "@/lib/call-analytics/employee-directory";
@@ -124,6 +128,7 @@ function buildResponse(record: ReturnType<typeof readCallerIdVerification>): Ver
 function cacheVerifiedCallerDirectoryItem(input: {
   loginName: string;
   phoneNumber: string;
+  employeeId?: string | null;
   displayName?: string | null;
   email?: string | null;
   contactId?: number | null;
@@ -137,6 +142,18 @@ function cacheVerifiedCallerDirectoryItem(input: {
     readCallEmployeeDirectory().find(
       (item) => item.loginName.trim().toLowerCase() === normalizedLoginName,
     ) ?? null;
+
+  saveCallerIdentityProfile({
+    loginName: normalizedLoginName,
+    employeeId: input.employeeId ?? null,
+    contactId: input.contactId ?? existing?.contactId ?? null,
+    displayName:
+      input.displayName?.trim() ||
+      existing?.displayName?.trim() ||
+      normalizedLoginName,
+    email: input.email ?? existing?.email ?? null,
+    phoneNumber: input.phoneNumber,
+  });
 
   upsertCallEmployeeDirectoryItem({
     loginName: normalizedLoginName,
@@ -200,8 +217,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const authCookieRefresh: AuthCookieRefreshState = { value: null };
   const storedOverridePhone = readCallerPhoneOverride(loginName)?.phoneNumber ?? null;
+  const storedIdentity = readCallerIdentityProfile(loginName);
   let resolvedPhoneNumber: string | null = storedOverridePhone;
-  let callerDisplayName = loginName;
+  let callerEmployeeId = storedIdentity?.employeeId ?? null;
+  let callerContactId = storedIdentity?.contactId ?? null;
+  let callerDisplayName = storedIdentity?.displayName ?? loginName;
+  let callerEmail = storedIdentity?.email ?? null;
 
   try {
     if (!storedOverridePhone) {
@@ -214,10 +235,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         sessionIdentity?.employeeId ?? null,
       );
       resolvedPhoneNumber = callerIdentity.userPhone;
+      callerEmployeeId = callerIdentity.employeeId ?? null;
+      callerContactId = callerIdentity.contactId ?? null;
       callerDisplayName = callerIdentity.displayName;
+      callerEmail = callerIdentity.email ?? null;
       saveCallerPhoneOverride(loginName, callerIdentity.userPhone);
       cacheVerifiedCallerDirectoryItem({
         loginName: callerIdentity.loginName,
+        employeeId: callerIdentity.employeeId ?? null,
         phoneNumber: callerIdentity.userPhone,
         displayName: callerIdentity.displayName,
         email: callerIdentity.email ?? null,
@@ -237,8 +262,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       clearTwilioPhoneInventoryCache();
       cacheVerifiedCallerDirectoryItem({
         loginName,
+        employeeId: callerEmployeeId,
         phoneNumber: resolvedPhoneNumber,
         displayName: callerDisplayName,
+        email: callerEmail,
+        contactId: callerContactId,
       });
       const verified = saveVerifiedCallerIdVerification({
         loginName,
@@ -283,6 +311,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       phoneNumber: validation.phoneNumber,
       validationCode: validation.validationCode,
       callSid: validation.callSid,
+    });
+    cacheVerifiedCallerDirectoryItem({
+      loginName,
+      employeeId: callerEmployeeId,
+      phoneNumber: pending.phoneNumber,
+      displayName: callerDisplayName,
+      email: callerEmail,
+      contactId: callerContactId,
     });
 
     const response = NextResponse.json(buildResponse(pending));

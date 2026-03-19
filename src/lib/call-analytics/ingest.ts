@@ -41,8 +41,11 @@ type ProvisionalBridgeCallInput = {
   callerId: string;
   userPhone: string;
   targetPhone: string;
+  callerEmployeeId: string | null;
+  callerContactId: number | null;
   callerDisplayName: string;
   callerLoginName: string;
+  callerEmail: string | null;
   context?: CallContextPayload;
 };
 
@@ -777,7 +780,10 @@ export function recordProvisionalBridgeCall(input: ProvisionalBridgeCallInput): 
       appContext: {
         sessionId: input.sessionId,
         loginName: input.callerLoginName,
+        employeeId: input.callerEmployeeId,
+        employeeContactId: input.callerContactId,
         displayName: input.callerDisplayName,
+        email: input.callerEmail,
         userPhone: input.userPhone,
         callerId: input.callerId,
         bridgeNumber: input.bridgeNumber,

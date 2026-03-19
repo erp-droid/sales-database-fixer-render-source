@@ -143,6 +143,21 @@ CREATE TABLE IF NOT EXISTS caller_phone_overrides (
 CREATE INDEX IF NOT EXISTS idx_caller_phone_overrides_updated_at
   ON caller_phone_overrides(updated_at);
 
+CREATE TABLE IF NOT EXISTS caller_identity_profiles (
+  login_name TEXT PRIMARY KEY,
+  employee_id TEXT,
+  contact_id INTEGER,
+  display_name TEXT NOT NULL,
+  email TEXT,
+  phone_number TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_caller_identity_profiles_employee_id
+  ON caller_identity_profiles(employee_id);
+CREATE INDEX IF NOT EXISTS idx_caller_identity_profiles_phone_number
+  ON caller_identity_profiles(phone_number);
+
 CREATE TABLE IF NOT EXISTS caller_id_verifications (
   login_name TEXT PRIMARY KEY,
   phone_number TEXT NOT NULL,
@@ -578,6 +593,48 @@ export function ensureReadModelSchema(db: Database.Database): void {
   if (!hasMeetingCategoryColumn) {
     db.exec("ALTER TABLE meeting_bookings ADD COLUMN category TEXT");
   }
+
+  const callerIdentityProfileColumns = db
+    .prepare("PRAGMA table_info(caller_identity_profiles)")
+    .all() as Array<{ name: string }>;
+  const hasCallerIdentityEmployeeIdColumn = callerIdentityProfileColumns.some(
+    (column) => column.name === "employee_id",
+  );
+  if (!hasCallerIdentityEmployeeIdColumn) {
+    db.exec("ALTER TABLE caller_identity_profiles ADD COLUMN employee_id TEXT");
+  }
+  const hasCallerIdentityContactIdColumn = callerIdentityProfileColumns.some(
+    (column) => column.name === "contact_id",
+  );
+  if (!hasCallerIdentityContactIdColumn) {
+    db.exec("ALTER TABLE caller_identity_profiles ADD COLUMN contact_id INTEGER");
+  }
+  const hasCallerIdentityDisplayNameColumn = callerIdentityProfileColumns.some(
+    (column) => column.name === "display_name",
+  );
+  if (!hasCallerIdentityDisplayNameColumn) {
+    db.exec(
+      "ALTER TABLE caller_identity_profiles ADD COLUMN display_name TEXT NOT NULL DEFAULT ''",
+    );
+  }
+  const hasCallerIdentityEmailColumn = callerIdentityProfileColumns.some(
+    (column) => column.name === "email",
+  );
+  if (!hasCallerIdentityEmailColumn) {
+    db.exec("ALTER TABLE caller_identity_profiles ADD COLUMN email TEXT");
+  }
+  const hasCallerIdentityPhoneColumn = callerIdentityProfileColumns.some(
+    (column) => column.name === "phone_number",
+  );
+  if (!hasCallerIdentityPhoneColumn) {
+    db.exec("ALTER TABLE caller_identity_profiles ADD COLUMN phone_number TEXT");
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_caller_identity_profiles_employee_id ON caller_identity_profiles(employee_id)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_caller_identity_profiles_phone_number ON caller_identity_profiles(phone_number)",
+  );
 
   db.prepare(
     `

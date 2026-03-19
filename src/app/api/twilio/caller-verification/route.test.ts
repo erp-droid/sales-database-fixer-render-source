@@ -14,6 +14,8 @@ const saveVerifiedCallerIdVerification = vi.fn();
 const saveFailedCallerIdVerification = vi.fn();
 const readCallerPhoneOverride = vi.fn();
 const saveCallerPhoneOverride = vi.fn();
+const readCallerIdentityProfile = vi.fn();
+const saveCallerIdentityProfile = vi.fn();
 const readCallEmployeeDirectory = vi.fn();
 const upsertCallEmployeeDirectoryItem = vi.fn();
 const createTwilioRestClient = vi.fn();
@@ -51,6 +53,11 @@ vi.mock("@/lib/caller-phone-overrides", () => ({
   saveCallerPhoneOverride,
 }));
 
+vi.mock("@/lib/caller-identity-cache", () => ({
+  readCallerIdentityProfile,
+  saveCallerIdentityProfile,
+}));
+
 vi.mock("@/lib/call-analytics/employee-directory", () => ({
   readCallEmployeeDirectory,
   upsertCallEmployeeDirectoryItem,
@@ -73,6 +80,7 @@ describe("twilio caller verification route", () => {
       name: "Jacky Lee",
       employeeId: "E0000142",
     });
+    readCallerIdentityProfile.mockReturnValue(null);
     readCallerPhoneOverride.mockReturnValue(null);
     readCallEmployeeDirectory.mockReturnValue([]);
     validateSessionWithAcumatica.mockResolvedValue({ ok: true });
@@ -84,6 +92,7 @@ describe("twilio caller verification route", () => {
   it("starts a Twilio caller verification call for the signed-in employee phone", async () => {
     resolveSignedInCallerIdentity.mockResolvedValue({
       loginName: "jlee",
+      employeeId: "E0000142",
       contactId: 123,
       displayName: "Jacky Lee",
       email: "jlee@meadowb.com",
@@ -160,6 +169,7 @@ describe("twilio caller verification route", () => {
   it("returns verified immediately when the employee number is already allowed in Twilio", async () => {
     resolveSignedInCallerIdentity.mockResolvedValue({
       loginName: "jlee",
+      employeeId: "E0000142",
       contactId: 123,
       displayName: "Jacky Lee",
       email: "jlee@meadowb.com",

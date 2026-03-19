@@ -3159,7 +3159,6 @@ export function AccountsClient({
     if (
       !session?.authenticated ||
       employeeOptions.length > 0 ||
-      isEmployeesLoading ||
       employeesFetchAttemptedRef.current
     ) {
       return;
@@ -3167,6 +3166,7 @@ export function AccountsClient({
 
     const controller = new AbortController();
     const requestId = employeesFetchRequestRef.current + 1;
+    let active = true;
     let settled = false;
     employeesFetchRequestRef.current = requestId;
 
@@ -3210,7 +3210,7 @@ export function AccountsClient({
             : "Unable to load sales reps.",
         );
       } finally {
-        if (requestId === employeesFetchRequestRef.current) {
+        if (active && requestId === employeesFetchRequestRef.current) {
           setIsEmployeesLoading(false);
         }
       }
@@ -3219,15 +3219,14 @@ export function AccountsClient({
     void fetchEmployees();
 
     return () => {
+      active = false;
       controller.abort();
       if (!settled && requestId === employeesFetchRequestRef.current) {
         employeesFetchAttemptedRef.current = false;
-        setIsEmployeesLoading(false);
       }
     };
   }, [
     employeeOptions.length,
-    isEmployeesLoading,
     session?.authenticated,
   ]);
 

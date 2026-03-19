@@ -11,6 +11,8 @@ const syncCallEmployeeDirectory = vi.fn();
 const upsertCallEmployeeDirectoryItem = vi.fn();
 const readCallerPhoneOverride = vi.fn();
 const saveCallerPhoneOverride = vi.fn();
+const readCallerIdentityProfile = vi.fn();
+const saveCallerIdentityProfile = vi.fn();
 
 vi.mock("@/lib/acumatica", async () => {
   const actual = await vi.importActual<typeof import("@/lib/acumatica")>("@/lib/acumatica");
@@ -37,6 +39,11 @@ vi.mock("@/lib/read-model/employees", () => ({
 vi.mock("@/lib/caller-phone-overrides", () => ({
   readCallerPhoneOverride,
   saveCallerPhoneOverride,
+}));
+
+vi.mock("@/lib/caller-identity-cache", () => ({
+  readCallerIdentityProfile,
+  saveCallerIdentityProfile,
 }));
 
 function setTestEnv(): void {
@@ -99,12 +106,15 @@ describe("resolveSignedInCallerIdentity", () => {
     upsertCallEmployeeDirectoryItem.mockReset();
     readCallerPhoneOverride.mockReset();
     saveCallerPhoneOverride.mockReset();
+    readCallerIdentityProfile.mockReset();
+    saveCallerIdentityProfile.mockReset();
     fetchEmployeeProfileById.mockResolvedValue(null);
     readEmployeeDirectory.mockReturnValue([]);
     searchEmployeeProfiles.mockResolvedValue([]);
     searchContacts.mockResolvedValue([]);
     searchEmployeesByDisplayName.mockResolvedValue([]);
     readCallerPhoneOverride.mockReturnValue(null);
+    readCallerIdentityProfile.mockReturnValue(null);
     setTestEnv();
   });
 
@@ -131,6 +141,7 @@ describe("resolveSignedInCallerIdentity", () => {
       resolveSignedInCallerIdentity("cookie", "JSeRRano"),
     ).resolves.toEqual({
       loginName: "jserrano",
+      employeeId: null,
       contactId: 1,
       displayName: "jserrano",
       email: "jserrano@meadowb.com",
@@ -249,6 +260,7 @@ describe("resolveSignedInCallerIdentity", () => {
       }),
     ).resolves.toEqual({
       loginName: "jserrano",
+      employeeId: "E0000045",
       contactId: 12,
       displayName: "Jorge Serrano",
       email: "jserrano@meadowb.com",
@@ -283,6 +295,7 @@ describe("resolveSignedInCallerIdentity", () => {
       }),
     ).resolves.toEqual({
       loginName: "jlee",
+      employeeId: null,
       contactId: 159842,
       displayName: "Jacky Lee",
       email: "jlee@meadowb.com",
@@ -330,6 +343,7 @@ describe("resolveSignedInCallerIdentity", () => {
       }),
     ).resolves.toEqual({
       loginName: "jlee",
+      employeeId: "E0000142",
       contactId: 142,
       displayName: "Jacky Lee",
       email: "jlee@meadowb.com",
@@ -366,6 +380,7 @@ describe("resolveSignedInCallerIdentity", () => {
       }),
     ).resolves.toEqual({
       loginName: "bkoczka",
+      employeeId: "E0000157",
       contactId: null,
       displayName: "Brock Koczka",
       email: null,
@@ -408,6 +423,7 @@ describe("resolveSignedInCallerIdentity", () => {
       }),
     ).resolves.toEqual({
       loginName: "bkoczka",
+      employeeId: "E0000117",
       contactId: null,
       displayName: "Brock Koczka",
       email: null,
@@ -449,6 +465,7 @@ describe("resolveSignedInCallerIdentity", () => {
       }),
     ).resolves.toEqual({
       loginName: "bkoczka",
+      employeeId: "E0000157",
       contactId: null,
       displayName: "Brock Koczka",
       email: null,
@@ -484,6 +501,7 @@ describe("resolveSignedInCallerIdentity", () => {
       }),
     ).resolves.toEqual({
       loginName: "jserrano",
+      employeeId: "E0000045",
       contactId: null,
       displayName: "Jorge Serrano",
       email: "jserrano@meadowb.com",
@@ -530,6 +548,7 @@ describe("resolveSignedInCallerIdentity", () => {
       }),
     ).resolves.toEqual({
       loginName: "jserrano",
+      employeeId: "E0000045",
       contactId: 157497,
       displayName: "Jorge Serrano",
       email: "jserrano@meadowb.com",
