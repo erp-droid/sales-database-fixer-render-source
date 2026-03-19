@@ -72,6 +72,21 @@ CREATE TABLE IF NOT EXISTS employee_directory (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sales_rep_directory (
+  employee_id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  normalized_name TEXT NOT NULL,
+  usage_count INTEGER NOT NULL,
+  owner_reference_id TEXT,
+  login_name TEXT,
+  email TEXT,
+  is_active INTEGER,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sales_rep_directory_normalized_name
+  ON sales_rep_directory(normalized_name);
+
 CREATE TABLE IF NOT EXISTS address_geocodes (
   address_key TEXT PRIMARY KEY,
   address_line1 TEXT NOT NULL,
@@ -270,6 +285,7 @@ CREATE TABLE IF NOT EXISTS meeting_bookings (
   company_name TEXT,
   related_contact_id INTEGER,
   related_contact_name TEXT,
+  category TEXT,
   meeting_summary TEXT NOT NULL,
   attendee_count INTEGER NOT NULL,
   attendee_details_json TEXT NOT NULL DEFAULT '[]',
@@ -484,6 +500,36 @@ export function ensureReadModelSchema(db: Database.Database): void {
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_employee_directory_email ON employee_directory(email)",
   );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_sales_rep_directory_normalized_name ON sales_rep_directory(normalized_name)",
+  );
+  const salesRepDirectoryColumns = db
+    .prepare("PRAGMA table_info(sales_rep_directory)")
+    .all() as Array<{ name: string }>;
+  const hasSalesRepOwnerReferenceIdColumn = salesRepDirectoryColumns.some(
+    (column) => column.name === "owner_reference_id",
+  );
+  if (!hasSalesRepOwnerReferenceIdColumn) {
+    db.exec("ALTER TABLE sales_rep_directory ADD COLUMN owner_reference_id TEXT");
+  }
+  const hasSalesRepLoginNameColumn = salesRepDirectoryColumns.some(
+    (column) => column.name === "login_name",
+  );
+  if (!hasSalesRepLoginNameColumn) {
+    db.exec("ALTER TABLE sales_rep_directory ADD COLUMN login_name TEXT");
+  }
+  const hasSalesRepEmailColumn = salesRepDirectoryColumns.some(
+    (column) => column.name === "email",
+  );
+  if (!hasSalesRepEmailColumn) {
+    db.exec("ALTER TABLE sales_rep_directory ADD COLUMN email TEXT");
+  }
+  const hasSalesRepIsActiveColumn = salesRepDirectoryColumns.some(
+    (column) => column.name === "is_active",
+  );
+  if (!hasSalesRepIsActiveColumn) {
+    db.exec("ALTER TABLE sales_rep_directory ADD COLUMN is_active INTEGER");
+  }
 
   const deferredActionColumns = db
     .prepare("PRAGMA table_info(deferred_actions)")
@@ -525,6 +571,12 @@ export function ensureReadModelSchema(db: Database.Database): void {
     db.exec(
       "ALTER TABLE meeting_bookings ADD COLUMN attendee_details_json TEXT NOT NULL DEFAULT '[]'",
     );
+  }
+  const hasMeetingCategoryColumn = meetingBookingColumns.some(
+    (column) => column.name === "category",
+  );
+  if (!hasMeetingCategoryColumn) {
+    db.exec("ALTER TABLE meeting_bookings ADD COLUMN category TEXT");
   }
 
   db.prepare(

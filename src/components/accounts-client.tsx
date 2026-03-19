@@ -93,6 +93,7 @@ import type { MailLastEmailedResponse } from "@/types/mail";
 import type { MailContactSuggestion, MailSendResponse } from "@/types/mail-compose";
 import type { OpportunityCreateResponse } from "@/types/opportunity-create";
 import type {
+  MeetingCategory,
   MeetingCreateOptionsResponse,
   MeetingCreateResponse,
   MeetingSourceContext,
@@ -1644,6 +1645,11 @@ function mergeEmployeeOptions(
   secondary: EmployeeOption[],
 ): EmployeeOption[] {
   const byId = new Map<string, EmployeeOption>();
+  const primaryIds = new Set(
+    primary
+      .map((item) => item.id.trim())
+      .filter((value) => value.length > 0),
+  );
 
   [...primary, ...secondary].forEach((item) => {
     const id = item.id.trim();
@@ -1657,7 +1663,34 @@ function mergeEmployeeOptions(
     }
   });
 
-  return [...byId.values()];
+  const byName = new Map<string, EmployeeOption>();
+  [...byId.values()].forEach((item) => {
+    const normalizedName = normalizeComparable(item.name);
+    const existing = byName.get(normalizedName);
+    if (!existing) {
+      byName.set(normalizedName, item);
+      return;
+    }
+
+    const itemIsPrimary = primaryIds.has(item.id);
+    const existingIsPrimary = primaryIds.has(existing.id);
+    if (itemIsPrimary && !existingIsPrimary) {
+      byName.set(normalizedName, item);
+      return;
+    }
+
+    if (itemIsPrimary === existingIsPrimary) {
+      const idComparison = item.id.localeCompare(existing.id, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      });
+      if (idComparison < 0) {
+        byName.set(normalizedName, item);
+      }
+    }
+  });
+
+  return [...byName.values()];
 }
 
 function formatCreateContactAccountAddress(row: BusinessAccountRow): string {
@@ -1997,6 +2030,7 @@ function toMergeableContactCandidate(row: BusinessAccountRow): MergeableContactC
 function clearCachedMapData() {
   try {
     window.localStorage.removeItem("businessAccounts.mapCache.v3");
+    window.localStorage.removeItem("businessAccounts.mapCache.v4");
   } catch {
     // Ignore storage failures while updating client caches.
   }
@@ -2107,6 +2141,7 @@ export function AccountsClient({
     useState<string | null>(null);
   const [isCreateOpportunityDrawerOpen, setIsCreateOpportunityDrawerOpen] = useState(false);
   const [isCreateMeetingDrawerOpen, setIsCreateMeetingDrawerOpen] = useState(false);
+  const [createMeetingCategory, setCreateMeetingCategory] = useState<MeetingCategory>("Meeting");
   const [meetingSource, setMeetingSource] = useState<MeetingSourceContext | null>(null);
   const [meetingOptions, setMeetingOptions] = useState<MeetingCreateOptionsResponse | null>(null);
   const [meetingOptionsError, setMeetingOptionsError] = useState<string | null>(null);
@@ -3122,7 +3157,7 @@ export function AccountsClient({
 
   useEffect(() => {
     if (
-      (!selected && !isCreateDrawerOpen && !isCreateOpportunityDrawerOpen) ||
+      !session?.authenticated ||
       employeeOptions.length > 0 ||
       isEmployeesLoading ||
       employeesFetchAttemptedRef.current
@@ -3192,13 +3227,18 @@ export function AccountsClient({
     };
   }, [
     employeeOptions.length,
-    isCreateDrawerOpen,
-    isCreateOpportunityDrawerOpen,
-    selected,
+    isEmployeesLoading,
+    session?.authenticated,
   ]);
 
   useEffect(() => {
-    if (!draft || draft.salesRepId || !draft.salesRepName || sortedEmployeeOptions.length === 0) {
+    if (!draft || !draft.salesRepName || sortedEmployeeOptions.length === 0) {
+      return;
+    }
+
+    const currentSelection =
+      draft.salesRepId ? findEmployeeById(sortedEmployeeOptions, draft.salesRepId) : null;
+    if (currentSelection) {
       return;
     }
 
@@ -3208,7 +3248,9 @@ export function AccountsClient({
     }
 
     setDraft((current) =>
-      current && !current.salesRepId
+      current &&
+      current.salesRepName &&
+      normalizeComparable(current.salesRepName) === normalizeComparable(draft.salesRepName)
         ? {
             ...current,
             salesRepId: matchedEmployee.id,
@@ -4207,7 +4249,7 @@ export function AccountsClient({
     setResumeOpportunityAfterContactCreate(null);
   }
 
-  function openCreateMeetingDrawer() {
+  function openCreateMeetingDrawer(category: MeetingCategory) {
     closeTransientMenus();
     closeMailComposer();
     setIsCreateDrawerOpen(false);
@@ -4219,12 +4261,16 @@ export function AccountsClient({
     closeDrawer();
     setSaveError(null);
     setSaveNotice(null);
+    setCreateMeetingCategory(category);
     setMeetingSource(null);
     setIsCreateMeetingDrawerOpen(true);
     void loadMeetingOptions(true);
   }
 
-  function openCreateMeetingDrawerFromRow(row: BusinessAccountRow) {
+  function openCreateMeetingDrawerFromRow(
+    row: BusinessAccountRow,
+    category: MeetingCategory,
+  ) {
     closeTransientMenus();
     closeMailComposer();
     setIsCreateDrawerOpen(false);
@@ -4236,6 +4282,7 @@ export function AccountsClient({
     closeDrawer();
     setSaveError(null);
     setSaveNotice(null);
+    setCreateMeetingCategory(category);
     setMeetingSource(buildMeetingSourceFromRow(row));
     setIsCreateMeetingDrawerOpen(true);
     void loadMeetingOptions(true);
@@ -4243,6 +4290,7 @@ export function AccountsClient({
 
   function closeCreateMeetingDrawer() {
     setIsCreateMeetingDrawerOpen(false);
+    setCreateMeetingCategory("Meeting");
     setMeetingSource(null);
   }
 
@@ -4486,9 +4534,11 @@ export function AccountsClient({
 
   function handleMeetingCreated(result: MeetingCreateResponse) {
     setIsCreateMeetingDrawerOpen(false);
+    setCreateMeetingCategory("Meeting");
     setMeetingSource(null);
     setSaveError(null);
-    const messageParts = [`Meeting "${result.summary}" created in Acumatica.`];
+    const categoryLabel = result.category === "Drop Off" ? "Drop off" : "Meeting";
+    const messageParts = [`${categoryLabel} "${result.summary}" created in Acumatica.`];
     if (result.inviteAuthority === "google" && (
       result.calendarInviteStatus === "created" || result.calendarInviteStatus === "updated"
     )) {
@@ -5912,10 +5962,21 @@ export function AccountsClient({
                 </button>
                 <button
                   className={styles.createDropdownAction}
-                  onClick={openCreateMeetingDrawer}
+                  onClick={() => {
+                    openCreateMeetingDrawer("Meeting");
+                  }}
                   type="button"
                 >
-                  Meeting
+                  Schedule meeting
+                </button>
+                <button
+                  className={styles.createDropdownAction}
+                  onClick={() => {
+                    openCreateMeetingDrawer("Drop Off");
+                  }}
+                  type="button"
+                >
+                  Schedule drop off
                 </button>
               </div>
             ) : null}
@@ -6414,11 +6475,20 @@ export function AccountsClient({
                                 <button
                                   className={styles.rowMenuAction}
                                   onClick={() => {
-                                    openCreateMeetingDrawerFromRow(row);
+                                    openCreateMeetingDrawerFromRow(row, "Meeting");
                                   }}
                                   type="button"
                                 >
-                                  Create meeting
+                                  Schedule meeting
+                                </button>
+                                <button
+                                  className={styles.rowMenuAction}
+                                  onClick={() => {
+                                    openCreateMeetingDrawerFromRow(row, "Drop Off");
+                                  }}
+                                  type="button"
+                                >
+                                  Schedule drop off
                                 </button>
                                 <button
                                   className={styles.rowMenuAction}
@@ -6543,6 +6613,7 @@ export function AccountsClient({
         onRequestCreateContact={handleOpportunityDrawerRequestCreateContact}
       />
       <CreateMeetingDrawer
+        defaultCategory={createMeetingCategory}
         isLoadingOptions={isLoadingMeetingOptions}
         isOpen={isCreateMeetingDrawerOpen}
         onClose={closeCreateMeetingDrawer}
@@ -7378,10 +7449,18 @@ export function AccountsClient({
               <button
                 className={styles.secondaryButton}
                 disabled={isSaving || isDeletingContact}
-                onClick={() => openCreateMeetingDrawerFromRow(selected)}
+                onClick={() => openCreateMeetingDrawerFromRow(selected, "Meeting")}
                 type="button"
               >
-                Create meeting
+                Schedule meeting
+              </button>
+              <button
+                className={styles.secondaryButton}
+                disabled={isSaving || isDeletingContact}
+                onClick={() => openCreateMeetingDrawerFromRow(selected, "Drop Off")}
+                type="button"
+              >
+                Schedule drop off
               </button>
               <button
                 className={styles.deleteContactButton}

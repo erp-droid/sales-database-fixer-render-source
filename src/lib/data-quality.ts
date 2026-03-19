@@ -460,20 +460,34 @@ function findDuplicateContactNamesByAccount(groups: AccountGroup[]): Map<string,
   const duplicateNamesByAccount = new Map<string, Set<string>>();
 
   groups.forEach((group) => {
-    const contactNameCounts = new Map<string, number>();
+    const contactNameIdentities = new Map<string, Set<string>>();
 
     group.rows.forEach((row) => {
+      if (!isAssociatedContactRow(row)) {
+        return;
+      }
+
       const canonicalName = normalizeContactNameForDuplicate(row.primaryContactName);
       if (isShortTextMissing(canonicalName, 2)) {
         return;
       }
 
-      contactNameCounts.set(canonicalName, (contactNameCounts.get(canonicalName) ?? 0) + 1);
+      const rowIdentity =
+        typeof row.contactId === "number" && Number.isInteger(row.contactId)
+          ? `contact:${row.contactId}`
+          : (row.rowKey?.trim() ?? canonicalName);
+      const existing = contactNameIdentities.get(canonicalName);
+      if (existing) {
+        existing.add(rowIdentity);
+        return;
+      }
+
+      contactNameIdentities.set(canonicalName, new Set([rowIdentity]));
     });
 
     const duplicateNames = new Set<string>();
-    contactNameCounts.forEach((count, canonicalName) => {
-      if (count >= 2) {
+    contactNameIdentities.forEach((identities, canonicalName) => {
+      if (identities.size >= 2) {
         duplicateNames.add(canonicalName);
       }
     });
@@ -772,6 +786,7 @@ export function buildDataQualitySnapshot(
         rowHasIssue = true;
       }
       if (
+        isAssociatedContactRow(row) &&
         duplicateContactNames &&
         !isShortTextMissing(contactDuplicateKey, 2) &&
         duplicateContactNames.has(contactDuplicateKey)

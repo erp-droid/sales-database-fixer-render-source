@@ -6,6 +6,7 @@ import { applyDeferredActionsToRows } from "@/lib/deferred-actions-store";
 import { invalidateReadModelCaches, registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import { applyLocalAccountMetadataToRows } from "@/lib/read-model/account-local-metadata";
 import { getReadModelDb } from "@/lib/read-model/db";
+import { rebuildSalesRepDirectoryFromStoredRows } from "@/lib/read-model/sales-reps";
 import type {
   BusinessAccountDetailResponse,
   BusinessAccountRow,
@@ -239,6 +240,7 @@ export function replaceAllAccountRows(rows: BusinessAccountRow[]): void {
   });
 
   replace(nextRows);
+  rebuildSalesRepDirectoryFromStoredRows();
   invalidateReadModelCaches();
 }
 
@@ -375,6 +377,7 @@ export function replaceReadModelAccountRows(
   });
 
   replace();
+  rebuildSalesRepDirectoryFromStoredRows();
   invalidateReadModelCaches();
 }
 
@@ -416,6 +419,7 @@ export function removeReadModelRowsByContactId(contactId: number): void {
     WHERE contact_id = ?
     `,
   ).run(contactId);
+  rebuildSalesRepDirectoryFromStoredRows();
   invalidateReadModelCaches();
 }
 

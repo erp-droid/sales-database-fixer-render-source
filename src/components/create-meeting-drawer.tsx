@@ -19,11 +19,13 @@ import type {
   MeetingContactOption,
   MeetingCreateOptionsResponse,
   MeetingCreateResponse,
+  MeetingCategory,
   MeetingEmployeeOption,
   MeetingPriority,
   MeetingCreateRequest,
   MeetingSourceContext,
 } from "@/types/meeting-create";
+import { MEETING_CATEGORY_VALUES } from "@/types/meeting-create";
 import type {
   BusinessAccountContactCreatePartialResponse,
   BusinessAccountContactCreateResponse,
@@ -35,6 +37,7 @@ import styles from "./create-meeting-drawer.module.css";
 type CreateMeetingDrawerProps = {
   isLoadingOptions: boolean;
   isOpen: boolean;
+  defaultCategory: MeetingCategory;
   source: MeetingSourceContext | null;
   onClose: () => void;
   onContactCreated: (
@@ -168,6 +171,7 @@ function isMeetingCreateResponse(payload: unknown): payload is MeetingCreateResp
       record.calendarInviteStatus === "updated" ||
       record.calendarInviteStatus === "skipped" ||
       record.calendarInviteStatus === "failed") &&
+    (record.category === "Meeting" || record.category === "Drop Off") &&
     (record.connectedGoogleEmail === null || typeof record.connectedGoogleEmail === "string") &&
     typeof record.includeOrganizerInAcumatica === "boolean" &&
     typeof record.summary === "string" &&
@@ -415,10 +419,11 @@ function buildFallbackSourceContactOption(
   };
 }
 
-function buildEmptyMeetingForm(timeZone: string): MeetingFormState {
+function buildEmptyMeetingForm(timeZone: string, category: MeetingCategory): MeetingFormState {
   const defaults = buildDefaultMeetingSlot(timeZone);
 
   return {
+    category,
     summary: "",
     location: null,
     timeZone,
@@ -512,6 +517,7 @@ function formatMeetingLocationAddress(address: AddressRetrieveResponse["address"
 export function CreateMeetingDrawer({
   isLoadingOptions,
   isOpen,
+  defaultCategory,
   source,
   onClose,
   onContactCreated,
@@ -527,7 +533,7 @@ export function CreateMeetingDrawer({
   );
   const defaultTimeZone = options?.defaultTimeZone ?? DEFAULT_MEETING_TIME_ZONE;
   const [form, setForm] = useState<MeetingFormState>(() =>
-    buildEmptyMeetingForm(defaultTimeZone),
+    buildEmptyMeetingForm(defaultTimeZone, defaultCategory),
   );
   const [relatedContactId, setRelatedContactId] = useState<number | null>(null);
   const [attendeeContactIds, setAttendeeContactIds] = useState<number[]>([]);
@@ -611,10 +617,14 @@ export function CreateMeetingDrawer({
     [contactDirectory, viewerLoginName],
   );
   const viewerContactId = viewerContact?.contactId ?? null;
+  const categoryLabel = form.category;
+  const categoryLowerLabel = categoryLabel === "Drop Off" ? "drop off" : "meeting";
+  const createLabel = form.category === "Drop Off" ? "Schedule drop off" : "Schedule meeting";
+  const createHeading = form.category === "Drop Off" ? "Schedule Drop Off" : "Schedule Meeting";
 
   useEffect(() => {
     if (!isOpen) {
-      setForm(buildEmptyMeetingForm(defaultTimeZone));
+      setForm(buildEmptyMeetingForm(defaultTimeZone, defaultCategory));
       setRelatedContactId(null);
       setAttendeeContactIds([]);
       setAttendeeEmails([]);
@@ -642,7 +652,7 @@ export function CreateMeetingDrawer({
     }
 
     const nextTimeZone = options?.defaultTimeZone ?? DEFAULT_MEETING_TIME_ZONE;
-    setForm(buildEmptyMeetingForm(nextTimeZone));
+    setForm(buildEmptyMeetingForm(nextTimeZone, defaultCategory));
     setRelatedContactId(source?.contactId ?? null);
     setAttendeeContactIds(source?.contactId !== null && source?.contactId !== undefined ? [source.contactId] : []);
     setAttendeeEmails([]);
@@ -675,6 +685,7 @@ export function CreateMeetingDrawer({
     source?.companyName,
     source?.contactId,
     source?.contactName,
+    defaultCategory,
     options?.defaultTimeZone,
     viewerContact,
   ]);
@@ -1225,7 +1236,7 @@ export function CreateMeetingDrawer({
 
     const effectiveRelatedContactId = relatedContactId ?? normalizedAttendeeIds[0] ?? null;
     if (effectiveRelatedContactId === null) {
-      setFormError("Select the related contact before creating the meeting.");
+      setFormError(`Select the related contact before scheduling the ${categoryLowerLabel}.`);
       return;
     }
 
@@ -1239,7 +1250,7 @@ export function CreateMeetingDrawer({
       });
     } catch (error) {
       setFormError(
-        error instanceof Error ? error.message : "Meeting end must be after the start.",
+        error instanceof Error ? error.message : `${categoryLabel} end must be after the start.`,
       );
       return;
     }
@@ -1260,6 +1271,7 @@ export function CreateMeetingDrawer({
           organizerContactId: includeOrganizerInAcumatica ? viewerContactId : null,
           includeOrganizerInAcumatica,
           relatedContactId: effectiveRelatedContactId,
+          category: form.category,
           summary: form.summary.trim(),
           location: normalizeNullableInput(form.location ?? ""),
           timeZone: defaultTimeZone,
@@ -1283,12 +1295,12 @@ export function CreateMeetingDrawer({
       }
 
       if (!isMeetingCreateResponse(payload)) {
-        throw new Error("Unexpected response while creating the meeting.");
+        throw new Error(`Unexpected response while creating the ${categoryLowerLabel}.`);
       }
 
       onMeetingCreated(payload);
     } catch (error) {
-      setFormError(error instanceof Error ? error.message : "Unable to create the meeting.");
+      setFormError(error instanceof Error ? error.message : `Unable to create the ${categoryLowerLabel}.`);
     } finally {
       setIsSubmitting(false);
     }
@@ -1304,12 +1316,12 @@ export function CreateMeetingDrawer({
       <aside className={`${styles.drawer} ${styles.drawerOpen}`}>
         <div className={styles.drawerHeader}>
           <div>
-            <p className={styles.kicker}>Create Meeting</p>
-            <h2>Create Acumatica Event</h2>
+            <p className={styles.kicker}>{createHeading}</p>
+            <h2>{createHeading}</h2>
             <p className={styles.headerMeta}>
               {source
                 ? `${source.companyName} · ${source.contactName ?? "Select a contact"}`
-                : "Create an event under Activities and relate it to a contact."}
+                : `Create an Acumatica ${categoryLowerLabel} event and relate it to a contact.`}
             </p>
           </div>
           <button className={styles.closeButton} onClick={onClose} type="button">
@@ -1342,7 +1354,7 @@ export function CreateMeetingDrawer({
               )}
             </div>
             <p className={styles.lookupHint}>
-              Meetings created here can send Google Calendar invites directly from the connected
+              {categoryLabel}s created here can send Google Calendar invites directly from the connected
               account instead of relying on the Gmail Apps Script bridge.
             </p>
             {calendarSession?.status === "connected" ? (
@@ -1350,7 +1362,7 @@ export function CreateMeetingDrawer({
                 <span className={styles.calendarStatusBadge}>Connected</span>
                 <strong>{calendarSession.connectedGoogleEmail}</strong>
                 <span className={styles.calendarStatusMeta}>
-                  Google Calendar will send invites for this meeting. Contact attendees can still be mirrored into Acumatica separately.
+                  Google Calendar will send invites for this {categoryLowerLabel}. Contact attendees can still be mirrored into Acumatica separately.
                 </span>
               </div>
             ) : calendarSession?.status === "needs_setup" ? (
@@ -1371,7 +1383,7 @@ export function CreateMeetingDrawer({
                 <span className={styles.calendarStatusBadgeMuted}>Not connected</span>
                 <span className={styles.calendarStatusMeta}>
                   {calendarSession?.connectionError ??
-                    "Acumatica will still create the meeting, but no Google invite will be sent until you connect Calendar."}
+                    `Acumatica will still create the ${categoryLowerLabel}, but no Google invite will be sent until you connect Calendar.`}
                 </span>
                 {calendarSession?.expectedRedirectUri ? (
                   <code className={styles.calendarStatusCode}>
@@ -1453,6 +1465,21 @@ export function CreateMeetingDrawer({
                 </select>
               </label>
               <label>
+                Category
+                <select
+                  onChange={(event) =>
+                    updateForm("category", event.target.value as MeetingCategory)
+                  }
+                  value={form.category}
+                >
+                  {MEETING_CATEGORY_VALUES.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Start Date
                 <input
                   onChange={(event) => updateForm("startDate", event.target.value)}
@@ -1475,10 +1502,6 @@ export function CreateMeetingDrawer({
                   type="time"
                   value={form.endTime}
                 />
-              </label>
-              <label>
-                Category
-                <input readOnly value="Red" />
               </label>
             </div>
 
@@ -1541,7 +1564,7 @@ export function CreateMeetingDrawer({
                   </button>
                 ) : (
                   <p className={styles.lookupHint}>
-                    This meeting stays tied to the selected contact.
+                    This {categoryLowerLabel} stays tied to the selected contact.
                   </p>
                 )}
               </div>
@@ -1561,7 +1584,7 @@ export function CreateMeetingDrawer({
                   />
                 </label>
                 <p className={styles.lookupHint}>
-                  Acumatica needs one primary related contact on the invite-sending event. Every contact attendee below also gets its own mirrored meeting activity.
+                  Acumatica needs one primary related contact on the invite-sending event. Every contact attendee below also gets its own mirrored {categoryLowerLabel} activity.
                 </p>
                 {relatedContactSuggestions.length > 0 ? (
                   <div className={styles.lookupSuggestions}>
@@ -1607,7 +1630,7 @@ export function CreateMeetingDrawer({
           <section className={styles.section}>
             <h3>Attendees</h3>
             <p className={styles.lookupHint}>
-              Contact attendees get mirrored meeting activities in Acumatica. When Google Calendar is connected, Google sends the invite emails and shows included attendees on the calendar event.
+              Contact attendees get mirrored {categoryLowerLabel} activities in Acumatica. When Google Calendar is connected, Google sends the invite emails and shows included attendees on the calendar event.
             </p>
             {viewerContact ? (
               <label className={styles.checkboxLabel}>
@@ -1619,7 +1642,7 @@ export function CreateMeetingDrawer({
                 <span>
                   Include my contact
                   <small className={styles.checkboxHint}>
-                    Adds {viewerContact.contactName} {viewerContact.email ? `(${viewerContact.email})` : ""} to the mirrored Acumatica meeting activities and, when Google Calendar is connected, to the attendee list there as well.
+                    Adds {viewerContact.contactName} {viewerContact.email ? `(${viewerContact.email})` : ""} to the mirrored Acumatica {categoryLowerLabel} activities and, when Google Calendar is connected, to the attendee list there as well.
                   </small>
                 </span>
               </label>
@@ -1700,7 +1723,7 @@ export function CreateMeetingDrawer({
             ) : null}
             {matchingDirectInviteContact && normalizedAttendeeSearchEmail ? (
               <p className={styles.lookupHint}>
-                {normalizedAttendeeSearchEmail} already exists in Acumatica. Add the contact entry above so the meeting is logged under that account.
+                {normalizedAttendeeSearchEmail} already exists in Acumatica. Add the contact entry above so the {categoryLowerLabel} is logged under that account.
               </p>
             ) : null}
 
@@ -1786,7 +1809,7 @@ export function CreateMeetingDrawer({
               }}
               type="button"
             >
-              {isSubmitting ? "Creating..." : "Create meeting"}
+              {isSubmitting ? "Scheduling..." : createLabel}
             </button>
           </div>
         </div>

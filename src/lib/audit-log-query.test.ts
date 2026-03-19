@@ -260,6 +260,7 @@ describe("audit log query", () => {
       companyName: "Alpha Foods",
       relatedContactId: 501,
       relatedContactName: "Jorge Serrano",
+      category: "Meeting",
       meetingSummary: "Quarterly review",
       attendeeCount: 2,
       attendees: [

@@ -5,6 +5,8 @@ const requireAuthCookieValue = vi.fn(() => "cookie");
 const setAuthCookie = vi.fn();
 const fetchEmployees = vi.fn();
 const getEnv = vi.fn();
+const replaceSalesRepDirectory = vi.fn();
+const readAllAccountRowsFromReadModel = vi.fn();
 const readEmployeeDirectorySnapshot = vi.fn();
 const replaceEmployeeDirectory = vi.fn();
 
@@ -21,15 +23,24 @@ vi.mock("@/lib/env", () => ({
   getEnv,
 }));
 
-vi.mock("@/lib/read-model/employees", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/read-model/employees")>(
-    "@/lib/read-model/employees",
+vi.mock("@/lib/read-model/accounts", () => ({
+  readAllAccountRowsFromReadModel,
+}));
+
+vi.mock("@/lib/read-model/employees", () => ({
+  FULL_EMPLOYEE_DIRECTORY_SOURCE: "acumatica_employees",
+  readEmployeeDirectorySnapshot,
+  replaceEmployeeDirectory,
+}));
+
+vi.mock("@/lib/read-model/sales-reps", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/read-model/sales-reps")>(
+    "@/lib/read-model/sales-reps",
   );
 
   return {
     ...actual,
-    readEmployeeDirectorySnapshot,
-    replaceEmployeeDirectory,
+    replaceSalesRepDirectory,
   };
 });
 
@@ -43,53 +54,56 @@ describe("GET /api/employees", () => {
     getEnv.mockReturnValue({
       READ_MODEL_ENABLED: true,
     });
+    readAllAccountRowsFromReadModel.mockReturnValue([]);
+    readEmployeeDirectorySnapshot.mockReturnValue({
+      items: [],
+      source: null,
+      updatedAt: null,
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("returns the cached directory immediately and refreshes in the background when the cache is stale", async () => {
-    readEmployeeDirectorySnapshot.mockReturnValue({
-      items: [{ id: "109343", name: "Jorge Serrano" }],
-      source: "sync",
-      updatedAt: "2026-03-12T13:55:00.000Z",
-    });
-    fetchEmployees.mockResolvedValue([
-      { id: "109343", name: "Jorge Serrano" },
-      { id: "124894", name: "Brock Koczka" },
-      { id: "109301", name: "Adrian Fernandez" },
+  it("returns canonical employee-code sales reps from the synced SQLite datasets", async () => {
+    readAllAccountRowsFromReadModel.mockReturnValue([
+      {
+        salesRepId: "109343",
+        salesRepName: "Jorge Serrano",
+      },
+      {
+        salesRepId: "109350",
+        salesRepName: "Justin Settle",
+      },
+      {
+        salesRepId: "100099",
+        salesRepName: "Justin Settle",
+      },
     ]);
-
-    const { GET } = await import("@/app/api/employees/route");
-    const response = await GET(new NextRequest("http://localhost/api/employees"));
-    const payload = (await response.json()) as {
-      items: Array<{ id: string; name: string }>;
-    };
-
-    expect(response.status).toBe(200);
-    expect(fetchEmployees).toHaveBeenCalledWith("cookie", expect.any(Object));
-    expect(payload.items).toEqual([{ id: "109343", name: "Jorge Serrano" }]);
-  });
-
-  it("reuses the cached full directory when it is already fresh", async () => {
     readEmployeeDirectorySnapshot.mockReturnValue({
       items: [
         {
-          id: "109343",
+          id: "E0000045",
           name: "Jorge Serrano",
           loginName: "jserrano",
           email: "jserrano@meadowb.com",
+          contactId: 157497,
+          phone: null,
+          isActive: true,
         },
         {
-          id: "124894",
-          name: "Brock Koczka",
-          loginName: "bkoczka",
-          email: "bkoczka@meadowb.com",
+          id: "E0000052",
+          name: "Justin Settle",
+          loginName: "jsettle",
+          email: "jsettle@meadowb.com",
+          contactId: null,
+          phone: null,
+          isActive: true,
         },
       ],
       source: "acumatica_employees",
-      updatedAt: "2026-03-12T13:30:00.000Z",
+      updatedAt: "2026-03-12T13:55:00.000Z",
     });
 
     const { GET } = await import("@/app/api/employees/route");
@@ -100,44 +114,26 @@ describe("GET /api/employees", () => {
 
     expect(response.status).toBe(200);
     expect(fetchEmployees).not.toHaveBeenCalled();
-    expect(replaceEmployeeDirectory).not.toHaveBeenCalled();
+    expect(replaceSalesRepDirectory).toHaveBeenCalledTimes(1);
     expect(payload.items).toEqual([
-      {
-        id: "109343",
-        name: "Jorge Serrano",
-        loginName: "jserrano",
-        email: "jserrano@meadowb.com",
-      },
-      {
-        id: "124894",
-        name: "Brock Koczka",
-        loginName: "bkoczka",
-        email: "bkoczka@meadowb.com",
-      },
+      { id: "E0000045", name: "Jorge Serrano" },
+      { id: "E0000052", name: "Justin Settle" },
     ]);
   });
 
-  it("refreshes a fresh but thin cached directory in the background", async () => {
-    readEmployeeDirectorySnapshot.mockReturnValue({
-      items: [
-        { id: "109343", name: "Jorge Serrano" },
-        { id: "124894", name: "Brock Koczka" },
-      ],
-      source: "acumatica_employees",
-      updatedAt: "2026-03-12T13:30:00.000Z",
-    });
-    fetchEmployees.mockResolvedValue([
+  it("rebuilds the sales rep directory from cached account rows when employee cache is unavailable", async () => {
+    readAllAccountRowsFromReadModel.mockReturnValue([
       {
-        id: "109343",
-        name: "Jorge Serrano",
-        loginName: "jserrano",
-        email: "jserrano@meadowb.com",
+        salesRepId: "109343",
+        salesRepName: "Jorge Serrano",
       },
       {
-        id: "124894",
-        name: "Brock Koczka",
-        loginName: "bkoczka",
-        email: "bkoczka@meadowb.com",
+        salesRepId: "100001",
+        salesRepName: "Justin Settle",
+      },
+      {
+        salesRepId: "100099",
+        salesRepName: "Justin Settle",
       },
     ]);
 
@@ -148,22 +144,39 @@ describe("GET /api/employees", () => {
     };
 
     expect(response.status).toBe(200);
+    expect(fetchEmployees).not.toHaveBeenCalled();
+    expect(replaceSalesRepDirectory).toHaveBeenCalledTimes(1);
     expect(payload.items).toEqual([
-      { id: "109343", name: "Jorge Serrano" },
-      { id: "124894", name: "Brock Koczka" },
+      {
+        id: "109343",
+        name: "Jorge Serrano",
+      },
+      {
+        id: "100001",
+        name: "Justin Settle",
+      },
     ]);
-    expect(fetchEmployees).toHaveBeenCalledWith("cookie", expect.any(Object));
   });
 
-  it("waits for a live refresh when there is no cached directory yet", async () => {
-    readEmployeeDirectorySnapshot.mockReturnValue({
-      items: [],
-      source: "sync",
-      updatedAt: null,
-    });
+  it("falls back to a live employee fetch only when there is no synced sales rep data yet", async () => {
+    readAllAccountRowsFromReadModel.mockReturnValue([]);
     fetchEmployees.mockResolvedValue([
-      { id: "109343", name: "Jorge Serrano" },
-      { id: "124894", name: "Brock Koczka" },
+      {
+        id: "E0000045",
+        name: "Jorge Serrano",
+      },
+      {
+        id: "E0000117",
+        name: "Brock Koczka",
+      },
+      {
+        id: "E0000052",
+        name: "Justin Settle",
+      },
+      {
+        id: "109350",
+        name: "Justin Settle",
+      },
     ]);
 
     const { GET } = await import("@/app/api/employees/route");
@@ -174,10 +187,12 @@ describe("GET /api/employees", () => {
 
     expect(response.status).toBe(200);
     expect(fetchEmployees).toHaveBeenCalledWith("cookie", expect.any(Object));
-    expect(replaceEmployeeDirectory).toHaveBeenCalledWith(payload.items, "acumatica_employees");
+    expect(replaceEmployeeDirectory).toHaveBeenCalledTimes(1);
+    expect(replaceSalesRepDirectory).toHaveBeenCalledTimes(1);
     expect(payload.items).toEqual([
-      { id: "109343", name: "Jorge Serrano" },
-      { id: "124894", name: "Brock Koczka" },
+      { id: "E0000117", name: "Brock Koczka" },
+      { id: "E0000045", name: "Jorge Serrano" },
+      { id: "E0000052", name: "Justin Settle" },
     ]);
   });
 });

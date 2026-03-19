@@ -9,47 +9,17 @@ import {
 } from "@/lib/acumatica";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import {
   FULL_EMPLOYEE_DIRECTORY_SOURCE,
-  hasDetailedEmployeeDirectory,
   readEmployeeDirectorySnapshot,
   replaceEmployeeDirectory,
 } from "@/lib/read-model/employees";
-
-const EMPLOYEE_DIRECTORY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-
-let employeeDirectoryRefreshPromise: Promise<Awaited<ReturnType<typeof fetchEmployees>>> | null =
-  null;
-
-function isFreshEmployeeDirectory(updatedAt: string | null): boolean {
-  if (!updatedAt) {
-    return false;
-  }
-
-  const parsed = Date.parse(updatedAt);
-  if (Number.isNaN(parsed)) {
-    return false;
-  }
-
-  return Date.now() - parsed <= EMPLOYEE_DIRECTORY_CACHE_TTL_MS;
-}
-
-async function refreshEmployeeDirectory(
-  cookieValue: string,
-  authCookieRefresh: AuthCookieRefreshState,
-) {
-  if (!employeeDirectoryRefreshPromise) {
-    employeeDirectoryRefreshPromise = (async () => {
-      const items = await fetchEmployees(cookieValue, authCookieRefresh);
-      replaceEmployeeDirectory(items, FULL_EMPLOYEE_DIRECTORY_SOURCE);
-      return items;
-    })().finally(() => {
-      employeeDirectoryRefreshPromise = null;
-    });
-  }
-
-  return employeeDirectoryRefreshPromise;
-}
+import {
+  buildSalesRepDirectory,
+  buildSalesRepOptions,
+  replaceSalesRepDirectory,
+} from "@/lib/read-model/sales-reps";
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh: AuthCookieRefreshState = {
@@ -61,26 +31,25 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const { READ_MODEL_ENABLED } = getEnv();
     let items;
     if (READ_MODEL_ENABLED) {
-      const snapshot = readEmployeeDirectorySnapshot();
-      const hasFullDirectory =
-        snapshot.source === FULL_EMPLOYEE_DIRECTORY_SOURCE && snapshot.items.length > 0;
-      const hasDetailedDirectory = hasDetailedEmployeeDirectory(snapshot.items);
-      const hasAnyCachedDirectory = snapshot.items.length > 0;
+      const rows = readAllAccountRowsFromReadModel();
+      const employeeSnapshot = readEmployeeDirectorySnapshot();
 
-      if (
-        hasFullDirectory &&
-        hasDetailedDirectory &&
-        isFreshEmployeeDirectory(snapshot.updatedAt)
-      ) {
-        items = snapshot.items;
-      } else if (hasAnyCachedDirectory) {
-        items = snapshot.items;
-        void refreshEmployeeDirectory(cookieValue, { value: null }).catch(() => undefined);
+      if (rows.length > 0 || employeeSnapshot.items.length > 0) {
+        const directoryItems = buildSalesRepDirectory(rows, employeeSnapshot.items);
+        if (directoryItems.length > 0) {
+          replaceSalesRepDirectory(directoryItems);
+        }
+        items = buildSalesRepOptions(directoryItems);
       } else {
-        items = await refreshEmployeeDirectory(cookieValue, authCookieRefresh);
+        const employeeItems = await fetchEmployees(cookieValue, authCookieRefresh);
+        replaceEmployeeDirectory(employeeItems, FULL_EMPLOYEE_DIRECTORY_SOURCE);
+        const directoryItems = buildSalesRepDirectory([], employeeItems);
+        replaceSalesRepDirectory(directoryItems);
+        items = buildSalesRepOptions(directoryItems);
       }
     } else {
-      items = await fetchEmployees(cookieValue, authCookieRefresh);
+      const employeeItems = await fetchEmployees(cookieValue, authCookieRefresh);
+      items = buildSalesRepOptions(buildSalesRepDirectory([], employeeItems));
     }
 
     const response = NextResponse.json({ items });

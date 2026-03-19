@@ -27,6 +27,8 @@ vi.mock("@/lib/call-analytics/employee-directory", () => ({
 
 vi.mock("@/lib/meeting-bookings", () => ({
   listMeetingBookings: listMeetingBookingsMock,
+  resolveMeetingBookingCategory: (value: string | null | undefined) =>
+    value === "Meeting" || value === "Drop Off" ? value : null,
 }));
 
 function setSnapshotEnv(): void {
@@ -163,6 +165,7 @@ describe("dashboard snapshot builder and cache", () => {
           companyName: "Northwind",
           relatedContactId: 91,
           relatedContactName: "Alex Prospect",
+          category: "Meeting",
           meetingSummary: "Intro meeting",
           attendeeCount: 3,
           attendees: [],
@@ -179,12 +182,124 @@ describe("dashboard snapshot builder and cache", () => {
     expect(snapshot.meetingStats.totalMeetings).toBe(1);
     expect(snapshot.meetingLeaderboard[0]?.loginName).toBe("jserrano");
     expect(snapshot.recentMeetings[0]?.meetingSummary).toBe("Intro meeting");
+    expect(snapshot.meetingCategoryAnalytics.meetings.stats.totalMeetings).toBe(1);
+    expect(snapshot.meetingCategoryAnalytics.dropOffs.stats.totalMeetings).toBe(0);
     expect(snapshot.teamStats.outboundCalls).toBe(3);
     expect(snapshot.employeeLeaderboard[0]?.loginName).toBe("jserrano");
     expect(snapshot.activityGaps[0]?.loginName).toBe("jlee");
     expect(snapshot.bucketDrilldowns).toHaveLength(2);
     expect(snapshot.bucketDrilldowns[0]?.companies[0]?.label).toBe("Northwind");
     expect(snapshot.bucketDrilldowns[0]?.outcomes[0]?.label).toBe("answered");
+  });
+
+  it("treats all non-drop-off meeting categories as meetings booked", async () => {
+    const snapshotModule = await import("@/lib/call-analytics/dashboard-snapshot");
+    const snapshot = snapshotModule.buildDashboardSnapshotForTests(
+      baseFilters,
+      [],
+      [
+        { loginName: "jserrano", displayName: "Jorge Serrano", email: null },
+        { loginName: "sdoal", displayName: "Simon Doal", email: null },
+      ],
+      undefined,
+      undefined,
+      undefined,
+      [
+        {
+          id: "meeting:event-1",
+          eventId: "event-1",
+          actorLoginName: "jserrano",
+          actorName: "Jorge Serrano",
+          businessAccountRecordId: "record-1",
+          businessAccountId: "B2001",
+          companyName: "Northwind",
+          relatedContactId: 91,
+          relatedContactName: "Alex Prospect",
+          category: "Meeting",
+          meetingSummary: "Intro meeting",
+          attendeeCount: 2,
+          attendees: [],
+          inviteAuthority: "google",
+          calendarInviteStatus: "created",
+          occurredAt: "2026-03-08T15:00:00.000Z",
+          createdAt: "2026-03-08T15:00:00.000Z",
+          updatedAt: "2026-03-08T15:00:00.000Z",
+        },
+        {
+          id: "meeting:event-2",
+          eventId: "event-2",
+          actorLoginName: "sdoal",
+          actorName: "Simon Doal",
+          businessAccountRecordId: "record-2",
+          businessAccountId: "B2002",
+          companyName: "Contoso",
+          relatedContactId: 92,
+          relatedContactName: "Jordan Buyer",
+          category: "Site Visit",
+          meetingSummary: "Site visit",
+          attendeeCount: 1,
+          attendees: [],
+          inviteAuthority: "acumatica",
+          calendarInviteStatus: "created",
+          occurredAt: "2026-03-08T16:00:00.000Z",
+          createdAt: "2026-03-08T16:00:00.000Z",
+          updatedAt: "2026-03-08T16:00:00.000Z",
+        },
+        {
+          id: "meeting:event-3",
+          eventId: "event-3",
+          actorLoginName: "sdoal",
+          actorName: "Simon Doal",
+          businessAccountRecordId: "record-3",
+          businessAccountId: "B2003",
+          companyName: "Fabrikam",
+          relatedContactId: 93,
+          relatedContactName: "Morgan Owner",
+          category: null,
+          meetingSummary: "Planning session",
+          attendeeCount: 3,
+          attendees: [],
+          inviteAuthority: "acumatica",
+          calendarInviteStatus: "created",
+          occurredAt: "2026-03-08T17:00:00.000Z",
+          createdAt: "2026-03-08T17:00:00.000Z",
+          updatedAt: "2026-03-08T17:00:00.000Z",
+        },
+        {
+          id: "meeting:event-4",
+          eventId: "event-4",
+          actorLoginName: "jserrano",
+          actorName: "Jorge Serrano",
+          businessAccountRecordId: "record-4",
+          businessAccountId: "B2004",
+          companyName: "Tailspin",
+          relatedContactId: 94,
+          relatedContactName: "Chris Lead",
+          category: "Drop Off",
+          meetingSummary: "Material drop off",
+          attendeeCount: 1,
+          attendees: [],
+          inviteAuthority: "acumatica",
+          calendarInviteStatus: "created",
+          occurredAt: "2026-03-08T18:00:00.000Z",
+          createdAt: "2026-03-08T18:00:00.000Z",
+          updatedAt: "2026-03-08T18:00:00.000Z",
+        },
+      ],
+    );
+
+    expect(snapshot.meetingStats.totalMeetings).toBe(3);
+    expect(snapshot.meetingCategoryAnalytics.meetings.stats.totalMeetings).toBe(3);
+    expect(snapshot.meetingCategoryAnalytics.dropOffs.stats.totalMeetings).toBe(1);
+    expect(snapshot.meetingCategoryAnalytics.meetings.leaderboard.map((item) => item.loginName)).toEqual([
+      "sdoal",
+      "jserrano",
+    ]);
+    expect(snapshot.meetingCategoryAnalytics.meetings.recentMeetings.map((item) => item.category)).toEqual([
+      "Meeting",
+      "Site Visit",
+      null,
+    ]);
   });
 
   it("returns warm cache hits without rereading call sessions", async () => {

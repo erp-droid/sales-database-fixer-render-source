@@ -74,8 +74,7 @@
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  justify-content: flex-start;
-  width: 100%;
+  justify-content: flex-end;
 }
 
 .filtersBar {
@@ -84,23 +83,48 @@
   border-radius: 14px;
   box-shadow: var(--shadow);
   padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.filtersToolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
-.filtersBarCopy {
-  display: grid;
-  gap: 2px;
-  color: var(--ink-muted);
-  font-size: 13px;
+.salesRepToggle {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink-strong);
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.filtersBarCopy strong {
-  color: var(--ink-strong);
-  font-size: 14px;
+.salesRepToggle:hover {
+  border-color: #8ea8c6;
+  background: #f3f8ff;
+}
+
+.clearInlineButton {
+  border: 1px solid #b9c8dc;
+  border-radius: 8px;
+  background: #f3f7fc;
+  color: #274765;
+  padding: 7px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.clearInlineButton:hover {
+  border-color: #8ea8c6;
+  background: #eaf1f8;
 }
 
 .salesRepFilterCard {
@@ -218,6 +242,19 @@
 .mapCanvas {
   position: absolute;
   inset: 0;
+}
+
+.mapCanvas :global(.leaflet-container) {
+  background: #dbe7f1;
+}
+
+.mapCanvas :global(.leaflet-tile-pane) {
+  will-change: transform;
+}
+
+.mapCanvas :global(.leaflet-tile) {
+  outline: 1px solid transparent;
+  backface-visibility: hidden;
 }
 
 .infoPanel {
@@ -600,10 +637,6 @@
     align-items: stretch;
   }
 
-  .filtersBarCopy {
-    width: 100%;
-  }
-
   .headerFilters {
     width: 100%;
     justify-content: flex-start;
@@ -611,6 +644,10 @@
 
   .searchInput {
     width: 100%;
+  }
+
+  .filtersToolbar {
+    align-items: stretch;
   }
 
   .salesRepFilterCard {

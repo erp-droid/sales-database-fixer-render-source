@@ -1147,6 +1147,29 @@ function resolveActionAccountKey(action: StoredDeferredActionRecord): string {
   return action.businessAccountRecordId?.trim() || action.businessAccountId?.trim() || "";
 }
 
+function getActiveDeferredHiddenContactIds(): Set<number> {
+  const hiddenContactIds = new Set<number>();
+
+  readStoredActions()
+    .filter((record) => ACTIVE_PREVIEW_STATUSES.has(record.status))
+    .forEach((record) => {
+      if (record.actionType === "deleteContact") {
+        if (typeof record.contactId === "number" && Number.isInteger(record.contactId) && record.contactId > 0) {
+          hiddenContactIds.add(record.contactId);
+        }
+        return;
+      }
+
+      record.loserContactIds.forEach((contactId) => {
+        if (Number.isInteger(contactId) && contactId > 0) {
+          hiddenContactIds.add(contactId);
+        }
+      });
+    });
+
+  return hiddenContactIds;
+}
+
 export function getActiveDeferredActionPreviews(): Array<{
   id: string;
   accountKey: string;
@@ -1206,7 +1229,33 @@ export function applyDeferredActionsToRows(rows: BusinessAccountRow[]): Business
     transformedRows.push(...nextRows);
   }
 
-  return transformedRows;
+  const hiddenContactIds = getActiveDeferredHiddenContactIds();
+  if (hiddenContactIds.size === 0) {
+    return transformedRows;
+  }
+
+  return transformedRows.filter((row) => {
+    if (
+      typeof row.contactId === "number" &&
+      Number.isInteger(row.contactId) &&
+      hiddenContactIds.has(row.contactId)
+    ) {
+      return false;
+    }
+
+    const rowKey = row.rowKey?.trim() ?? "";
+    const isPrimaryPlaceholder = rowKey.includes(":primary");
+    if (
+      isPrimaryPlaceholder &&
+      typeof row.primaryContactId === "number" &&
+      Number.isInteger(row.primaryContactId) &&
+      hiddenContactIds.has(row.primaryContactId)
+    ) {
+      return false;
+    }
+
+    return true;
+  });
 }
 
 export function createDeferredActionActor(input: DeferredActionActor): DeferredActionActor {

@@ -1,8 +1,11 @@
 import {
+  applyOptimisticCreatedAccountRequestToRow,
+  applyOptimisticCreatedAccountRequestToRows,
   buildBusinessAccountCreatePayload,
   buildContactCreatePayload,
   CONTACT_CLASS_VALUE_MAP,
 } from "@/lib/business-account-create";
+import type { BusinessAccountRow } from "@/types/business-account";
 
 describe("buildBusinessAccountCreatePayload", () => {
   const baseRequest = {
@@ -184,6 +187,90 @@ describe("buildContactCreatePayload", () => {
 
     expect(payload).toMatchObject({
       ContactClass: { value: CONTACT_CLASS_VALUE_MAP.billing },
+    });
+  });
+});
+
+describe("applyOptimisticCreatedAccountRequestToRows", () => {
+  const baseRequest = {
+    companyName: "Alpha Inc",
+    classId: "LEAD" as const,
+    salesRepId: "E0000045",
+    salesRepName: "Jorge Serrano",
+    industryType: "Service",
+    subCategory: "General",
+    companyRegion: "Region 6",
+    week: "Week 7",
+    category: "A" as const,
+    addressLookupId: "cp-123",
+    addressLine1: "5579 McAdam Road",
+    addressLine2: "Unit 4",
+    city: "Mississauga",
+    state: "ON",
+    postalCode: "L4Z 1N4",
+    country: "CA" as const,
+  };
+
+  const baseRow: BusinessAccountRow = {
+    id: "account-1",
+    accountRecordId: "account-1",
+    rowKey: "account-1:primary",
+    contactId: null,
+    isPrimaryContact: true,
+    companyPhone: null,
+    companyPhoneSource: null,
+    phoneNumber: null,
+    salesRepId: null,
+    salesRepName: null,
+    industryType: null,
+    subCategory: null,
+    companyRegion: null,
+    week: null,
+    businessAccountId: "B200000003",
+    companyName: "Alpha Inc",
+    address: "5579 McAdam Road, Mississauga, ON L4Z 1N4, CA",
+    addressLine1: "5579 McAdam Road",
+    addressLine2: "",
+    city: "Mississauga",
+    state: "ON",
+    postalCode: "L4Z 1N4",
+    country: "CA",
+    primaryContactName: null,
+    primaryContactPhone: null,
+    primaryContactEmail: null,
+    primaryContactId: null,
+    category: null,
+    notes: null,
+    lastModifiedIso: null,
+  };
+
+  it("applies created account attributes to stale normalized rows", () => {
+    const rows = applyOptimisticCreatedAccountRequestToRows([baseRow], baseRequest);
+
+    expect(rows[0]).toMatchObject({
+      companyName: "Alpha Inc",
+      salesRepId: "E0000045",
+      salesRepName: "Jorge Serrano",
+      industryType: "Service",
+      subCategory: "General",
+      companyRegion: "Region 6",
+      week: "Week 7",
+      category: "A",
+      addressLine2: "Unit 4",
+    });
+    expect(rows[0]?.address).toBe("5579 McAdam Road Unit 4, Mississauga ON L4Z 1N4, CA");
+  });
+
+  it("applies created account attributes to an individual created row", () => {
+    const row = applyOptimisticCreatedAccountRequestToRow(baseRow, baseRequest);
+
+    expect(row).toMatchObject({
+      salesRepId: "E0000045",
+      industryType: "Service",
+      subCategory: "General",
+      companyRegion: "Region 6",
+      week: "Week 7",
+      category: "A",
     });
   });
 });

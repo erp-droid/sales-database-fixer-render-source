@@ -379,6 +379,52 @@ export function normalizeCreatedBusinessAccountRows(rawAccount: unknown): Busine
   return [normalizeBusinessAccount(rawAccount)];
 }
 
+function formatCreatedAddress(request: BusinessAccountCreateRequest): string {
+  const line = [request.addressLine1, request.addressLine2]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join(" ");
+  const cityLine = [request.city, request.state, request.postalCode]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join(" ");
+
+  return [line, cityLine, request.country.trim().toUpperCase()]
+    .filter(Boolean)
+    .join(", ");
+}
+
+export function applyOptimisticCreatedAccountRequestToRow(
+  row: BusinessAccountRow,
+  request: BusinessAccountCreateRequest,
+): BusinessAccountRow {
+  return {
+    ...row,
+    companyName: request.companyName.trim(),
+    salesRepId: request.salesRepId?.trim() || null,
+    salesRepName: request.salesRepName?.trim() || null,
+    industryType: request.industryType.trim(),
+    subCategory: request.subCategory.trim(),
+    companyRegion: request.companyRegion.trim(),
+    week: request.week?.trim() || null,
+    address: formatCreatedAddress(request),
+    addressLine1: request.addressLine1,
+    addressLine2: request.addressLine2,
+    city: request.city,
+    state: request.state,
+    postalCode: request.postalCode,
+    country: request.country.trim().toUpperCase(),
+    category: request.category,
+  };
+}
+
+export function applyOptimisticCreatedAccountRequestToRows(
+  rows: BusinessAccountRow[],
+  request: BusinessAccountCreateRequest,
+): BusinessAccountRow[] {
+  return rows.map((row) => applyOptimisticCreatedAccountRequestToRow(row, request));
+}
+
 export function isValidCategoryValue(value: string): value is Category {
   return (CATEGORY_VALUES as readonly string[]).includes(value);
 }

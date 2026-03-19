@@ -11,6 +11,7 @@ import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directo
 import { getReadModelDb } from "@/lib/read-model/db";
 import { readEmployeeDirectorySnapshot } from "@/lib/read-model/employees";
 import { ensureReadModelSchema } from "@/lib/read-model/schema";
+import type { MeetingCategory } from "@/types/meeting-create";
 
 export type StoredMeetingBooking = {
   id: string;
@@ -22,6 +23,7 @@ export type StoredMeetingBooking = {
   companyName: string | null;
   relatedContactId: number | null;
   relatedContactName: string | null;
+  category: string | null;
   meetingSummary: string;
   attendeeCount: number;
   attendees: StoredMeetingAttendee[];
@@ -50,6 +52,7 @@ type UpsertMeetingBookingInput = {
   companyName: string | null;
   relatedContactId: number | null;
   relatedContactName: string | null;
+  category?: string | null;
   meetingSummary: string;
   attendeeCount: number;
   attendees?: StoredMeetingAttendee[];
@@ -73,6 +76,7 @@ type StoredMeetingBookingRow = {
   company_name: string | null;
   related_contact_id: number | null;
   related_contact_name: string | null;
+  category: string | null;
   meeting_summary: string;
   attendee_count: number;
   attendee_details_json: string;
@@ -86,6 +90,13 @@ type StoredMeetingBookingRow = {
 function cleanString(value: string | null | undefined): string | null {
   const normalized = value?.trim() ?? "";
   return normalized ? normalized : null;
+}
+
+export function resolveMeetingBookingCategory(
+  value: string | null | undefined,
+): MeetingCategory | null {
+  const normalized = cleanString(value);
+  return normalized === "Meeting" || normalized === "Drop Off" ? normalized : null;
 }
 
 function normalizeLoginName(value: string | null | undefined): string | null {
@@ -299,6 +310,7 @@ function mapHistoricalEventToMeetingBooking(
         : null,
     relatedContactId: null,
     relatedContactName: relatedEntityType.includes("contact") ? relatedDescription : null,
+    category: readEventText(event, "Category"),
     meetingSummary: readEventSummary(event),
     attendeeCount: attendees.length,
     attendees,
@@ -332,6 +344,7 @@ function writeMeetingBookingUpsert(
       company_name,
       related_contact_id,
       related_contact_name,
+      category,
       meeting_summary,
       attendee_count,
       attendee_details_json,
@@ -350,6 +363,7 @@ function writeMeetingBookingUpsert(
       @company_name,
       @related_contact_id,
       @related_contact_name,
+      @category,
       @meeting_summary,
       @attendee_count,
       @attendee_details_json,
@@ -368,6 +382,7 @@ function writeMeetingBookingUpsert(
       company_name = excluded.company_name,
       related_contact_id = excluded.related_contact_id,
       related_contact_name = excluded.related_contact_name,
+      category = excluded.category,
       meeting_summary = excluded.meeting_summary,
       attendee_count = excluded.attendee_count,
       attendee_details_json = excluded.attendee_details_json,
@@ -389,6 +404,7 @@ function writeMeetingBookingUpsert(
         ? input.relatedContactId
         : null,
     related_contact_name: cleanString(input.relatedContactName),
+    category: cleanString(input.category),
     meeting_summary: cleanString(input.meetingSummary) ?? "Meeting created",
     attendee_count: Math.max(0, Math.trunc(input.attendeeCount)),
     attendee_details_json: JSON.stringify(dedupeMeetingAttendees(input.attendees ?? [])),
@@ -447,6 +463,7 @@ export async function syncMeetingBookings(
         companyName: item.companyName ?? existing.companyName,
         relatedContactId: item.relatedContactId ?? existing.relatedContactId,
         relatedContactName: item.relatedContactName ?? existing.relatedContactName,
+        category: item.category ?? existing.category,
         attendeeCount: item.attendeeCount > 0 ? item.attendeeCount : existing.attendeeCount,
         attendees: item.attendees && item.attendees.length > 0 ? item.attendees : existing.attendees,
         inviteAuthority: item.inviteAuthority ?? existing.inviteAuthority,
@@ -472,6 +489,7 @@ function toStoredMeetingBooking(row: StoredMeetingBookingRow): StoredMeetingBook
     companyName: row.company_name,
     relatedContactId: row.related_contact_id,
     relatedContactName: row.related_contact_name,
+    category: cleanString(row.category),
     meetingSummary: row.meeting_summary,
     attendeeCount: Math.max(0, Number(row.attendee_count) || 0),
     attendees: readAttendeeDetailsJson(row.attendee_details_json),
@@ -518,6 +536,7 @@ export function listMeetingBookings(): StoredMeetingBooking[] {
           company_name,
           related_contact_id,
           related_contact_name,
+          category,
           meeting_summary,
           attendee_count,
           attendee_details_json,
@@ -550,6 +569,7 @@ export function getMeetingBookingById(id: string): StoredMeetingBooking | null {
         company_name,
         related_contact_id,
         related_contact_name,
+        category,
         meeting_summary,
         attendee_count,
         attendee_details_json,

@@ -118,6 +118,7 @@ describe("ensureReadModelSchema", () => {
         "company_name",
         "related_contact_id",
         "related_contact_name",
+        "category",
         "meeting_summary",
         "attendee_count",
         "attendee_details_json",
@@ -227,6 +228,28 @@ describe("ensureReadModelSchema", () => {
         "is_active",
         "sort_name",
         "source",
+        "updated_at",
+      ]),
+    );
+  });
+
+  it("creates the sales_rep_directory table", () => {
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(sales_rep_directory)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "employee_id",
+        "display_name",
+        "normalized_name",
+        "usage_count",
+        "owner_reference_id",
+        "login_name",
+        "email",
+        "is_active",
         "updated_at",
       ]),
     );

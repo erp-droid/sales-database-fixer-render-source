@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildMeetingEventPayloadVariants,
   buildMeetingInviteAttendees,
   findMeetingContactByEmail,
   findMeetingContactByLoginName,
   isMeetingOrganizerContactForLogin,
   normalizeMeetingLoginName,
 } from "@/lib/meeting-create";
-import type { MeetingContactOption } from "@/types/meeting-create";
+import type { MeetingContactOption, MeetingCreateRequest } from "@/types/meeting-create";
 
 function buildContact(input: Partial<MeetingContactOption> & Pick<MeetingContactOption, "contactId" | "contactName" | "key">): MeetingContactOption {
   return {
@@ -154,5 +155,45 @@ describe("buildMeetingInviteAttendees", () => {
         email: "guest@example.com",
       },
     ]);
+  });
+});
+
+describe("buildMeetingEventPayloadVariants", () => {
+  it("sends the selected Acumatica category literally", () => {
+    const request: MeetingCreateRequest = {
+      businessAccountRecordId: "record-1",
+      businessAccountId: "BA0001",
+      sourceContactId: 10,
+      organizerContactId: null,
+      includeOrganizerInAcumatica: false,
+      relatedContactId: 10,
+      category: "Drop Off",
+      summary: "Material delivery",
+      location: "Warehouse",
+      timeZone: "America/Toronto",
+      startDate: "2026-03-19",
+      startTime: "09:00",
+      endDate: "2026-03-19",
+      endTime: "10:00",
+      priority: "Normal",
+      details: "Leave samples at reception.",
+      attendeeContactIds: [10],
+      attendeeEmails: ["guest@example.com"],
+    };
+
+    const payload = buildMeetingEventPayloadVariants({
+      attendees: [
+        {
+          contactId: 10,
+          contactName: "Jacky Lee",
+          contactRecordId: "contact-note-10",
+          email: "jacky.lee@example.com",
+        },
+      ],
+      relatedContactRecordId: "contact-note-10",
+      request,
+    })[0] as Record<string, { value?: unknown }>;
+
+    expect(payload.Category).toEqual({ value: "Drop Off" });
   });
 });

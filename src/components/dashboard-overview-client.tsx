@@ -8,6 +8,7 @@ import type {
   DashboardFilters,
   DashboardSnapshotResponse,
 } from "@/lib/call-analytics/types";
+import type { MeetingCategory } from "@/types/meeting-create";
 
 import styles from "./dashboard-page.module.css";
 import {
@@ -85,22 +86,24 @@ function buildSelectedEmployeeCards(
 function buildSelectedMeetingCards(
   employee: DashboardSnapshotResponse["meetingLeaderboard"][number],
   totalMeetings: number,
+  category: MeetingCategory,
 ): Array<{ label: string; value: string; meta?: string }> {
   const shareOfTotal = totalMeetings > 0 ? employee.totalMeetings / totalMeetings : 0;
+  const categoryLowerLabel = formatMeetingCategoryLowerLabel(category);
   const inviteeValue =
     employee.meetingsWithUnknownAttendeeCount > 0 && employee.totalAttendees === 0
       ? "Unknown"
       : employee.totalAttendees.toLocaleString();
   const inviteeMeta =
     employee.meetingsWithUnknownAttendeeCount > 0
-      ? `${employee.meetingsWithUnknownAttendeeCount.toLocaleString()} imported meeting${
+      ? `${employee.meetingsWithUnknownAttendeeCount.toLocaleString()} imported ${categoryLowerLabel}${
           employee.meetingsWithUnknownAttendeeCount === 1 ? "" : "s"
         } with unknown attendee counts`
       : `${employee.averageAttendees.toFixed(1)} avg invitees`;
 
   return [
     {
-      label: "Meetings booked",
+      label: category === "Drop Off" ? "Drop offs booked" : "Meetings booked",
       value: employee.totalMeetings.toLocaleString(),
       meta: `${formatPercent(shareOfTotal)} of total`,
     },
@@ -146,11 +149,32 @@ function buildMeetingInviteeLabel(meeting: DashboardSnapshotResponse["recentMeet
   return `${meeting.attendeeCount.toLocaleString()} invitee${meeting.attendeeCount === 1 ? "" : "s"}`;
 }
 
-function buildMeetingAuditHref(loginName: string): string {
+function formatMeetingCategoryTitle(category: MeetingCategory): string {
+  return category === "Drop Off" ? "Drop Offs booked" : "Meetings booked";
+}
+
+function formatMeetingCategoryLegend(category: MeetingCategory): string {
+  return category === "Drop Off" ? "Total drop offs" : "Total meetings";
+}
+
+function formatMeetingCategoryMeta(category: MeetingCategory): string {
+  return category === "Drop Off"
+    ? "Drop offs attributed to known users for the current range, grouped by creator."
+    : "Meetings and all other non-drop-off categories attributed to known users for the current range, grouped by creator.";
+}
+
+function formatMeetingCategoryLowerLabel(category: MeetingCategory): string {
+  return category === "Drop Off" ? "drop off" : "meeting";
+}
+
+function buildMeetingCategoryAuditHref(loginName: string, category: MeetingCategory): string {
   const params = new URLSearchParams({
     actionGroup: "meeting_create",
     actor: loginName,
   });
+  if (category === "Drop Off") {
+    params.set("q", category);
+  }
   return `/audit?${params.toString()}`;
 }
 
@@ -224,6 +248,7 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
   const [refreshing, setRefreshing] = useState(false);
   const [selectedEmployeeLoginName, setSelectedEmployeeLoginName] = useState<string | null>(null);
   const [selectedMeetingEmployeeLoginName, setSelectedMeetingEmployeeLoginName] = useState<string | null>(null);
+  const [selectedDropOffEmployeeLoginName, setSelectedDropOffEmployeeLoginName] = useState<string | null>(null);
   const [showFiltersPanel, setShowFiltersPanel] = useState(false);
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [searchDraft, setSearchDraft] = useState(filters.search);
@@ -327,18 +352,34 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
   }, [selectedEmployeeLoginName, snapshot]);
 
   useEffect(() => {
-    if (!snapshot?.meetingLeaderboard.length) {
+    const leaderboard = snapshot?.meetingCategoryAnalytics.meetings.leaderboard ?? [];
+    if (!leaderboard.length) {
       setSelectedMeetingEmployeeLoginName(null);
       return;
     }
 
-    const hasSelectedEmployee = snapshot.meetingLeaderboard.some(
+    const hasSelectedEmployee = leaderboard.some(
       (item) => item.loginName === selectedMeetingEmployeeLoginName,
     );
     if (!hasSelectedEmployee) {
-      setSelectedMeetingEmployeeLoginName(snapshot.meetingLeaderboard[0]?.loginName ?? null);
+      setSelectedMeetingEmployeeLoginName(leaderboard[0]?.loginName ?? null);
     }
-  }, [selectedMeetingEmployeeLoginName, snapshot]);
+  }, [selectedMeetingEmployeeLoginName, snapshot?.meetingCategoryAnalytics.meetings.leaderboard]);
+
+  useEffect(() => {
+    const leaderboard = snapshot?.meetingCategoryAnalytics.dropOffs.leaderboard ?? [];
+    if (!leaderboard.length) {
+      setSelectedDropOffEmployeeLoginName(null);
+      return;
+    }
+
+    const hasSelectedEmployee = leaderboard.some(
+      (item) => item.loginName === selectedDropOffEmployeeLoginName,
+    );
+    if (!hasSelectedEmployee) {
+      setSelectedDropOffEmployeeLoginName(leaderboard[0]?.loginName ?? null);
+    }
+  }, [selectedDropOffEmployeeLoginName, snapshot?.meetingCategoryAnalytics.dropOffs.leaderboard]);
 
   const useActiveRefresh = shouldUseActiveRefresh(snapshot);
 
@@ -487,42 +528,80 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     return [...new Set([maxEmailVolume, midpoint, 0])].sort((left, right) => right - left);
   }, [maxEmailVolume]);
   const latestSelectedCall = selectedEmployeeRecentCalls[0] ?? null;
+  const meetingAnalytics = snapshot?.meetingCategoryAnalytics.meetings ?? null;
+  const dropOffAnalytics = snapshot?.meetingCategoryAnalytics.dropOffs ?? null;
   const meetingChartEmployees = useMemo(
-    () => snapshot?.meetingLeaderboard ?? [],
-    [snapshot?.meetingLeaderboard],
+    () => meetingAnalytics?.leaderboard ?? [],
+    [meetingAnalytics?.leaderboard],
+  );
+  const dropOffChartEmployees = useMemo(
+    () => dropOffAnalytics?.leaderboard ?? [],
+    [dropOffAnalytics?.leaderboard],
   );
   const maxEmployeeMeetings = useMemo(
     () => Math.max(1, ...meetingChartEmployees.map((item) => item.totalMeetings)),
     [meetingChartEmployees],
   );
+  const maxEmployeeDropOffs = useMemo(
+    () => Math.max(1, ...dropOffChartEmployees.map((item) => item.totalMeetings)),
+    [dropOffChartEmployees],
+  );
   const meetingChartTicks = useMemo(() => {
     const midpoint = Math.max(0, Math.ceil(maxEmployeeMeetings / 2));
     return [...new Set([maxEmployeeMeetings, midpoint, 0])].sort((left, right) => right - left);
   }, [maxEmployeeMeetings]);
+  const dropOffChartTicks = useMemo(() => {
+    const midpoint = Math.max(0, Math.ceil(maxEmployeeDropOffs / 2));
+    return [...new Set([maxEmployeeDropOffs, midpoint, 0])].sort((left, right) => right - left);
+  }, [maxEmployeeDropOffs]);
   const selectedMeetingEmployee =
-    snapshot?.meetingLeaderboard.find(
+    meetingAnalytics?.leaderboard.find(
       (item) => item.loginName === selectedMeetingEmployeeLoginName,
     ) ?? null;
+  const selectedDropOffEmployee =
+    dropOffAnalytics?.leaderboard.find(
+      (item) => item.loginName === selectedDropOffEmployeeLoginName,
+    ) ?? null;
   const latestSelectedMeeting = useMemo(() => {
-    if (!snapshot || !selectedMeetingEmployee) {
+    if (!meetingAnalytics || !selectedMeetingEmployee) {
       return null;
     }
 
     return (
-      snapshot.recentMeetings.find(
+      meetingAnalytics.recentMeetings.find(
         (meeting) => meeting.actorLoginName === selectedMeetingEmployee.loginName,
       ) ?? null
     );
-  }, [selectedMeetingEmployee, snapshot]);
+  }, [meetingAnalytics, selectedMeetingEmployee]);
+  const latestSelectedDropOff = useMemo(() => {
+    if (!dropOffAnalytics || !selectedDropOffEmployee) {
+      return null;
+    }
+
+    return (
+      dropOffAnalytics.recentMeetings.find(
+        (meeting) => meeting.actorLoginName === selectedDropOffEmployee.loginName,
+      ) ?? null
+    );
+  }, [dropOffAnalytics, selectedDropOffEmployee]);
   const selectedMeetingEmployeeRecentMeetings = useMemo(() => {
-    if (!snapshot || !selectedMeetingEmployee) {
+    if (!meetingAnalytics || !selectedMeetingEmployee) {
       return [];
     }
 
-    return snapshot.recentMeetings
+    return meetingAnalytics.recentMeetings
       .filter((meeting) => meeting.actorLoginName === selectedMeetingEmployee.loginName)
       .slice(0, 5);
-  }, [selectedMeetingEmployee, snapshot]);
+  }, [meetingAnalytics, selectedMeetingEmployee]);
+  const selectedDropOffEmployeeRecentMeetings = useMemo(() => {
+    if (!dropOffAnalytics || !selectedDropOffEmployee) {
+      return [];
+    }
+
+    return dropOffAnalytics.recentMeetings
+      .filter((meeting) => meeting.actorLoginName === selectedDropOffEmployee.loginName)
+      .slice(0, 5);
+  }, [dropOffAnalytics, selectedDropOffEmployee]);
 
   function openExplorerForEmployee(loginName: string): void {
     const nextFilters = {
@@ -547,12 +626,194 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     setSelectedMeetingEmployeeLoginName(loginName);
   }
 
+  function selectDropOffEmployee(loginName: string): void {
+    setSelectedDropOffEmployeeLoginName(loginName);
+  }
+
+  function renderMeetingCategoryCard(input: {
+    category: MeetingCategory;
+    chartEmployees: DashboardSnapshotResponse["meetingLeaderboard"];
+    chartTicks: number[];
+    maxValue: number;
+    stats: DashboardSnapshotResponse["meetingStats"];
+    selectedEmployee: DashboardSnapshotResponse["meetingLeaderboard"][number] | null;
+    latestSelectedMeeting: DashboardSnapshotResponse["recentMeetings"][number] | null;
+    recentMeetings: DashboardSnapshotResponse["recentMeetings"];
+    onSelectEmployee: (loginName: string) => void;
+  }) {
+    const categoryLowerLabel = formatMeetingCategoryLowerLabel(input.category);
+
+    return (
+      <article className={styles.chartCard}>
+        <div className={styles.chartHeader}>
+          <div>
+            <h2 className={styles.chartTitle}>{formatMeetingCategoryTitle(input.category)}</h2>
+            <p className={styles.chartMeta}>{formatMeetingCategoryMeta(input.category)}</p>
+          </div>
+          {input.selectedEmployee ? (
+            <span className={styles.softBadge}>{input.selectedEmployee.displayName}</span>
+          ) : null}
+        </div>
+
+        <div className={styles.chartLegend}>
+          <span className={styles.legendItem}>
+            <span className={styles.legendSwatch} />
+            {formatMeetingCategoryLegend(input.category)}
+          </span>
+        </div>
+
+        {input.chartEmployees.length ? (
+          <div className={styles.chartFrame}>
+            <div aria-hidden="true" className={styles.chartYAxis}>
+              {input.chartTicks.map((tick) => (
+                <span className={styles.chartYAxisValue} key={`${input.category}-${tick}`}>
+                  {tick.toLocaleString()}
+                </span>
+              ))}
+            </div>
+
+            <div className={styles.chartViewport}>
+              <div className={styles.trendChart}>
+                {input.chartEmployees.map((item) => {
+                  const isActive = item.loginName === input.selectedEmployee?.loginName;
+                  const shareOfMeetings = input.stats.totalMeetings > 0
+                    ? item.totalMeetings / input.stats.totalMeetings
+                    : 0;
+
+                  return (
+                    <div className={styles.trendColumn} key={`${input.category}-${item.loginName}`}>
+                      <button
+                        className={`${styles.trendButton} ${isActive ? styles.trendButtonActive : ""}`}
+                        onClick={() => input.onSelectEmployee(item.loginName)}
+                        title={`${item.displayName}: ${formatCountWithTotalShare(
+                          item.totalMeetings,
+                          input.stats.totalMeetings,
+                        )} ${categoryLowerLabel}s booked`}
+                        type="button"
+                      >
+                        <span className={styles.trendValue}>
+                          {formatCountWithTotalShare(
+                            item.totalMeetings,
+                            input.stats.totalMeetings,
+                          )}
+                        </span>
+                        <div className={styles.trendBarTrack}>
+                          <div
+                            className={styles.trendBarTotal}
+                            style={{ height: `${(item.totalMeetings / input.maxValue) * 100}%` }}
+                          />
+                        </div>
+                        <div className={styles.trendFooter}>
+                          <span className={styles.trendLabel}>{item.displayName}</span>
+                          <span className={styles.trendMeta}>
+                            {item.meetingsWithUnknownAttendeeCount > 0 && item.totalAttendees === 0
+                              ? `Invitees unknown · ${formatPercent(shareOfMeetings)}`
+                              : `${item.totalAttendees.toLocaleString()} invitees · ${formatPercent(shareOfMeetings)}`}
+                          </span>
+                        </div>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className={styles.emptyState}>
+            No {input.category === "Drop Off" ? "drop offs" : "meetings"} were booked in the current range.
+          </p>
+        )}
+
+        {input.selectedEmployee ? (
+          <div className={styles.selectionPanel}>
+            <div className={styles.selectionHeader}>
+              <div>
+                <p className={styles.sectionKicker}>Selected</p>
+                <h3 className={styles.selectionTitle}>{input.selectedEmployee.displayName}</h3>
+              </div>
+              <div className={styles.selectionFeed}>
+                <a
+                  className={styles.summaryLink}
+                  href={buildMeetingCategoryAuditHref(input.selectedEmployee.loginName, input.category)}
+                >
+                  Open {categoryLowerLabel} audit
+                </a>
+              </div>
+            </div>
+
+            <div className={styles.selectionStats}>
+              {buildSelectedMeetingCards(
+                input.selectedEmployee,
+                input.stats.totalMeetings,
+                input.category,
+              ).map((card) => (
+                <div
+                  className={styles.selectionStat}
+                  key={`${input.category}-${input.selectedEmployee?.loginName}-${card.label}`}
+                >
+                  <small>{card.label}</small>
+                  <strong>{card.value}</strong>
+                  {card.meta ? <span>{card.meta}</span> : null}
+                </div>
+              ))}
+            </div>
+
+            <div className={styles.selectionFeed}>
+              <div className={styles.selectionFeedItem}>
+                <span className={styles.selectionFeedLabel}>
+                  Latest {categoryLowerLabel}
+                </span>
+                <span>
+                  {input.latestSelectedMeeting
+                    ? `${buildMeetingActivityLabel(input.latestSelectedMeeting)} · ${
+                        input.latestSelectedMeeting.companyName ??
+                        input.latestSelectedMeeting.contactName ??
+                        "Unknown account"
+                      } · ${formatDateTime(input.latestSelectedMeeting.occurredAt)}`
+                    : `No recent ${categoryLowerLabel}s in the current range.`}
+                </span>
+              </div>
+              <div className={styles.selectionFeedItem}>
+                <span className={styles.selectionFeedLabel}>Linked record</span>
+                <span>
+                  {input.latestSelectedMeeting
+                    ? buildMeetingRecordLabel(input.latestSelectedMeeting)
+                    : `No recent ${categoryLowerLabel}s in the current range.`}
+                </span>
+              </div>
+            </div>
+
+            {input.recentMeetings.length ? (
+              <ul className={styles.summaryList}>
+                {input.recentMeetings.map((meeting) => (
+                  <li key={`${input.category}-${meeting.id}`}>
+                    <div className={styles.summaryRow}>
+                      <div className={styles.summaryCopy}>
+                        <strong>{buildMeetingActivityLabel(meeting)}</strong>
+                        <span>
+                          {buildMeetingRecordLabel(meeting)} • {buildMeetingSourceLabel(meeting)} • {buildMeetingInviteeLabel(meeting)}
+                        </span>
+                      </div>
+                      <div className={styles.summaryMeta}>
+                        <span>{formatDateTime(meeting.occurredAt)}</span>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+      </article>
+    );
+  }
+
   return (
     <DashboardShell
       activeTab="overview"
       onRefresh={handleManualRefresh}
       refreshing={refreshing}
-      subtitle="A quieter view of calls, meetings booked, and sent-email activity for the current range."
+      subtitle="A quieter view of calls, meetings, drop offs, and sent-email activity for the current range."
       title="Dashboard"
     >
       <DashboardStatusBar
@@ -1005,164 +1266,30 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
           </section>
 
           <section className={styles.summarySection}>
-            <article className={styles.chartCard}>
-              <div className={styles.chartHeader}>
-                <div>
-                  <h2 className={styles.chartTitle}>Meetings booked</h2>
-                  <p className={styles.chartMeta}>
-                    Meetings attributed to known users for the current range, grouped by creator.
-                  </p>
-                </div>
-                {selectedMeetingEmployee ? (
-                  <span className={styles.softBadge}>{selectedMeetingEmployee.displayName}</span>
-                ) : null}
-              </div>
-
-              <div className={styles.chartLegend}>
-                <span className={styles.legendItem}>
-                  <span className={styles.legendSwatch} />
-                  Total meetings
-                </span>
-              </div>
-
-              {meetingChartEmployees.length ? (
-                <div className={styles.chartFrame}>
-                  <div aria-hidden="true" className={styles.chartYAxis}>
-                    {meetingChartTicks.map((tick) => (
-                      <span className={styles.chartYAxisValue} key={tick}>
-                        {tick.toLocaleString()}
-                      </span>
-                    ))}
-                  </div>
-
-                  <div className={styles.chartViewport}>
-                    <div className={styles.trendChart}>
-                      {meetingChartEmployees.map((item) => {
-                        const isActive = item.loginName === selectedMeetingEmployeeLoginName;
-                        const shareOfMeetings = snapshot.meetingStats.totalMeetings > 0
-                          ? item.totalMeetings / snapshot.meetingStats.totalMeetings
-                          : 0;
-
-                        return (
-                          <div className={styles.trendColumn} key={`meeting-${item.loginName}`}>
-                            <button
-                              className={`${styles.trendButton} ${isActive ? styles.trendButtonActive : ""}`}
-                              onClick={() => selectMeetingEmployee(item.loginName)}
-                              title={`${item.displayName}: ${formatCountWithTotalShare(
-                                item.totalMeetings,
-                                snapshot.meetingStats.totalMeetings,
-                              )} meetings booked`}
-                              type="button"
-                            >
-                              <span className={styles.trendValue}>
-                                {formatCountWithTotalShare(
-                                  item.totalMeetings,
-                                  snapshot.meetingStats.totalMeetings,
-                                )}
-                              </span>
-                              <div className={styles.trendBarTrack}>
-                                <div
-                                  className={styles.trendBarTotal}
-                                  style={{ height: `${(item.totalMeetings / maxEmployeeMeetings) * 100}%` }}
-                                />
-                              </div>
-                              <div className={styles.trendFooter}>
-                                <span className={styles.trendLabel}>{item.displayName}</span>
-                                <span className={styles.trendMeta}>
-                                  {item.meetingsWithUnknownAttendeeCount > 0 && item.totalAttendees === 0
-                                    ? `Invitees unknown · ${formatPercent(shareOfMeetings)}`
-                                    : `${item.totalAttendees.toLocaleString()} invitees · ${formatPercent(shareOfMeetings)}`}
-                                </span>
-                              </div>
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <p className={styles.emptyState}>No meetings were booked in the current range.</p>
-              )}
-
-              {selectedMeetingEmployee ? (
-                <div className={styles.selectionPanel}>
-                  <div className={styles.selectionHeader}>
-                    <div>
-                      <p className={styles.sectionKicker}>Selected</p>
-                      <h3 className={styles.selectionTitle}>{selectedMeetingEmployee.displayName}</h3>
-                    </div>
-                    <div className={styles.selectionFeed}>
-                      <a
-                        className={styles.summaryLink}
-                        href={buildMeetingAuditHref(selectedMeetingEmployee.loginName)}
-                      >
-                        Open meeting audit
-                      </a>
-                    </div>
-                  </div>
-
-                  <div className={styles.selectionStats}>
-                    {buildSelectedMeetingCards(
-                      selectedMeetingEmployee,
-                      snapshot?.meetingStats.totalMeetings ?? 0,
-                    ).map((card) => (
-                      <div
-                        className={styles.selectionStat}
-                        key={`${selectedMeetingEmployee.loginName}-${card.label}`}
-                      >
-                        <small>{card.label}</small>
-                        <strong>{card.value}</strong>
-                        {card.meta ? <span>{card.meta}</span> : null}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className={styles.selectionFeed}>
-                    <div className={styles.selectionFeedItem}>
-                      <span className={styles.selectionFeedLabel}>Latest meeting</span>
-                      <span>
-                        {latestSelectedMeeting
-                          ? `${buildMeetingActivityLabel(latestSelectedMeeting)} · ${
-                              latestSelectedMeeting.companyName ??
-                              latestSelectedMeeting.contactName ??
-                              "Unknown account"
-                            } · ${formatDateTime(latestSelectedMeeting.occurredAt)}`
-                          : "No recent meetings in the current range."}
-                      </span>
-                    </div>
-                    <div className={styles.selectionFeedItem}>
-                      <span className={styles.selectionFeedLabel}>Linked record</span>
-                      <span>
-                        {latestSelectedMeeting
-                          ? buildMeetingRecordLabel(latestSelectedMeeting)
-                          : "No recent meetings in the current range."}
-                      </span>
-                    </div>
-                  </div>
-
-                  {selectedMeetingEmployeeRecentMeetings.length ? (
-                    <ul className={styles.summaryList}>
-                      {selectedMeetingEmployeeRecentMeetings.map((meeting) => (
-                        <li key={meeting.id}>
-                          <div className={styles.summaryRow}>
-                            <div className={styles.summaryCopy}>
-                              <strong>{buildMeetingActivityLabel(meeting)}</strong>
-                              <span>
-                                {buildMeetingRecordLabel(meeting)} • {buildMeetingSourceLabel(meeting)} • {buildMeetingInviteeLabel(meeting)}
-                              </span>
-                            </div>
-                            <div className={styles.summaryMeta}>
-                              <span>{formatDateTime(meeting.occurredAt)}</span>
-                            </div>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </div>
-              ) : null}
-            </article>
+            <div className={styles.dualChartGrid}>
+              {renderMeetingCategoryCard({
+                category: "Meeting",
+                chartEmployees: meetingChartEmployees,
+                chartTicks: meetingChartTicks,
+                maxValue: maxEmployeeMeetings,
+                stats: meetingAnalytics?.stats ?? snapshot.meetingStats,
+                selectedEmployee: selectedMeetingEmployee,
+                latestSelectedMeeting,
+                recentMeetings: selectedMeetingEmployeeRecentMeetings,
+                onSelectEmployee: selectMeetingEmployee,
+              })}
+              {renderMeetingCategoryCard({
+                category: "Drop Off",
+                chartEmployees: dropOffChartEmployees,
+                chartTicks: dropOffChartTicks,
+                maxValue: maxEmployeeDropOffs,
+                stats: dropOffAnalytics?.stats ?? snapshot.meetingStats,
+                selectedEmployee: selectedDropOffEmployee,
+                latestSelectedMeeting: latestSelectedDropOff,
+                recentMeetings: selectedDropOffEmployeeRecentMeetings,
+                onSelectEmployee: selectDropOffEmployee,
+              })}
+            </div>
           </section>
         </>
       ) : null}

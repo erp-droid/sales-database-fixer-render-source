@@ -1,6 +1,8 @@
 export const MEETING_PRIORITY_VALUES = ["Low", "Normal", "High"] as const;
+export const MEETING_CATEGORY_VALUES = ["Meeting", "Drop Off"] as const;
 
 export type MeetingPriority = (typeof MEETING_PRIORITY_VALUES)[number];
+export type MeetingCategory = (typeof MEETING_CATEGORY_VALUES)[number];
 
 export type MeetingAccountOption = {
   businessAccountRecordId: string;
@@ -55,6 +57,7 @@ export type MeetingCreateRequest = {
   organizerContactId: number | null;
   includeOrganizerInAcumatica: boolean;
   relatedContactId: number;
+  category: MeetingCategory;
   summary: string;
   location: string | null;
   timeZone: string;
@@ -71,6 +74,7 @@ export type MeetingCreateRequest = {
 export type MeetingCreateResponse = {
   created: true;
   eventId: string;
+  category: MeetingCategory;
   inviteAuthority: "google" | "acumatica";
   calendarEventId: string | null;
   calendarInviteStatus: "created" | "updated" | "skipped" | "failed";

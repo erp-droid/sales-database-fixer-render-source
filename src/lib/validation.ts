@@ -19,6 +19,7 @@ import {
   type OpportunityCreateRequest,
 } from "@/types/opportunity-create";
 import {
+  MEETING_CATEGORY_VALUES,
   MEETING_PRIORITY_VALUES,
   type MeetingCreateRequest,
 } from "@/types/meeting-create";
@@ -391,6 +392,10 @@ export const meetingCreateRequestSchema = z
       .default(null),
     includeOrganizerInAcumatica: z.coerce.boolean().default(false),
     relatedContactId: z.coerce.number().int().positive("Related contact is required."),
+    category: z.enum(MEETING_CATEGORY_VALUES, {
+      required_error: "Category is required.",
+      invalid_type_error: "Category is required.",
+    }),
     summary: z.string().trim().min(1, "Summary is required.").max(255),
     location: nullableStringSchema.default(null),
     timeZone: z.string().trim().min(1, "Time zone is required.").max(100),

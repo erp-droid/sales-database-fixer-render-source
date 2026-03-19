@@ -403,6 +403,89 @@ describe("Acumatica endpoint resolution", () => {
       "BusinessAccountID+eq+%2702670D2595%27",
     );
   });
+
+  it("supplements missing detail attributes when the endpoint only accepts a lighter detail expand", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ status: 200, body: [] }));
+
+    const { fetchBusinessAccountById, validateSessionWithAcumatica } = await import(
+      "@/lib/acumatica"
+    );
+
+    await validateSessionWithAcumatica("cookie");
+    fetchMock.mockReset();
+
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Attributes expand is not available on this endpoint." },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: 200, body: [] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: {
+            id: "account-record-id",
+            BusinessAccountID: { value: "B200000001" },
+            Name: { value: "Alpha Inc" },
+            MainAddress: {
+              AddressLine1: { value: "5579 McAdam Road" },
+              City: { value: "Mississauga" },
+              State: { value: "ON" },
+              PostalCode: { value: "L4Z 1N4" },
+              Country: { value: "CA" },
+            },
+            PrimaryContact: {
+              DisplayName: { value: "Jorge Serrano" },
+            },
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: {
+            id: "account-record-id",
+            BusinessAccountID: { value: "B200000001" },
+            Attributes: [
+              {
+                AttributeID: { value: "CLIENTTYPE" },
+                Value: { value: "A" },
+              },
+              {
+                AttributeID: { value: "REGION" },
+                Value: { value: "Region 6" },
+              },
+            ],
+          },
+        }),
+      );
+
+    const result = await fetchBusinessAccountById("cookie", "B200000001");
+
+    expect(result).toMatchObject({
+      id: "account-record-id",
+      BusinessAccountID: { value: "B200000001" },
+      Attributes: [
+        {
+          AttributeID: { value: "CLIENTTYPE" },
+          Value: { value: "A" },
+        },
+        {
+          AttributeID: { value: "REGION" },
+          Value: { value: "Region 6" },
+        },
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain(
+      "/BusinessAccount/B200000001?%24expand=Contacts%2CMainAddress%2CPrimaryContact",
+    );
+    expect(String(fetchMock.mock.calls[3]?.[0])).toContain(
+      "/BusinessAccount/B200000001?%24expand=Attributes",
+    );
+  });
 });
 
 describe("fetchEmployeeProfiles", () => {

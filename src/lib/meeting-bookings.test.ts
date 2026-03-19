@@ -119,6 +119,7 @@ describe("meeting bookings store", () => {
       companyName: "Alpha Foods",
       relatedContactId: 157497,
       relatedContactName: "Jacky Lee",
+      category: "Meeting",
       meetingSummary: "Operations sync",
       attendeeCount: 4,
       attendees: [
@@ -147,6 +148,7 @@ describe("meeting bookings store", () => {
     expect(saved.id).toBe("meeting:EV0001");
     expect(getMeetingBookingById("meeting:EV0001")).toMatchObject({
       actorLoginName: "jserrano",
+      category: "Meeting",
       meetingSummary: "Operations sync",
       attendeeCount: 4,
       attendees: [
@@ -179,6 +181,7 @@ describe("meeting bookings store", () => {
         id: "event-1",
         CreatedByID: { value: "jserrano" },
         CreatedDateTime: { value: "2026-03-10T14:00:00.000Z" },
+        Category: { value: "Drop Off" },
         Summary: { value: "Retro meeting" },
         RelatedEntityType: { value: "PX.Objects.CR.Contact" },
         RelatedEntityDescription: { value: "Jacky Lee" },
@@ -214,6 +217,7 @@ describe("meeting bookings store", () => {
         eventId: "event-1",
         actorLoginName: "jserrano",
         actorName: "Jorge Serrano",
+        category: "Drop Off",
         relatedContactName: "Jacky Lee",
         meetingSummary: "Retro meeting",
         attendeeCount: 2,

@@ -1,3 +1,5 @@
+import type { MeetingCategory } from "@/types/meeting-create";
+
 export type CallAnalyticsSource = "app_bridge" | "twilio_direct" | "inbound" | "unknown";
 
 export type CallAnalyticsDirection = "outbound" | "inbound" | "internal" | "unknown";
@@ -271,12 +273,20 @@ export type DashboardRecentMeeting = {
   actorLoginName: string | null;
   actorName: string | null;
   displayName: string;
+  category: string | null;
   companyName: string | null;
   contactName: string | null;
   meetingSummary: string;
   attendeeCount: number;
   inviteAuthority: "google" | "acumatica" | null;
   calendarInviteStatus: "created" | "updated" | "skipped" | "failed" | null;
+};
+
+export type DashboardMeetingCategoryAnalytics = {
+  category: MeetingCategory;
+  stats: DashboardMeetingSummaryStats;
+  leaderboard: DashboardMeetingActivityItem[];
+  recentMeetings: DashboardRecentMeeting[];
 };
 
 export type DashboardRecentEmail = {
@@ -360,6 +370,10 @@ export type DashboardSnapshotResponse = {
   }>;
   teamStats: CallSummaryStats;
   meetingStats: DashboardMeetingSummaryStats;
+  meetingCategoryAnalytics: {
+    meetings: DashboardMeetingCategoryAnalytics;
+    dropOffs: DashboardMeetingCategoryAnalytics;
+  };
   emailStats: DashboardEmailSummaryStats;
   trend: DashboardTrendResponse;
   emailTrend: DashboardEmailTrendResponse;

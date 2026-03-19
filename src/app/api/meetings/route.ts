@@ -286,6 +286,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const responseBody: MeetingCreateResponse = {
       created: true,
       eventId,
+      category: normalizedRequest.category,
       inviteAuthority,
       calendarEventId,
       calendarInviteStatus,
@@ -307,6 +308,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         companyName: meetingCompanyName,
         relatedContactId: normalizedRequest.relatedContactId,
         relatedContactName: relatedContact?.contactName ?? null,
+        category: normalizedRequest.category,
         meetingSummary: normalizedRequest.summary,
         attendeeCount: responseBody.attendeeCount,
         attendees:

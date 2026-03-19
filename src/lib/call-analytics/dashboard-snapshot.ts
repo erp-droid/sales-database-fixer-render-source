@@ -7,6 +7,7 @@ import type {
   DashboardActivityGapItem,
   DashboardBreakdownItem,
   DashboardEmailActivityItem,
+  DashboardMeetingCategoryAnalytics,
   DashboardEmailSummaryStats,
   DashboardEmailTrendPoint,
   DashboardFilters,
@@ -21,8 +22,13 @@ import type {
   CallSummaryStats,
 } from "@/lib/call-analytics/types";
 import { getEnv } from "@/lib/env";
-import { listMeetingBookings, type StoredMeetingBooking } from "@/lib/meeting-bookings";
+import {
+  listMeetingBookings,
+  resolveMeetingBookingCategory,
+  type StoredMeetingBooking,
+} from "@/lib/meeting-bookings";
 import { getReadModelDb } from "@/lib/read-model/db";
+import type { MeetingCategory } from "@/types/meeting-create";
 
 const TREND_BUCKET = "day";
 const MAX_TREND_BUCKETS = 18;
@@ -94,6 +100,15 @@ type MeetingBookerAggregate = {
   googleInviteMeetings: number;
   lastMeetingAt: string | null;
 };
+
+function cleanString(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
 
 function buildSnapshotCacheKey(filters: DashboardFilters): string {
   return JSON.stringify(filters);
@@ -334,10 +349,20 @@ function buildEmailAnalytics(
 function filterMeetingBookings(
   rows: StoredMeetingBooking[],
   filters: DashboardFilters,
+  category?: MeetingCategory,
 ): StoredMeetingBooking[] {
   const lowerSearch = filters.search.trim().toLowerCase();
 
   return rows.filter((row) => {
+    const normalizedCategory = cleanString(row.category);
+    if (category === "Drop Off") {
+      if (normalizedCategory !== "Drop Off") {
+        return false;
+      }
+    } else if (category === "Meeting" && normalizedCategory === "Drop Off") {
+      return false;
+    }
+
     const occurredAtMs = Date.parse(row.occurredAt);
     if (!Number.isFinite(occurredAtMs)) {
       return false;
@@ -360,6 +385,7 @@ function filterMeetingBookings(
     return [
       row.actorLoginName,
       row.actorName,
+      row.category,
       row.companyName,
       row.relatedContactName,
       row.meetingSummary,
@@ -411,12 +437,13 @@ function buildMeetingAnalytics(
   filters: DashboardFilters,
   employees: EmployeeDirectoryOption[],
   rowsOverride?: StoredMeetingBooking[],
+  category?: MeetingCategory,
 ): {
   stats: DashboardMeetingSummaryStats;
   leaderboard: DashboardMeetingActivityItem[];
   recentMeetings: DashboardRecentMeeting[];
 } {
-  const rows = filterMeetingBookings(rowsOverride ?? listMeetingBookings(), filters);
+  const rows = filterMeetingBookings(rowsOverride ?? listMeetingBookings(), filters, category);
   const employeesByLogin = new Map(employees.map((employee) => [employee.loginName, employee]));
   const aggregates = new Map<string, MeetingBookerAggregate>();
   let totalAttendees = 0;
@@ -479,6 +506,7 @@ function buildMeetingAnalytics(
       actorLoginName: row.actorLoginName,
       actorName: row.actorName,
       displayName: actor.displayName,
+      category: cleanString(row.category),
       companyName: row.companyName,
       contactName: row.relatedContactName,
       meetingSummary: row.meetingSummary,
@@ -498,6 +526,21 @@ function buildMeetingAnalytics(
     },
     leaderboard,
     recentMeetings,
+  };
+}
+
+function buildMeetingCategoryAnalytics(
+  filters: DashboardFilters,
+  employees: EmployeeDirectoryOption[],
+  category: MeetingCategory,
+  rowsOverride?: StoredMeetingBooking[],
+): DashboardMeetingCategoryAnalytics {
+  const analytics = buildMeetingAnalytics(filters, employees, rowsOverride, category);
+  return {
+    category,
+    stats: analytics.stats,
+    leaderboard: analytics.leaderboard,
+    recentMeetings: analytics.recentMeetings,
   };
 }
 
@@ -845,6 +888,7 @@ function buildSnapshotFromSessions(
   meetingRows?: StoredMeetingBooking[],
 ): DashboardSnapshotResponse {
   const teamStats = buildSummaryStats(sessions);
+  const visibleMeetingRows = meetingRows ?? [];
   const trendGroups = new Map<string, DashboardTrendPoint>();
   const bucketSessions = new Map<string, CallSessionRecord[]>();
 
@@ -888,7 +932,11 @@ function buildSnapshotFromSessions(
   const breakdowns = buildBreakdownsForSessions(sessions);
   const employeeAnalytics = buildEmployeeAnalytics(filters, sessions, employees);
   const emailAnalytics = buildEmailAnalytics(filters, employees, emailRows);
-  const meetingAnalytics = buildMeetingAnalytics(filters, employees, meetingRows);
+  const meetingAnalytics = buildMeetingAnalytics(filters, employees, visibleMeetingRows, "Meeting");
+  const meetingCategoryAnalytics = {
+    meetings: buildMeetingCategoryAnalytics(filters, employees, "Meeting", visibleMeetingRows),
+    dropOffs: buildMeetingCategoryAnalytics(filters, employees, "Drop Off", visibleMeetingRows),
+  };
 
   return {
     filters,
@@ -914,6 +962,7 @@ function buildSnapshotFromSessions(
     employees,
     teamStats,
     meetingStats: meetingAnalytics.stats,
+    meetingCategoryAnalytics,
     emailStats: emailAnalytics.stats,
     trend: {
       filters,

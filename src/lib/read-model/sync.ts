@@ -7,6 +7,10 @@ import {
   readEmployeeDirectorySnapshot,
   replaceEmployeeDirectory,
 } from "@/lib/read-model/employees";
+import {
+  buildSalesRepDirectory,
+  replaceSalesRepDirectory,
+} from "@/lib/read-model/sales-reps";
 import { geocodePendingAddresses, queueGeocodesForRows } from "@/lib/read-model/geocodes";
 import { getReadModelDb } from "@/lib/read-model/db";
 import { replaceAllAccountRows, readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
@@ -218,16 +222,50 @@ async function runFullSync(
     });
 
     replaceAllAccountRows(rows);
-    const employeeDirectorySnapshot = readEmployeeDirectorySnapshot();
-    if (
-      employeeDirectorySnapshot.source !== FULL_EMPLOYEE_DIRECTORY_SOURCE ||
-      employeeDirectorySnapshot.items.length === 0
-    ) {
-      replaceEmployeeDirectory(
-        buildEmployeeDirectoryFromRows(rows),
-        DERIVED_EMPLOYEE_DIRECTORY_SOURCE,
-      );
+    let employeeDirectoryItems = readEmployeeDirectorySnapshot().items;
+    let hasFullEmployeeDirectory = false;
+    try {
+      const { fetchEmployees } = await import("@/lib/acumatica");
+      const fetchedEmployeeItems = await withServiceAcumaticaSession(
+        null,
+        (serviceCookieValue, serviceRefresh) =>
+          fetchEmployees(serviceCookieValue, serviceRefresh),
+      ).catch(() => fetchEmployees(cookieValue, authCookieRefresh));
+
+      if (fetchedEmployeeItems.length > 0) {
+        replaceEmployeeDirectory(
+          fetchedEmployeeItems,
+          FULL_EMPLOYEE_DIRECTORY_SOURCE,
+        );
+        employeeDirectoryItems = fetchedEmployeeItems;
+        hasFullEmployeeDirectory = true;
+      }
+    } catch (error) {
+      console.warn("[sync]", {
+        event: "employee_directory_failed",
+        startedAt,
+        phase: currentPhase,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
+
+    if (!hasFullEmployeeDirectory) {
+      const employeeDirectorySnapshot = readEmployeeDirectorySnapshot();
+      if (
+        employeeDirectorySnapshot.source === FULL_EMPLOYEE_DIRECTORY_SOURCE &&
+        employeeDirectorySnapshot.items.length > 0
+      ) {
+        employeeDirectoryItems = employeeDirectorySnapshot.items;
+      } else {
+        employeeDirectoryItems = buildEmployeeDirectoryFromRows(rows);
+        replaceEmployeeDirectory(
+          employeeDirectoryItems,
+          DERIVED_EMPLOYEE_DIRECTORY_SOURCE,
+        );
+      }
+    }
+
+    replaceSalesRepDirectory(buildSalesRepDirectory(rows, employeeDirectoryItems));
     currentPhase = "employee-cache";
     writeSyncState({
       status: "running",

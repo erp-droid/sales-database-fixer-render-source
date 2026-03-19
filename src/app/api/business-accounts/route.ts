@@ -18,6 +18,8 @@ import {
   type AddressInput,
 } from "@/lib/address-complete";
 import {
+  applyOptimisticCreatedAccountRequestToRow,
+  applyOptimisticCreatedAccountRequestToRows,
   buildBusinessAccountCreatePayload,
   normalizeCreatedBusinessAccountRows,
 } from "@/lib/business-account-create";
@@ -1103,10 +1105,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
-    const accountRows = normalizeCreatedBusinessAccountRows(accountSource);
-    const createdRow =
-      accountRows.find((row) => (row.accountRecordId ?? row.id) === identifiers.businessAccountRecordId) ??
-      accountRows[0];
+    const normalizedCreatedRows = normalizeCreatedBusinessAccountRows(accountSource);
+    const accountRows = applyOptimisticCreatedAccountRequestToRows(
+      normalizedCreatedRows,
+      effectiveRequest,
+    );
+    const rawCreatedRow =
+      normalizedCreatedRows.find(
+        (row) => (row.accountRecordId ?? row.id) === identifiers.businessAccountRecordId,
+      ) ?? normalizedCreatedRows[0];
+    const createdRow = rawCreatedRow
+      ? applyOptimisticCreatedAccountRequestToRow(rawCreatedRow, effectiveRequest)
+      : null;
 
     if (!createdRow) {
       throw new HttpError(
@@ -1138,7 +1148,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (getEnv().READ_MODEL_ENABLED) {
       replaceReadModelAccountRows(
         responseBody.businessAccountRecordId,
-        responseBody.accountRows,
+        responseRows,
       );
     }
 

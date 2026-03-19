@@ -421,6 +421,12 @@
   padding-top: 4px;
 }
 
+.dualChartGrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .sideStack {
   display: grid;
   gap: 12px;
@@ -1039,6 +1045,10 @@
   }
 
   .chartFrame {
+    grid-template-columns: 1fr;
+  }
+
+  .dualChartGrid {
     grid-template-columns: 1fr;
   }
 

@@ -216,4 +216,83 @@ describe("deferred actions store", () => {
       listStoredDeferredActionRecords().filter((record) => record.actionType === "mergeContacts"),
     ).toHaveLength(1);
   });
+
+  it("globally hides queued loser contacts even if sync rows come back under a fallback account key", async () => {
+    const {
+      applyDeferredActionsToRows,
+      enqueueDeferredMergeContactsAction,
+    } = await import("@/lib/deferred-actions-store");
+
+    enqueueDeferredMergeContactsAction({
+      sourceSurface: "merge",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "BA0001",
+      companyName: "Alpha Foods",
+      keptContactId: 157497,
+      keptContactName: "Kept Contact",
+      loserContactIds: [157498],
+      loserContactNames: ["Duplicate Contact"],
+      affectedFields: ["Phone 1"],
+      actor: {
+        loginName: "jserrano",
+        name: "Jorge Serrano",
+      },
+      payloadJson: JSON.stringify({
+        businessAccountRecordId: "record-1",
+        businessAccountId: "BA0001",
+        keepContactId: 157497,
+        selectedContactIds: [157497, 157498],
+        setKeptAsPrimary: false,
+      }),
+      preview: {
+        actionType: "mergeContacts",
+        keepContactId: 157497,
+        loserContactIds: [157498],
+        setKeptAsPrimary: false,
+        mergedFields: {
+          displayName: "Kept Contact",
+        },
+        mergedPrimaryContactName: "Kept Contact",
+        mergedPrimaryContactJobTitle: null,
+        mergedPrimaryContactPhone: null,
+        mergedPrimaryContactEmail: null,
+        mergedNotes: null,
+      },
+    });
+
+    const projectedRows = applyDeferredActionsToRows([
+      {
+        id: "fallback-contact",
+        accountRecordId: "fallback-contact",
+        rowKey: "fallback-contact:contact:157498",
+        contactId: 157498,
+        isPrimaryContact: false,
+        phoneNumber: null,
+        salesRepId: null,
+        salesRepName: null,
+        industryType: null,
+        subCategory: null,
+        companyRegion: null,
+        week: null,
+        businessAccountId: "",
+        companyName: "",
+        address: "",
+        addressLine1: "",
+        addressLine2: "",
+        city: "",
+        state: "",
+        postalCode: "",
+        country: "",
+        primaryContactName: "Duplicate Contact",
+        primaryContactPhone: null,
+        primaryContactEmail: "duplicate@example.com",
+        primaryContactId: 157498,
+        category: null,
+        notes: null,
+        lastModifiedIso: null,
+      },
+    ]);
+
+    expect(projectedRows).toEqual([]);
+  });
 });

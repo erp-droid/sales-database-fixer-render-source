@@ -84,6 +84,7 @@ function buildRequest(
       organizerContactId: 157499,
       includeOrganizerInAcumatica: true,
       relatedContactId: 157497,
+      category: "Meeting",
       summary: "Operations sync",
       location: "Boardroom",
       timeZone: "America/Toronto",
@@ -134,6 +135,7 @@ describe("POST /api/meetings", () => {
       companyName: input.companyName,
       relatedContactId: input.relatedContactId,
       relatedContactName: input.relatedContactName,
+      category: input.category,
       meetingSummary: input.meetingSummary,
       attendeeCount: input.attendeeCount,
       attendees: input.attendees,
@@ -199,6 +201,7 @@ describe("POST /api/meetings", () => {
     expect(payload).toEqual({
       created: true,
       eventId: "event-note-1",
+      category: "Meeting",
       inviteAuthority: "google",
       calendarEventId: "google-event-1",
       calendarInviteStatus: "created",
@@ -230,6 +233,7 @@ describe("POST /api/meetings", () => {
         actorLoginName: "jserrano",
         relatedContactId: 157497,
         relatedContactName: "Jacky Lee",
+        category: "Meeting",
         meetingSummary: "Operations sync",
         attendeeCount: 4,
         attendees: [
@@ -247,12 +251,14 @@ describe("POST /api/meetings", () => {
         eventId: "event-note-1",
         actorLoginName: "jserrano",
         relatedContactName: "Jacky Lee",
+        category: "Meeting",
       }),
       { notifyReason: "meeting-create" },
     );
 
     const primaryPayloadVariants = createEvent.mock.calls[0]?.[1] as Array<Record<string, unknown>>;
     expect(primaryPayloadVariants[0]).not.toHaveProperty("Attendees");
+    expect(primaryPayloadVariants[0]?.Category).toEqual({ value: "Meeting" });
 
     const firstMirrorPayload = createEvent.mock.calls[1]?.[1] as Array<Record<string, unknown>>;
     const secondMirrorPayload = createEvent.mock.calls[2]?.[1] as Array<Record<string, unknown>>;
@@ -297,6 +303,34 @@ describe("POST /api/meetings", () => {
 
     const primaryPayloadVariants = createEvent.mock.calls[0]?.[1] as Array<Record<string, unknown>>;
     expect(primaryPayloadVariants[0]?.Attendees).toHaveLength(3);
+  });
+
+  it("sends the selected Drop Off category to Acumatica and the local meeting store", async () => {
+    readGoogleCalendarInviteAuthority.mockReturnValue("acumatica");
+    createEvent
+      .mockResolvedValueOnce({
+        id: "event-note-dropoff",
+        EventID: { value: "EV0009" },
+      })
+      .mockResolvedValue({
+        id: "event-note-mirror",
+        EventID: { value: "EV0010" },
+      });
+
+    const { POST } = await import("@/app/api/meetings/route");
+
+    const response = await POST(buildRequest({ category: "Drop Off", summary: "Sample drop off" }));
+    const payload = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(201);
+    expect(payload).toEqual(expect.objectContaining({ category: "Drop Off" }));
+    expect(createEvent.mock.calls[0]?.[1]?.[0]?.Category).toEqual({ value: "Drop Off" });
+    expect(upsertMeetingBooking).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: "Drop Off",
+        meetingSummary: "Sample drop off",
+      }),
+    );
   });
 
   it("rejects organizer contacts that do not match the signed-in user", async () => {

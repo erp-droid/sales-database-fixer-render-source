@@ -660,4 +660,36 @@ describe("buildDataQualitySnapshot", () => {
     expect(snapshot.issues.missingContact.row).toHaveLength(0);
     expect(snapshot.issues.missingContact.account).toHaveLength(0);
   });
+
+  it("does not treat a primary placeholder row and its real contact row as duplicate contacts", () => {
+    const snapshot = buildDataQualitySnapshot([
+      buildRow({
+        id: "primary-shadow",
+        accountRecordId: "acc-duplicate-placeholder",
+        rowKey: "acc-duplicate-placeholder:primary",
+        businessAccountId: "ACC-DUPLICATE-PLACEHOLDER",
+        contactId: 154499,
+        isPrimaryContact: true,
+        primaryContactId: 154499,
+        primaryContactName: "Satish Dokur",
+        primaryContactPhone: "416-555-0101",
+        primaryContactEmail: "satish@example.com",
+      }),
+      buildRow({
+        id: "real-contact",
+        accountRecordId: "acc-duplicate-placeholder",
+        rowKey: "acc-duplicate-placeholder:contact:154499",
+        businessAccountId: "ACC-DUPLICATE-PLACEHOLDER",
+        contactId: 154499,
+        isPrimaryContact: false,
+        primaryContactId: 154499,
+        primaryContactName: "Satish Dokur",
+        primaryContactPhone: "416-555-0101",
+        primaryContactEmail: "satish@example.com",
+      }),
+    ]);
+
+    expect(snapshot.issues.duplicateContact.row).toHaveLength(0);
+    expect(snapshot.issues.duplicateContact.account).toHaveLength(0);
+  });
 });

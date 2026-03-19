@@ -1264,6 +1264,43 @@ function mergeMainAddressFromSupplement(
   });
 }
 
+function readMissingBusinessAccountDetailExpandParts(expand: string): string[] {
+  const selectedParts = new Set(
+    expand
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean),
+  );
+
+  return BUSINESS_ACCOUNT_PROFILE_EXPANDS.detail.filter(
+    (part) => !selectedParts.has(part),
+  );
+}
+
+function mergeBusinessAccountDetailSupplement(
+  baseRow: RawBusinessAccount,
+  supplementRow: RawBusinessAccount,
+  supplementExpandParts: readonly string[],
+): RawBusinessAccount {
+  let mergedRows = [baseRow];
+  const supplementRows = [supplementRow];
+
+  if (supplementExpandParts.includes("PrimaryContact")) {
+    mergedRows = mergePrimaryContactFromSupplement(mergedRows, supplementRows);
+  }
+  if (supplementExpandParts.includes("Attributes")) {
+    mergedRows = mergeAttributesFromSupplement(mergedRows, supplementRows);
+  }
+  if (supplementExpandParts.includes("Contacts")) {
+    mergedRows = mergeContactsFromSupplement(mergedRows, supplementRows);
+  }
+  if (supplementExpandParts.includes("MainAddress")) {
+    mergedRows = mergeMainAddressFromSupplement(mergedRows, supplementRows);
+  }
+
+  return mergedRows[0] ?? baseRow;
+}
+
 export async function fetchBusinessAccounts(
   cookieValue: string,
   options?: FetchBusinessAccountsOptions,
@@ -1432,15 +1469,56 @@ export async function fetchBusinessAccountById(
   id: string,
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<RawBusinessAccount> {
+  const selectedDetailExpand = await resolveBusinessAccountExpand(
+    cookieValue,
+    "detail",
+    authCookieRefresh,
+  );
+  const missingDetailExpandParts = readMissingBusinessAccountDetailExpandParts(
+    selectedDetailExpand,
+  );
+
+  async function fetchSupplementedBusinessAccountById(
+    targetId: string,
+    baseRow: RawBusinessAccount,
+  ): Promise<RawBusinessAccount> {
+    if (missingDetailExpandParts.length === 0) {
+      return baseRow;
+    }
+
+    try {
+      const supplement = await requestAcumatica<RawBusinessAccount>(
+        getActiveCookieValue(cookieValue, authCookieRefresh),
+        buildBusinessAccountByIdPath(
+          targetId,
+          missingDetailExpandParts.join(","),
+          BUSINESS_ACCOUNT_PROFILE_SELECTS.detail,
+        ),
+        {
+          authCookieRefresh,
+        },
+      );
+
+      return mergeBusinessAccountDetailSupplement(
+        baseRow,
+        supplement,
+        missingDetailExpandParts,
+      );
+    } catch (error) {
+      if (
+        error instanceof HttpError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        throw error;
+      }
+
+      return baseRow;
+    }
+  }
+
   async function fetchFirstBusinessAccountByFilters(
     filters: string[],
   ): Promise<RawBusinessAccount | null> {
-    const expand = await resolveBusinessAccountExpand(
-      cookieValue,
-      "detail",
-      authCookieRefresh,
-    );
-
     for (const filter of filters) {
       try {
         const payload = await requestAcumatica<unknown>(
@@ -1448,7 +1526,7 @@ export async function fetchBusinessAccountById(
           buildBusinessAccountCollectionPath({
             top: 1,
             skip: 0,
-            expand,
+            expand: selectedDetailExpand,
             select: BUSINESS_ACCOUNT_PROFILE_SELECTS.detail,
             filter,
           }),
@@ -1458,7 +1536,43 @@ export async function fetchBusinessAccountById(
         );
         const rows = unwrapCollection<RawBusinessAccount>(payload);
         if (rows[0]) {
-          return rows[0];
+          const baseRow = rows[0];
+          if (missingDetailExpandParts.length === 0) {
+            return baseRow;
+          }
+
+          try {
+            const supplementPayload = await requestAcumatica<unknown>(
+              getActiveCookieValue(cookieValue, authCookieRefresh),
+              buildBusinessAccountCollectionPath({
+                top: 1,
+                skip: 0,
+                expand: missingDetailExpandParts.join(","),
+                select: BUSINESS_ACCOUNT_PROFILE_SELECTS.detail,
+                filter,
+              }),
+              {
+                authCookieRefresh,
+              },
+            );
+            const supplementRows = unwrapCollection<RawBusinessAccount>(supplementPayload);
+            if (supplementRows[0]) {
+              return mergeBusinessAccountDetailSupplement(
+                baseRow,
+                supplementRows[0],
+                missingDetailExpandParts,
+              );
+            }
+          } catch (error) {
+            if (
+              error instanceof HttpError &&
+              (error.status === 401 || error.status === 403)
+            ) {
+              throw error;
+            }
+          }
+
+          return baseRow;
         }
       } catch (error) {
         if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
@@ -1501,22 +1615,18 @@ export async function fetchBusinessAccountById(
   }
 
   try {
-    const expand = await resolveBusinessAccountExpand(
-      cookieValue,
-      "detail",
-      authCookieRefresh,
-    );
-    return await requestAcumatica<RawBusinessAccount>(
+    const baseRow = await requestAcumatica<RawBusinessAccount>(
       getActiveCookieValue(cookieValue, authCookieRefresh),
       buildBusinessAccountByIdPath(
         id,
-        expand,
+        selectedDetailExpand,
         BUSINESS_ACCOUNT_PROFILE_SELECTS.detail,
       ),
       {
         authCookieRefresh,
       },
     );
+    return await fetchSupplementedBusinessAccountById(id, baseRow);
   } catch (directError) {
     if (!(directError instanceof HttpError)) {
       throw directError;
@@ -2289,9 +2399,15 @@ export async function fetchEmployees(
     }
   }
 
-  // Always merge known sales reps from business accounts so partial employee endpoints
-  // do not collapse the dropdown to one user.
+  // Some Acumatica business account payloads expose the owner through a numeric
+  // reference instead of the canonical employee code. Only use those rows as a
+  // fallback when the employee collection did not already return that person.
   try {
+    const knownEmployeesByName = new Set(
+      collectUniqueEmployees(collectedRows).map((employee) =>
+        employee.name.trim().toLowerCase(),
+      ),
+    );
     const rawAccounts = await fetchBusinessAccounts(
       cookieValue,
       {
@@ -2300,10 +2416,20 @@ export async function fetchEmployees(
       },
       authCookieRefresh,
     );
-    const derivedRows: RawEmployee[] = rawAccounts.map((account) => ({
-      Owner: { value: readWrappedScalarString(account, "Owner") },
-      DisplayName: { value: readWrappedString(account, "OwnerEmployeeName") },
-    }));
+    const derivedRows = rawAccounts
+      .map((account): RawEmployee | null => {
+        const displayName = readWrappedString(account, "OwnerEmployeeName");
+        if (!displayName || knownEmployeesByName.has(displayName.trim().toLowerCase())) {
+          return null;
+        }
+
+        knownEmployeesByName.add(displayName.trim().toLowerCase());
+        return {
+          Owner: { value: readWrappedScalarString(account, "Owner") },
+          DisplayName: { value: displayName },
+        } satisfies RawEmployee;
+      })
+      .filter((row): row is RawEmployee => row !== null);
     collectedRows.push(...derivedRows);
   } catch (error) {
     if (

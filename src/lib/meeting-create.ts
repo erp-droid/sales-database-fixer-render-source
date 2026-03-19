@@ -443,7 +443,7 @@ export function buildMeetingEventPayload(
       value: input.request.priority,
     },
     Category: {
-      value: "Red",
+      value: input.request.category,
     },
     RelatedEntityType: {
       value: variant.relatedEntityTypeValue,

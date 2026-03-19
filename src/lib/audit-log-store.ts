@@ -650,14 +650,21 @@ function summarizeMeetingCreate(booking: StoredMeetingBooking): string {
     cleanString(booking.companyName) ??
     cleanString(booking.relatedContactName) ??
     null;
+  const categoryLabel = cleanString(booking.category);
+  const itemLabel =
+    categoryLabel === "Drop Off"
+      ? "drop off"
+      : categoryLabel === "Meeting"
+        ? "meeting"
+        : "meeting";
 
   if (booking.inviteAuthority === null && booking.calendarInviteStatus === null) {
     return recordLabel
-      ? `Imported historical meeting "${summary}" for ${recordLabel}`
-      : `Imported historical meeting "${summary}"`;
+      ? `Imported historical ${itemLabel} "${summary}" for ${recordLabel}`
+      : `Imported historical ${itemLabel} "${summary}"`;
   }
 
-  return recordLabel ? `Booked meeting "${summary}" for ${recordLabel}` : `Booked meeting "${summary}"`;
+  return recordLabel ? `Booked ${itemLabel} "${summary}" for ${recordLabel}` : `Booked ${itemLabel} "${summary}"`;
 }
 
 export function upsertMeetingAuditEvent(
@@ -710,6 +717,7 @@ export function upsertMeetingAuditEvent(
 
   const affectedFields: AuditAffectedField[] = [
     { key: "meeting_summary", label: "Meeting summary" },
+    ...(booking.category ? [{ key: "category", label: "Category" } satisfies AuditAffectedField] : []),
     ...(booking.relatedContactName || booking.relatedContactId !== null
       ? [{ key: "related_contact", label: "Related contact" } satisfies AuditAffectedField]
       : []),
