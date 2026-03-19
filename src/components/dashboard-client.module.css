@@ -1,0 +1,499 @@
+.page {
+  min-height: 100vh;
+  padding: 32px;
+  background:
+    radial-gradient(circle at top left, rgba(46, 121, 203, 0.12), transparent 32%),
+    linear-gradient(180deg, #f7fbff 0%, #eef3f8 100%);
+  color: #1c3155;
+}
+
+.header,
+.panel,
+.filterCard,
+.tableCard,
+.loadingCard,
+.statusBar {
+  border: 1px solid rgba(131, 161, 194, 0.35);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 24px 80px rgba(35, 66, 109, 0.08);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px;
+}
+
+.brandBlock {
+  display: grid;
+  gap: 8px;
+}
+
+.brandLogo {
+  width: 240px;
+  height: auto;
+}
+
+.kicker,
+.sectionKicker {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.72rem;
+  color: #5a769a;
+}
+
+.title,
+.panelHeader h2,
+.tableHeader h2,
+.drawerHeader h2 {
+  margin: 0;
+  font-size: clamp(2.2rem, 4vw, 3.5rem);
+  line-height: 1;
+}
+
+.subtitle {
+  margin: 0;
+  max-width: 720px;
+  color: #5b6f8e;
+  font-size: 1.05rem;
+}
+
+.headerActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.navButton,
+.logoutButton,
+.presetRow button,
+.employeeQuickActions button,
+.pagination button,
+.drawerHeader button {
+  border: 1px solid rgba(120, 154, 196, 0.4);
+  border-radius: 999px;
+  background: #f3f8ff;
+  color: #23426d;
+  padding: 12px 18px;
+  text-decoration: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.logoutButton {
+  background: #fff2ef;
+  color: #a64737;
+}
+
+.userName {
+  align-self: center;
+  color: #506887;
+  font-weight: 600;
+}
+
+.statusBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  margin-top: 20px;
+  padding: 16px 20px;
+  color: #56708f;
+}
+
+.statusPill,
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: #edf6ff;
+  color: #2f6fb7;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.filterCard,
+.panel,
+.tableCard,
+.loadingCard {
+  margin-top: 20px;
+  padding: 24px;
+}
+
+.filterHeader,
+.panelHeader,
+.tableHeader,
+.visualHeader,
+.employeePickerHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.filterHeader h2,
+.visualHeader h3,
+.tableHeader h3 {
+  margin: 0;
+}
+
+.presetRow,
+.employeeQuickActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.filterGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.filterField {
+  display: grid;
+  gap: 8px;
+  color: #4f6687;
+  font-size: 0.92rem;
+}
+
+.searchField {
+  grid-column: span 2;
+}
+
+.filterInput,
+.filterSelect {
+  width: 100%;
+  border: 1px solid rgba(127, 161, 199, 0.45);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: #fcfeff;
+  color: #183153;
+  font: inherit;
+}
+
+.employeePicker {
+  margin-top: 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.employeeList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  max-height: 210px;
+  overflow: auto;
+}
+
+.employeeOption {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 10px;
+  padding: 12px;
+  border: 1px solid rgba(140, 168, 201, 0.35);
+  border-radius: 16px;
+  background: #f9fbfe;
+}
+
+.employeeOption span {
+  font-weight: 600;
+}
+
+.employeeOption small {
+  grid-column: 2;
+  color: #667d9d;
+}
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.metricCard {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, #f9fcff 0%, #eef5fd 100%);
+  border: 1px solid rgba(131, 161, 194, 0.35);
+}
+
+.metricCard small {
+  color: #6680a3;
+}
+
+.metricCard strong {
+  font-size: 1.7rem;
+}
+
+.visualGrid {
+  margin-top: 20px;
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 1fr;
+  gap: 18px;
+}
+
+.visualCard {
+  border: 1px solid rgba(131, 161, 194, 0.35);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 20px;
+  min-height: 240px;
+}
+
+.visualHeader span {
+  color: #6c86a7;
+}
+
+.trendChart {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(22px, 1fr));
+  align-items: end;
+  gap: 10px;
+  margin-top: 18px;
+  min-height: 220px;
+}
+
+.trendBarGroup {
+  display: grid;
+  gap: 10px;
+}
+
+.trendBarStack {
+  position: relative;
+  height: 180px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(226, 238, 251, 0.85), rgba(242, 247, 253, 0.5));
+  overflow: hidden;
+}
+
+.trendBarTotal,
+.trendBarAnswered {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 18px 18px 0 0;
+}
+
+.trendBarTotal {
+  background: linear-gradient(180deg, #cfe4ff 0%, #89b6ef 100%);
+}
+
+.trendBarAnswered {
+  background: linear-gradient(180deg, #58a36c 0%, #2e7f4d 100%);
+}
+
+.trendBarGroup span {
+  color: #6b84a4;
+  font-size: 0.76rem;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-align: left;
+}
+
+.breakdownList,
+.timelineList {
+  list-style: none;
+  padding: 0;
+  margin: 18px 0 0;
+  display: grid;
+  gap: 10px;
+}
+
+.breakdownRow,
+.timelineItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid rgba(135, 164, 196, 0.25);
+  border-radius: 18px;
+  background: #f9fbfe;
+}
+
+.breakdownRow strong,
+.timelineItem strong {
+  display: block;
+}
+
+.breakdownRow span,
+.timelineItem span {
+  color: #69819f;
+}
+
+.breakdownMeta {
+  display: grid;
+  justify-items: end;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 18px;
+}
+
+.table th {
+  text-align: left;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #647d9f;
+  padding-bottom: 12px;
+}
+
+.table td {
+  padding: 14px 10px;
+  border-top: 1px solid rgba(150, 178, 208, 0.22);
+  vertical-align: top;
+}
+
+.table tbody tr {
+  cursor: pointer;
+}
+
+.table tbody tr:hover {
+  background: rgba(233, 242, 252, 0.55);
+}
+
+.emptyState,
+.emptyCell,
+.loadingCard span {
+  color: #7087a5;
+}
+
+.loadingCard {
+  display: grid;
+  gap: 10px;
+}
+
+.error {
+  margin-top: 20px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: #fff1ef;
+  color: #b24a39;
+  border: 1px solid rgba(214, 127, 111, 0.28);
+}
+
+.pagination {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.drawerBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 32, 54, 0.36);
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px;
+  z-index: 80;
+}
+
+.drawer {
+  width: min(560px, 100%);
+  height: 100%;
+  overflow: auto;
+  border-radius: 30px;
+  background: #fbfdff;
+  border: 1px solid rgba(131, 161, 194, 0.35);
+  box-shadow: 0 30px 90px rgba(16, 31, 52, 0.28);
+  padding: 24px;
+}
+
+.drawerHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.detailGrid div {
+  padding: 14px;
+  border-radius: 18px;
+  background: #f5f9fd;
+  border: 1px solid rgba(135, 164, 196, 0.24);
+}
+
+.detailGrid dt {
+  color: #647d9f;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.detailGrid dd {
+  margin: 8px 0 0;
+  word-break: break-word;
+}
+
+.timelineSection {
+  margin-top: 24px;
+}
+
+@media (max-width: 1100px) {
+  .header,
+  .filterHeader,
+  .panelHeader,
+  .tableHeader,
+  .visualHeader,
+  .employeePickerHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .filterGrid,
+  .metricsGrid,
+  .visualGrid,
+  .detailGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .searchField {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 18px;
+  }
+
+  .filterGrid,
+  .metricsGrid,
+  .visualGrid,
+  .detailGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .searchField {
+    grid-column: span 1;
+  }
+
+  .table {
+    display: block;
+    overflow-x: auto;
+  }
+}

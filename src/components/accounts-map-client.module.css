@@ -1,0 +1,680 @@
+.pageContent {
+  --ink-strong: var(--app-text);
+  --ink: var(--app-text);
+  --ink-muted: var(--app-text-secondary);
+  --panel: var(--app-surface);
+  --panel-alt: #f7fafc;
+  --border: var(--app-border);
+  --accent: var(--app-green);
+  --accent-strong: var(--app-green);
+  --shadow: var(--app-shadow);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.topbar {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brandLogo {
+  width: 168px;
+  height: auto;
+  object-fit: contain;
+}
+
+.kicker {
+  margin: 0;
+  color: var(--accent-strong);
+  font-family: var(--font-mono), "Courier New", monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 2px 0 0;
+  color: var(--ink-strong);
+  font-size: clamp(18px, 2.4vw, 26px);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.searchInput {
+  width: min(340px, 48vw);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px 10px;
+}
+
+.headerFilters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.filtersBar {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.filtersToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.salesRepToggle {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink-strong);
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.salesRepToggle:hover {
+  border-color: #8ea8c6;
+  background: #f3f8ff;
+}
+
+.clearInlineButton {
+  border: 1px solid #b9c8dc;
+  border-radius: 8px;
+  background: #f3f7fc;
+  color: #274765;
+  padding: 7px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.clearInlineButton:hover {
+  border-color: #8ea8c6;
+  background: #eaf1f8;
+}
+
+.salesRepFilterCard {
+  width: min(420px, 100%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.salesRepFilterCardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.salesRepFilterCardCopy {
+  display: grid;
+  gap: 2px;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.salesRepFilterCardCopy strong {
+  color: var(--ink-strong);
+  font-size: 14px;
+}
+
+.salesRepFilterActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.salesRepFilterActions button {
+  border: 1px solid #b9c8dc;
+  border-radius: 8px;
+  background: #f3f7fc;
+  color: #274765;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.salesRepFilterActions button:hover {
+  border-color: #8ea8c6;
+  background: #eaf1f8;
+}
+
+.salesRepFilterSearch {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px 9px;
+  font-size: 13px;
+}
+
+.salesRepFilterList {
+  max-height: 260px;
+  overflow-y: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.salesRepFilterEmpty {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.navButton {
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  color: var(--ink-strong);
+  border-radius: 9px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.navButton:hover {
+  border-color: #b7c8e3;
+}
+
+.userName {
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.recordLink {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.recordLink:hover {
+  color: var(--accent-strong);
+}
+
+.mapShell {
+  position: relative;
+  min-height: clamp(420px, calc(100vh - 240px), 860px);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.mapCanvas {
+  position: absolute;
+  inset: 0;
+}
+
+.mapCanvas :global(.leaflet-container) {
+  background: #dbe7f1;
+}
+
+.mapCanvas :global(.leaflet-tile-pane) {
+  will-change: transform;
+}
+
+.mapCanvas :global(.leaflet-tile) {
+  outline: 1px solid transparent;
+  backface-visibility: hidden;
+}
+
+.infoPanel {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  width: min(420px, calc(100% - 28px));
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
+  z-index: 500;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 14px 30px rgba(19, 35, 63, 0.25);
+  padding: 12px;
+}
+
+.panelToolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.panelModeText {
+  display: grid;
+  gap: 2px;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.panelModeText strong {
+  color: var(--ink-strong);
+}
+
+.viewOptionsMenu {
+  position: relative;
+}
+
+.viewOptionsSummary {
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #f4f8fd;
+  color: var(--ink-strong);
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.viewOptionsSummary::-webkit-details-marker {
+  display: none;
+}
+
+.viewOptionsMenu[open] .viewOptionsSummary {
+  border-color: #8cbbe8;
+  background: #e9f4ff;
+  color: #1f5f9f;
+}
+
+.viewOptionsPanel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(260px, 70vw);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 14px 24px rgba(19, 35, 63, 0.18);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  z-index: 2;
+}
+
+.viewOptionsActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.viewOptionsActions button {
+  border: 1px solid #b9c8dc;
+  border-radius: 8px;
+  background: #f3f7fc;
+  color: #274765;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.viewOptionsActions button:hover {
+  border-color: #8ea8c6;
+  background: #eaf1f8;
+}
+
+.viewOptionsList {
+  display: grid;
+  gap: 6px;
+}
+
+.viewOptionItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.viewOptionItem input {
+  margin: 0;
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-bottom: 8px;
+}
+
+.loadingText {
+  margin: 6px 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.errorText {
+  margin: 6px 0;
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.card {
+  border: 1px solid #dae4f2;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+}
+
+.cardHeader h2 {
+  margin: 0 0 8px;
+  color: var(--ink-strong);
+  font-size: 24px;
+}
+
+.cardTitleBlock {
+  display: grid;
+  gap: 4px;
+}
+
+.cardSubtitle {
+  margin: 0 0 8px;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.details {
+  margin: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.details div {
+  display: grid;
+  grid-template-columns: minmax(126px, 32%) 1fr;
+  gap: 8px;
+}
+
+.details dt {
+  margin: 0;
+  font-weight: 700;
+  color: #111a2f;
+}
+
+.details dd {
+  margin: 0;
+  color: #2f3f59;
+  word-break: break-word;
+}
+
+.hiddenDetailsNotice {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.contactsSection {
+  margin-top: 12px;
+  border-top: 1px solid #dae4f2;
+  padding-top: 10px;
+}
+
+.contactsSection h3 {
+  margin: 0 0 8px;
+  color: var(--ink-strong);
+  font-size: 16px;
+}
+
+.noContacts {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.contactList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.contactItem {
+  border: 1px solid #dae4f2;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.contactHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.contactItem p {
+  margin: 0;
+  color: #2f3f59;
+  font-size: 14px;
+  word-break: break-word;
+}
+
+.contactPhoneRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.contactEditor {
+  display: grid;
+  gap: 8px;
+}
+
+.contactField {
+  display: grid;
+  gap: 4px;
+  color: #23405d;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.contactField input,
+.contactField textarea {
+  border: 1px solid #c8d6e9;
+  border-radius: 8px;
+  background: #fff;
+  color: #23364d;
+  font-size: 13px;
+  padding: 8px 9px;
+}
+
+.contactField input:disabled,
+.contactField textarea:disabled {
+  background: #eff4fa;
+  color: #6e8098;
+}
+
+.contactActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.primaryBadge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid #3e91db;
+  color: #1f5f9f;
+  background: #e9f4ff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 1px 8px;
+}
+
+.makePrimaryButton,
+.contactSaveButton,
+.contactSecondaryButton,
+.contactDeleteButton {
+  justify-self: flex-start;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1;
+  padding: 6px 9px;
+  cursor: pointer;
+}
+
+.makePrimaryButton {
+  justify-self: flex-start;
+  border: 1px solid #8ce8c5;
+  background: #e9f4ff;
+  color: #1f9f61;
+}
+
+.contactSaveButton {
+  border: 1px solid #7db889;
+  background: #ebf8ee;
+  color: #1f6c39;
+}
+
+.contactSecondaryButton {
+  border: 1px solid #b9c8dc;
+  background: #f3f7fc;
+  color: #274765;
+}
+
+.contactDeleteButton {
+  border: 1px solid #e4b7b2;
+  background: #fff3f2;
+  color: #a23e37;
+}
+
+.makePrimaryButton:hover:not(:disabled) {
+  border-color: #1f9f61;
+  background: #dff0ff;
+}
+
+.contactSaveButton:hover:not(:disabled) {
+  border-color: #1f6c39;
+  background: #dff4e6;
+}
+
+.contactSecondaryButton:hover:not(:disabled) {
+  border-color: #8ea8c6;
+  background: #eaf1f8;
+}
+
+.contactDeleteButton:hover:not(:disabled) {
+  border-color: #c8645d;
+  background: #ffe8e5;
+}
+
+.makePrimaryButton:disabled,
+.contactSaveButton:disabled,
+.contactSecondaryButton:disabled,
+.contactDeleteButton:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+@media (max-width: 980px) {
+  .mapShell {
+    min-height: clamp(380px, calc(100vh - 260px), 640px);
+  }
+
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .filtersBar {
+    align-items: stretch;
+  }
+
+  .headerFilters {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .searchInput {
+    width: 100%;
+  }
+
+  .filtersToolbar {
+    align-items: stretch;
+  }
+
+  .salesRepFilterCard {
+    width: 100%;
+  }
+
+  .infoPanel {
+    left: 10px;
+    right: 10px;
+    top: auto;
+    bottom: 10px;
+    width: auto;
+    max-height: min(52vh, 420px);
+  }
+
+  .panelToolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .viewOptionsPanel {
+    position: static;
+    width: 100%;
+  }
+
+  .details div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
