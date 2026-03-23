@@ -1,5 +1,6 @@
 import {
   buildBusinessAccountRegionProfiles,
+  isAllowedBusinessAccountType,
   normalizeCanadianPostalCodeFsa,
   resolveBusinessAccountClassDecision,
   resolveBusinessAccountRegion,
@@ -61,6 +62,15 @@ describe("business-account region resolution", () => {
       skippedReason: null,
       targetClassId: "LEAD",
     });
+  });
+
+  it("includes prospect accounts in allowed business account types", () => {
+    expect(
+      isAllowedBusinessAccountType({
+        type: "Prospect",
+        classId: "LEAD",
+      }),
+    ).toBe(true);
   });
 
   it("normalizes Canadian FSAs and resolves exact mappings with first-listed precedence", () => {

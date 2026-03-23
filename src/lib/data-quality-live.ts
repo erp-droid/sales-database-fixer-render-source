@@ -143,7 +143,11 @@ function isAllowedBusinessAccountType(record: unknown): boolean {
       readWrappedString(record, "TypeDescription"),
   );
   if (normalizedType) {
-    return normalizedType === "customer" || normalizedType === "businessaccount";
+    return (
+      normalizedType === "customer" ||
+      normalizedType === "businessaccount" ||
+      normalizedType === "prospect"
+    );
   }
 
   const classId =
