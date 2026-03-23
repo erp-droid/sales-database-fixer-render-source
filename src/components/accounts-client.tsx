@@ -161,10 +161,11 @@ type EmployeeLookupResponse = {
 };
 
 type SyncProgress = {
-  fetchedPages: number;
-  totalPages: number | null;
-  fetchedRows: number;
-  totalRows: number | null;
+  fetchedAccounts: number;
+  totalAccounts: number | null;
+  fetchedContacts: number;
+  totalContacts: number | null;
+  snapshotRows: number;
 };
 
 type OpportunityDrawerContext = {
@@ -2894,13 +2895,13 @@ export function AccountsClient({
     [page, totalPages],
   );
   const syncPercent = useMemo(() => {
-    if (!syncProgress || !syncProgress.totalPages || syncProgress.totalPages <= 0) {
+    if (!syncProgress || !syncProgress.totalAccounts || syncProgress.totalAccounts <= 0) {
       return null;
     }
 
     return Math.min(
       100,
-      Math.round((syncProgress.fetchedPages / syncProgress.totalPages) * 100),
+      Math.round((syncProgress.fetchedAccounts / syncProgress.totalAccounts) * 100),
     );
   }, [syncProgress]);
 
@@ -4003,10 +4004,11 @@ export function AccountsClient({
     setSyncStartedAt(startedAt);
     setSyncElapsedMs(0);
     setSyncProgress({
-      fetchedPages: 0,
-      totalPages: null,
-      fetchedRows: 0,
-      totalRows: null,
+      fetchedAccounts: 0,
+      totalAccounts: null,
+      fetchedContacts: 0,
+      totalContacts: null,
+      snapshotRows: 0,
     });
 
     try {
@@ -4035,17 +4037,17 @@ export function AccountsClient({
         }
 
         setSyncProgress({
-          fetchedPages: statusPayload.progress?.fetchedAccounts ?? 0,
-          totalPages: statusPayload.progress?.totalAccounts ?? null,
-          fetchedRows: statusPayload.rowsCount,
-          totalRows: statusPayload.progress?.totalContacts ?? statusPayload.contactsCount,
+          fetchedAccounts: statusPayload.progress?.fetchedAccounts ?? statusPayload.accountsCount,
+          totalAccounts: statusPayload.progress?.totalAccounts ?? statusPayload.accountsCount,
+          fetchedContacts: statusPayload.progress?.fetchedContacts ?? statusPayload.contactsCount,
+          totalContacts: statusPayload.progress?.totalContacts ?? statusPayload.contactsCount,
+          snapshotRows: statusPayload.rowsCount,
         });
 
         if (statusPayload.status !== "running") {
           if (statusPayload.status === "failed") {
             throw new Error(statusPayload.lastError ?? "Sync failed.");
           }
-          setLastSyncedAt(statusPayload.lastSuccessfulSyncAt);
           break;
         }
 
@@ -6265,8 +6267,8 @@ export function AccountsClient({
             <div className={styles.syncProgressHeader}>
               <strong>Sync in progress</strong>
               <span>
-                {(syncProgress.totalPages
-                  ? `${syncProgress.fetchedPages} / ${syncProgress.totalPages} accounts`
+                {(syncProgress.totalAccounts
+                  ? `${syncProgress.fetchedAccounts} / ${syncProgress.totalAccounts} accounts`
                   : "Preparing snapshot") + ` • ${formatElapsedDuration(syncElapsedMs)}`}
               </span>
             </div>
@@ -6288,10 +6290,14 @@ export function AccountsClient({
               />
             </div>
             <p className={styles.syncProgressMeta}>
-              Loaded {syncProgress.fetchedRows.toLocaleString()}
-              {syncProgress.totalRows !== null
-                ? ` of ${syncProgress.totalRows.toLocaleString()} records`
-                : " records"}
+              Synced {syncProgress.fetchedContacts.toLocaleString()}
+              {syncProgress.totalContacts !== null
+                ? ` of ${syncProgress.totalContacts.toLocaleString()} contacts`
+                : " contacts"}
+              {` • ${syncProgress.snapshotRows.toLocaleString()} snapshot rows`}
+            </p>
+            <p className={styles.syncProgressMeta}>
+              Showing the previous table snapshot until sync completes.
             </p>
           </section>
         ) : null}
@@ -7300,7 +7306,7 @@ export function AccountsClient({
                   </p>
                 ) : (
                   <p className={styles.lookupHint}>
-                    OpenAI looks online for company evidence, writes a local-only company description, and also uses MeadowBrook's postal-code region map.
+                    OpenAI looks online for company evidence, writes a local-only company description, and also uses MeadowBrook&apos;s postal-code region map.
                   </p>
                 )}
               </div>
