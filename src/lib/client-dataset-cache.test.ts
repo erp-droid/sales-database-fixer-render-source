@@ -88,7 +88,7 @@ describe("client dataset cache", () => {
     });
   });
 
-  it("migrates legacy dataset keys into the current cache key", async () => {
+  it("ignores and clears legacy dataset keys after a cache version bump", async () => {
     const legacyPayload = JSON.stringify({
       rows: [SAMPLE_ROW],
       lastSyncedAt: "2026-03-13T21:36:00.592Z",
@@ -99,11 +99,9 @@ describe("client dataset cache", () => {
     localStorage.setItem("businessAccounts.dataset.v3", legacyPayload);
 
     const cache = await import("@/lib/client-dataset-cache");
-    expect(cache.readCachedDatasetFromStorage()).toEqual({
-      rows: [SAMPLE_ROW],
-      lastSyncedAt: "2026-03-13T21:36:00.592Z",
-    });
-    expect(localStorage.getItem("businessAccounts.dataset.v4")).toBe(legacyPayload);
+    expect(cache.readCachedDatasetFromStorage()).toBeNull();
+    expect(localStorage.getItem("businessAccounts.dataset.v5")).toBeNull();
+    expect(localStorage.getItem("businessAccounts.dataset.v4")).toBeNull();
     expect(localStorage.getItem("businessAccounts.dataset.v3")).toBeNull();
   });
 });
