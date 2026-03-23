@@ -66,6 +66,7 @@ const BUSINESS_ACCOUNT_CREATE_FIELD_LABELS: Record<keyof BusinessAccountCreateRe
   classId: "Class",
   salesRepId: "Sales rep",
   salesRepName: "Sales rep",
+  companyPhone: "Company phone",
   industryType: "Industry type",
   subCategory: "Sub-category",
   companyRegion: "Company region",
@@ -85,6 +86,7 @@ const CONTACT_CREATE_FIELD_LABELS: Record<keyof BusinessAccountContactCreateRequ
   jobTitle: "Job title",
   email: "Email",
   phone1: "Phone",
+  extension: "Extension",
   contactClass: "Contact class",
 };
 
