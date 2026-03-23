@@ -20,6 +20,7 @@ export type BusinessAccountCreateRequest = {
   classId: BusinessAccountClassCode;
   salesRepId: string | null;
   salesRepName: string | null;
+  companyPhone: string | null;
   industryType: string;
   subCategory: string;
   companyRegion: string;
@@ -48,6 +49,7 @@ export type BusinessAccountContactCreateRequest = {
   jobTitle: string;
   email: string;
   phone1: string;
+  extension: string | null;
   contactClass: ContactClassKey;
 };
 

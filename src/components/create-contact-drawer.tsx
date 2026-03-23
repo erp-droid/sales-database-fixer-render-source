@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { CONTACT_CLASS_OPTIONS } from "@/lib/business-account-create";
-import { formatPhoneDraftValue, normalizePhoneForSave } from "@/lib/phone";
+import {
+  formatPhoneDraftValue,
+  normalizeExtensionForSave,
+  normalizePhoneForSave,
+} from "@/lib/phone";
 import type {
   BusinessAccountContactCreatePartialResponse,
   BusinessAccountContactCreateRequest,
@@ -36,6 +40,7 @@ const EMPTY_CONTACT_FORM: BusinessAccountContactCreateRequest = {
   jobTitle: "",
   email: "",
   phone1: "",
+  extension: null,
   contactClass: "sales",
 };
 
@@ -227,6 +232,13 @@ export function CreateContactDrawer({
       setContactError("Phone Number must use the format ###-###-####.");
       return;
     }
+    const normalizedExtension = contactForm.extension
+      ? normalizeExtensionForSave(contactForm.extension)
+      : null;
+    if (contactForm.extension && !normalizedExtension) {
+      setContactError("Extension must use 1 to 5 digits.");
+      return;
+    }
 
     setIsCreatingContact(true);
     setContactError(null);
@@ -242,6 +254,7 @@ export function CreateContactDrawer({
           },
           body: JSON.stringify({
             ...contactForm,
+            extension: normalizedExtension,
             phone1: normalizedPhone,
           }),
         },
@@ -425,6 +438,23 @@ export function CreateContactDrawer({
                 }
                 placeholder="123-456-7890"
                 value={contactForm.phone1}
+              />
+            </label>
+
+            <label>
+              Extension
+              <input
+                disabled={contactPartialComplete}
+                inputMode="numeric"
+                maxLength={5}
+                onChange={(event) =>
+                  setContactForm((current) => ({
+                    ...current,
+                    extension: event.target.value.replace(/\D/g, "").slice(0, 5) || null,
+                  }))
+                }
+                placeholder="Extension"
+                value={contactForm.extension ?? ""}
               />
             </label>
 

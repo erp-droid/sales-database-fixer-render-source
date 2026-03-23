@@ -315,6 +315,7 @@ describe("parseBusinessAccountCreatePayload", () => {
     classId: "CUSTOMER",
     salesRepId: "109343",
     salesRepName: "Jorge Serrano",
+    companyPhone: null,
     industryType: "Distributi",
     subCategory: "Manufactur",
     companyRegion: "Region 1",
@@ -413,6 +414,33 @@ describe("parseBusinessAccountCreatePayload", () => {
     });
     expect(parsed.country).toBe("CA");
   });
+
+  it("accepts blank company phone", () => {
+    const parsed = parseBusinessAccountCreatePayload({
+      ...validPayload,
+      companyPhone: "   ",
+    });
+
+    expect(parsed.companyPhone).toBeNull();
+  });
+
+  it("normalizes valid company phone", () => {
+    const parsed = parseBusinessAccountCreatePayload({
+      ...validPayload,
+      companyPhone: "19055550100",
+    });
+
+    expect(parsed.companyPhone).toBe("905-555-0100");
+  });
+
+  it("rejects invalid company phone", () => {
+    expect(() =>
+      parseBusinessAccountCreatePayload({
+        ...validPayload,
+        companyPhone: "12345",
+      }),
+    ).toThrow(ZodError);
+  });
 });
 
 describe("parseCompanyAttributeSuggestionPayload", () => {
@@ -457,6 +485,7 @@ describe("parseBusinessAccountContactCreatePayload", () => {
     jobTitle: "Sales",
     email: "jserrano@meadowb.com",
     phone1: "4162304681",
+    extension: null,
     contactClass: "sales",
   };
 
@@ -501,6 +530,33 @@ describe("parseBusinessAccountContactCreatePayload", () => {
       parseBusinessAccountContactCreatePayload({
         ...validPayload,
         contactClass: "unknown",
+      }),
+    ).toThrow(ZodError);
+  });
+
+  it("accepts blank extension", () => {
+    const parsed = parseBusinessAccountContactCreatePayload({
+      ...validPayload,
+      extension: "   ",
+    });
+
+    expect(parsed.extension).toBeNull();
+  });
+
+  it("normalizes valid extension", () => {
+    const parsed = parseBusinessAccountContactCreatePayload({
+      ...validPayload,
+      extension: "0031",
+    });
+
+    expect(parsed.extension).toBe("0031");
+  });
+
+  it("rejects invalid extension", () => {
+    expect(() =>
+      parseBusinessAccountContactCreatePayload({
+        ...validPayload,
+        extension: "123456",
       }),
     ).toThrow(ZodError);
   });
@@ -654,6 +710,7 @@ describe("parseMeetingCreatePayload", () => {
     organizerContactId: 157499,
     includeOrganizerInAcumatica: true,
     relatedContactId: 157497,
+    category: "Meeting",
     summary: "Operations sync",
     location: "Boardroom",
     timeZone: "America/Toronto",
@@ -685,6 +742,7 @@ describe("parseMeetingCreatePayload", () => {
       organizerContactId: 157499,
       includeOrganizerInAcumatica: true,
       relatedContactId: 157497,
+      category: "Meeting",
       summary: "Operations sync",
       location: "Boardroom",
       timeZone: "America/Toronto",

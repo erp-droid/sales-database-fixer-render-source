@@ -11,7 +11,11 @@ import {
   SUB_CATEGORY_OPTIONS,
   WEEK_OPTIONS,
 } from "@/lib/business-account-create";
-import { formatPhoneDraftValue, normalizePhoneForSave } from "@/lib/phone";
+import {
+  formatPhoneDraftValue,
+  normalizeExtensionForSave,
+  normalizePhoneForSave,
+} from "@/lib/phone";
 import type {
   BusinessAccountCreateRequest,
   BusinessAccountCreateResponse,
@@ -84,6 +88,7 @@ const EMPTY_ACCOUNT_FORM: AccountCreateFormState = {
   classId: "",
   salesRepId: null,
   salesRepName: null,
+  companyPhone: null,
   industryType: "",
   subCategory: "",
   companyRegion: "",
@@ -103,6 +108,7 @@ const EMPTY_CONTACT_FORM: BusinessAccountContactCreateRequest = {
   jobTitle: "",
   email: "",
   phone1: "",
+  extension: null,
   contactClass: "sales",
 };
 
@@ -674,6 +680,13 @@ export function CreateBusinessAccountDrawer({
       setAccountError("Select a valid Sales Rep from the employee list.");
       return;
     }
+    const normalizedCompanyPhone = accountForm.companyPhone
+      ? normalizePhoneForSave(accountForm.companyPhone)
+      : null;
+    if (accountForm.companyPhone && !normalizedCompanyPhone) {
+      setAccountError("Company Phone must use the format ###-###-####.");
+      return;
+    }
 
     setIsCreatingAccount(true);
     setAccountError(null);
@@ -685,6 +698,7 @@ export function CreateBusinessAccountDrawer({
         companyDescription: readText(accountForm.companyDescription),
         classId: accountForm.classId,
         category: accountForm.category,
+        companyPhone: normalizedCompanyPhone,
         week: accountForm.week || null,
       };
       const response = await fetch("/api/business-accounts", {
@@ -817,6 +831,13 @@ export function CreateBusinessAccountDrawer({
       setContactError("Phone Number must use the format ###-###-####.");
       return;
     }
+    const normalizedExtension = contactForm.extension
+      ? normalizeExtensionForSave(contactForm.extension)
+      : null;
+    if (contactForm.extension && !normalizedExtension) {
+      setContactError("Extension must use 1 to 5 digits.");
+      return;
+    }
 
     setIsCreatingContact(true);
     setContactError(null);
@@ -832,6 +853,7 @@ export function CreateBusinessAccountDrawer({
           },
           body: JSON.stringify({
             ...contactForm,
+            extension: normalizedExtension,
             phone1: normalizedPhone,
           }),
         },
@@ -931,6 +953,22 @@ export function CreateBusinessAccountDrawer({
                 <p className={styles.lookupHint}>
                   This description stays in the app only. Create saves it locally and does not push it to Acumatica.
                 </p>
+
+                <label>
+                  Company Phone
+                  <input
+                    inputMode="numeric"
+                    maxLength={12}
+                    onChange={(event) =>
+                      setAccountForm((current) => ({
+                        ...current,
+                        companyPhone: formatPhoneDraftValue(event.target.value) || null,
+                      }))
+                    }
+                    placeholder="123-456-7890"
+                    value={accountForm.companyPhone ?? ""}
+                  />
+                </label>
 
                 <label>
                   Business Account Class
@@ -1321,6 +1359,23 @@ export function CreateBusinessAccountDrawer({
                     }
                     placeholder="123-456-7890"
                     value={contactForm.phone1}
+                  />
+                </label>
+
+                <label>
+                  Extension
+                  <input
+                    disabled={contactPartialComplete}
+                    inputMode="numeric"
+                    maxLength={5}
+                    onChange={(event) =>
+                      setContactForm((current) => ({
+                        ...current,
+                        extension: event.target.value.replace(/\D/g, "").slice(0, 5) || null,
+                      }))
+                    }
+                    placeholder="Extension"
+                    value={contactForm.extension ?? ""}
                   />
                 </label>
 

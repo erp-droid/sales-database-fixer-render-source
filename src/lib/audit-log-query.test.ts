@@ -102,6 +102,7 @@ describe("audit log query", () => {
         classId: "LEAD",
         salesRepId: "109343",
         salesRepName: "Jorge Serrano",
+        companyPhone: null,
         industryType: "Distribution",
         subCategory: "Pharmaceuticals",
         companyRegion: "Region 1",

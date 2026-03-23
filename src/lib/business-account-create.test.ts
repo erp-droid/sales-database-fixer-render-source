@@ -13,6 +13,7 @@ describe("buildBusinessAccountCreatePayload", () => {
     classId: "LEAD" as const,
     salesRepId: "109343",
     salesRepName: "Jorge Serrano",
+    companyPhone: null,
     industryType: "Distribution",
     subCategory: "Pharmaceuticals",
     companyRegion: "Region 1",
@@ -46,6 +47,17 @@ describe("buildBusinessAccountCreatePayload", () => {
     expect(payload).toMatchObject({
       ClassID: { value: "CUSTOMER" },
       Type: { value: "Customer" },
+    });
+  });
+
+  it("includes Business1 when company phone is provided", () => {
+    const payload = buildBusinessAccountCreatePayload({
+      ...baseRequest,
+      companyPhone: "905-555-0100",
+    });
+
+    expect(payload).toMatchObject({
+      Business1: { value: "905-555-0100" },
     });
   });
 
@@ -109,6 +121,31 @@ describe("buildBusinessAccountCreatePayload", () => {
     ).toBe(false);
   });
 
+  it("omits blank optional attributes and owner values", () => {
+    const payload = buildBusinessAccountCreatePayload({
+      ...baseRequest,
+      salesRepId: null,
+      industryType: "",
+      subCategory: "",
+      companyRegion: "",
+      week: null,
+      addressLine2: "",
+    }) as {
+      Attributes: Array<Record<string, { value: string }>>;
+      Owner?: { value: string };
+      MainAddress: Record<string, { value: string }>;
+    };
+
+    expect(payload.Attributes).toEqual([
+      {
+        AttributeID: { value: "CLIENTTYPE" },
+        Value: { value: "A" },
+      },
+    ]);
+    expect(payload).not.toHaveProperty("Owner");
+    expect(payload.MainAddress).not.toHaveProperty("AddressLine2");
+  });
+
   it("maps the canonical address with unit number override", () => {
     const payload = buildBusinessAccountCreatePayload(baseRequest) as {
       MainAddress: Record<string, { value: string }>;
@@ -133,6 +170,7 @@ describe("buildContactCreatePayload", () => {
         jobTitle: "Sales",
         email: "jserrano@meadowb.com",
         phone1: "416-230-4681",
+        extension: null,
         contactClass: "sales",
       },
       businessAccountId: "B200000003",
@@ -159,6 +197,7 @@ describe("buildContactCreatePayload", () => {
         jobTitle: "Sales",
         email: "prince@example.com",
         phone1: "416-230-4681",
+        extension: null,
         contactClass: "sales",
       },
       businessAccountId: "B200000003",
@@ -179,6 +218,7 @@ describe("buildContactCreatePayload", () => {
         jobTitle: "Sales",
         email: "jserrano@meadowb.com",
         phone1: "416-230-4681",
+        extension: null,
         contactClass: "billing",
       },
       businessAccountId: "B200000003",
@@ -189,6 +229,26 @@ describe("buildContactCreatePayload", () => {
       ContactClass: { value: CONTACT_CLASS_VALUE_MAP.billing },
     });
   });
+
+  it("maps extension to Phone2 when provided", () => {
+    const payload = buildContactCreatePayload({
+      request: {
+        displayName: "Jorge Serrano",
+        jobTitle: "Sales",
+        email: "jserrano@meadowb.com",
+        phone1: "416-230-4681",
+        extension: "31",
+        contactClass: "sales",
+      },
+      businessAccountId: "B200000003",
+      companyName: "Alpha Inc",
+    });
+
+    expect(payload).toMatchObject({
+      Phone1: { value: "416-230-4681" },
+      Phone2: { value: "31" },
+    });
+  });
 });
 
 describe("applyOptimisticCreatedAccountRequestToRows", () => {
@@ -197,6 +257,7 @@ describe("applyOptimisticCreatedAccountRequestToRows", () => {
     classId: "LEAD" as const,
     salesRepId: "E0000045",
     salesRepName: "Jorge Serrano",
+    companyPhone: "905-555-0100",
     industryType: "Service",
     subCategory: "General",
     companyRegion: "Region 6",
@@ -249,6 +310,8 @@ describe("applyOptimisticCreatedAccountRequestToRows", () => {
 
     expect(rows[0]).toMatchObject({
       companyName: "Alpha Inc",
+      companyPhone: "905-555-0100",
+      companyPhoneSource: "account",
       salesRepId: "E0000045",
       salesRepName: "Jorge Serrano",
       industryType: "Service",
@@ -265,6 +328,8 @@ describe("applyOptimisticCreatedAccountRequestToRows", () => {
     const row = applyOptimisticCreatedAccountRequestToRow(baseRow, baseRequest);
 
     expect(row).toMatchObject({
+      companyPhone: "905-555-0100",
+      companyPhoneSource: "account",
       salesRepId: "E0000045",
       industryType: "Service",
       subCategory: "General",

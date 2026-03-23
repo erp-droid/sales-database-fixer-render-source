@@ -262,6 +262,7 @@ export const businessAccountCreateRequestSchema = z.object({
   }),
   salesRepId: nullableStringSchema.default(null),
   salesRepName: nullableStringSchema.default(null),
+  companyPhone: nullablePhoneSchema.default(null),
   industryType: z.string().trim().min(1, "Industry Type is required.").max(255),
   subCategory: z
     .string()
@@ -321,6 +322,7 @@ export const businessAccountContactCreateRequestSchema = z.object({
       message: "Phone number must use the format ###-###-####.",
     })
     .transform((value) => normalizePhoneForSave(value) as string),
+  extension: nullableExtensionSchema.default(null),
   contactClass: z.enum(CONTACT_CLASS_KEYS, {
     required_error: "Contact class is required.",
     invalid_type_error: "Contact class is required.",

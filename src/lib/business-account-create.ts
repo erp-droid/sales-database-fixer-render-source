@@ -111,6 +111,10 @@ export const WEEK_OPTIONS: AttributeOption[] = Array.from({ length: 15 }, (_, in
   };
 });
 
+function hasText(value: string | null | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function splitContactName(displayName: string): {
   firstName: string | null;
   lastName: string;
@@ -274,14 +278,16 @@ function buildCreateAttributes(
     attributes.push({ id: "WEEK", value: canonicalizedWeek });
   }
 
-  return attributes.map((attribute) => ({
-    AttributeID: {
-      value: attribute.id,
-    },
-    Value: {
-      value: attribute.value,
-    },
-  }));
+  return attributes
+    .filter((attribute) => attribute.value.trim().length > 0)
+    .map((attribute) => ({
+      AttributeID: {
+        value: attribute.id,
+      },
+      Value: {
+        value: attribute.value,
+      },
+    }));
 }
 
 export function buildBusinessAccountCreatePayload(
@@ -299,16 +305,31 @@ export function buildBusinessAccountCreatePayload(
     Type: {
       value: classConfig.type,
     },
-    Owner: {
-      value: request.salesRepId ?? "",
-    },
+    ...(hasText(request.salesRepId)
+      ? {
+          Owner: {
+            value: request.salesRepId,
+          },
+        }
+      : {}),
+    ...(hasText(request.companyPhone)
+      ? {
+          Business1: {
+            value: request.companyPhone,
+          },
+        }
+      : {}),
     MainAddress: {
       AddressLine1: {
         value: request.addressLine1,
       },
-      AddressLine2: {
-        value: request.addressLine2,
-      },
+      ...(hasText(request.addressLine2)
+        ? {
+            AddressLine2: {
+              value: request.addressLine2,
+            },
+          }
+        : {}),
       City: {
         value: request.city,
       },
@@ -355,6 +376,13 @@ export function buildContactCreatePayload(input: {
     Phone1: {
       value: input.request.phone1,
     },
+    ...(hasText(input.request.extension)
+      ? {
+          Phone2: {
+            value: input.request.extension,
+          },
+        }
+      : {}),
     ContactClass: {
       value: CONTACT_CLASS_VALUE_MAP[input.request.contactClass],
     },
@@ -401,6 +429,8 @@ export function applyOptimisticCreatedAccountRequestToRow(
   return {
     ...row,
     companyName: request.companyName.trim(),
+    companyPhone: request.companyPhone?.trim() || null,
+    companyPhoneSource: request.companyPhone?.trim() ? "account" : row.companyPhoneSource ?? null,
     salesRepId: request.salesRepId?.trim() || null,
     salesRepName: request.salesRepName?.trim() || null,
     industryType: request.industryType.trim(),
