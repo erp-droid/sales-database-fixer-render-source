@@ -313,6 +313,8 @@ const el = {
   prototypeStatus: document.getElementById("prototypeStatus"),
   prototypePreview: document.getElementById("prototypePreview"),
   estimateLibraryStatus: document.getElementById("estimateLibraryStatus"),
+  manualAiReviewBtn: document.getElementById("manualAiReviewBtn"),
+  manualAiReviewStatus: document.getElementById("manualAiReviewStatus"),
   scopeCustomBtn: document.getElementById("scopeCustomBtn"),
   scopeCustomWrap: document.getElementById("scopeCustomWrap"),
   scopeCustomInstruction: document.getElementById("scopeCustomInstruction"),
@@ -1854,6 +1856,28 @@ function syncQuoteActionButtons() {
   if (el.openQuoteBtn) {
     el.openQuoteBtn.disabled = !hasQuote;
   }
+}
+
+function syncManualAiReviewControls() {
+  const hasSections = getSelectedDivisionSections().length > 0;
+  if (el.manualAiReviewBtn) {
+    el.manualAiReviewBtn.disabled = !hasSections;
+  }
+  if (!el.manualAiReviewStatus) {
+    return;
+  }
+  if (!hasSections) {
+    el.manualAiReviewStatus.textContent = "Add at least one trade section to run AI review.";
+    return;
+  }
+  if (state.aiValidation) {
+    const score = parseNumber(state.aiValidation?.score, 0);
+    const summary = cleanString(state.aiValidation?.summary || "AI review is ready.");
+    el.manualAiReviewStatus.textContent = `AI review ready. Score ${score}/100. ${summary} Continue to Step 4, then Step 5 when you are ready to create the quote.`;
+    return;
+  }
+  el.manualAiReviewStatus.textContent =
+    "Manual sections are ready for AI review. Click Validate with AI to prepare the quote flow and open Step 4.";
 }
 
 async function openCurrentQuote() {
@@ -4652,6 +4676,7 @@ function renderDivisions() {
   syncProjectTypeField();
   updateQuoteMarkupSummaryDisplay();
   renderPrototypeEstimatePanel();
+  syncManualAiReviewControls();
 }
 
 function normalizeLineForPayload(line) {
@@ -7483,6 +7508,35 @@ async function handleAiReviewAndFinalizeOneClick() {
   }
 }
 
+async function handleManualAiReview() {
+  setBusy(el.manualAiReviewBtn, true);
+  try {
+    const result = await prepareEstimateForQuoteAction({
+      aiRequired: true,
+      autoOpenEstimatorQuestions: false,
+      showProgressStatus: true,
+      showSuccessStatus: false
+    });
+    if (!result?.ok) {
+      syncManualAiReviewControls();
+      return;
+    }
+    syncManualAiReviewControls();
+    openBuilderAccordion("step4");
+    if (el.step4Section) {
+      el.step4Section.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    }
+    showStatus("AI review is complete. Step 4 and Step 5 are ready.", "success");
+  } catch (error) {
+    showStatus(error.message, "error");
+  } finally {
+    setBusy(el.manualAiReviewBtn, false);
+  }
+}
+
 function validateStepThreeCostCompletion() {
   const selectedDivisions = getSelectedDivisionSections();
   const errors = [];
@@ -7928,6 +7982,7 @@ function handleAiValidationSuggestionChange(event) {
 function renderAiValidation() {
   if (!state.aiValidation) {
     el.aiValidation.textContent = "No validation results yet.";
+    syncManualAiReviewControls();
     return;
   }
 
@@ -8142,6 +8197,7 @@ function renderAiValidation() {
     ${assumptionsHtml}
     ${divisionCards || "<p class=\"hint\">No trade sections to validate yet.</p>"}
   `;
+  syncManualAiReviewControls();
 }
 
 function acceptValidationSuggestion(index, { silent = false, trackHistory = true } = {}) {
@@ -9442,6 +9498,9 @@ function bindEvents() {
   }
   if (el.prototypeGenerateBtn) {
     el.prototypeGenerateBtn.addEventListener("click", handleGeneratePrototypeEstimate);
+  }
+  if (el.manualAiReviewBtn) {
+    el.manualAiReviewBtn.addEventListener("click", handleManualAiReview);
   }
   if (el.prototypeApplyBtn) {
     el.prototypeApplyBtn.addEventListener("click", handleApplyPrototypeEstimate);
