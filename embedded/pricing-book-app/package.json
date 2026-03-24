@@ -1,0 +1,22 @@
+{
+  "name": "pricing-book-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node src/index.js",
+    "start": "node src/index.js",
+    "estimate-library:backfill": "node scripts/estimate-library-backfill.mjs",
+    "pricing-book:repro": "node scripts/pricing-book-repro.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@google-cloud/firestore": "^8.3.0",
+    "dotenv": "^16.6.1",
+    "express": "^4.19.2",
+    "googleapis": "^140.0.0",
+    "openai": "^4.77.0",
+    "pdf-lib": "^1.17.1"
+  }
+}

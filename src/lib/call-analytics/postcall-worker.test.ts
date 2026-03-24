@@ -9,7 +9,8 @@ import type { CallLegRecord, CallSessionRecord } from "@/lib/call-analytics/type
 
 const validateRequestMock = vi.fn();
 const readCallLegsBySessionIdMock = vi.fn<() => CallLegRecord[]>();
-const readCallSessionByIdMock = vi.fn<() => CallSessionRecord | null>();
+const readCallSessionByIdMock = vi.fn<(sessionId: string) => CallSessionRecord | null>();
+const readCallSessionsMock = vi.fn<() => CallSessionRecord[]>();
 const serviceFetchContactByIdMock = vi.fn();
 const serviceFetchBusinessAccountByIdMock = vi.fn();
 const serviceCreateActivityMock = vi.fn();
@@ -28,6 +29,7 @@ vi.mock("twilio", () => ({
 vi.mock("@/lib/call-analytics/sessionize", () => ({
   readCallLegsBySessionId: readCallLegsBySessionIdMock,
   readCallSessionById: readCallSessionByIdMock,
+  readCallSessions: readCallSessionsMock,
 }));
 
 vi.mock("@/lib/acumatica-service-auth", () => ({
@@ -143,6 +145,8 @@ describe("post-call activity sync worker", () => {
       }),
     ]);
     readCallSessionByIdMock.mockReset();
+    readCallSessionsMock.mockReset();
+    readCallSessionsMock.mockReturnValue([]);
     serviceFetchContactByIdMock.mockReset();
     serviceFetchBusinessAccountByIdMock.mockReset();
     serviceCreateActivityMock.mockReset();
@@ -637,5 +641,82 @@ describe("post-call activity sync worker", () => {
     expect(retried?.status).toBe("synced");
     expect(retried?.activityId).toBe("activity-2");
     expect(fetchCount).toBe(3);
+  });
+
+  it("backfills recent answered app-bridge calls when due jobs are run", async () => {
+    recordingsListMock.mockResolvedValue([
+      {
+        sid: "RE-BACKFILL",
+        status: "completed",
+        duration: "31",
+        dateCreated: "2026-03-11T14:10:05.000Z",
+      },
+    ]);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Recordings/RE-BACKFILL.mp3")) {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "audio/mpeg" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/audio/transcriptions") {
+        return new Response(JSON.stringify({ text: "Customer reviewed the scope." }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/chat/completions") {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "Reviewed scope and agreed to next steps." } }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("Unexpected fetch", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const session = buildSession({
+      startedAt: "2026-03-24T14:00:00.000Z",
+      answeredAt: "2026-03-24T14:00:03.000Z",
+      endedAt: "2026-03-24T14:10:00.000Z",
+      updatedAt: "2026-03-24T14:10:00.000Z",
+    });
+    readCallSessionsMock.mockReturnValue([session]);
+    readCallSessionByIdMock.mockImplementation((sessionId: string) =>
+      sessionId === session.sessionId ? session : null,
+    );
+    serviceFetchContactByIdMock.mockResolvedValue({
+      id: "contact-note-id",
+      NoteID: { value: "contact-note-id" },
+    });
+    serviceCreateActivityMock.mockResolvedValue({
+      id: "activity-backfill",
+      NoteID: { value: "activity-backfill" },
+    });
+
+    const { readCallActivitySyncBySessionId } = await import("@/lib/call-analytics/postcall-store");
+    const { runDueCallActivitySyncJobs } = await import("@/lib/call-analytics/postcall-worker");
+
+    const result = await runDueCallActivitySyncJobs();
+    const stored = readCallActivitySyncBySessionId(session.sessionId);
+
+    expect(result).toEqual({
+      processedCount: 1,
+      syncedCount: 1,
+      failedCount: 0,
+      skippedCount: 0,
+    });
+    expect(stored?.status).toBe("synced");
+    expect(stored?.activityId).toBe("activity-backfill");
   });
 });
