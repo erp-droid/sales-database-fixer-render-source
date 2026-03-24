@@ -37,7 +37,11 @@ import type {
 } from "@/lib/call-analytics/types";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
-import { readCallLegsBySessionId, readCallSessionById } from "@/lib/call-analytics/sessionize";
+import {
+  readCallLegsBySessionId,
+  readCallSessionById,
+  readCallSessions,
+} from "@/lib/call-analytics/sessionize";
 import {
   createTwilioRestClient,
   getTwilioRestConfig,
@@ -61,6 +65,8 @@ type TwilioRecordingLike = {
   dateCreated?: Date | string | null;
   dateUpdated?: Date | string | null;
 };
+
+const RECENT_CALL_ACTIVITY_SYNC_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 
 function cleanText(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -715,6 +721,55 @@ async function createPhoneCallActivity(
   return readActivityId(activity);
 }
 
+function queueRecentEligibleCallActivitySyncJobs(
+  limit = 25,
+  lookbackMs = RECENT_CALL_ACTIVITY_SYNC_LOOKBACK_MS,
+): void {
+  const maxCandidates = Math.max(1, Math.trunc(limit));
+  const earliestStartedAtMs = Date.now() - Math.max(0, Math.trunc(lookbackMs));
+  let consideredCount = 0;
+
+  for (const session of readCallSessions()) {
+    if (
+      session.source !== "app_bridge" ||
+      !session.answered ||
+      !session.endedAt ||
+      session.outcome === "in_progress"
+    ) {
+      continue;
+    }
+
+    const sessionStartedAtMs = Date.parse(session.startedAt ?? session.endedAt ?? session.updatedAt);
+    if (Number.isFinite(sessionStartedAtMs) && sessionStartedAtMs < earliestStartedAtMs) {
+      continue;
+    }
+
+    const existing = readCallActivitySyncBySessionId(session.sessionId);
+    if (
+      existing &&
+      (existing.status === "synced" ||
+        existing.status === "skipped" ||
+        existing.status === "processing")
+    ) {
+      continue;
+    }
+
+    consideredCount += 1;
+    if (!existing) {
+      upsertQueuedCallActivitySync({
+        sessionId: session.sessionId,
+        recordingSid: null,
+        recordingStatus: null,
+        recordingDurationSeconds: null,
+      });
+    }
+
+    if (consideredCount >= maxCandidates) {
+      break;
+    }
+  }
+}
+
 export async function processCallActivitySyncJob(
   sessionId: string,
 ): Promise<CallActivitySyncRecord | null> {
@@ -801,6 +856,7 @@ export async function runDueCallActivitySyncJobs(limit = 25): Promise<{
   failedCount: number;
   skippedCount: number;
 }> {
+  queueRecentEligibleCallActivitySyncJobs(limit);
   const jobs = listPendingCallActivitySyncJobs(limit);
   let processedCount = 0;
   let syncedCount = 0;

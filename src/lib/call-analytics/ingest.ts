@@ -1020,6 +1020,10 @@ export async function refreshCallAnalytics(
       nextState = await runHistoricalBackfill(inventory.voiceNumbers);
     }
 
+    void import("@/lib/call-analytics/postcall-worker")
+      .then(({ runDueCallActivitySyncJobs }) => runDueCallActivitySyncJobs(5))
+      .catch(() => undefined);
+
     return nextState;
   })()
     .catch((error) => {
@@ -1063,7 +1067,9 @@ export function maybeTriggerCallAnalyticsRefresh(
   return true;
 }
 
-export async function processTwilioStatusCallback(request: NextRequest): Promise<void> {
+export async function processTwilioStatusCallback(
+  request: NextRequest,
+): Promise<CallSessionRecord | null> {
   const config = getTwilioRestConfig();
   if (!config) {
     throw new HttpError(503, "Twilio is not configured.");
@@ -1123,12 +1129,14 @@ export async function processTwilioStatusCallback(request: NextRequest): Promise
 
   const inventory = await readTwilioPhoneInventory();
   rebuildCallSessions({ bridgeNumbers: inventory.voiceNumbers });
+  const session = readCallSessionById(sessionId);
   invalidateDashboardSnapshotCache();
   writeCallIngestState({
     status: readCallIngestState().fullHistoryComplete ? "complete" : "idle",
     lastWebhookAt: new Date().toISOString(),
     lastError: null,
   });
+  return session;
 }
 
 export function buildTwilioBridgeCallbacks(
