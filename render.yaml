@@ -24,8 +24,18 @@ services:
         value: .ASPXAUTH
       - key: AUTH_COOKIE_SECURE
         value: "true"
-      - key: APP_BASE_URL
+      - key: AUTH_TOKEN_SECRET
         sync: false
+      - key: APP_BASE_URL
+        value: https://sales-database-fixer.onrender.com
+      - key: MBQ_BASE_PATH
+        value: /quotes
+      - key: MBQ_INTEGRATED_AUTH_ENABLED
+        value: "true"
+      - key: MBQ_SIGNIN_PATH
+        value: /signin
+      - key: MBQ_GOOGLE_OAUTH_REDIRECT_URL
+        value: https://sales-database-fixer.onrender.com/quotes/api/mail/oauth/callback
       - key: USER_CREDENTIALS_SECRET
         generateValue: true
       - key: ACUMATICA_BASE_URL
@@ -35,15 +45,15 @@ services:
       - key: ACUMATICA_COMPANY
         value: MeadowBrook Live
       - key: ACUMATICA_BRANCH
-        sync: false
+        value: ""
       - key: ACUMATICA_LOCALE
         value: en-US
       - key: ACUMATICA_USERNAME
-        sync: false
+        value: jserrano
       - key: ACUMATICA_PASSWORD
         sync: false
       - key: ACUMATICA_SERVICE_USERNAME
-        sync: false
+        value: jserrano
       - key: ACUMATICA_SERVICE_PASSWORD
         sync: false
       - key: ACUMATICA_PHONE_CALL_ACTIVITY_TYPE
@@ -61,7 +71,7 @@ services:
       - key: ACUMATICA_OPPORTUNITY_LOCATION_DEFAULT
         value: MAIN
       - key: ACUMATICA_OPPORTUNITY_OWNER_DEFAULT
-        sync: false
+        value: ""
       - key: ACUMATICA_OPPORTUNITY_ESTIMATION_OFFSET_DAYS
         value: "0"
       - key: ACUMATICA_OPPORTUNITY_ATTR_WIN_JOB_ID
@@ -71,10 +81,12 @@ services:
       - key: ACUMATICA_OPPORTUNITY_ATTR_PROJECT_TYPE_ID
         value: Project Type
       - key: ACUMATICA_OPPORTUNITY_LINK_TO_DRIVE_DEFAULT
-        sync: false
+        value: Made using MB Quoting Page
       - key: MAIL_SERVICE_URL
-        sync: false
+        value: https://pricing-book-app-720902901526.us-central1.run.app
       - key: MAIL_SERVICE_SHARED_SECRET
+        sync: false
+      - key: MAIL_PROXY_SHARED_SECRET
         sync: false
       - key: MAIL_INTERNAL_DOMAIN
         value: meadowb.com
@@ -106,6 +118,12 @@ services:
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_SECRET
         sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URL
+        value: https://sales-database-fixer.onrender.com/api/mail/oauth/callback
+      - key: GOOGLE_OAUTH_ALLOWED_DOMAIN
+        value: meadowb.com
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
       - key: ADDRESS_COMPLETE_API_KEY
         sync: false
       - key: ADDRESS_COMPLETE_FIND_URL
@@ -128,3 +146,27 @@ services:
         value: "300000"
       - key: CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS
         value: "86400000"
+      - key: MASTER_SHEET_ID
+        value: 1Gc0Hy7I2wt0BcrjU2iYU6R4dNaxYJj2nUVnBFcL7cSM
+      - key: ESTIMATE_LIBRARY_DRIVE_FOLDER_ID
+        value: 0AE7uQ5JCesZCUk9PVA
+      - key: ESTIMATE_LIBRARY_FIRESTORE_PROJECT_ID
+        value: fine-jetty-347018
+      - key: ESTIMATE_LIBRARY_AUTO_SYNC_ENABLED
+        value: "true"
+      - key: ESTIMATE_LIBRARY_AUTO_SYNC_INTERVAL_MS
+        value: "3600000"
+      - key: QUOTE_DOC_TEMPLATE_ID
+        value: 17Z3JGGLyyd4gbz9yFLku3R7BeLGBzS8RpOQS6r0NGG0
+      - key: QUOTE_DOC_TEMPLATE_URL
+        value: https://docs.google.com/document/d/17Z3JGGLyyd4gbz9yFLku3R7BeLGBzS8RpOQS6r0NGG0/edit
+      - key: QUOTE_DOC_OUTPUT_FOLDER_ID
+        value: ""
+      - key: QUOTE_DOC_STORE_PDF_IN_DRIVE
+        value: "false"
+      - key: QUOTE_DOC_GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: PRICING_BOOK_SERVICE_URL
+        value: https://pricing-book-service-720902901526.us-central1.run.app
+      - key: PRICING_BOOK_SERVICE_TOKEN
+        sync: false

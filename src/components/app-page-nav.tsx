@@ -8,6 +8,7 @@ const APP_NAV_ITEMS = [
   { href: "/map", label: "Map view" },
   { href: "/mail", label: "Mail" },
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/quotes", label: "Quotes" },
   { href: "/quality", label: "Data quality" },
   { href: "/audit", label: "Audit" },
   { href: "/deletions", label: "Deletion queue" },

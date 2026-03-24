@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MeadowBrook Quoting Web App</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="auth-screen" data-app-base-path="/quotes" data-integrated-auth="true">
+    <main class="page">
+      <div class="brand-top" aria-label="MeadowBrook logo">
+        <img src="./mb-logo.png" alt="MeadowBrook" />
+      </div>
+
+      <header class="hero auth-hero card">
+        <div class="hero-heading">
+          <p class="hero-kicker">Secure MeadowBrook Workspace</p>
+          <h1>MeadowBrook Quoting</h1>
+          <p class="hero-copy">A refined workspace for building multi-trade opportunities, AI-reviewed scopes, and polished Acumatica-ready quotes.</p>
+        </div>
+        <div class="hero-auth-actions">
+          <div id="authBadge" class="badge muted auth-badge">Signed out</div>
+          <button id="logoutBtn" class="btn ghost hero-signout" disabled>Sign out</button>
+        </div>
+      </header>
+
+      <section id="loginSection" class="card signin-card">
+        <div class="signin-shell">
+          <div class="signin-brandmark" aria-label="MeadowBrook logo">
+            <img src="./mb-logo.png" alt="MeadowBrook" />
+          </div>
+          <div class="signin-copy-block">
+            <h2>Sign in</h2>
+            <p class="signin-copy">Use the same credentials and cookie-backed session used by your internal web tools.</p>
+          </div>
+          <div class="signin-form-stack">
+            <label class="signin-field">
+              <span>Username</span>
+              <input id="loginUsername" autocomplete="username" placeholder="Acumatica username" />
+            </label>
+            <label class="signin-field">
+              <span>Password</span>
+              <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Acumatica password" />
+            </label>
+          </div>
+          <div class="remember-row">
+            <label class="remember-label">
+              <input id="rememberPassword" type="checkbox" />
+              Remember my password
+            </label>
+          </div>
+          <button id="forgotPasswordBtn" class="signin-link-btn" type="button">Forgot your password?</button>
+          <button id="loginBtn" class="btn primary signin-submit">Sign in</button>
+        </div>
+        <div id="authStatus" class="subtle-box signin-status" aria-live="polite">Ready to sign in.</div>
+      </section>
+
+      <section id="builderSection" class="hidden">
+        <section class="card">
+          <h2>2. Account + Contact</h2>
+          <div class="grid two">
+            <div class="department-selector-wrap">
+              <span class="department-label">Department</span>
+              <div class="department-selector" role="radiogroup" aria-label="Department">
+                <label class="department-option">
+                  <input type="radio" name="departmentType" value="service" />
+                  <span>Service</span>
+                </label>
+                <label class="department-option">
+                  <input type="radio" name="departmentType" value="production" />
+                  <span>Production</span>
+                </label>
+                <label class="department-option">
+                  <input type="radio" name="departmentType" value="glendale" />
+                  <span>Glendale</span>
+                </label>
+              </div>
+            </div>
+            <div class="inline-actions">
+              <button id="refreshAccountsBtn" class="btn">Refresh Accounts</button>
+              <button id="newAccountBtn" class="btn">New Account</button>
+            </div>
+          </div>
+
+          <label>
+            Business account
+            <div class="combo">
+              <input
+                id="accountComboInput"
+                placeholder="Start typing business account name"
+                autocomplete="off"
+              />
+              <div id="accountDropdown" class="combo-list hidden"></div>
+            </div>
+          </label>
+
+          <div class="grid two">
+            <label>
+              Contact
+              <select id="contactSelect" disabled>
+                <option value="">Select contact</option>
+              </select>
+            </label>
+            <div class="inline-actions align-end">
+              <button id="refreshContactsBtn" class="btn" disabled>Refresh Contacts</button>
+              <button id="newContactBtn" class="btn" disabled>New Contact</button>
+            </div>
+          </div>
+
+          <div class="opportunity-required hidden" aria-hidden="true">
+            <select id="willWinJobSelect" tabindex="-1">
+              <option value="Yes" selected>Yes</option>
+              <option value="No">No</option>
+            </select>
+            <input id="linkToDriveInput" type="hidden" value="Made using MB Quoting Page" />
+            <input id="projectTypeInput" type="hidden" />
+          </div>
+        </section>
+
+        <div id="step2GateNotice" class="subtle-box workflow-gate-notice">
+          Complete Step 2 by selecting Department, Business account, and Contact to unlock the estimator workflow.
+        </div>
+
+        <section id="step3Section" class="card builder-step-card hidden">
+          <button
+            id="step3AccordionBtn"
+            class="builder-step-toggle"
+            type="button"
+            aria-expanded="true"
+            aria-controls="step3AccordionContent"
+          >
+            <span class="builder-step-toggle-title">3. Estimation Input</span>
+            <span class="builder-step-toggle-meta">Open</span>
+          </button>
+          <div id="step3AccordionContent" class="builder-step-panel">
+            <p class="hint">Add one or more trade sections for the same job. Repeated sections stay separate through AI, validation, and final quote creation.</p>
+            <div class="row wrap hidden">
+              <button id="scopeBuildBtn" class="btn">Force Breakdown</button>
+              <button id="librarySuggestBtn" class="btn">Historical Suggestions</button>
+              <button id="librarySyncBtn" class="btn">Sync Estimate Library</button>
+            </div>
+            <section class="prototype-shell">
+              <div class="prototype-head">
+                <div>
+                  <p class="section-caption">Scope-First Prototype</p>
+                  <p class="hint">Paste one full scope and let AI break it into premium Construction, Electrical, Plumbing, HVAC, and Glendale sections, then apply the estimate automatically.</p>
+                </div>
+                <button id="prototypeToggleBtn" class="btn ghost" type="button">Hide Prototype</button>
+              </div>
+              <div id="prototypePanel" class="prototype-panel">
+                <label>
+                  Master scope of work
+                  <textarea
+                    id="prototypeScopeInput"
+                    rows="8"
+                    placeholder="Paste one full scope of work. The prototype will classify and expand it into detailed trade sections."
+                  ></textarea>
+                </label>
+                <div class="row wrap">
+                  <button id="prototypeGenerateBtn" class="btn primary" type="button">Generate Estimate</button>
+                  <button id="prototypeApplyBtn" class="btn hidden" type="button" disabled>Apply to Estimator</button>
+                  <button id="prototypeApproveBtn" class="btn hidden" type="button" disabled>Approve as Feedback</button>
+                </div>
+                <div id="prototypeStatus" class="subtle-box">Estimate generator is ready.</div>
+                <div id="prototypePreview" class="prototype-preview">
+                  <p class="hint">No estimate generated yet.</p>
+                </div>
+              </div>
+            </section>
+            <div id="estimateLibraryStatus" class="subtle-box hidden">Estimate library is idle.</div>
+            <div id="divisionsContainer"></div>
+          </div>
+        </section>
+
+        <section class="card hidden">
+          <h2>4. MeadowBrook AI Validation</h2>
+          <div class="row wrap">
+            <button id="aiReviewFinalizeBtn" class="btn primary">Validate your Estimate</button>
+          </div>
+
+          <h3>Full Scope of Work (editable)</h3>
+          <div id="scopeSuggestionNotes" class="hint">AI updates this same scope box. You can edit it at any time.</div>
+          <textarea id="quoteBody" rows="8" placeholder="Write the full quote body/scope here."></textarea>
+
+          <div id="aiValidation" class="subtle-box">No validation results yet.</div>
+        </section>
+
+        <section class="card hidden">
+          <h2>5. Project Description</h2>
+          <label>
+            Project description (editable, used for Opportunity + Quote)
+            <textarea
+              id="quoteDescription"
+              rows="2"
+              placeholder="Example: MeadowBrook Internal - Electrical Service Upgrade"
+            ></textarea>
+          </label>
+        </section>
+
+        <section id="step4Section" class="card builder-step-card hidden">
+          <button
+            id="step4AccordionBtn"
+            class="builder-step-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="step4AccordionContent"
+          >
+            <span class="builder-step-toggle-title">4. Quote Markup Summary</span>
+            <span class="builder-step-toggle-meta">Open</span>
+          </button>
+          <div id="step4AccordionContent" class="builder-step-panel hidden">
+            <div id="quoteMarkupSummary" class="quote-markup-summary">
+              <p class="hint">Select at least one division to view quote markup summary.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="step5Section" class="card builder-step-card hidden">
+          <button
+            id="step5AccordionBtn"
+            class="builder-step-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="step5AccordionContent"
+          >
+            <span class="builder-step-toggle-title">5. Create Quote + PDF</span>
+            <span class="builder-step-toggle-meta">Open</span>
+          </button>
+          <div id="step5AccordionContent" class="builder-step-panel hidden">
+            <p class="hint">AI validation now runs automatically when you create the quote. You can still open it directly in Acumatica or download the backup quote PDF.</p>
+            <div class="quote-review-shell">
+              <p class="section-caption">Estimator Cost Review</p>
+              <label class="inline-check quote-review-check">
+                <input id="quoteReviewConfirmCheckbox" type="checkbox" />
+                I&apos;ve reviewed and confirm that the material, subtrade and labour cost are accurate to the best of my ability.
+              </label>
+              <label>
+                Confirmed by *
+                <input
+                  id="quoteReviewSignerInput"
+                  placeholder="Enter your full name"
+                  autocomplete="name"
+                />
+              </label>
+              <p class="hint">Required before creating the opportunity and project quote.</p>
+            </div>
+            <div class="row wrap">
+              <button id="createQuoteBtn" class="btn primary">Validate + Create Opportunity + Project Quote</button>
+              <button id="openQuoteBtn" class="btn" disabled>Open Quote in Acumatica</button>
+              <button id="downloadPdfBtn" class="btn">Download Quote</button>
+            </div>
+            <div id="runStatus" class="subtle-box">Ready.</div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <div id="accountModal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card card">
+        <h3>Create Business Account</h3>
+        <input id="newAccountId" type="hidden" value="" />
+        <input id="newAccountState" type="hidden" value="ON" />
+        <input id="newAccountCountry" type="hidden" value="CA" />
+        <input id="newAccountSalesRepId" type="hidden" value="" />
+        <div class="grid two">
+          <label>
+            Account Name *
+            <input id="newAccountName" placeholder="Business account name" />
+          </label>
+          <label>
+            Sales Rep *
+            <div class="combo">
+              <input id="newAccountSalesRepInput" placeholder="Start typing sales rep name" autocomplete="off" />
+              <div id="newAccountSalesRepDropdown" class="combo-list hidden"></div>
+            </div>
+          </label>
+          <label>
+            Email
+            <input id="newAccountEmail" placeholder="account@email.com" />
+          </label>
+          <label>
+            Phone
+            <input id="newAccountPhone" placeholder="905-000-0000" />
+          </label>
+          <label>
+            Address Line 1
+            <input id="newAccountAddress1" placeholder="Street" />
+          </label>
+          <label>
+            Address Line 2
+            <input id="newAccountAddress2" placeholder="Unit / Suite" />
+          </label>
+          <label>
+            City *
+            <select id="newAccountCity" required>
+              <option value="" selected disabled>Select city</option>
+              <option value="Ajax">Ajax</option>
+              <option value="Aurora">Aurora</option>
+              <option value="Barrie">Barrie</option>
+              <option value="Brampton">Brampton</option>
+              <option value="Brantford">Brantford</option>
+              <option value="Burlington">Burlington</option>
+              <option value="Cambridge">Cambridge</option>
+              <option value="Caledon">Caledon</option>
+              <option value="Etobicoke">Etobicoke</option>
+              <option value="Georgetown">Georgetown</option>
+              <option value="Guelph">Guelph</option>
+              <option value="Hamilton">Hamilton</option>
+              <option value="Kitchener">Kitchener</option>
+              <option value="London">London</option>
+              <option value="Markham">Markham</option>
+              <option value="Milton">Milton</option>
+              <option value="Mississauga">Mississauga</option>
+              <option value="Newmarket">Newmarket</option>
+              <option value="Niagara Falls">Niagara Falls</option>
+              <option value="North York">North York</option>
+              <option value="Oakville">Oakville</option>
+              <option value="Orangeville">Orangeville</option>
+              <option value="Oshawa">Oshawa</option>
+              <option value="Pickering">Pickering</option>
+              <option value="Richmond Hill">Richmond Hill</option>
+              <option value="Scarborough">Scarborough</option>
+              <option value="St. Catharines">St. Catharines</option>
+              <option value="Toronto">Toronto</option>
+              <option value="Vaughan">Vaughan</option>
+              <option value="Waterloo">Waterloo</option>
+              <option value="Whitby">Whitby</option>
+              <option value="Windsor">Windsor</option>
+            </select>
+          </label>
+          <label>
+            Postal Code *
+            <input
+              id="newAccountPostal"
+              placeholder="A1A 1A1"
+              required
+              pattern="[A-Za-z][0-9][A-Za-z][ -]?[0-9][A-Za-z][0-9]"
+              title="Use Canadian postal code format (e.g., A1A 1A1)"
+            />
+          </label>
+        </div>
+        <div class="row end">
+          <button id="cancelAccountBtn" class="btn">Cancel</button>
+          <button id="saveAccountBtn" class="btn primary">Create Account</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="contactModal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-card card">
+        <h3>Create Contact</h3>
+        <div class="grid two">
+          <label>
+            First Name *
+            <input id="newContactFirstName" required />
+          </label>
+          <label>
+            Last Name *
+            <input id="newContactLastName" required />
+          </label>
+          <label>
+            Display Name
+            <input id="newContactDisplayName" placeholder="Optional override" />
+          </label>
+          <label>
+            Email *
+            <input id="newContactEmail" type="email" required />
+          </label>
+          <label>
+            Phone *
+            <input id="newContactPhone" required />
+          </label>
+          <label>
+            Contact Class *
+            <select id="newContactClass" required>
+              <option value="" disabled selected>Select contact class</option>
+              <option value="BILLING">BILLING</option>
+              <option value="OPERATIONS">OPERATIONS</option>
+              <option value="PRODUCTION">PRODUCTION</option>
+              <option value="SALES">SALES</option>
+              <option value="SERVICE">SERVICE</option>
+            </select>
+          </label>
+        </div>
+        <div class="row end">
+          <button id="cancelContactBtn" class="btn">Cancel</button>
+          <button id="saveContactBtn" class="btn primary">Create Contact</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="estimatorQuestionsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="estimatorQuestionsTitle">
+      <div class="modal-card card estimator-questions-modal-card">
+        <h3 id="estimatorQuestionsTitle">Estimator Questions</h3>
+        <p class="hint">Answer only the project details you know. AI will use them to tighten the final scope and validation, and keep the rest generic.</p>
+        <div id="estimatorQuestionsStatus" class="subtle-box">No estimator questions yet.</div>
+        <div id="estimatorQuestionsList" class="estimator-question-list"></div>
+        <div class="row end">
+          <button id="closeEstimatorQuestionsBtn" class="btn">Close</button>
+          <button id="saveEstimatorQuestionsBtn" class="btn primary">Save Answers + Rebuild</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
