@@ -1775,7 +1775,7 @@ function getQuoteReviewStatement() {
 }
 
 function isQuoteReviewConfirmationComplete() {
-  return Boolean(state.quoteReviewConfirmed) && Boolean(cleanString(state.quoteReviewSignerName));
+  return Boolean(state.quoteReviewConfirmed);
 }
 
 function resetQuoteReviewConfirmation({ keepSignerName = true } = {}) {
@@ -4875,7 +4875,7 @@ function renderDivisions() {
             </label>
 
             <label>
-              Estimator *
+              Estimator
               <select
                 data-division="${sectionId}"
                 data-field="estimatorId"
@@ -5656,9 +5656,6 @@ function buildPayload() {
   if (!state.quoteReviewConfirmed) {
     errors.push("Cost review confirmation is required before creating the quote.");
   }
-  if (!cleanString(state.quoteReviewSignerName)) {
-    errors.push("Enter the estimator name confirming the cost review.");
-  }
 
   const divisionPayload = selectedDivisions.map((division) => {
     applyDivisionModeRules(division);
@@ -5667,9 +5664,6 @@ function buildPayload() {
     const { materialLines, subcontractorLines } = validateDivisionCostRequirements(division, errors);
     const estimatorId = cleanString(division.estimatorId || division.templateEstimator).toUpperCase();
     const estimatorName = cleanString(division.estimatorName);
-    if (!estimatorId) {
-      errors.push(`${getDivisionDisplayTitle(division)} estimator is required.`);
-    }
 
     return {
       id: division.id,
