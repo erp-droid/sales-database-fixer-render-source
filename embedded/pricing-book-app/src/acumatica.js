@@ -1088,6 +1088,80 @@ export class AcumaticaClient {
     );
   }
 
+  async updateOpportunityFields(opportunityId, fields = {}) {
+    const normalizedOpportunityId = stringValue(opportunityId);
+    if (!normalizedOpportunityId) {
+      throw new Error("Opportunity id is required to update opportunity fields.");
+    }
+
+    const payload = {
+      OpportunityID: { value: normalizedOpportunityId }
+    };
+    Object.entries(fields || {}).forEach(([fieldName, fieldValue]) => {
+      if (!fieldName || fieldValue === undefined || fieldValue === null) return;
+      payload[fieldName] = fieldValue;
+    });
+
+    const attemptedEntityNames = [...this.getOpportunityEntityCandidates()];
+    let lastRecoverableEntityError = null;
+    const recoverableErrors = [];
+
+    for (const entityName of attemptedEntityNames) {
+      try {
+        return await this.request(entityName, { method: "PUT", body: payload });
+      } catch (error) {
+        if (isRecoverableEntityCandidateError(error)) {
+          lastRecoverableEntityError = error;
+          recoverableErrors.push({
+            entityName,
+            message: error instanceof Error ? error.message : String(error || "Unknown error")
+          });
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (lastRecoverableEntityError) {
+      const summary = recoverableErrors
+        .map((item) => `${item.entityName}: ${item.message}`)
+        .join(" | ");
+      throw new Error(`Opportunity update failed for attempted entities. ${summary}`);
+    }
+
+    throw new Error("Could not resolve an Opportunity entity from the Acumatica endpoint.");
+  }
+
+  async opportunityMatchesOwner(opportunityId, ownerId) {
+    const normalizedOpportunityId = stringValue(opportunityId);
+    const normalizedOwnerId = stringValue(ownerId);
+    if (!normalizedOpportunityId || !normalizedOwnerId) return false;
+
+    const escapedOpportunityId = normalizedOpportunityId.replace(/'/g, "''");
+    const escapedOwnerId = normalizedOwnerId.replace(/'/g, "''");
+    const query = [
+      `$top=1`,
+      `$select=OpportunityID`,
+      `$filter=${encodeURIComponent(`OpportunityID eq '${escapedOpportunityId}' and Owner eq '${escapedOwnerId}'`)}`
+    ].join("&");
+
+    const attemptedEntityNames = [...this.getOpportunityEntityCandidates()];
+    for (const entityName of attemptedEntityNames) {
+      try {
+        const payload = await this.request(`${entityName}?${query}`, { method: "GET" });
+        const records = extractRecords(payload);
+        if (records.length) return true;
+      } catch (error) {
+        if (isRecoverableEntityCandidateError(error)) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    return false;
+  }
+
   async resolveBusinessAccountMeta() {
     return this.resolveEntityMeta({
       preferred: this.settings.businessAccountEntity || "BusinessAccount",

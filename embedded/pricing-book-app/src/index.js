@@ -559,6 +559,15 @@ function buildOwnerLookupVariants(value) {
   variants.add(raw);
   const compact = compactOwnerLookupValue(raw);
   if (compact) variants.add(compact);
+  const nameParts = raw
+    .split(/[\s._-]+/)
+    .map((part) => cleanFieldValue(part))
+    .filter(Boolean);
+  if (nameParts.length >= 2) {
+    const firstInitialLastName = `${nameParts[0].slice(0, 1)}${nameParts[nameParts.length - 1]}`;
+    const compactInitialLastName = compactOwnerLookupValue(firstInitialLastName);
+    if (compactInitialLastName) variants.add(compactInitialLastName);
+  }
   const atIndex = raw.indexOf("@");
   if (atIndex > 0) {
     const localPart = raw.slice(0, atIndex);
@@ -3158,8 +3167,8 @@ app.post("/api/quote", async (req, res) => {
     const opportunityOwnerCandidates = Array.from(
       new Set(
         [
-          cleanFieldValue(signedInQuoteOwner?.ownerName),
-          cleanFieldValue(signedInQuoteOwner?.ownerId)
+          cleanFieldValue(signedInQuoteOwner?.ownerId),
+          cleanFieldValue(signedInQuoteOwner?.ownerName)
         ].filter(Boolean)
       )
     );
@@ -3209,6 +3218,34 @@ app.post("/api/quote", async (req, res) => {
 
     if (!opportunityId) {
       throw new AcumaticaUpstreamError("opportunity_create", new Error("Acumatica did not return an opportunity id."));
+    }
+
+    const signedInOwnerId = cleanFieldValue(signedInQuoteOwner?.ownerId);
+    if (signedInOwnerId) {
+      try {
+        const ownerAlreadyApplied = await withUpstreamStep("opportunity_owner_verify", () =>
+          acumatica.opportunityMatchesOwner(opportunityId, signedInOwnerId)
+        );
+        if (!ownerAlreadyApplied) {
+          await withUpstreamStep("opportunity_owner_update", () =>
+            acumatica.updateOpportunityFields(opportunityId, {
+              Owner: { value: signedInOwnerId }
+            })
+          );
+          const ownerUpdated = await withUpstreamStep("opportunity_owner_verify", () =>
+            acumatica.opportunityMatchesOwner(opportunityId, signedInOwnerId)
+          );
+          if (!ownerUpdated) {
+            console.warn(
+              `[${correlationId}] Opportunity ${opportunityId} owner verification did not confirm signed-in owner "${signedInOwnerId}" after update.`
+            );
+          }
+        }
+      } catch (error) {
+        console.warn(
+          `[${correlationId}] Opportunity ${opportunityId} owner assignment warning: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
     }
 
     const quoteAttributes = mergeAttributeLists(requiredOpportunityAttributes);
