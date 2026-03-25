@@ -1087,6 +1087,78 @@ export function readCallSessionById(sessionId: string): CallSessionRecord | null
   return row ? normalizeCallSessionRow(row) : null;
 }
 
+export function findRecentBridgeCallSessionForEmployee(options: {
+  employeeLoginName: string;
+  targetPhone: string;
+  withinMs?: number;
+}): CallSessionRecord | null {
+  maybeRepairCallSessionsFromEmployeeDirectory();
+
+  const normalizedLoginName = options.employeeLoginName.trim().toLowerCase();
+  const normalizedTargetPhone = formatPhoneForTwilioDial(options.targetPhone);
+  if (!normalizedLoginName || !normalizedTargetPhone) {
+    return null;
+  }
+
+  const withinMs = Math.max(0, options.withinMs ?? 45_000);
+  const cutoffIso = new Date(Date.now() - withinMs).toISOString();
+  const db = getReadModelDb();
+  const row = db
+    .prepare(
+      `
+      SELECT
+        session_id,
+        root_call_sid,
+        primary_leg_sid,
+        source,
+        direction,
+        outcome,
+        answered,
+        started_at,
+        answered_at,
+        ended_at,
+        talk_duration_seconds,
+        ring_duration_seconds,
+        employee_login_name,
+        employee_display_name,
+        employee_contact_id,
+        employee_phone,
+        recipient_employee_login_name,
+        recipient_employee_display_name,
+        presented_caller_id,
+        bridge_number,
+        target_phone,
+        counterparty_phone,
+        matched_contact_id,
+        matched_contact_name,
+        matched_business_account_id,
+        matched_company_name,
+        phone_match_type,
+        phone_match_ambiguity_count,
+        initiated_from_surface,
+        linked_account_row_key,
+        linked_business_account_id,
+        linked_contact_id,
+        metadata_json,
+        updated_at
+      FROM call_sessions
+      WHERE source = 'app_bridge'
+        AND employee_login_name = ?
+        AND target_phone = ?
+        AND COALESCE(started_at, updated_at) >= ?
+      ORDER BY COALESCE(started_at, updated_at) DESC, session_id DESC
+      LIMIT 1
+      `,
+    )
+    .get(
+      normalizedLoginName,
+      normalizedTargetPhone,
+      cutoffIso,
+    ) as StoredCallSessionRow | undefined;
+
+  return row ? normalizeCallSessionRow(row) : null;
+}
+
 export function readCallLegsBySessionId(sessionId: string): CallLegRecord[] {
   const db = getReadModelDb();
   const rows = db

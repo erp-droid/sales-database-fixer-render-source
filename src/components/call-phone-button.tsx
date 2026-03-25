@@ -44,7 +44,7 @@ export function CallPhoneButton({
   return (
     <button
       className={className ? `${styles.button} ${className}` : styles.button}
-      disabled={isInitializing && !isActive}
+      disabled={isInitializing || activeLabel !== null}
       onClick={handleClick}
       onMouseDown={(event) => {
         event.preventDefault();
