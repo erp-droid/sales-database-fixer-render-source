@@ -121,6 +121,11 @@ function readWrappedValue<T>(source: unknown): T | null {
   return value as T;
 }
 
+function unwrapRecordValue(source: unknown): unknown {
+  const wrapped = readWrappedValue<unknown>(source);
+  return wrapped ?? source;
+}
+
 function readString(record: unknown, key: string): string {
   const raw = readWrappedValue<string>(getField(record, key));
   return raw?.trim() ?? "";
@@ -1138,7 +1143,7 @@ function normalizePrimaryContact(account: unknown): {
   email: string | null;
   notes: string | null;
 } {
-  const primary = getField(account, "PrimaryContact");
+  const primary = unwrapRecordValue(getField(account, "PrimaryContact"));
   const primaryContactId = readNullableNumber(primary, "ContactID");
   const primaryContactName = composeContactName(primary);
   const primaryContactEmail = readFirstString(primary, ["Email", "EMail"]) || null;
@@ -1342,7 +1347,7 @@ function includesLastModifiedFilter(
 }
 
 export function normalizeBusinessAccount(account: unknown): BusinessAccountRow {
-  const mainAddress = getField(account, "MainAddress");
+  const mainAddress = unwrapRecordValue(getField(account, "MainAddress"));
 
   const addressParts = {
     line1: readString(mainAddress, "AddressLine1"),
@@ -1430,7 +1435,7 @@ export function normalizeBusinessAccount(account: unknown): BusinessAccountRow {
 export function normalizeBusinessAccountRows(account: unknown): BusinessAccountRow[] {
   const base = normalizeBusinessAccount(account);
   const contacts = readArrayField(account, "Contacts");
-  const primary = getField(account, "PrimaryContact");
+  const primary = unwrapRecordValue(getField(account, "PrimaryContact"));
   const primaryId = readNullableNumber(primary, "ContactID");
   const primaryFromPayload = composeContactName(primary);
   const primaryEmail = readFirstString(primary, ["Email", "EMail"]) || null;

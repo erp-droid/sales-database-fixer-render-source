@@ -63,6 +63,36 @@ export type BusinessAccountRow = {
   lastModifiedIso: string | null;
 };
 
+export type BusinessAccountConcurrencySnapshot = {
+  companyName: string;
+  companyDescription?: string | null;
+  assignedBusinessAccountRecordId: string | null;
+  assignedBusinessAccountId: string | null;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
+  targetContactId: number | null;
+  salesRepId: string | null;
+  salesRepName: string | null;
+  industryType: string | null;
+  subCategory: string | null;
+  companyRegion: string | null;
+  week: string | null;
+  companyPhone: string | null;
+  primaryContactName: string | null;
+  primaryContactJobTitle?: string | null;
+  primaryContactPhone: string | null;
+  primaryContactExtension?: string | null;
+  primaryContactEmail: string | null;
+  category: Category | null;
+  notes: string | null;
+  primaryContactId: number | null;
+  lastModifiedIso: string | null;
+};
+
 export type BusinessAccountUpdateRequest = {
   companyName: string;
   companyDescription?: string | null;
@@ -93,6 +123,7 @@ export type BusinessAccountUpdateRequest = {
   category: Category | null;
   notes: string | null;
   expectedLastModified: string | null;
+  baseSnapshot?: BusinessAccountConcurrencySnapshot | null;
 };
 
 export type BusinessAccountsResponse = {
@@ -106,6 +137,15 @@ export type BusinessAccountDetailResponse = {
   row: BusinessAccountRow;
   rows?: BusinessAccountRow[];
   accountLocation?: string | null;
+};
+
+export type BusinessAccountLiveEvent = {
+  type: "changed";
+  at: string;
+  accountRecordId: string;
+  businessAccountId: string | null;
+  targetContactId: number | null;
+  reason: string;
 };
 
 export type BusinessAccountMapPoint = {

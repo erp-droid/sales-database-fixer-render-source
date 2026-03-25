@@ -49,7 +49,7 @@ import {
   getTwilioRestConfig,
 } from "@/lib/twilio";
 
-type ResolvedActivityTarget = {
+export type ResolvedActivityTarget = {
   relatedEntityNoteId: string;
   relatedEntityType: "PX.Objects.CR.Contact" | "PX.Objects.CR.BAccount";
 };
@@ -184,7 +184,7 @@ function readSummaryTarget(session: CallSessionRecord): string {
   );
 }
 
-function buildActivitySummary(session: CallSessionRecord): string {
+export function buildActivitySummary(session: CallSessionRecord): string {
   const value = `Phone call with ${readSummaryTarget(session)}`.trim();
   return value.length > 255 ? `${value.slice(0, 252).trim()}...` : value;
 }
@@ -304,6 +304,7 @@ function buildDetailsHtml(session: CallSessionRecord): string {
     ["Started", formatDateTime(session.startedAt)],
     ["Ended", formatDateTime(session.endedAt)],
     ["Talk duration", formatDuration(session.talkDurationSeconds)],
+    ["Call session ID", cleanText(session.sessionId) || "-"],
   ];
 
   const items = rows
@@ -320,7 +321,7 @@ function buildTranscriptSection(transcriptText: string, truncated: boolean): str
   )}</div>`;
 }
 
-function buildActivityBodyHtml(
+export function buildActivityBodyHtml(
   session: CallSessionRecord,
   summaryText: string,
   transcriptText: string,
@@ -676,7 +677,7 @@ async function resolveRecordingForSession(
   };
 }
 
-async function resolveActivityTarget(
+export async function resolveActivityTarget(
   session: CallSessionRecord,
 ): Promise<ResolvedActivityTarget | null> {
   const candidateContactIds = [...new Set([session.linkedContactId, session.matchedContactId])]

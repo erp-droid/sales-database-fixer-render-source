@@ -19,6 +19,7 @@ import {
   buildAcumaticaContactUrl,
 } from "@/lib/acumatica-links";
 import { enforceSinglePrimaryPerAccountRows } from "@/lib/business-accounts";
+import { buildBusinessAccountConcurrencySnapshot } from "@/lib/business-account-concurrency";
 import {
   readCachedDatasetFromStorage,
   readCachedSyncMeta,
@@ -742,6 +743,7 @@ function buildMapContactUpdateRequest(
     category: targetRow.category,
     notes: targetRow.notes,
     expectedLastModified: targetRow.lastModifiedIso ?? point.lastModifiedIso,
+    baseSnapshot: buildBusinessAccountConcurrencySnapshot(targetRow),
     ...overrides,
   };
 }

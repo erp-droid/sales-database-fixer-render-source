@@ -2,6 +2,7 @@ import {
   type AuthCookieRefreshState,
   type RawActivity,
   createActivity,
+  fetchActivities,
   fetchContactsByBusinessAccountIds,
   fetchBusinessAccountById,
   fetchContactById,
@@ -192,6 +193,15 @@ export async function serviceCreateActivity(
 ): Promise<RawActivity> {
   return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
     createActivity(cookieValue, input, authCookieRefresh),
+  );
+}
+
+export async function serviceFetchActivities(
+  loginName: string | null | undefined,
+  options?: Parameters<typeof fetchActivities>[1],
+): Promise<RawActivity[]> {
+  return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
+    fetchActivities(cookieValue, options, authCookieRefresh),
   );
 }
 

@@ -6,6 +6,7 @@ import {
   type ReactNode,
   useDeferredValue,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -16,6 +17,7 @@ import { useRouter } from "next/navigation";
 import { AppChrome } from "@/components/app-chrome";
 import type {
   BusinessAccountDetailResponse,
+  BusinessAccountLiveEvent,
   BusinessAccountRow,
   BusinessAccountsResponse,
   BusinessAccountUpdateRequest,
@@ -34,6 +36,10 @@ import {
   queryBusinessAccounts,
   resolveCompanyPhone,
 } from "@/lib/business-accounts";
+import {
+  buildBusinessAccountConcurrencySnapshot,
+  collectUpdatedConcurrencyFields,
+} from "@/lib/business-account-concurrency";
 import {
   buildAcumaticaBusinessAccountUrl,
   buildAcumaticaContactUrl,
@@ -906,7 +912,35 @@ function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
     category: row.category,
     notes: row.notes,
     expectedLastModified: row.lastModifiedIso,
+    baseSnapshot: buildBusinessAccountConcurrencySnapshot(row),
   };
+}
+
+function isDraftDirty(draft: BusinessAccountUpdateRequest | null): boolean {
+  if (!draft) {
+    return false;
+  }
+
+  return (
+    collectUpdatedConcurrencyFields(draft).size > 0 ||
+    draft.setAsPrimaryContact === true
+  );
+}
+
+function rowMatchesLiveAccountEvent(
+  row: BusinessAccountRow | null,
+  event: BusinessAccountLiveEvent,
+): boolean {
+  if (!row) {
+    return false;
+  }
+
+  const accountRecordId = row.accountRecordId ?? row.id;
+  if (accountRecordId === event.accountRecordId) {
+    return true;
+  }
+
+  return Boolean(event.businessAccountId && row.businessAccountId === event.businessAccountId);
 }
 
 function readTextValue(value: string | null | undefined): string | null {
@@ -2059,6 +2093,10 @@ function replaceRowsForAccount(
   return enforceSinglePrimaryPerAccountRows([...incomingRows, ...nextRows]);
 }
 
+function canAddContactToRow(row: BusinessAccountRow): boolean {
+  return row.businessAccountId.trim().length > 0;
+}
+
 function buildPaginationNumbers(
   currentPage: number,
   totalPages: number,
@@ -2134,6 +2172,7 @@ export function AccountsClient({
   const [error, setError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<BusinessAccountRow | null>(null);
+  const selectedRef = useRef<BusinessAccountRow | null>(null);
   const [selectedContactRowKeys, setSelectedContactRowKeys] = useState<string[]>([]);
   const [isSelectionMergeOpen, setIsSelectionMergeOpen] = useState(false);
   const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false);
@@ -2173,6 +2212,7 @@ export function AccountsClient({
   const [columnDropTargetId, setColumnDropTargetId] = useState<SortBy | null>(null);
   const [drawerFocusTarget, setDrawerFocusTarget] = useState<"notes" | null>(null);
   const [draft, setDraft] = useState<BusinessAccountUpdateRequest | null>(null);
+  const draftRef = useRef<BusinessAccountUpdateRequest | null>(null);
   const [isEnhancingContact, setIsEnhancingContact] = useState(false);
   const [contactEnhanceError, setContactEnhanceError] = useState<string | null>(null);
   const [contactEnhanceNotice, setContactEnhanceNotice] = useState<string | null>(null);
@@ -2195,6 +2235,7 @@ export function AccountsClient({
     useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveFieldErrors, setSaveFieldErrors] = useState<SaveFieldErrors>({});
+  const isSavingRef = useRef(false);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeletingContact, setIsDeletingContact] = useState(false);
@@ -2488,6 +2529,18 @@ export function AccountsClient({
     allRowsRef.current = allRows;
     allRowsCountRef.current = allRows.length;
   }, [allRows]);
+
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
+
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  useEffect(() => {
+    isSavingRef.current = isSaving;
+  }, [isSaving]);
 
   useEffect(() => {
     if (
@@ -3084,6 +3137,106 @@ export function AccountsClient({
       );
     });
   }, [router]);
+
+  const refreshLiveUpdatedAccount = useEffectEvent(
+    async (event: BusinessAccountLiveEvent): Promise<void> => {
+      if (!session?.authenticated || isSavingRef.current) {
+        return;
+      }
+
+      const selectedRow = selectedRef.current;
+      const currentRows = allRowsRef.current;
+      const shouldRefresh =
+        rowMatchesLiveAccountEvent(selectedRow, event) ||
+        currentRows.some((row) => rowMatchesLiveAccountEvent(row, event));
+
+      if (!shouldRefresh) {
+        return;
+      }
+
+      try {
+        const preferredContactId =
+          selectedRow && rowMatchesLiveAccountEvent(selectedRow, event)
+            ? resolveRowContactId(selectedRow)
+            : event.targetContactId;
+        const response = await fetch(
+          buildBusinessAccountDetailUrl(event.accountRecordId, preferredContactId),
+          {
+            cache: "no-store",
+          },
+        );
+        const payload = await readJsonResponse<
+          BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
+        >(response);
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+
+        const refreshedRows =
+          readDetailResponseRows(payload) ??
+          (() => {
+            const refreshedRow = readDetailResponseRow(payload);
+            return refreshedRow ? [refreshedRow] : null;
+          })();
+        if (!refreshedRows || refreshedRows.length === 0) {
+          return;
+        }
+
+        const responseRow = readDetailResponseRow(payload) ?? refreshedRows[0];
+        setAllRows((rows) =>
+          replaceRowsForAccount(
+            rows,
+            refreshedRows,
+            event.accountRecordId,
+            responseRow.businessAccountId,
+          ),
+        );
+        setLastSyncedAt(event.at);
+        clearCachedMapData();
+
+        if (selectedRow && rowMatchesLiveAccountEvent(selectedRow, event)) {
+          const nextSelected =
+            findMatchingAccountRow(refreshedRows, selectedRow) ?? responseRow;
+          if (isDraftDirty(draftRef.current)) {
+            setSaveNotice(
+              "This record changed in Acumatica while you were editing. Your draft is preserved.",
+            );
+            return;
+          }
+
+          setSelected(nextSelected);
+          setDraft(buildDraft(nextSelected));
+        }
+      } catch {
+        // Ignore transient live-refresh failures and keep the local working set.
+      }
+    },
+  );
+
+  useEffect(() => {
+    if (!session?.authenticated) {
+      return;
+    }
+
+    const eventSource = new EventSource("/api/business-accounts/stream");
+    const handleChanged = (rawEvent: MessageEvent) => {
+      try {
+        const parsed = JSON.parse(rawEvent.data) as BusinessAccountLiveEvent;
+        if (parsed && parsed.type === "changed" && parsed.accountRecordId) {
+          void refreshLiveUpdatedAccount(parsed);
+        }
+      } catch {
+        // Ignore malformed live update events.
+      }
+    };
+
+    eventSource.addEventListener("changed", handleChanged as EventListener);
+
+    return () => {
+      eventSource.removeEventListener("changed", handleChanged as EventListener);
+      eventSource.close();
+    };
+  }, [refreshLiveUpdatedAccount, session?.authenticated]);
 
   useEffect(() => {
     if (!session?.authenticated || !selected) {
@@ -4199,6 +4352,31 @@ export function AccountsClient({
     setCreateContactDrawerInitialAccountRecordId(null);
     setPendingOpportunityResumeAccountRecordId(null);
     setResumeOpportunityAfterContactCreate(null);
+    setIsCreateContactDrawerOpen(true);
+  }
+
+  function openCreateContactDrawerFromRow(row: BusinessAccountRow) {
+    if (!canAddContactToRow(row)) {
+      setSaveError(
+        "This row is not attached to a business account yet. Assign it to an account before adding another contact.",
+      );
+      setSaveNotice(null);
+      closeTransientMenus();
+      return;
+    }
+
+    closeTransientMenus();
+    closeMailComposer();
+    setIsCreateDrawerOpen(false);
+    setIsCreateMeetingDrawerOpen(false);
+    setIsCreateOpportunityDrawerOpen(false);
+    setMeetingSource(null);
+    closeDrawer();
+    setSaveError(null);
+    setSaveNotice(null);
+    setPendingOpportunityResumeAccountRecordId(null);
+    setResumeOpportunityAfterContactCreate(null);
+    setCreateContactDrawerInitialAccountRecordId(resolveRowBusinessAccountRecordId(row));
     setIsCreateContactDrawerOpen(true);
   }
 
@@ -6387,6 +6565,7 @@ export function AccountsClient({
                   const rowHasNote = hasRowNote(row);
                   const rowCanEditNote = canEditRowNote(row);
                   const rowCanDelete = canDeleteRowContact(row);
+                  const rowCanAddContact = canAddContactToRow(row);
                   const isRowSelectable = rowContactId !== null;
                   const isRowChecked = selectedContactRowKeys.includes(rowKey);
                   const selectedClass =
@@ -6467,6 +6646,16 @@ export function AccountsClient({
                                 role="menu"
                                 style={rowMenuPosition}
                               >
+                                <button
+                                  className={styles.rowMenuAction}
+                                  disabled={!rowCanAddContact}
+                                  onClick={() => {
+                                    openCreateContactDrawerFromRow(row);
+                                  }}
+                                  type="button"
+                                >
+                                  Add contact
+                                </button>
                                 <button
                                   className={styles.rowMenuAction}
                                   disabled={!rowHasEmail}
