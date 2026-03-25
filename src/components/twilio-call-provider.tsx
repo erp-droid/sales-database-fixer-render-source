@@ -19,6 +19,7 @@ type StartCallResponse = {
   callerId?: string;
   userPhone?: string;
   targetPhone?: string;
+  deduped?: boolean;
 };
 
 type CallStatusResponse = {
@@ -337,6 +338,16 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    const normalizedActiveTarget = formatPhoneForTwilioDial(activeTargetPhone);
+    if (isInitializing || callSid || sessionId || activeLabel) {
+      if (normalizedActiveTarget && normalizedActiveTarget === dialTarget) {
+        return;
+      }
+
+      setError("A call is already in progress. Hang up before starting another.");
+      return;
+    }
+
     setLastCallRequest({
       phone,
       label,
@@ -363,7 +374,11 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
         setCachedCallerPhone(payload.userPhone);
       }
       setActiveTargetPhone(payload.targetPhone ?? dialTarget);
-      setStatusText("Answer your phone to connect the call.");
+      setStatusText(
+        payload.deduped
+          ? "Call already in progress."
+          : "Answer your phone to connect the call.",
+      );
     } catch (callError) {
       setError(callError instanceof Error ? callError.message : "Calling failed.");
       setCallSid(null);

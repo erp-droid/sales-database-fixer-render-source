@@ -10,7 +10,10 @@ import {
 } from "@/lib/auth";
 import { type AuthCookieRefreshState, validateSessionWithAcumatica } from "@/lib/acumatica";
 import { ensureCallActivitySyncQueuedForSession } from "@/lib/call-analytics/postcall-worker";
-import { readCallSessionById } from "@/lib/call-analytics/sessionize";
+import {
+  findRecentBridgeCallSessionForEmployee,
+  readCallSessionById,
+} from "@/lib/call-analytics/sessionize";
 import {
   buildTwilioBridgeCallbacks,
   createCallSessionId,
@@ -18,6 +21,7 @@ import {
   recordProvisionalBridgeCall,
 } from "@/lib/call-analytics/ingest";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { formatPhoneForTwilioDial } from "@/lib/phone";
 import { endBridgeCall, resolveCallerProfile, startBridgeCall } from "@/lib/twilio-outbound";
 
 type StartPayload = {
@@ -32,8 +36,22 @@ type StartPayload = {
   } | null;
 };
 
+const ACTIVE_BRIDGE_CALL_LOOKBACK_MS = 45_000;
+const pendingBridgeCallStarts = new Map<string, Promise<BridgeCallStartResult>>();
+
 type EndPayload = {
   callSid?: string;
+};
+
+type BridgeCallStartResult = {
+  sessionId: string;
+  callSid: string;
+  status: string | null;
+  bridgeNumber: string;
+  callerId: string;
+  userPhone: string;
+  targetPhone: string;
+  callerDisplayName: string;
 };
 
 function isEmployeePhoneResolutionError(message: string | null | undefined): boolean {
@@ -83,6 +101,41 @@ function shouldRetryCallerProfileWithSession(error: unknown): boolean {
     normalized.includes("verify that employee number in twilio first") ||
     normalized.includes("caller id")
   );
+}
+
+function buildBridgeCallStartKey(employeeLoginName: string, targetPhone: string): string {
+  return `${employeeLoginName.trim().toLowerCase()}::${
+    formatPhoneForTwilioDial(targetPhone) ?? targetPhone.trim()
+  }`;
+}
+
+async function startOrJoinPendingBridgeCall(
+  key: string,
+  startCall: () => Promise<BridgeCallStartResult>,
+): Promise<BridgeCallStartResult & { deduped: boolean }> {
+  const pendingStart = pendingBridgeCallStarts.get(key);
+  if (pendingStart) {
+    const result = await pendingStart;
+    return {
+      ...result,
+      deduped: true,
+    };
+  }
+
+  const startedCallPromise = startCall();
+  pendingBridgeCallStarts.set(key, startedCallPromise);
+
+  try {
+    const result = await startedCallPromise;
+    return {
+      ...result,
+      deduped: false,
+    };
+  } finally {
+    if (pendingBridgeCallStarts.get(key) === startedCallPromise) {
+      pendingBridgeCallStarts.delete(key);
+    }
+  }
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -157,38 +210,79 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
-    const callbacks = buildTwilioBridgeCallbacks(request, sessionId);
-    const startedCall = await startBridgeCall(callerProfile, targetPhone, {
-      parentStatusCallback: callbacks.parentStatusCallback,
-      childStatusCallback: callbacks.childStatusCallback,
-      recordingStatusCallback: callbacks.recordingStatusCallback,
+    const existingSession = findRecentBridgeCallSessionForEmployee({
+      employeeLoginName: callerProfile.loginName,
+      targetPhone,
+      withinMs: ACTIVE_BRIDGE_CALL_LOOKBACK_MS,
     });
-    recordProvisionalBridgeCall({
-      sessionId,
-      rootCallSid: startedCall.sid,
-      status: startedCall.status,
-      bridgeNumber: startedCall.bridgeNumber,
-      callerId: startedCall.callerId,
-      userPhone: startedCall.userPhone,
-      targetPhone: startedCall.targetPhone,
-      callerEmployeeId: callerProfile.employeeId ?? null,
-      callerContactId: callerProfile.contactId ?? null,
-      callerDisplayName: callerProfile.displayName,
-      callerLoginName: callerProfile.loginName,
-      callerEmail: callerProfile.email ?? null,
-      context: body?.context ?? undefined,
-    });
+    if (existingSession && !existingSession.endedAt) {
+      const response = NextResponse.json({
+        ok: true,
+        deduped: true,
+        sessionId: existingSession.sessionId,
+        callSid: existingSession.rootCallSid,
+        status: existingSession.outcome,
+        bridgeNumber: existingSession.bridgeNumber,
+        callerId: existingSession.presentedCallerId,
+        userPhone: existingSession.employeePhone,
+        targetPhone: existingSession.targetPhone,
+        callerDisplayName: existingSession.employeeDisplayName ?? callerProfile.displayName,
+      });
+      if (authCookieRefresh.value) {
+        setAuthCookie(response, authCookieRefresh.value);
+      }
+      return response;
+    }
+
+    const startResult = await startOrJoinPendingBridgeCall(
+      buildBridgeCallStartKey(callerProfile.loginName, targetPhone),
+      async () => {
+        const callbacks = buildTwilioBridgeCallbacks(request, sessionId);
+        const startedCall = await startBridgeCall(callerProfile, targetPhone, {
+          parentStatusCallback: callbacks.parentStatusCallback,
+          childStatusCallback: callbacks.childStatusCallback,
+          recordingStatusCallback: callbacks.recordingStatusCallback,
+        });
+        recordProvisionalBridgeCall({
+          sessionId,
+          rootCallSid: startedCall.sid,
+          status: startedCall.status,
+          bridgeNumber: startedCall.bridgeNumber,
+          callerId: startedCall.callerId,
+          userPhone: startedCall.userPhone,
+          targetPhone: startedCall.targetPhone,
+          callerEmployeeId: callerProfile.employeeId ?? null,
+          callerContactId: callerProfile.contactId ?? null,
+          callerDisplayName: callerProfile.displayName,
+          callerLoginName: callerProfile.loginName,
+          callerEmail: callerProfile.email ?? null,
+          context: body?.context ?? undefined,
+        });
+
+        return {
+          sessionId,
+          callSid: startedCall.sid,
+          status: startedCall.status,
+          bridgeNumber: startedCall.bridgeNumber,
+          callerId: startedCall.callerId,
+          userPhone: startedCall.userPhone,
+          targetPhone: startedCall.targetPhone,
+          callerDisplayName: callerProfile.displayName,
+        };
+      },
+    );
 
     const response = NextResponse.json({
       ok: true,
-      sessionId,
-      callSid: startedCall.sid,
-      status: startedCall.status,
-      bridgeNumber: startedCall.bridgeNumber,
-      callerId: startedCall.callerId,
-      userPhone: startedCall.userPhone,
-      targetPhone: startedCall.targetPhone,
-      callerDisplayName: callerProfile.displayName,
+      ...(startResult.deduped ? { deduped: true } : {}),
+      sessionId: startResult.sessionId,
+      callSid: startResult.callSid,
+      status: startResult.status,
+      bridgeNumber: startResult.bridgeNumber,
+      callerId: startResult.callerId,
+      userPhone: startResult.userPhone,
+      targetPhone: startResult.targetPhone,
+      callerDisplayName: startResult.callerDisplayName,
     });
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
