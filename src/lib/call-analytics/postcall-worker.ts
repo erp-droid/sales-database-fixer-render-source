@@ -49,7 +49,7 @@ import {
   getTwilioRestConfig,
 } from "@/lib/twilio";
 
-type ResolvedActivityTarget = {
+export type ResolvedActivityTarget = {
   relatedEntityNoteId: string;
   relatedEntityType: "PX.Objects.CR.Contact" | "PX.Objects.CR.BAccount";
 };
@@ -69,9 +69,46 @@ type TwilioRecordingLike = {
 };
 
 const RECENT_CALL_ACTIVITY_SYNC_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+const OPENAI_TRANSCRIPTION_FALLBACK_MODELS = [
+  "gpt-4o-transcribe",
+  "gpt-4o-mini-transcribe",
+  "whisper-1",
+];
 
 function cleanText(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function logCallActivitySyncResult(
+  sessionId: string,
+  result: CallActivitySyncRecord | null,
+  context: string,
+): void {
+  if (!result) {
+    return;
+  }
+
+  const payload = {
+    sessionId,
+    context,
+    status: result.status,
+    attempts: result.attempts,
+    recordingSid: cleanText(result.recordingSid) || null,
+    activityId: cleanText(result.activityId) || null,
+    error: cleanText(result.error) || null,
+  };
+
+  if (result.status === "failed") {
+    console.error("[call-activity-sync] Job failed.", payload);
+    return;
+  }
+
+  if (result.status === "queued" || result.status === "skipped") {
+    console.warn("[call-activity-sync] Job not yet synced.", payload);
+    return;
+  }
+
+  console.info("[call-activity-sync] Job completed.", payload);
 }
 
 function normalizeComparableName(value: string | null | undefined): string {
@@ -184,7 +221,7 @@ function readSummaryTarget(session: CallSessionRecord): string {
   );
 }
 
-function buildActivitySummary(session: CallSessionRecord): string {
+export function buildActivitySummary(session: CallSessionRecord): string {
   const value = `Phone call with ${readSummaryTarget(session)}`.trim();
   return value.length > 255 ? `${value.slice(0, 252).trim()}...` : value;
 }
@@ -304,6 +341,7 @@ function buildDetailsHtml(session: CallSessionRecord): string {
     ["Started", formatDateTime(session.startedAt)],
     ["Ended", formatDateTime(session.endedAt)],
     ["Talk duration", formatDuration(session.talkDurationSeconds)],
+    ["Call session ID", cleanText(session.sessionId) || "-"],
   ];
 
   const items = rows
@@ -320,7 +358,7 @@ function buildTranscriptSection(transcriptText: string, truncated: boolean): str
   )}</div>`;
 }
 
-function buildActivityBodyHtml(
+export function buildActivityBodyHtml(
   session: CallSessionRecord,
   summaryText: string,
   transcriptText: string,
@@ -440,10 +478,14 @@ function shouldUseLocalTranscriptionFallback(error: unknown): boolean {
   );
 }
 
-async function transcribeAudioWithOpenAi(recordingSid: string, audioBlob: Blob): Promise<string> {
+async function transcribeAudioWithOpenAiModel(
+  recordingSid: string,
+  audioBlob: Blob,
+  model: string,
+): Promise<string> {
   const apiKey = readOpenAiApiKey();
   const formData = new FormData();
-  formData.append("model", getEnv().OPENAI_TRANSCRIPTION_MODEL);
+  formData.append("model", model);
   formData.append("file", audioBlob, `${recordingSid}.mp3`);
 
   const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
@@ -469,6 +511,25 @@ async function transcribeAudioWithOpenAi(recordingSid: string, audioBlob: Blob):
   }
 
   return transcript;
+}
+
+async function transcribeAudioWithOpenAi(recordingSid: string, audioBlob: Blob): Promise<string> {
+  const preferredModel = getEnv().OPENAI_TRANSCRIPTION_MODEL;
+  const models = [...new Set([preferredModel, ...OPENAI_TRANSCRIPTION_FALLBACK_MODELS])];
+  let lastError: Error | null = null;
+
+  for (const model of models) {
+    try {
+      return await transcribeAudioWithOpenAiModel(recordingSid, audioBlob, model);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(getErrorMessage(error));
+      if (!shouldUseLocalTranscriptionFallback(lastError)) {
+        throw lastError;
+      }
+    }
+  }
+
+  throw lastError ?? new Error("OpenAI transcription failed.");
 }
 
 async function transcribeAudioLocally(recordingSid: string, audioBlob: Blob): Promise<string> {
@@ -508,16 +569,30 @@ async function transcribeAudioLocally(recordingSid: string, audioBlob: Blob): Pr
 
 async function transcribeRecording(recordingSid: string): Promise<string> {
   const audioBlob = await fetchTwilioRecordingAudio(recordingSid);
+  let openAiError: Error | null = null;
 
   try {
     return await transcribeAudioWithOpenAi(recordingSid, audioBlob);
   } catch (error) {
-    if (!shouldUseLocalTranscriptionFallback(error)) {
-      throw error;
+    const normalizedError = error instanceof Error ? error : new Error(getErrorMessage(error));
+    if (!shouldUseLocalTranscriptionFallback(normalizedError)) {
+      throw normalizedError;
     }
+    openAiError = normalizedError;
   }
 
-  return transcribeAudioLocally(recordingSid, audioBlob);
+  try {
+    return await transcribeAudioLocally(recordingSid, audioBlob);
+  } catch (error) {
+    const localError = error instanceof Error ? error : new Error(getErrorMessage(error));
+    if (!openAiError) {
+      throw localError;
+    }
+
+    throw new Error(
+      `${getErrorMessage(openAiError)}; local fallback failed: ${getErrorMessage(localError)}`,
+    );
+  }
 }
 
 async function summarizeTranscriptWithModel(
@@ -676,7 +751,7 @@ async function resolveRecordingForSession(
   };
 }
 
-async function resolveActivityTarget(
+export async function resolveActivityTarget(
   session: CallSessionRecord,
 ): Promise<ResolvedActivityTarget | null> {
   const candidateContactIds = [...new Set([session.linkedContactId, session.matchedContactId])]
@@ -849,28 +924,41 @@ export async function processCallActivitySyncJob(
 ): Promise<CallActivitySyncRecord | null> {
   const claimed = claimCallActivitySyncJob(sessionId);
   if (!claimed) {
-    return readCallActivitySyncBySessionId(sessionId);
+    const current = readCallActivitySyncBySessionId(sessionId);
+    logCallActivitySyncResult(sessionId, current, "already_claimed");
+    return current;
   }
 
   try {
+    const finish = (result: CallActivitySyncRecord | null, context = "process") => {
+      logCallActivitySyncResult(sessionId, result, context);
+      return result;
+    };
+
     let session = readCallSessionById(sessionId);
     if (session && (!session.endedAt || session.outcome === "in_progress")) {
       session = (await reconcileTwilioSession(sessionId)) ?? session;
     }
 
     if (!session || !session.endedAt || session.outcome === "in_progress") {
-      return requeueCallActivitySyncJob(sessionId, "Waiting for the call session to finish syncing.");
+      return finish(
+        requeueCallActivitySyncJob(sessionId, "Waiting for the call session to finish syncing."),
+        "waiting_for_session",
+      );
     }
 
     if (!session.answered) {
-      return markCallActivitySyncSkipped(sessionId, "Call was not answered.");
+      return finish(markCallActivitySyncSkipped(sessionId, "Call was not answered."), "unanswered");
     }
 
     const target = await resolveActivityTarget(session);
     if (!target) {
-      return markCallActivitySyncSkipped(
-        sessionId,
-        "No related contact or business account could be resolved for this call.",
+      return finish(
+        markCallActivitySyncSkipped(
+          sessionId,
+          "No related contact or business account could be resolved for this call.",
+        ),
+        "no_target",
       );
     }
 
@@ -882,9 +970,12 @@ export async function processCallActivitySyncJob(
       if (!recordingSid) {
         const resolvedRecording = await resolveRecordingForSession(sessionId);
         if (!resolvedRecording?.recordingSid) {
-          return requeueCallActivitySyncJob(
-            sessionId,
-            "Waiting for the call recording to be available.",
+          return finish(
+            requeueCallActivitySyncJob(
+              sessionId,
+              "Waiting for the call recording to be available.",
+            ),
+            "waiting_for_recording",
           );
         }
 
@@ -918,9 +1009,11 @@ export async function processCallActivitySyncJob(
       }
     }
 
-    return synced;
+    return finish(synced, "synced");
   } catch (error) {
-    return markCallActivitySyncFailed(sessionId, getErrorMessage(error));
+    const failed = markCallActivitySyncFailed(sessionId, getErrorMessage(error));
+    logCallActivitySyncResult(sessionId, failed, "failed");
+    return failed;
   }
 }
 
@@ -997,7 +1090,16 @@ export async function processTwilioRecordingCallback(
     recordingDurationSeconds: parsed.payload.recordingDurationSeconds,
   });
 
-  void processCallActivitySyncJob(parsed.sessionId).catch(() => undefined);
+  void ensureCallActivitySyncQueuedForSession(parsed.sessionId)
+    .then((result) => {
+      logCallActivitySyncResult(parsed.sessionId, result, "recording_callback");
+    })
+    .catch((error) => {
+      console.error("[call-activity-sync] Recording callback processing crashed.", {
+        sessionId: parsed.sessionId,
+        error: getErrorMessage(error),
+      });
+    });
   return job;
 }
 
