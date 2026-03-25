@@ -1,0 +1,50 @@
+<Customization level="1" description="Opportunity Quote Generator launcher for MeadowBrook quoting" product-version="25.101">
+  <Comment>
+    Import this file into a new Acumatica customization project or copy the CDATA code block into a runtime code file.
+    The action adds a main-toolbar button named "Quote Generator" to the standard Opportunities screen and opens
+    the Render quoting app in a new tab with the current Opportunity ID preselected.
+  </Comment>
+  <Files>
+    <File path="App_RuntimeCode/OpportunityQuoteGenerator.cs"><![CDATA[
+using System;
+using System.Collections;
+using PX.Data;
+using PX.Objects.CR;
+
+namespace PX.Objects.CR
+{
+    public class OpportunityMaintQuoteGeneratorExt : PXGraphExtension<OpportunityMaint>
+    {
+        private const string QuoteGeneratorBaseUrl = "https://sales-meadowb.onrender.com/quotes/";
+
+        public static bool IsActive() => true;
+
+        public PXAction<CROpportunity> QuoteGenerator;
+
+        [PXButton(CommitChanges = false, DisplayOnMainToolbar = true)]
+        [PXUIField(DisplayName = "Quote Generator", MapEnableRights = PXCacheRights.Select, MapViewRights = PXCacheRights.Select)]
+        protected virtual IEnumerable quoteGenerator(PXAdapter adapter)
+        {
+            CROpportunity row = Base.Opportunity.Current;
+            if (row == null)
+                return adapter.Get();
+
+            string opportunityId = row.OpportunityID?.Trim();
+            if (string.IsNullOrWhiteSpace(opportunityId))
+                throw new PXSetPropertyException("Save the opportunity before opening Quote Generator.");
+
+            string url = $"{QuoteGeneratorBaseUrl}?launch=opportunity&opportunityId={Uri.EscapeDataString(opportunityId)}";
+            throw new PXRedirectToUrlException(url, PXBaseRedirectException.WindowMode.NewWindow, "Quote Generator");
+        }
+
+        protected virtual void _(Events.RowSelected<CROpportunity> e)
+        {
+            bool enabled = e.Row != null && !string.IsNullOrWhiteSpace(e.Row.OpportunityID);
+            QuoteGenerator.SetVisible(true);
+            QuoteGenerator.SetEnabled(enabled);
+        }
+    }
+}
+]]></File>
+  </Files>
+</Customization>

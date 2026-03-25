@@ -663,6 +663,7 @@ function normalizePayload(body) {
   const opportunity = normalizeOpportunity(body.opportunity || body);
   return {
     quoteType: body.quoteType,
+    existingOpportunityId: cleanString(body.existingOpportunityId),
     account: normalizeAccount(body.account || {}),
     opportunity,
     divisions: divisions.filter((division) => division.isSelected),
@@ -701,6 +702,136 @@ function resolveQuoteMode(payload) {
   if (quoteType === "glendale" || hasGlendaleDivision) return "glendale";
   if (quoteType === "service") return "service";
   return "production";
+}
+
+function resolveQuoteTypeFromOpportunityContext(opportunity = {}) {
+  const branch = cleanFieldValue(opportunity?.branch).toLowerCase();
+  if (branch.includes("service")) return "service";
+  if (branch.includes("glendale")) return "glendale";
+  if (branch.includes("production") || branch.includes("construction")) return "production";
+
+  const classId = cleanFieldValue(opportunity?.classId).toLowerCase();
+  if (classId.includes("service")) return "service";
+  if (classId.includes("glendale")) return "glendale";
+  if (classId) return "production";
+
+  return "";
+}
+
+function buildOpportunityContextValidationMessage(opportunityId, reasons = []) {
+  const cleanedReasons = reasons.map((reason) => cleanString(reason)).filter(Boolean);
+  const prefix = cleanString(opportunityId)
+    ? `Opportunity ${cleanString(opportunityId)} is missing required quote-generator data.`
+    : "The selected opportunity is missing required quote-generator data.";
+  if (!cleanedReasons.length) {
+    return prefix;
+  }
+  return `${prefix} ${cleanedReasons.join(" ")}`;
+}
+
+async function loadExistingOpportunityContext({ acumatica, opportunityId } = {}) {
+  const normalizedOpportunityId = cleanString(opportunityId);
+  if (!normalizedOpportunityId) {
+    throw new AcumaticaValidationError(
+      "OPPORTUNITY_ID_REQUIRED",
+      "Opportunity ID is required to launch the quote generator.",
+      { validationErrors: ["Opportunity ID is required."] }
+    );
+  }
+
+  const opportunity = await withUpstreamStep("opportunity_lookup", () =>
+    acumatica.getOpportunityById(normalizedOpportunityId)
+  );
+
+  if (!opportunity?.id) {
+    throw new AcumaticaValidationError(
+      "OPPORTUNITY_NOT_FOUND",
+      `Opportunity ${normalizedOpportunityId} was not found.`,
+      {
+        opportunityId: normalizedOpportunityId,
+        validationErrors: [`Opportunity ${normalizedOpportunityId} was not found.`]
+      }
+    );
+  }
+
+  const businessAccountId = cleanFieldValue(opportunity.businessAccountId);
+  const contactId = cleanFieldValue(opportunity.contactId);
+  const quoteType = resolveQuoteTypeFromOpportunityContext(opportunity);
+  const validationErrors = [];
+
+  if (!businessAccountId) {
+    validationErrors.push("Business account is missing.");
+  }
+  if (!contactId) {
+    validationErrors.push("Contact is missing.");
+  }
+  if (!quoteType) {
+    validationErrors.push("Department could not be resolved from Branch or Opportunity Class.");
+  }
+
+  if (validationErrors.length) {
+    throw new AcumaticaValidationError(
+      "OPPORTUNITY_CONTEXT_INVALID",
+      buildOpportunityContextValidationMessage(opportunity.id || normalizedOpportunityId, validationErrors),
+      {
+        opportunityId: cleanString(opportunity.id || normalizedOpportunityId),
+        validationErrors
+      }
+    );
+  }
+
+  let businessAccount = null;
+  try {
+    businessAccount = await withUpstreamStep("opportunity_business_account_lookup", () =>
+      acumatica.getBusinessAccountById(businessAccountId)
+    );
+  } catch (error) {
+    console.warn(
+      `[opportunity-context] Business account lookup warning for ${opportunity.id}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  let contact = null;
+  try {
+    contact = await withUpstreamStep("opportunity_contact_lookup", () =>
+      acumatica.getContactById(contactId, { businessAccountId })
+    );
+  } catch (error) {
+    console.warn(
+      `[opportunity-context] Contact lookup warning for ${opportunity.id}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  const normalizedAccount = {
+    businessAccountId,
+    name: cleanFieldValue(businessAccount?.name || opportunity.businessAccountName || businessAccountId),
+    owner: cleanFieldValue(businessAccount?.owner),
+    location: cleanFieldValue(businessAccount?.location || opportunity.location),
+    address: businessAccount?.address || undefined
+  };
+
+  const normalizedContact = {
+    contactId,
+    displayName: cleanFieldValue(contact?.displayName || opportunity.contactName || contactId),
+    email: cleanFieldValue(contact?.email),
+    phone: cleanFieldValue(contact?.phone),
+    contactClass: cleanFieldValue(contact?.contactClass)
+  };
+
+  return {
+    opportunityId: cleanFieldValue(opportunity.id || normalizedOpportunityId),
+    subject: cleanFieldValue(opportunity.subject),
+    description: cleanFieldValue(opportunity.note || opportunity.subject),
+    branch: cleanFieldValue(opportunity.branch),
+    classId: cleanFieldValue(opportunity.classId),
+    stage: cleanFieldValue(opportunity.stage),
+    owner: cleanFieldValue(opportunity.owner),
+    location: cleanFieldValue(opportunity.location || normalizedAccount.location),
+    quoteType,
+    businessAccount: normalizedAccount,
+    contact: normalizedContact,
+    opportunity
+  };
 }
 
 const VALID_PROJECT_TYPE_VALUES = new Set(["Construct", "Electrical", "HVAC", "M-Trade", "Plumbing"]);
@@ -3069,6 +3200,23 @@ app.post("/api/quote", async (req, res) => {
     const acumatica = requireAcumaticaClient(req);
     const payload = normalizePayload(req.body || {});
     const quoteBody = cleanString(req.body?.quoteBody || req.body?.fullQuoteBody);
+    let existingOpportunityContext = null;
+    if (payload.existingOpportunityId) {
+      existingOpportunityContext = await loadExistingOpportunityContext({
+        acumatica,
+        opportunityId: payload.existingOpportunityId
+      });
+      payload.quoteType = cleanString(existingOpportunityContext.quoteType || payload.quoteType);
+      payload.account = normalizeAccount({
+        ...payload.account,
+        ...existingOpportunityContext.businessAccount,
+        contactId: cleanFieldValue(existingOpportunityContext.contact?.contactId),
+        contactName: cleanFieldValue(existingOpportunityContext.contact?.displayName),
+        location: cleanFieldValue(
+          existingOpportunityContext.businessAccount?.location || existingOpportunityContext.location || payload.account?.location
+        )
+      });
+    }
     if (!payload.divisions.length) {
       return res.status(400).json({
         code: "VALIDATION_ERROR",
@@ -3143,12 +3291,27 @@ app.post("/api/quote", async (req, res) => {
       ? `${quoteScopeNote}\n\n${generatedBackupSummary}`
       : generatedBackupSummary;
 
-    const businessAccount = await withUpstreamStep("business_account_lookup", () =>
-      acumatica.resolveBusinessAccount(payload.account)
-    );
-    const contact = await withUpstreamStep("contact_lookup", () =>
-      acumatica.resolveContactForBusinessAccount(payload.account, businessAccount)
-    );
+    const businessAccount = existingOpportunityContext
+      ? {
+          id: cleanFieldValue(existingOpportunityContext.businessAccount?.businessAccountId),
+          code: cleanFieldValue(existingOpportunityContext.businessAccount?.businessAccountId),
+          name: cleanFieldValue(existingOpportunityContext.businessAccount?.name),
+          location: cleanFieldValue(existingOpportunityContext.businessAccount?.location),
+          owner: cleanFieldValue(existingOpportunityContext.businessAccount?.owner),
+          address: existingOpportunityContext.businessAccount?.address || undefined
+        }
+      : await withUpstreamStep("business_account_lookup", () => acumatica.resolveBusinessAccount(payload.account));
+    const contact = existingOpportunityContext
+      ? {
+          id: cleanFieldValue(existingOpportunityContext.contact?.contactId),
+          displayName: cleanFieldValue(existingOpportunityContext.contact?.displayName),
+          email: cleanFieldValue(existingOpportunityContext.contact?.email),
+          phone: cleanFieldValue(existingOpportunityContext.contact?.phone),
+          contactClass: cleanFieldValue(existingOpportunityContext.contact?.contactClass)
+        }
+      : await withUpstreamStep("contact_lookup", () =>
+          acumatica.resolveContactForBusinessAccount(payload.account, businessAccount)
+        );
     const signedInQuoteOwner = await resolveSignedInQuoteOwner({
       req,
       acumatica,
@@ -3161,9 +3324,10 @@ app.post("/api/quote", async (req, res) => {
       requiredOpportunityAttributes
     );
 
-    let opportunityId = "";
-    let usedOpportunityClassId = "";
+    let opportunityId = cleanFieldValue(existingOpportunityContext?.opportunityId);
+    let usedOpportunityClassId = cleanFieldValue(existingOpportunityContext?.classId);
     let lastOpportunityError = null;
+    let createdOpportunity = false;
     const opportunityOwnerCandidates = Array.from(
       new Set(
         [
@@ -3172,44 +3336,47 @@ app.post("/api/quote", async (req, res) => {
         ].filter(Boolean)
       )
     );
-    for (const classId of uniqueClassCandidates) {
-      const ownerValuesToTry = opportunityOwnerCandidates.length ? opportunityOwnerCandidates : [""];
-      for (let ownerIndex = 0; ownerIndex < ownerValuesToTry.length; ownerIndex += 1) {
-        const ownerValue = ownerValuesToTry[ownerIndex];
-        try {
-          const opportunityPayload = acumatica.buildOpportunityPayload({ fields: [] }, {
-            classId,
-            stage: resolveOpportunityStage(),
-            businessAccountId: businessAccount.id,
-            contactId: contact.id,
-            location: payload.account.location || businessAccount.location,
-            owner: ownerValue,
-            subject: quoteDescription,
-            note: quoteScopeNote,
-            attributes: opportunityAttributes
-          });
-          const result = await withUpstreamStep("opportunity_create", () => acumatica.createOpportunity(opportunityPayload));
-          opportunityId = cleanString(result?.opportunityId);
-          if (opportunityId) {
-            usedOpportunityClassId = classId;
-            break;
+    if (!existingOpportunityContext) {
+      for (const classId of uniqueClassCandidates) {
+        const ownerValuesToTry = opportunityOwnerCandidates.length ? opportunityOwnerCandidates : [""];
+        for (let ownerIndex = 0; ownerIndex < ownerValuesToTry.length; ownerIndex += 1) {
+          const ownerValue = ownerValuesToTry[ownerIndex];
+          try {
+            const opportunityPayload = acumatica.buildOpportunityPayload({ fields: [] }, {
+              classId,
+              stage: resolveOpportunityStage(),
+              businessAccountId: businessAccount.id,
+              contactId: contact.id,
+              location: payload.account.location || businessAccount.location,
+              owner: ownerValue,
+              subject: quoteDescription,
+              note: quoteScopeNote,
+              attributes: opportunityAttributes
+            });
+            const result = await withUpstreamStep("opportunity_create", () => acumatica.createOpportunity(opportunityPayload));
+            opportunityId = cleanString(result?.opportunityId);
+            if (opportunityId) {
+              usedOpportunityClassId = classId;
+              createdOpportunity = true;
+              break;
+            }
+          } catch (error) {
+            lastOpportunityError = error;
+            if (isOpportunityClassNotFoundError(error)) break;
+            const canRetryOwnerWithAlternateValue =
+              ownerValuesToTry.length > 1 &&
+              ownerIndex < ownerValuesToTry.length - 1 &&
+              isOpportunityOwnerNotFoundError(error);
+            if (canRetryOwnerWithAlternateValue) {
+              continue;
+            }
+            throw error;
           }
-        } catch (error) {
-          lastOpportunityError = error;
-          if (isOpportunityClassNotFoundError(error)) break;
-          const canRetryOwnerWithAlternateValue =
-            ownerValuesToTry.length > 1 &&
-            ownerIndex < ownerValuesToTry.length - 1 &&
-            isOpportunityOwnerNotFoundError(error);
-          if (canRetryOwnerWithAlternateValue) {
-            continue;
-          }
-          throw error;
         }
+        if (opportunityId) break;
+        if (lastOpportunityError && isOpportunityClassNotFoundError(lastOpportunityError)) continue;
+        if (opportunityId) break;
       }
-      if (opportunityId) break;
-      if (lastOpportunityError && isOpportunityClassNotFoundError(lastOpportunityError)) continue;
-      if (opportunityId) break;
     }
 
     if (!opportunityId && lastOpportunityError) {
@@ -3814,6 +3981,7 @@ app.post("/api/quote", async (req, res) => {
       quoteUrl,
       quoteDescription,
       opportunityId,
+      createdOpportunity,
       businessAccountId: businessAccount.id,
       contactId: contact.id,
       opportunityClassId: usedOpportunityClassId,
@@ -3857,6 +4025,75 @@ app.post("/api/quote", async (req, res) => {
     res.status(500).json({
       code: "INTERNAL_ERROR",
       error: message,
+      correlationId
+    });
+  }
+});
+
+app.get("/api/opportunity-context/:opportunityId", async (req, res) => {
+  const correlationId = crypto.randomUUID();
+  try {
+    const acumatica = requireAcumaticaClient(req);
+    const opportunityId = cleanString(req.params?.opportunityId);
+    if (!opportunityId) {
+      return res.status(400).json({
+        code: "VALIDATION_ERROR",
+        error: "Opportunity ID is required.",
+        correlationId
+      });
+    }
+
+    const context = await loadExistingOpportunityContext({
+      acumatica,
+      opportunityId
+    });
+
+    return res.json({
+      opportunityId: cleanString(context.opportunityId),
+      subject: cleanString(context.subject),
+      description: cleanString(context.description),
+      branch: cleanString(context.branch),
+      classId: cleanString(context.classId),
+      stage: cleanString(context.stage),
+      owner: cleanString(context.owner),
+      location: cleanString(context.location),
+      quoteType: cleanString(context.quoteType),
+      businessAccountId: cleanFieldValue(context.businessAccount?.businessAccountId),
+      businessAccountName: cleanFieldValue(context.businessAccount?.name),
+      contactId: cleanFieldValue(context.contact?.contactId),
+      contactName: cleanFieldValue(context.contact?.displayName),
+      businessAccount: context.businessAccount,
+      contact: context.contact,
+      correlationId
+    });
+  } catch (error) {
+    console.error(`[${correlationId}]`, error);
+    if (error instanceof ApiAuthError) {
+      return res.status(error.status).json({
+        code: error.code,
+        error: error.message,
+        correlationId
+      });
+    }
+    if (error instanceof AcumaticaValidationError) {
+      return res.status(error.status).json({
+        code: error.code,
+        error: error.message,
+        correlationId,
+        ...(error.details || {})
+      });
+    }
+    if (error instanceof AcumaticaUpstreamError) {
+      return res.status(error.status).json({
+        code: error.code || "ACUMATICA_UPSTREAM_ERROR",
+        error: error.message,
+        step: error.step,
+        correlationId
+      });
+    }
+    return res.status(500).json({
+      code: "INTERNAL_ERROR",
+      error: error instanceof Error ? error.message : "Unknown error",
       correlationId
     });
   }
@@ -4043,7 +4280,9 @@ app.post("/api/estimate-library/suggest", async (req, res) => {
 
 app.get("/", (_req, res) => {
   if (INTEGRATED_AUTH_ENABLED && !resolveIntegratedSession(_req)) {
-    const redirectTarget = `${INTEGRATED_SIGNIN_PATH}?next=${encodeURIComponent(INTEGRATED_QUOTES_PATH)}`;
+    const requestedPath = cleanString(_req.originalUrl || _req.url || INTEGRATED_QUOTES_PATH) || INTEGRATED_QUOTES_PATH;
+    const nextTarget = requestedPath.startsWith("/") ? requestedPath : INTEGRATED_QUOTES_PATH;
+    const redirectTarget = `${INTEGRATED_SIGNIN_PATH}?next=${encodeURIComponent(nextTarget)}`;
     return res.redirect(302, redirectTarget);
   }
   res.sendFile(path.join(publicDir, "index.html"));

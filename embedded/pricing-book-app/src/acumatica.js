@@ -62,11 +62,14 @@ const OPPORTUNITY_FIELD_CANDIDATES = {
   id: ["OpportunityID", "OpportunityId", "OpportunityNbr", "ID"],
   classId: ["ClassID", "ClassId", "OpportunityClass", "OpportunityClassID"],
   businessAccount: ["BusinessAccount", "BusinessAccountID", "BusinessAccountCD", "BAccountID", "AccountID"],
+  businessAccountName: ["BusinessAccountName", "AccountName", "BAccountName", "CompanyName", "CustomerName"],
   location: ["Location", "LocationID", "LocationCD"],
   contactId: ["ContactID", "ContactId", "Contact"],
+  contactName: ["ContactName", "DisplayName", "Attention", "FullName", "Name"],
   stage: ["Stage", "StageID", "OpportunityStage"],
   owner: ["Owner", "OwnerID", "WorkgroupOwner", "OwnerName"],
   subject: ["Subject", "Description", "Summary"],
+  branch: ["Branch", "BranchID", "BranchCD", "BranchName"],
   estimation: ["Estimation", "EstimationDate", "Date"],
   note: ["note", "Note", "Notes"],
   attributes: ["Attributes"]
@@ -1984,11 +1987,14 @@ export class AcumaticaClient {
       id: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.id),
       classId: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.classId),
       businessAccount: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.businessAccount),
+      businessAccountName: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.businessAccountName),
       location: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.location),
       contactId: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.contactId),
+      contactName: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.contactName),
       stage: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.stage),
       owner: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.owner),
       subject: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.subject),
+      branch: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.branch),
       estimation: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.estimation),
       note: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.note),
       attributes: resolveFieldName(fields, OPPORTUNITY_FIELD_CANDIDATES.attributes)
@@ -2036,12 +2042,73 @@ export class AcumaticaClient {
     const name = stringValue(this.pickFieldValue(record, [fieldMap.name, fieldMap.code, fieldMap.id]));
     const location = stringValue(this.pickFieldValue(record, [fieldMap.location]));
     const owner = stringValue(this.pickFieldValue(record, [fieldMap.owner, fieldMap.ownerId]));
+    const address = buildBusinessAccountAddress(record);
     return {
       id: id || code,
       code: code || id,
       name,
       location,
       owner,
+      address,
+      raw: record
+    };
+  }
+
+  toOpportunity(record, fieldMap) {
+    const id =
+      stringValue(this.pickFieldValue(record, [fieldMap.id])) ||
+      firstPathValue(record, [["OpportunityID"], ["OpportunityId"], ["OpportunityNbr"], ["ID"], ["id"]]);
+    const classId =
+      stringValue(this.pickFieldValue(record, [fieldMap.classId])) ||
+      firstPathValue(record, [["ClassID"], ["ClassId"], ["OpportunityClass"], ["OpportunityClassID"]]);
+    const businessAccountId =
+      stringValue(this.pickFieldValue(record, [fieldMap.businessAccount])) ||
+      firstPathValue(record, [["BusinessAccount"], ["BusinessAccountID"], ["BusinessAccountCD"], ["BAccountID"], ["AccountID"]]);
+    const businessAccountName =
+      stringValue(this.pickFieldValue(record, [fieldMap.businessAccountName])) ||
+      firstPathValue(record, [["BusinessAccountName"], ["AccountName"], ["BAccountName"], ["CompanyName"], ["CustomerName"]]);
+    const location =
+      stringValue(this.pickFieldValue(record, [fieldMap.location])) ||
+      firstPathValue(record, [["Location"], ["LocationID"], ["LocationCD"]]);
+    const contactId =
+      stringValue(this.pickFieldValue(record, [fieldMap.contactId])) ||
+      firstPathValue(record, [["ContactID"], ["ContactId"], ["Contact"], ["PrimaryContactID"]]);
+    const contactName =
+      stringValue(this.pickFieldValue(record, [fieldMap.contactName])) ||
+      firstPathValue(record, [["ContactName"], ["DisplayName"], ["Attention"], ["FullName"], ["Name"]]);
+    const stage =
+      stringValue(this.pickFieldValue(record, [fieldMap.stage])) ||
+      firstPathValue(record, [["Stage"], ["StageID"], ["OpportunityStage"]]);
+    const owner =
+      stringValue(this.pickFieldValue(record, [fieldMap.owner])) ||
+      firstPathValue(record, [["Owner"], ["OwnerID"], ["OwnerName"], ["WorkgroupOwner"]]);
+    const subject =
+      stringValue(this.pickFieldValue(record, [fieldMap.subject])) ||
+      firstPathValue(record, [["Subject"], ["Description"], ["Summary"]]);
+    const branch =
+      stringValue(this.pickFieldValue(record, [fieldMap.branch])) ||
+      firstPathValue(record, [["Branch"], ["BranchID"], ["BranchCD"], ["BranchName"]]);
+    const estimation =
+      stringValue(this.pickFieldValue(record, [fieldMap.estimation])) ||
+      firstPathValue(record, [["Estimation"], ["EstimationDate"], ["Date"]]);
+    const note =
+      stringValue(this.pickFieldValue(record, [fieldMap.note])) ||
+      firstPathValue(record, [["note"], ["Note"], ["Notes"]]);
+
+    return {
+      id,
+      classId,
+      businessAccountId,
+      businessAccountName,
+      location,
+      contactId,
+      contactName,
+      stage,
+      owner,
+      subject,
+      branch,
+      estimation,
+      note,
       raw: record
     };
   }
@@ -2123,6 +2190,16 @@ export class AcumaticaClient {
     };
   }
 
+  formatBusinessAccountOption(account) {
+    return compactObject({
+      businessAccountId: stringValue(account?.id || account?.code),
+      name: stringValue(account?.name || account?.code || account?.id),
+      owner: stringValue(account?.owner),
+      location: stringValue(account?.location),
+      address: account?.address || undefined
+    });
+  }
+
   buildValidationDetails(baseDetails = {}) {
     return compactObject(baseDetails);
   }
@@ -2180,6 +2257,233 @@ export class AcumaticaClient {
       `No business account matched "${lookup}".`,
       this.buildValidationDetails()
     );
+  }
+
+  async getOpportunityById(opportunityId) {
+    const targetId = stringValue(opportunityId);
+    if (!targetId) return null;
+
+    const attemptedEntityNames = [...this.getOpportunityEntityCandidates()];
+    const resolvedMetaByEntity = new Map();
+    try {
+      const resolvedMeta = await this.resolveOpportunityMeta();
+      if (
+        resolvedMeta?.entityName &&
+        !attemptedEntityNames.some((existing) => normalizeName(existing) === normalizeName(resolvedMeta.entityName))
+      ) {
+        attemptedEntityNames.unshift(resolvedMeta.entityName);
+      }
+      if (resolvedMeta?.entityName) {
+        resolvedMetaByEntity.set(normalizeName(resolvedMeta.entityName), resolvedMeta);
+      }
+    } catch (error) {
+      if (!isRecoverableEntityCandidateError(error)) throw error;
+    }
+
+    const escapedId = targetId.replace(/'/g, "''");
+    const filters = [
+      `OpportunityID eq '${escapedId}'`,
+      `OpportunityId eq '${escapedId}'`,
+      `OpportunityNbr eq '${escapedId}'`,
+      `ID eq '${escapedId}'`
+    ];
+
+    for (const entityName of attemptedEntityNames) {
+      const meta =
+        resolvedMetaByEntity.get(normalizeName(entityName)) || {
+          entityName,
+          fields: []
+        };
+      const fieldMap = this.getOpportunityFieldMap(meta.fields || []);
+      try {
+        const payload = await this.request(`${entityName}/${encodeURIComponent(targetId)}`, { method: "GET" });
+        const rows = extractRecords(payload);
+        const record = rows[0] || payload;
+        const mapped = this.toOpportunity(record, fieldMap);
+        if (mapped.id) return mapped;
+      } catch (error) {
+        if (!isRecoverableEntityCandidateError(error)) throw error;
+      }
+    }
+
+    for (const entityName of attemptedEntityNames) {
+      const meta =
+        resolvedMetaByEntity.get(normalizeName(entityName)) || {
+          entityName,
+          fields: []
+        };
+      const fieldMap = this.getOpportunityFieldMap(meta.fields || []);
+      for (const filter of filters) {
+        try {
+          const payload = await this.request(`${entityName}?$top=1&$filter=${encodeURIComponent(filter)}`, {
+            method: "GET"
+          });
+          const rows = extractRecords(payload);
+          if (!rows.length) continue;
+          const mapped = this.toOpportunity(rows[0], fieldMap);
+          if (mapped.id) return mapped;
+        } catch (error) {
+          if (!isRecoverableEntityCandidateError(error)) throw error;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async getBusinessAccountById(businessAccountId) {
+    const accountId = stringValue(businessAccountId);
+    if (!accountId) return null;
+
+    const attemptedEntityNames = dedupeBy(
+      [this.settings.businessAccountEntity || "BusinessAccount", ...DEFAULT_BUSINESS_ACCOUNT_ENTITY_CANDIDATES]
+        .map((value) => stringValue(value))
+        .filter(Boolean),
+      (value) => normalizeName(value)
+    );
+    const resolvedMetaByEntity = new Map();
+
+    try {
+      const resolvedMeta = await this.resolveBusinessAccountMeta();
+      if (
+        resolvedMeta?.entityName &&
+        !attemptedEntityNames.some((existing) => normalizeName(existing) === normalizeName(resolvedMeta.entityName))
+      ) {
+        attemptedEntityNames.unshift(resolvedMeta.entityName);
+      }
+      if (resolvedMeta?.entityName) {
+        resolvedMetaByEntity.set(normalizeName(resolvedMeta.entityName), resolvedMeta);
+      }
+    } catch (error) {
+      if (!isRecoverableEntityCandidateError(error)) throw error;
+    }
+
+    const escapedId = accountId.replace(/'/g, "''");
+    const filters = [
+      `BusinessAccountID eq '${escapedId}'`,
+      `BusinessAccountCD eq '${escapedId}'`,
+      `AccountCD eq '${escapedId}'`,
+      `BAccountID eq '${escapedId}'`
+    ];
+
+    for (const entityName of attemptedEntityNames) {
+      const meta =
+        resolvedMetaByEntity.get(normalizeName(entityName)) || {
+          entityName,
+          fields: []
+        };
+      const fieldMap = this.getBusinessAccountFieldMap(meta.fields || []);
+      try {
+        const payload = await this.request(`${entityName}/${encodeURIComponent(accountId)}`, { method: "GET" });
+        const rows = extractRecords(payload);
+        const record = rows[0] || payload;
+        const mapped = this.toBusinessAccount(record, fieldMap);
+        if (mapped.id || mapped.code) return mapped;
+      } catch (error) {
+        if (!isRecoverableEntityCandidateError(error)) throw error;
+      }
+    }
+
+    for (const entityName of attemptedEntityNames) {
+      const meta =
+        resolvedMetaByEntity.get(normalizeName(entityName)) || {
+          entityName,
+          fields: []
+        };
+      const fieldMap = this.getBusinessAccountFieldMap(meta.fields || []);
+      for (const filter of filters) {
+        try {
+          const payload = await this.request(`${entityName}?$top=1&$filter=${encodeURIComponent(filter)}&$expand=ShippingAddress,MainAddress`, {
+            method: "GET"
+          });
+          const rows = extractRecords(payload);
+          if (!rows.length) continue;
+          const mapped = this.toBusinessAccount(rows[0], fieldMap);
+          if (mapped.id || mapped.code) return mapped;
+        } catch (error) {
+          if (!isRecoverableEntityCandidateError(error)) throw error;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async getContactById(contactId, { businessAccountId = "" } = {}) {
+    const targetContactId = stringValue(contactId);
+    if (!targetContactId) return null;
+
+    const scopedContacts = businessAccountId ? await this.listBusinessAccountContacts(businessAccountId, { maxRecords: 1000 }) : [];
+    const scopedMatch = scopedContacts.find(
+      (contact) => normalizeSearch(contact.id) === normalizeSearch(targetContactId)
+    );
+    if (scopedMatch) return scopedMatch;
+
+    const attemptedEntityNames = dedupeBy(
+      [...DEFAULT_CONTACT_ENTITY_CANDIDATES]
+        .map((value) => stringValue(value))
+        .filter(Boolean),
+      (value) => normalizeName(value)
+    );
+    const resolvedMetaByEntity = new Map();
+
+    try {
+      const resolvedMeta = await this.resolveContactMeta();
+      if (
+        resolvedMeta?.entityName &&
+        !attemptedEntityNames.some((existing) => normalizeName(existing) === normalizeName(resolvedMeta.entityName))
+      ) {
+        attemptedEntityNames.unshift(resolvedMeta.entityName);
+      }
+      if (resolvedMeta?.entityName) {
+        resolvedMetaByEntity.set(normalizeName(resolvedMeta.entityName), resolvedMeta);
+      }
+    } catch (error) {
+      if (!isRecoverableEntityCandidateError(error)) throw error;
+    }
+
+    const escapedId = targetContactId.replace(/'/g, "''");
+    const filters = [`ContactID eq '${escapedId}'`, `ContactId eq '${escapedId}'`, `ID eq '${escapedId}'`];
+
+    for (const entityName of attemptedEntityNames) {
+      const meta =
+        resolvedMetaByEntity.get(normalizeName(entityName)) || {
+          entityName,
+          fields: []
+        };
+      const fieldMap = this.getContactFieldMap(meta.fields || []);
+      try {
+        const payload = await this.request(`${entityName}/${encodeURIComponent(targetContactId)}`, { method: "GET" });
+        const rows = extractRecords(payload);
+        const record = rows[0] || payload;
+        const mapped = this.toContact(record, fieldMap);
+        if (mapped.id) return mapped;
+      } catch (error) {
+        if (!isRecoverableEntityCandidateError(error)) throw error;
+      }
+    }
+
+    for (const entityName of attemptedEntityNames) {
+      const meta =
+        resolvedMetaByEntity.get(normalizeName(entityName)) || {
+          entityName,
+          fields: []
+        };
+      const fieldMap = this.getContactFieldMap(meta.fields || []);
+      for (const filter of filters) {
+        try {
+          const payload = await this.request(`${entityName}?$top=1&$filter=${encodeURIComponent(filter)}`, { method: "GET" });
+          const rows = extractRecords(payload);
+          if (!rows.length) continue;
+          const mapped = this.toContact(rows[0], fieldMap);
+          if (mapped.id) return mapped;
+        } catch (error) {
+          if (!isRecoverableEntityCandidateError(error)) throw error;
+        }
+      }
+    }
+
+    return null;
   }
 
   async resolveContactForBusinessAccount(account = {}, businessAccount = {}) {

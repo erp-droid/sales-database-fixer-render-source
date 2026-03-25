@@ -58,54 +58,58 @@
       <section id="builderSection" class="hidden">
         <section class="card">
           <h2>2. Account + Contact</h2>
-          <div class="grid two">
-            <div class="department-selector-wrap">
-              <span class="department-label">Department</span>
-              <div class="department-selector" role="radiogroup" aria-label="Department">
-                <label class="department-option">
-                  <input type="radio" name="departmentType" value="service" />
-                  <span>Service</span>
-                </label>
-                <label class="department-option">
-                  <input type="radio" name="departmentType" value="production" />
-                  <span>Production</span>
-                </label>
-                <label class="department-option">
-                  <input type="radio" name="departmentType" value="glendale" />
-                  <span>Glendale</span>
-                </label>
+          <div id="existingOpportunityBanner" class="linked-opportunity-banner hidden" aria-live="polite"></div>
+          <div id="step2EditableFields">
+            <div class="grid two">
+              <div class="department-selector-wrap">
+                <span class="department-label">Department</span>
+                <div class="department-selector" role="radiogroup" aria-label="Department">
+                  <label class="department-option">
+                    <input type="radio" name="departmentType" value="service" />
+                    <span>Service</span>
+                  </label>
+                  <label class="department-option">
+                    <input type="radio" name="departmentType" value="production" />
+                    <span>Production</span>
+                  </label>
+                  <label class="department-option">
+                    <input type="radio" name="departmentType" value="glendale" />
+                    <span>Glendale</span>
+                  </label>
+                </div>
+              </div>
+              <div class="inline-actions">
+                <button id="refreshAccountsBtn" class="btn">Refresh Accounts</button>
+                <button id="newAccountBtn" class="btn">New Account</button>
               </div>
             </div>
-            <div class="inline-actions">
-              <button id="refreshAccountsBtn" class="btn">Refresh Accounts</button>
-              <button id="newAccountBtn" class="btn">New Account</button>
-            </div>
-          </div>
 
-          <label>
-            Business account
-            <div class="combo">
-              <input
-                id="accountComboInput"
-                placeholder="Start typing business account name"
-                autocomplete="off"
-              />
-              <div id="accountDropdown" class="combo-list hidden"></div>
-            </div>
-          </label>
-
-          <div class="grid two">
             <label>
-              Contact
-              <select id="contactSelect" disabled>
-                <option value="">Select contact</option>
-              </select>
+              Business account
+              <div class="combo">
+                <input
+                  id="accountComboInput"
+                  placeholder="Start typing business account name"
+                  autocomplete="off"
+                />
+                <div id="accountDropdown" class="combo-list hidden"></div>
+              </div>
             </label>
-            <div class="inline-actions align-end">
-              <button id="refreshContactsBtn" class="btn" disabled>Refresh Contacts</button>
-              <button id="newContactBtn" class="btn" disabled>New Contact</button>
+
+            <div class="grid two">
+              <label>
+                Contact
+                <select id="contactSelect" disabled>
+                  <option value="">Select contact</option>
+                </select>
+              </label>
+              <div class="inline-actions align-end">
+                <button id="refreshContactsBtn" class="btn" disabled>Refresh Contacts</button>
+                <button id="newContactBtn" class="btn" disabled>New Contact</button>
+              </div>
             </div>
           </div>
+          <div id="existingOpportunitySummary" class="linked-opportunity-card hidden"></div>
 
           <div class="opportunity-required hidden" aria-hidden="true">
             <select id="willWinJobSelect" tabindex="-1">
@@ -235,7 +239,7 @@
             <span class="builder-step-toggle-meta">Open</span>
           </button>
           <div id="step5AccordionContent" class="builder-step-panel hidden">
-            <p class="hint">AI validation now runs automatically when you create the quote. You can still open it directly in Acumatica or download the backup quote PDF.</p>
+            <p id="step5Hint" class="hint">AI validation now runs automatically when you create the quote. You can still open it directly in Acumatica or download the backup quote PDF.</p>
             <div class="quote-review-shell">
               <div class="quote-review-header">
                 <div>

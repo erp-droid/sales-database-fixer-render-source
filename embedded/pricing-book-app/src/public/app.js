@@ -159,6 +159,9 @@ const APP_BASE_PATH = (() => {
   if (!value) return "";
   return value.startsWith("/") ? value.replace(/\/+$/, "") : `/${value.replace(/^\/+/, "").replace(/\/+$/, "")}`;
 })();
+const PAGE_URL = new URL(window.location.href);
+const INITIAL_LAUNCH_MODE = cleanString(PAGE_URL.searchParams.get("launch")).toLowerCase();
+const INITIAL_EXISTING_OPPORTUNITY_ID = cleanString(PAGE_URL.searchParams.get("opportunityId"));
 const INTEGRATED_AUTH_MODE = String(document.body?.dataset?.integratedAuth || "")
   .trim()
   .toLowerCase() === "true";
@@ -186,6 +189,12 @@ const state = {
   selectedAccountId: "",
   selectedContactId: "",
   quoteType: "",
+  launchMode: INITIAL_LAUNCH_MODE,
+  existingOpportunityId: INITIAL_EXISTING_OPPORTUNITY_ID,
+  existingOpportunityContext: null,
+  isExistingOpportunityMode: INITIAL_LAUNCH_MODE === "opportunity" && Boolean(INITIAL_EXISTING_OPPORTUNITY_ID),
+  existingOpportunityLoaded: false,
+  existingOpportunityLoadError: "",
   willWinJob: "Yes",
   linkToDrive: DEFAULT_LINK_TO_DRIVE_TEXT,
   projectType: "",
@@ -282,6 +291,9 @@ const el = {
   linkToDriveInput: document.getElementById("linkToDriveInput"),
   projectTypeInput: document.getElementById("projectTypeInput"),
   accountAddress: document.getElementById("accountAddress"),
+  step2EditableFields: document.getElementById("step2EditableFields"),
+  existingOpportunityBanner: document.getElementById("existingOpportunityBanner"),
+  existingOpportunitySummary: document.getElementById("existingOpportunitySummary"),
   step2GateNotice: document.getElementById("step2GateNotice"),
   step3Section: document.getElementById("step3Section"),
   step4Section: document.getElementById("step4Section"),
@@ -333,6 +345,7 @@ const el = {
   closeEstimatorQuestionsBtn: document.getElementById("closeEstimatorQuestionsBtn"),
   saveEstimatorQuestionsBtn: document.getElementById("saveEstimatorQuestionsBtn"),
   quoteMarkupSummary: document.getElementById("quoteMarkupSummary"),
+  step5Hint: document.getElementById("step5Hint"),
   createQuoteBtn: document.getElementById("createQuoteBtn"),
   openQuoteBtn: document.getElementById("openQuoteBtn"),
   downloadPdfBtn: document.getElementById("downloadPdfBtn"),
@@ -952,6 +965,185 @@ function hasSelectedDepartment() {
   return Boolean(cleanString(state.quoteType));
 }
 
+function isExistingOpportunityMode() {
+  return Boolean(state.isExistingOpportunityMode && cleanString(state.existingOpportunityId));
+}
+
+function isExistingOpportunityReady() {
+  return isExistingOpportunityMode() && state.existingOpportunityLoaded && !cleanString(state.existingOpportunityLoadError);
+}
+
+function normalizeExistingOpportunityContext(raw = {}) {
+  const businessAccount = raw?.businessAccount || {};
+  const contact = raw?.contact || {};
+  return {
+    opportunityId: cleanString(raw.opportunityId),
+    subject: cleanString(raw.subject),
+    description: cleanString(raw.description),
+    branch: cleanString(raw.branch),
+    classId: cleanString(raw.classId),
+    stage: cleanString(raw.stage),
+    owner: cleanString(raw.owner),
+    location: cleanString(raw.location),
+    quoteType: cleanString(raw.quoteType).toLowerCase(),
+    businessAccount: {
+      businessAccountId: cleanString(raw.businessAccountId || businessAccount.businessAccountId),
+      name: cleanString(raw.businessAccountName || businessAccount.name),
+      owner: cleanString(businessAccount.owner),
+      location: cleanString(businessAccount.location || raw.location),
+      address: businessAccount.address || {}
+    },
+    contact: {
+      contactId: cleanString(raw.contactId || contact.contactId),
+      displayName: cleanString(raw.contactName || contact.displayName),
+      email: cleanString(contact.email),
+      phone: cleanString(contact.phone),
+      contactClass: cleanString(contact.contactClass)
+    }
+  };
+}
+
+function resolveStepTwoGateMessage() {
+  if (isExistingOpportunityMode()) {
+    if (cleanString(state.existingOpportunityLoadError)) {
+      return `Quote Generator could not load opportunity ${cleanString(state.existingOpportunityId)}. ${cleanString(
+        state.existingOpportunityLoadError
+      )}`;
+    }
+    if (!state.existingOpportunityLoaded) {
+      return `Loading linked opportunity ${cleanString(state.existingOpportunityId)}...`;
+    }
+  }
+  return "Complete Step 2 by selecting Department, Business account, and Contact to unlock the estimator workflow.";
+}
+
+function renderExistingOpportunitySummary() {
+  if (!el.existingOpportunitySummary || !el.existingOpportunityBanner) return;
+
+  const existingMode = isExistingOpportunityMode();
+  const context = state.existingOpportunityContext || {};
+  const account = context.businessAccount || {};
+  const contact = context.contact || {};
+  const linkedOpportunityId = cleanString(context.opportunityId || state.existingOpportunityId);
+  const description = cleanString(context.subject || context.description);
+
+  el.existingOpportunityBanner.classList.toggle("hidden", !existingMode);
+  el.existingOpportunitySummary.classList.toggle("hidden", !existingMode);
+
+  if (!existingMode) {
+    el.existingOpportunityBanner.textContent = "";
+    el.existingOpportunitySummary.innerHTML = "";
+    return;
+  }
+
+  const statusText = cleanString(state.existingOpportunityLoadError)
+    ? "Link needs attention"
+    : state.existingOpportunityLoaded
+    ? `Linked to Opportunity ${linkedOpportunityId || state.existingOpportunityId}`
+    : `Loading Opportunity ${state.existingOpportunityId}`;
+  el.existingOpportunityBanner.textContent = statusText;
+  el.existingOpportunityBanner.classList.toggle("error", Boolean(cleanString(state.existingOpportunityLoadError)));
+
+  if (!state.existingOpportunityLoaded && !cleanString(state.existingOpportunityLoadError)) {
+    el.existingOpportunitySummary.innerHTML = `
+      <div class="linked-opportunity-placeholder">
+        <p>Loading opportunity context from Acumatica...</p>
+      </div>
+    `;
+    return;
+  }
+
+  if (cleanString(state.existingOpportunityLoadError)) {
+    el.existingOpportunitySummary.innerHTML = `
+      <div class="linked-opportunity-placeholder error">
+        <p>${escapeHtml(cleanString(state.existingOpportunityLoadError))}</p>
+      </div>
+    `;
+    return;
+  }
+
+  const summaryRows = [
+    { label: "Opportunity", value: linkedOpportunityId },
+    { label: "Department", value: capitalize(cleanString(context.quoteType)) },
+    {
+      label: "Business account",
+      value: [cleanString(account.businessAccountId), cleanString(account.name)].filter(Boolean).join(" - ")
+    },
+    {
+      label: "Contact",
+      value: [cleanString(contact.displayName), cleanString(contact.email)].filter(Boolean).join(" • ")
+    },
+    { label: "Branch", value: cleanString(context.branch) },
+    { label: "Opportunity class", value: cleanString(context.classId) }
+  ].filter((row) => cleanString(row.value));
+
+  const addressText = formatAddress(account);
+  el.existingOpportunitySummary.innerHTML = `
+    <div class="linked-opportunity-head">
+      <div>
+        <p class="section-caption">Existing Opportunity</p>
+        <p class="hint">This quote will be created on the selected Acumatica opportunity. Step 2 is locked to preserve that link.</p>
+      </div>
+      <span class="linked-opportunity-pill">${escapeHtml(linkedOpportunityId || "Linked")}</span>
+    </div>
+    <div class="linked-opportunity-grid">
+      ${summaryRows
+        .map(
+          (row) => `
+            <div class="linked-opportunity-field">
+              <span>${escapeHtml(row.label)}</span>
+              <strong>${escapeHtml(row.value)}</strong>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+    ${
+      description
+        ? `
+          <div class="linked-opportunity-detail">
+            <span>Opportunity description</span>
+            <strong>${escapeHtml(description)}</strong>
+          </div>
+        `
+        : ""
+    }
+    ${
+      addressText && addressText !== "No address on file."
+        ? `
+          <div class="linked-opportunity-detail">
+            <span>Account address</span>
+            <strong>${escapeHtml(addressText)}</strong>
+          </div>
+        `
+        : ""
+    }
+  `;
+}
+
+function syncExistingOpportunityUi() {
+  const existingMode = isExistingOpportunityMode();
+  if (el.step2EditableFields) {
+    el.step2EditableFields.classList.toggle("hidden", existingMode);
+  }
+  if (Array.isArray(el.quoteTypeInputs)) {
+    el.quoteTypeInputs.forEach((input) => {
+      input.disabled = existingMode;
+    });
+  }
+  if (el.step5Hint) {
+    el.step5Hint.textContent = existingMode
+      ? "AI validation runs automatically when you create the project quote for this linked opportunity. No new opportunity will be created."
+      : "AI validation now runs automatically when you create the quote. You can still open it directly in Acumatica or download the backup quote PDF.";
+  }
+  if (el.createQuoteBtn) {
+    el.createQuoteBtn.textContent = existingMode
+      ? "Validate + Create Project Quote"
+      : "Validate + Create Opportunity + Project Quote";
+  }
+  renderExistingOpportunitySummary();
+}
+
 function ensureDepartmentSelected(message = "Department selection is required before you continue.") {
   if (hasSelectedDepartment()) return true;
   showStatus(message, "error");
@@ -979,7 +1171,23 @@ function syncProjectTypeField() {
   }
 }
 
+function syncQuoteTypeInputsFromState() {
+  if (!Array.isArray(el.quoteTypeInputs)) return;
+  el.quoteTypeInputs.forEach((input) => {
+    input.checked = cleanString(input.value) === cleanString(state.quoteType);
+  });
+}
+
 function isStepTwoComplete() {
+  if (isExistingOpportunityMode()) {
+    return (
+      state.existingOpportunityLoaded &&
+      !cleanString(state.existingOpportunityLoadError) &&
+      hasSelectedDepartment() &&
+      Boolean(cleanString(state.selectedAccountId)) &&
+      Boolean(cleanString(state.selectedContactId))
+    );
+  }
   return hasSelectedDepartment() && Boolean(cleanString(state.selectedAccountId)) && Boolean(cleanString(state.selectedContactId));
 }
 
@@ -1017,6 +1225,7 @@ function openBuilderAccordion(stepKey = "step3") {
 function syncBuilderWorkflowGate() {
   const unlocked = isStepTwoComplete();
   if (el.step2GateNotice) {
+    el.step2GateNotice.textContent = resolveStepTwoGateMessage();
     el.step2GateNotice.classList.toggle("hidden", unlocked);
   }
 
@@ -1051,33 +1260,39 @@ function syncBuilderWorkflowGate() {
 }
 
 function syncDepartmentGate() {
+  const existingMode = isExistingOpportunityMode();
   const departmentSelected = hasSelectedDepartment();
-  const canUseContact = departmentSelected && Boolean(state.selectedAccountId);
+  const canUseContact = existingMode
+    ? isExistingOpportunityReady()
+    : departmentSelected && Boolean(state.selectedAccountId);
 
   if (el.accountComboInput) {
-    el.accountComboInput.disabled = !departmentSelected;
-    el.accountComboInput.placeholder = departmentSelected
+    el.accountComboInput.disabled = existingMode || !departmentSelected;
+    el.accountComboInput.placeholder = existingMode
+      ? "Linked to Acumatica opportunity"
+      : departmentSelected
       ? "Start typing business account name"
       : "Select Department first";
-    if (!departmentSelected) {
+    if (!departmentSelected || existingMode) {
       closeAccountDropdown();
     }
   }
   if (el.refreshAccountsBtn) {
-    el.refreshAccountsBtn.disabled = !departmentSelected || state.accountsLoading;
+    el.refreshAccountsBtn.disabled = existingMode || !departmentSelected || state.accountsLoading;
   }
   if (el.newAccountBtn) {
-    el.newAccountBtn.disabled = !departmentSelected;
+    el.newAccountBtn.disabled = existingMode || !departmentSelected;
   }
   if (el.contactSelect) {
-    el.contactSelect.disabled = !canUseContact;
+    el.contactSelect.disabled = existingMode || !canUseContact;
   }
   if (el.refreshContactsBtn) {
-    el.refreshContactsBtn.disabled = !canUseContact;
+    el.refreshContactsBtn.disabled = existingMode || !canUseContact;
   }
   if (el.newContactBtn) {
-    el.newContactBtn.disabled = !canUseContact;
+    el.newContactBtn.disabled = existingMode || !canUseContact;
   }
+  syncExistingOpportunityUi();
   syncBuilderWorkflowGate();
 }
 
@@ -1775,6 +1990,90 @@ async function requestAcumaticaSession({ username = "", password = "" } = {}) {
   return payload;
 }
 
+async function initializeExistingOpportunityLaunchContext() {
+  syncExistingOpportunityUi();
+  if (!isExistingOpportunityMode()) return;
+
+  const linkedOpportunityId = cleanString(state.existingOpportunityId);
+  if (
+    state.existingOpportunityLoaded &&
+    !cleanString(state.existingOpportunityLoadError) &&
+    cleanString(state.existingOpportunityContext?.opportunityId) === linkedOpportunityId
+  ) {
+    syncDepartmentGate();
+    return;
+  }
+
+  state.existingOpportunityLoaded = false;
+  state.existingOpportunityLoadError = "";
+  renderExistingOpportunitySummary();
+  syncDepartmentGate();
+  showStatus(`Loading linked opportunity ${linkedOpportunityId}...`);
+
+  try {
+    const result = await apiFetch(`/api/opportunity-context/${encodeURIComponent(linkedOpportunityId)}`);
+    const context = normalizeExistingOpportunityContext(result);
+    const linkedAccount = {
+      businessAccountId: cleanString(context.businessAccount?.businessAccountId),
+      name: cleanString(context.businessAccount?.name),
+      owner: cleanString(context.businessAccount?.owner),
+      location: cleanString(context.businessAccount?.location),
+      address: context.businessAccount?.address || {}
+    };
+    const linkedContact = {
+      contactId: cleanString(context.contact?.contactId),
+      displayName: cleanString(context.contact?.displayName),
+      email: cleanString(context.contact?.email),
+      phone: cleanString(context.contact?.phone),
+      contactClass: cleanString(context.contact?.contactClass)
+    };
+
+    state.existingOpportunityContext = context;
+    state.existingOpportunityLoaded = true;
+    state.existingOpportunityLoadError = "";
+    state.quoteType = cleanString(context.quoteType);
+    syncQuoteTypeInputsFromState();
+    state.selectedAccountId = cleanString(linkedAccount.businessAccountId);
+    state.selectedContactId = cleanString(linkedContact.contactId);
+    state.accountQuery = cleanString(linkedAccount.name || linkedAccount.businessAccountId);
+    state.accounts = sortAccounts([
+      linkedAccount,
+      ...state.accounts.filter(
+        (account) => cleanString(account.businessAccountId) !== cleanString(linkedAccount.businessAccountId)
+      )
+    ]);
+    state.contacts = [
+      linkedContact,
+      ...state.contacts.filter((contact) => cleanString(contact.contactId) !== cleanString(linkedContact.contactId))
+    ];
+    syncProjectTypeField();
+    renderAccounts();
+    renderContacts();
+    renderAccountAddress();
+    if (!cleanString(el.quoteDescription?.value || state.quoteDescription)) {
+      setQuoteDescription(cleanString(context.subject || context.description));
+    }
+    syncDepartmentGate();
+    showStatus(`Linked to opportunity ${cleanString(context.opportunityId)}.`, "success");
+  } catch (error) {
+    state.existingOpportunityContext = null;
+    state.existingOpportunityLoaded = false;
+    state.existingOpportunityLoadError =
+      cleanString(error?.message) || `Unable to load linked opportunity ${linkedOpportunityId}.`;
+    state.selectedAccountId = "";
+    state.selectedContactId = "";
+    state.quoteType = "";
+    syncQuoteTypeInputsFromState();
+    state.contacts = [];
+    syncProjectTypeField();
+    renderAccounts();
+    renderContacts();
+    renderAccountAddress();
+    syncDepartmentGate();
+    showStatus(state.existingOpportunityLoadError, "error");
+  }
+}
+
 async function loadAuthenticatedAppData() {
   if (hasSelectedDepartment() && !hydrateAccountsFromCache()) {
     await loadAccounts({ force: true });
@@ -1786,6 +2085,7 @@ async function loadAuthenticatedAppData() {
   }
   await loadTemplateCatalog();
   await loadEstimateLibraryStatus({ silent: true });
+  await initializeExistingOpportunityLaunchContext();
 }
 
 async function restoreSavedSession() {
@@ -1923,11 +2223,29 @@ async function openCurrentQuote() {
 }
 
 function getSelectedAccount() {
-  return state.accounts.find((account) => account.businessAccountId === state.selectedAccountId) || null;
+  const selected =
+    state.accounts.find((account) => cleanString(account.businessAccountId) === cleanString(state.selectedAccountId)) || null;
+  if (selected) return selected;
+  if (isExistingOpportunityMode()) {
+    const linkedAccount = state.existingOpportunityContext?.businessAccount || null;
+    if (cleanString(linkedAccount?.businessAccountId) === cleanString(state.selectedAccountId)) {
+      return linkedAccount;
+    }
+  }
+  return null;
 }
 
 function getSelectedContact() {
-  return state.contacts.find((contact) => contact.contactId === state.selectedContactId) || null;
+  const selected =
+    state.contacts.find((contact) => cleanString(contact.contactId) === cleanString(state.selectedContactId)) || null;
+  if (selected) return selected;
+  if (isExistingOpportunityMode()) {
+    const linkedContact = state.existingOpportunityContext?.contact || null;
+    if (cleanString(linkedContact?.contactId) === cleanString(state.selectedContactId)) {
+      return linkedContact;
+    }
+  }
+  return null;
 }
 
 function getSelectedNewAccountSalesRep() {
@@ -2905,6 +3223,9 @@ function hardSignOut(message = "Signed out.", type = "info") {
   state.selectedAccountId = "";
   state.selectedContactId = "";
   state.quoteType = "";
+  state.existingOpportunityContext = null;
+  state.existingOpportunityLoaded = false;
+  state.existingOpportunityLoadError = "";
   state.scopeSuggestion = "";
   state.scopeSuggestionNotes = "";
   state.quoteDescription = "";
@@ -2924,6 +3245,7 @@ function hardSignOut(message = "Signed out.", type = "info") {
   renderAccounts();
   renderContacts();
   renderAccountAddress();
+  renderExistingOpportunitySummary();
   renderScopeSuggestion();
   if (Array.isArray(el.quoteTypeInputs)) {
     el.quoteTypeInputs.forEach((input) => {
@@ -5417,13 +5739,14 @@ function buildPayload() {
     errors,
     payload: {
       quoteType: state.quoteType,
+      existingOpportunityId: isExistingOpportunityMode() ? cleanString(state.existingOpportunityId) : "",
       account: {
         name: cleanString(account?.name),
         businessAccountId: cleanString(account?.businessAccountId),
         owner: cleanString(account?.owner || account?.ownerEmployeeName),
         contactId: cleanString(contact?.contactId),
         contactName: cleanString(contact?.displayName),
-        location: "MAIN",
+        location: cleanString(account?.location || "MAIN"),
         addressLine1: cleanString(accountAddressForPdf?.addressLine1),
         addressLine2: cleanString(accountAddressForPdf?.addressLine2),
         city: cleanString(accountAddressForPdf?.city),
@@ -8541,7 +8864,11 @@ function extractQuoteNumberCandidate(text) {
 async function handleCreateQuote() {
   resetResult();
   setBusy(el.createQuoteBtn, true);
-  showStatus("Validating estimate with AI and creating opportunity/project quote...");
+  showStatus(
+    isExistingOpportunityMode()
+      ? "Validating estimate with AI and creating project quote on the linked opportunity..."
+      : "Validating estimate with AI and creating opportunity/project quote..."
+  );
 
   try {
     const preparationResult = await prepareEstimateForQuoteAction({
@@ -8567,7 +8894,11 @@ async function handleCreateQuote() {
         buildLocalQuoteDescription(payload.quoteBody)
       );
 
-    showStatus("Creating opportunity and project quote...");
+    showStatus(
+      isExistingOpportunityMode()
+        ? "Creating project quote on the linked opportunity..."
+        : "Creating opportunity and project quote..."
+    );
     const result = await apiFetch("/api/quote", {
       method: "POST",
       body: payload
@@ -8602,13 +8933,13 @@ async function handleCreateQuote() {
     if (scopePolishAttempted && !scopePolishGeneratedByAI) {
       warnings.push("OpenAI scope polish ran in fallback mode. Set OPENAI_API_KEY to enable full AI text cleanup.");
     }
+    const creationSummary = result?.createdOpportunity === false
+      ? `Validated and created Quote ${result.quoteNbr} on Opportunity ${result.opportunityId}.`
+      : `Validated and created Quote ${result.quoteNbr} and Opportunity ${result.opportunityId}.`;
     if (warnings.length) {
-      showStatus(
-        `Validated and created Quote ${result.quoteNbr} and Opportunity ${result.opportunityId}. ${warnings.join(" ")}`,
-        "error"
-      );
+      showStatus(`${creationSummary} ${warnings.join(" ")}`, "error");
     } else {
-      showStatus(`Validated and created Quote ${result.quoteNbr} and Opportunity ${result.opportunityId}.`, "success");
+      showStatus(creationSummary, "success");
     }
   } catch (error) {
     showStatus(error.message, "error");
