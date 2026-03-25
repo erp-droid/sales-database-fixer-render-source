@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { NextRequest } from "next/server";
-import twilio from "twilio";
 
 import {
   readWrappedString,
@@ -15,6 +14,7 @@ import {
 import {
   serviceCreateActivity,
   serviceFetchBusinessAccountById,
+  serviceFetchContactsByBusinessAccountIds,
   serviceFetchContactById,
 } from "@/lib/acumatica-service-auth";
 import { buildTwilioRecordingCallbackUrl, reconcileTwilioSession } from "@/lib/call-analytics/ingest";
@@ -37,11 +37,13 @@ import type {
 } from "@/lib/call-analytics/types";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { extractNormalizedPhoneDigits } from "@/lib/phone";
 import {
   readCallLegsBySessionId,
   readCallSessionById,
   readCallSessions,
 } from "@/lib/call-analytics/sessionize";
+import { validateTwilioWebhookRequest } from "@/lib/twilio-webhook-validation";
 import {
   createTwilioRestClient,
   getTwilioRestConfig,
@@ -70,6 +72,59 @@ const RECENT_CALL_ACTIVITY_SYNC_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 
 function cleanText(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function normalizeComparableName(value: string | null | undefined): string {
+  return cleanText(value).replace(/\s+/g, " ").toLowerCase();
+}
+
+function readContactDisplayName(contact: RawContact): string {
+  const preferred = cleanText(readWrappedString(contact, "DisplayName"));
+  if (preferred) {
+    return preferred;
+  }
+
+  return [cleanText(readWrappedString(contact, "FirstName")), cleanText(readWrappedString(contact, "LastName"))]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function readContactPhones(contact: RawContact): string[] {
+  return [
+    cleanText(readWrappedString(contact, "Phone1")),
+    cleanText(readWrappedString(contact, "Phone2")),
+    cleanText(readWrappedString(contact, "Phone3")),
+    cleanText(readWrappedString(contact, "Phone")),
+  ].filter(Boolean);
+}
+
+function resolveRelatedContactByPhoneOrName(
+  session: CallSessionRecord,
+  contacts: RawContact[],
+): RawContact | null {
+  const sessionPhoneDigits = new Set(
+    [extractNormalizedPhoneDigits(session.counterpartyPhone), extractNormalizedPhoneDigits(session.targetPhone)].filter(
+      Boolean,
+    ),
+  );
+  if (sessionPhoneDigits.size > 0) {
+    const phoneMatches = contacts.filter((contact) =>
+      readContactPhones(contact).some((phone) => sessionPhoneDigits.has(extractNormalizedPhoneDigits(phone))),
+    );
+    if (phoneMatches.length === 1) {
+      return phoneMatches[0] ?? null;
+    }
+  }
+
+  const targetName = normalizeComparableName(session.matchedContactName);
+  if (!targetName) {
+    return null;
+  }
+
+  const nameMatches = contacts.filter(
+    (contact) => normalizeComparableName(readContactDisplayName(contact)) === targetName,
+  );
+  return nameMatches.length === 1 ? (nameMatches[0] ?? null) : null;
 }
 
 function escapeHtml(value: string): string {
@@ -649,6 +704,25 @@ async function resolveActivityTarget(
     ]),
   ].filter(Boolean);
 
+  if (candidateBusinessAccountIds.length > 0) {
+    try {
+      const contacts = (await serviceFetchContactsByBusinessAccountIds(
+        session.employeeLoginName,
+        candidateBusinessAccountIds,
+      )) as RawContact[];
+      const resolvedContact = resolveRelatedContactByPhoneOrName(session, contacts);
+      const noteId = resolvedContact ? readRecordIdentity(resolvedContact) : null;
+      if (noteId) {
+        return {
+          relatedEntityNoteId: noteId,
+          relatedEntityType: "PX.Objects.CR.Contact",
+        };
+      }
+    } catch {
+      // Fall through to a business-account-level target.
+    }
+  }
+
   for (const businessAccountId of candidateBusinessAccountIds) {
     try {
       const businessAccount = (await serviceFetchBusinessAccountById(
@@ -895,14 +969,18 @@ export async function processTwilioRecordingCallback(
     throw new HttpError(503, "Twilio is not configured.");
   }
 
-  const signature = request.headers.get("x-twilio-signature") ?? "";
   const formData = await request.formData();
   const params = Object.fromEntries(
     [...formData.entries()].map(([key, value]) => [key, typeof value === "string" ? value : ""]),
   ) as Record<string, string>;
 
-  const isValid = twilio.validateRequest(config.authToken, signature, request.url, params);
-  if (!isValid) {
+  const validation = validateTwilioWebhookRequest(request, params, config.authToken);
+  if (!validation.isValid) {
+    console.warn("[twilio] Rejected recording callback due to invalid signature.", {
+      path: request.nextUrl.pathname,
+      requestUrl: request.url,
+      candidateUrls: validation.candidateUrls,
+    });
     throw new HttpError(403, "Invalid Twilio signature.");
   }
 

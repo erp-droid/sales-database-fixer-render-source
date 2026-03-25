@@ -2,6 +2,7 @@ import {
   type AuthCookieRefreshState,
   type RawActivity,
   createActivity,
+  fetchContactsByBusinessAccountIds,
   fetchBusinessAccountById,
   fetchContactById,
 } from "@/lib/acumatica";
@@ -173,6 +174,15 @@ export async function serviceFetchBusinessAccountById(
 ): Promise<Record<string, unknown>> {
   return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
     fetchBusinessAccountById(cookieValue, businessAccountId, authCookieRefresh),
+  );
+}
+
+export async function serviceFetchContactsByBusinessAccountIds(
+  loginName: string | null | undefined,
+  businessAccountIds: string[],
+): Promise<Array<Record<string, unknown>>> {
+  return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
+    fetchContactsByBusinessAccountIds(cookieValue, businessAccountIds, authCookieRefresh),
   );
 }
 

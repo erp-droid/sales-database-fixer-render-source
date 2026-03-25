@@ -1,10 +1,10 @@
 import type { NextRequest } from "next/server";
-import twilio from "twilio";
 
 import type { AuthCookieRefreshState } from "@/lib/acumatica";
 import { getEnv } from "@/lib/env";
 import { HttpError } from "@/lib/errors";
 import { getReadModelDb } from "@/lib/read-model/db";
+import { validateTwilioWebhookRequest } from "@/lib/twilio-webhook-validation";
 import {
   createTwilioRestClient,
   getTwilioRestConfig,
@@ -1075,14 +1075,18 @@ export async function processTwilioStatusCallback(
     throw new HttpError(503, "Twilio is not configured.");
   }
 
-  const signature = request.headers.get("x-twilio-signature") ?? "";
   const formData = await request.formData();
   const params = Object.fromEntries(
     [...formData.entries()].map(([key, value]) => [key, typeof value === "string" ? value : ""]),
   ) as Record<string, string>;
 
-  const isValid = twilio.validateRequest(config.authToken, signature, request.url, params);
-  if (!isValid) {
+  const validation = validateTwilioWebhookRequest(request, params, config.authToken);
+  if (!validation.isValid) {
+    console.warn("[twilio] Rejected voice status callback due to invalid signature.", {
+      path: request.nextUrl.pathname,
+      requestUrl: request.url,
+      candidateUrls: validation.candidateUrls,
+    });
     throw new HttpError(403, "Invalid Twilio signature.");
   }
 
