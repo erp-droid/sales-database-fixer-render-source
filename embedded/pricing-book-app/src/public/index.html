@@ -237,20 +237,33 @@
           <div id="step5AccordionContent" class="builder-step-panel hidden">
             <p class="hint">AI validation now runs automatically when you create the quote. You can still open it directly in Acumatica or download the backup quote PDF.</p>
             <div class="quote-review-shell">
-              <p class="section-caption">Estimator Cost Review</p>
-              <label class="inline-check quote-review-check">
-                <input id="quoteReviewConfirmCheckbox" type="checkbox" />
-                I&apos;ve reviewed and confirm that the material, subtrade and labour cost are accurate to the best of my ability.
+              <div class="quote-review-header">
+                <div>
+                  <p class="section-caption">Estimator Cost Review</p>
+                  <p class="hint">Confirm the pricing has been reviewed before the quote is created.</p>
+                </div>
+                <span class="quote-review-badge">Required</span>
+              </div>
+              <label class="quote-review-card" for="quoteReviewConfirmCheckbox">
+                <span class="quote-review-check">
+                  <input id="quoteReviewConfirmCheckbox" type="checkbox" />
+                </span>
+                <span class="quote-review-copy">
+                  <span class="quote-review-title">Estimator Confirmation</span>
+                  <span class="quote-review-caption">I&apos;ve reviewed and confirm that the material, subtrade and labour cost are accurate to the best of my ability.</span>
+                </span>
               </label>
-              <label>
-                Confirmed by *
-                <input
-                  id="quoteReviewSignerInput"
-                  placeholder="Enter your full name"
-                  autocomplete="name"
-                />
-              </label>
-              <p class="hint">Required before creating the opportunity and project quote.</p>
+              <div class="quote-review-form">
+                <label class="quote-review-field">
+                  <span>Confirmed by *</span>
+                  <input
+                    id="quoteReviewSignerInput"
+                    placeholder="Enter your full name"
+                    autocomplete="name"
+                  />
+                </label>
+                <p class="hint">Required before creating the opportunity and project quote.</p>
+              </div>
             </div>
             <div class="row wrap">
               <button id="createQuoteBtn" class="btn primary">Validate + Create Opportunity + Project Quote</button>

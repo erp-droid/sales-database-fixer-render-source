@@ -1002,9 +1002,13 @@ function setBuilderAccordionOpen(stepKey = "step3", isOpen = false) {
 
 function openBuilderAccordion(stepKey = "step3") {
   if (!Object.prototype.hasOwnProperty.call(builderAccordionState, stepKey)) return;
-  Object.keys(builderAccordionState).forEach((key) => {
-    builderAccordionState[key] = key === stepKey;
-  });
+  if (stepKey === "step3") {
+    builderAccordionState.step3 = true;
+  } else if (!isStepTwoComplete()) {
+    builderAccordionState.step3 = false;
+  }
+  builderAccordionState.step4 = isStepTwoComplete();
+  builderAccordionState.step5 = isStepTwoComplete();
   setBuilderAccordionOpen("step3", builderAccordionState.step3);
   setBuilderAccordionOpen("step4", builderAccordionState.step4);
   setBuilderAccordionOpen("step5", builderAccordionState.step5);
@@ -1024,8 +1028,14 @@ function syncBuilderWorkflowGate() {
   });
 
   if (unlocked && !builderWorkflowUnlockedOnce) {
+    builderAccordionState.step3 = true;
+    builderAccordionState.step4 = true;
+    builderAccordionState.step5 = true;
     openBuilderAccordion("step3");
     builderWorkflowUnlockedOnce = true;
+  } else if (unlocked) {
+    builderAccordionState.step4 = true;
+    builderAccordionState.step5 = true;
   }
 
   if (!unlocked) {

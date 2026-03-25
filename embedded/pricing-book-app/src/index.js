@@ -544,6 +544,100 @@ function normalizeOpportunity(raw = {}) {
   };
 }
 
+function normalizeOwnerLookupValue(value) {
+  return cleanFieldValue(value).toLowerCase();
+}
+
+function compactOwnerLookupValue(value) {
+  return normalizeOwnerLookupValue(value).replace(/[^a-z0-9]/g, "");
+}
+
+function buildOwnerLookupVariants(value) {
+  const raw = normalizeOwnerLookupValue(value);
+  const variants = new Set();
+  if (!raw) return variants;
+  variants.add(raw);
+  const compact = compactOwnerLookupValue(raw);
+  if (compact) variants.add(compact);
+  const atIndex = raw.indexOf("@");
+  if (atIndex > 0) {
+    const localPart = raw.slice(0, atIndex);
+    variants.add(localPart);
+    const compactLocalPart = compactOwnerLookupValue(localPart);
+    if (compactLocalPart) variants.add(compactLocalPart);
+  }
+  return variants;
+}
+
+function isOpportunityOwnerNotFoundError(error) {
+  const message = cleanFieldValue(error?.message).toLowerCase();
+  return (
+    message.includes("owner") &&
+    (
+      message.includes("cannot be found") ||
+      message.includes("not found") ||
+      message.includes("invalid owner")
+    )
+  );
+}
+
+async function resolveSignedInQuoteOwner({ req, acumatica, correlationId = "" } = {}) {
+  let session;
+  try {
+    session = requireAppSession(req);
+  } catch (_error) {
+    return null;
+  }
+
+  const signedInUsername = cleanFieldValue(session?.sub || session?.username);
+  if (!signedInUsername || /^signed in user$/i.test(signedInUsername)) {
+    return null;
+  }
+
+  try {
+    const employees = await withUpstreamStep("employee_list", () =>
+      acumatica.listEmployees({ pageSize: 200, maxRecords: 5000 })
+    );
+    const requestedVariants = buildOwnerLookupVariants(signedInUsername);
+    if (!requestedVariants.size) return null;
+
+    const match = employees.find((employee) => {
+      if (!cleanFieldValue(employee?.id) || employee?.isActive === false) {
+        return false;
+      }
+      const employeeVariants = new Set([
+        ...buildOwnerLookupVariants(employee?.id),
+        ...buildOwnerLookupVariants(employee?.name),
+        ...buildOwnerLookupVariants(employee?.email)
+      ]);
+      for (const candidate of requestedVariants) {
+        if (employeeVariants.has(candidate)) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (!match) {
+      console.warn(
+        `[${correlationId}] Quote owner lookup did not find an active Acumatica employee for signed-in user "${signedInUsername}".`
+      );
+      return null;
+    }
+
+    return {
+      username: signedInUsername,
+      ownerId: cleanFieldValue(match.id),
+      ownerName: cleanFieldValue(match.name || match.id)
+    };
+  } catch (error) {
+    console.warn(
+      `[${correlationId}] Quote owner lookup failed for signed-in user "${signedInUsername}": ${error instanceof Error ? error.message : String(error)}`
+    );
+    return null;
+  }
+}
+
 function normalizeEstimatorConfig(raw = {}) {
   const conservativeness = Math.min(100, Math.max(0, parseNumber(raw.conservativeness, 100)));
   return {
@@ -3046,6 +3140,11 @@ app.post("/api/quote", async (req, res) => {
     const contact = await withUpstreamStep("contact_lookup", () =>
       acumatica.resolveContactForBusinessAccount(payload.account, businessAccount)
     );
+    const signedInQuoteOwner = await resolveSignedInQuoteOwner({
+      req,
+      acumatica,
+      correlationId
+    });
     const uniqueClassCandidates = resolveOpportunityClassCandidates(payload);
     const requiredOpportunityAttributes = buildRequiredOpportunityAttributes(payload);
     const opportunityAttributes = mergeAttributeLists(
@@ -3056,29 +3155,52 @@ app.post("/api/quote", async (req, res) => {
     let opportunityId = "";
     let usedOpportunityClassId = "";
     let lastOpportunityError = null;
+    const opportunityOwnerCandidates = Array.from(
+      new Set(
+        [
+          cleanFieldValue(signedInQuoteOwner?.ownerName),
+          cleanFieldValue(signedInQuoteOwner?.ownerId)
+        ].filter(Boolean)
+      )
+    );
     for (const classId of uniqueClassCandidates) {
-      try {
-        const opportunityPayload = acumatica.buildOpportunityPayload({ fields: [] }, {
-          classId,
-          stage: resolveOpportunityStage(),
-          businessAccountId: businessAccount.id,
-          contactId: contact.id,
-          location: payload.account.location || businessAccount.location,
-          subject: quoteDescription,
-          note: quoteScopeNote,
-          attributes: opportunityAttributes
-        });
-        const result = await withUpstreamStep("opportunity_create", () => acumatica.createOpportunity(opportunityPayload));
-        opportunityId = cleanString(result?.opportunityId);
-        if (opportunityId) {
-          usedOpportunityClassId = classId;
-          break;
+      const ownerValuesToTry = opportunityOwnerCandidates.length ? opportunityOwnerCandidates : [""];
+      for (let ownerIndex = 0; ownerIndex < ownerValuesToTry.length; ownerIndex += 1) {
+        const ownerValue = ownerValuesToTry[ownerIndex];
+        try {
+          const opportunityPayload = acumatica.buildOpportunityPayload({ fields: [] }, {
+            classId,
+            stage: resolveOpportunityStage(),
+            businessAccountId: businessAccount.id,
+            contactId: contact.id,
+            location: payload.account.location || businessAccount.location,
+            owner: ownerValue,
+            subject: quoteDescription,
+            note: quoteScopeNote,
+            attributes: opportunityAttributes
+          });
+          const result = await withUpstreamStep("opportunity_create", () => acumatica.createOpportunity(opportunityPayload));
+          opportunityId = cleanString(result?.opportunityId);
+          if (opportunityId) {
+            usedOpportunityClassId = classId;
+            break;
+          }
+        } catch (error) {
+          lastOpportunityError = error;
+          if (isOpportunityClassNotFoundError(error)) break;
+          const canRetryOwnerWithAlternateValue =
+            ownerValuesToTry.length > 1 &&
+            ownerIndex < ownerValuesToTry.length - 1 &&
+            isOpportunityOwnerNotFoundError(error);
+          if (canRetryOwnerWithAlternateValue) {
+            continue;
+          }
+          throw error;
         }
-      } catch (error) {
-        lastOpportunityError = error;
-        if (isOpportunityClassNotFoundError(error)) continue;
-        throw error;
       }
+      if (opportunityId) break;
+      if (lastOpportunityError && isOpportunityClassNotFoundError(lastOpportunityError)) continue;
+      if (opportunityId) break;
     }
 
     if (!opportunityId && lastOpportunityError) {
