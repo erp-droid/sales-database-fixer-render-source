@@ -1941,6 +1941,7 @@ async function applyStructuredPricingBookWorkbook({
       seeded,
       summaryApplied,
       rowsWritten,
+      divisionRowsWritten,
       sheetsTouched: touchedSheets.size,
       message: messageParts.join(" ")
     };
@@ -1950,6 +1951,7 @@ async function applyStructuredPricingBookWorkbook({
       seeded: false,
       summaryApplied: false,
       rowsWritten: 0,
+      divisionRowsWritten: 0,
       sheetsTouched: 0,
       message: `Structured workbook write failed: ${extractGoogleErrorMessage(error)}`
     };

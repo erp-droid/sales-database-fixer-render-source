@@ -176,6 +176,7 @@ export const config = {
       env.QUOTE_DOC_TEMPLATE_URL ||
       "https://docs.google.com/document/d/17Z3JGGLyyd4gbz9yFLku3R7BeLGBzS8RpOQS6r0NGG0/edit",
     outputFolderId: env.QUOTE_DOC_OUTPUT_FOLDER_ID || "",
+    driveRequired: parseBoolean(env.QUOTE_DOC_DRIVE_REQUIRED, true),
     keepGeneratedDoc: parseBoolean(env.QUOTE_DOC_KEEP_GENERATED, false),
     storePdfInDrive: parseBoolean(env.QUOTE_DOC_STORE_PDF_IN_DRIVE, true)
   },

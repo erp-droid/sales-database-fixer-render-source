@@ -431,6 +431,98 @@ function normalizeDriveFile(data = {}) {
   });
 }
 
+async function resolveDriveTargetFolderId({
+  drive,
+  outputFolderId,
+  templateDocId,
+  templateDocUrl
+} = {}) {
+  const explicitFolderId = extractGoogleDocId(outputFolderId);
+  if (explicitFolderId) {
+    return explicitFolderId;
+  }
+
+  const resolvedTemplateDocId = extractGoogleDocId(templateDocId || templateDocUrl);
+  if (!resolvedTemplateDocId) {
+    return "";
+  }
+
+  const templateMetadata = await drive.files.get({
+    fileId: resolvedTemplateDocId,
+    fields: "id,name,parents,driveId",
+    supportsAllDrives: true
+  });
+  const templateMeta = templateMetadata.data || {};
+  return Array.isArray(templateMeta.parents) && templateMeta.parents.length ? cleanString(templateMeta.parents[0]) : "";
+}
+
+async function uploadQuoteBackupPdfToDrive(options = {}) {
+  const pdfBuffer = Buffer.isBuffer(options.pdfBytes)
+    ? options.pdfBytes
+    : Buffer.from(options.pdfBytes instanceof Uint8Array ? options.pdfBytes : new Uint8Array(options.pdfBytes || []));
+  if (!pdfBuffer.length) {
+    throw new Error("Quote backup Drive upload failed because the PDF content is empty.");
+  }
+
+  const auth = buildGoogleAuth();
+  const serviceAccountEmail = resolveServiceAccountEmailHint();
+  const templateShareHint = serviceAccountEmail
+    ? `Share the template and output folder with ${serviceAccountEmail}.`
+    : "Share the template and output folder with the backend Google service account.";
+
+  try {
+    const client = await auth.getClient();
+    const drive = google.drive({ version: "v3", auth: client });
+    const targetFolderId = await resolveDriveTargetFolderId({
+      drive,
+      outputFolderId: options.outputFolderId,
+      templateDocId: options.templateDocId,
+      templateDocUrl: options.templateDocUrl
+    });
+
+    if (!targetFolderId) {
+      throw new Error(`Quote backup Drive upload failed. Output folder could not be resolved. ${templateShareHint}`);
+    }
+
+    const quoteNumber = cleanString(options.quoteNumber || options.quoteNbr || "PENDING");
+    const pdfFileName = quoteNumber ? `Quote Backup - ${quoteNumber}.pdf` : `Quote Backup - ${Date.now()}.pdf`;
+    const uploadResponse = await drive.files.create({
+      fields: "id,name,webViewLink,webContentLink,parents,driveId",
+      supportsAllDrives: true,
+      requestBody: compactObject({
+        name: cleanString(options.outputPdfName) || pdfFileName,
+        mimeType: "application/pdf",
+        parents: [targetFolderId]
+      }),
+      media: {
+        mimeType: "application/pdf",
+        body: Readable.from(pdfBuffer)
+      }
+    });
+
+    return {
+      driveFile: normalizeDriveFile(uploadResponse.data || {}),
+      targetFolderId
+    };
+  } catch (error) {
+    const detail = extractGoogleErrorMessage(error);
+    if (isReauthError(error)) {
+      throw new Error(
+        "Google Drive quote backup upload failed. Google auth reauthentication is required (invalid_rapt). " +
+          "Set service-account credentials via QUOTE_DOC_GOOGLE_SERVICE_ACCOUNT_JSON (or GOOGLE_APPLICATION_CREDENTIALS key file). " +
+          templateShareHint
+      );
+    }
+    if (/file not found/i.test(detail)) {
+      throw new Error(`Google Drive quote backup upload failed. ${detail}. ${templateShareHint}`);
+    }
+    if (isDriveStorageQuotaExceededError(error)) {
+      throw new Error(`Google Drive quote backup upload failed. ${detail}.`);
+    }
+    throw new Error(`Google Drive quote backup upload failed. ${detail}. ${templateShareHint}`);
+  }
+}
+
 function buildPlaceholderReplacements({
   billTo,
   shipTo,
@@ -587,19 +679,14 @@ export async function renderQuoteBackupPdfFromGoogleDoc(options = {}) {
     docs = google.docs({ version: "v1", auth: client });
     drive = google.drive({ version: "v3", auth: client });
 
-    const templateMetadata = await drive.files.get({
-      fileId: templateDocId,
-      fields: "id,name,parents,driveId",
-      supportsAllDrives: true
-    });
-    const templateMeta = templateMetadata.data || {};
-    const templateParentId =
-      Array.isArray(templateMeta.parents) && templateMeta.parents.length ? cleanString(templateMeta.parents[0]) : "";
-
     const copyNameBase = cleanString(options.outputDocumentName) || "Quote Backup";
     const copyName = quoteNumber ? `${copyNameBase} - ${quoteNumber}` : `${copyNameBase} - ${Date.now()}`;
-    const outputFolderId = extractGoogleDocId(options.outputFolderId);
-    const targetFolderId = outputFolderId || templateParentId;
+    const targetFolderId = await resolveDriveTargetFolderId({
+      drive,
+      outputFolderId: options.outputFolderId,
+      templateDocId,
+      templateDocUrl: options.templateDocUrl
+    });
 
     const copyResponse = await drive.files.copy({
       fileId: templateDocId,
@@ -730,4 +817,8 @@ export const __test__ = {
   buildStatementOfWork,
   formatStatementScopeLine,
   normalizeStatementOfWorkText
+};
+
+export {
+  uploadQuoteBackupPdfToDrive
 };

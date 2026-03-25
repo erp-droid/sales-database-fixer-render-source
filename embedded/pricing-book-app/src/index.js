@@ -27,7 +27,7 @@ import {
   buildPricingBookSeedRows
 } from "./pricingBookWorkbook.js";
 import { loadPricingBookEstimatorCatalog } from "./estimators.js";
-import { renderQuoteBackupPdfFromGoogleDoc } from "./quoteDocTemplate.js";
+import { renderQuoteBackupPdfFromGoogleDoc, uploadQuoteBackupPdfToDrive } from "./quoteDocTemplate.js";
 import { renderQuoteBackupPdf } from "./quotePdfTemplate.js";
 import { loadTemplates, pickTemplateItem } from "./templates.js";
 import { buildQuoteBackupSummary, buildQuoteDescription, buildQuoteScopeNote, buildTasksAndLines, buildQuoteSummary, normalizeDivisionId } from "./quoteBuilder.js";
@@ -1674,27 +1674,97 @@ function buildQuoteBackupFilename(quoteNumber) {
   return safeQuoteNumber ? `quote-backup-${safeQuoteNumber}.pdf` : "quote-backup.pdf";
 }
 
+function normalizePdfBytes(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (Buffer.isBuffer(value)) return new Uint8Array(value);
+  if (Array.isArray(value)) return new Uint8Array(value);
+  return new Uint8Array();
+}
+
 async function renderQuoteBackupPdfResult(options = {}) {
   const hasGoogleDocTemplate = Boolean(
     cleanString(config.quotePdf?.templateDocId || config.quotePdf?.templateDocUrl)
   );
+  const shouldStorePdfInDrive = config.quotePdf?.storePdfInDrive !== false;
+  const requireDriveFile = shouldStorePdfInDrive && config.quotePdf?.driveRequired !== false;
+  let primaryError = null;
 
   if (hasGoogleDocTemplate) {
-    return renderQuoteBackupPdfFromGoogleDoc({
-      ...options,
-      templateDocId: config.quotePdf?.templateDocId,
-      templateDocUrl: config.quotePdf?.templateDocUrl,
-      outputFolderId: config.quotePdf?.outputFolderId,
-      keepGeneratedDoc: Boolean(config.quotePdf?.keepGeneratedDoc),
-      storePdfInDrive: config.quotePdf?.storePdfInDrive !== false
-    });
+    try {
+      const googleDocResult = await renderQuoteBackupPdfFromGoogleDoc({
+        ...options,
+        templateDocId: config.quotePdf?.templateDocId,
+        templateDocUrl: config.quotePdf?.templateDocUrl,
+        outputFolderId: config.quotePdf?.outputFolderId,
+        keepGeneratedDoc: Boolean(config.quotePdf?.keepGeneratedDoc),
+        storePdfInDrive: config.quotePdf?.storePdfInDrive !== false
+      });
+      const pdfBytes = normalizePdfBytes(googleDocResult?.pdfBytes);
+      if (pdfBytes.length > 0) {
+        let driveFile = googleDocResult?.driveFile || null;
+        if (shouldStorePdfInDrive && !cleanString(driveFile?.id)) {
+          const uploadResult = await uploadQuoteBackupPdfToDrive({
+            pdfBytes,
+            quoteNumber: options.quoteNumber || options.quoteNbr,
+            outputPdfName: options.outputPdfName,
+            outputFolderId: config.quotePdf?.outputFolderId,
+            templateDocId: config.quotePdf?.templateDocId,
+            templateDocUrl: config.quotePdf?.templateDocUrl
+          });
+          driveFile = uploadResult?.driveFile || null;
+        }
+        if (requireDriveFile && !cleanString(driveFile?.id)) {
+          throw new Error("Quote backup Drive file was not created.");
+        }
+        return {
+          ...googleDocResult,
+          pdfBytes,
+          driveFile
+        };
+      }
+      primaryError = new Error("Quote backup PDF generation returned no file bytes.");
+    } catch (error) {
+      primaryError = error instanceof Error ? error : new Error(String(error || "Unknown Google Docs PDF error"));
+    }
   }
 
-  const fallbackBytes = await renderQuoteBackupPdf({
-    ...options,
-    templatePath: config.quotePdf?.templatePath
-  });
-  return { pdfBytes: fallbackBytes };
+  try {
+    const fallbackBytes = await renderQuoteBackupPdf({
+      ...options,
+      templatePath: config.quotePdf?.templatePath
+    });
+    const pdfBytes = normalizePdfBytes(fallbackBytes);
+    if (pdfBytes.length > 0) {
+      let driveFile = null;
+      if (shouldStorePdfInDrive) {
+        const uploadResult = await uploadQuoteBackupPdfToDrive({
+          pdfBytes,
+          quoteNumber: options.quoteNumber || options.quoteNbr,
+          outputPdfName: options.outputPdfName,
+          outputFolderId: config.quotePdf?.outputFolderId,
+          templateDocId: config.quotePdf?.templateDocId,
+          templateDocUrl: config.quotePdf?.templateDocUrl
+        });
+        driveFile = uploadResult?.driveFile || null;
+      }
+      if (requireDriveFile && !cleanString(driveFile?.id)) {
+        throw new Error("Quote backup Drive file was not created.");
+      }
+      if (primaryError) {
+        console.warn(`Quote backup Google Docs render fell back to template PDF: ${primaryError.message}`);
+      }
+      return { pdfBytes, driveFile };
+    }
+    throw new Error("Template PDF generation returned no file bytes.");
+  } catch (fallbackError) {
+    const normalizedFallbackError =
+      fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError || "Unknown PDF fallback error"));
+    if (primaryError) {
+      throw new Error(`${primaryError.message} Fallback PDF template also failed: ${normalizedFallbackError.message}`);
+    }
+    throw normalizedFallbackError;
+  }
 }
 
 function buildPricingBookServiceHeaders() {
@@ -1719,6 +1789,10 @@ function parsePricingBookSeedStatus(raw) {
     nested?.sheetsTouched ?? parsed?.sheetsTouched ?? nested?.sheets ?? parsed?.sheets,
     0
   );
+  const divisionRowsWritten = parseNumber(
+    nested?.divisionRowsWritten ?? parsed?.divisionRowsWritten ?? nested?.divisionRows ?? parsed?.divisionRows,
+    0
+  );
   const summaryApplied = Boolean(
     nested?.summaryApplied ?? parsed?.summaryApplied ?? nested?.summary_applied ?? parsed?.summary_applied
   );
@@ -1730,10 +1804,73 @@ function parsePricingBookSeedStatus(raw) {
   return {
     seeded,
     rowsWritten,
+    divisionRowsWritten,
     sheetsTouched,
     summaryApplied,
     message
   };
+}
+
+function buildNormalizedPricingBookSeedStatus(raw) {
+  const parsed = parsePricingBookSeedStatus(raw);
+  return {
+    attempted: raw !== undefined && raw !== null,
+    seeded: Boolean(parsed.seeded),
+    rowsWritten: parseNumber(parsed.rowsWritten, 0),
+    divisionRowsWritten: parseNumber(parsed.divisionRowsWritten, 0),
+    sheetsTouched: parseNumber(parsed.sheetsTouched, 0),
+    summaryApplied: Boolean(parsed.summaryApplied),
+    message: cleanString(parsed.message)
+  };
+}
+
+function mergePricingBookSeedStatus(base, overlay) {
+  const normalizedBase = {
+    attempted: Boolean(base?.attempted),
+    seeded: Boolean(base?.seeded),
+    rowsWritten: parseNumber(base?.rowsWritten, 0),
+    divisionRowsWritten: parseNumber(base?.divisionRowsWritten, 0),
+    sheetsTouched: parseNumber(base?.sheetsTouched, 0),
+    summaryApplied: Boolean(base?.summaryApplied),
+    message: cleanString(base?.message)
+  };
+  const normalizedOverlay = {
+    attempted: Boolean(overlay?.attempted),
+    seeded: Boolean(overlay?.seeded),
+    rowsWritten: parseNumber(overlay?.rowsWritten, 0),
+    divisionRowsWritten: parseNumber(overlay?.divisionRowsWritten, 0),
+    sheetsTouched: parseNumber(overlay?.sheetsTouched, 0),
+    summaryApplied: Boolean(overlay?.summaryApplied),
+    message: cleanString(overlay?.message)
+  };
+
+  if (!normalizedOverlay.attempted) {
+    return normalizedBase;
+  }
+
+  return {
+    attempted: true,
+    seeded: normalizedOverlay.seeded,
+    rowsWritten: normalizedOverlay.rowsWritten,
+    divisionRowsWritten: normalizedOverlay.divisionRowsWritten,
+    sheetsTouched: normalizedOverlay.sheetsTouched,
+    summaryApplied: normalizedOverlay.summaryApplied,
+    message: [normalizedBase.message, normalizedOverlay.message].filter(Boolean).join(" | ")
+  };
+}
+
+function isPricingBookSeedReady(seed, { requireRows = false, requireDivisionRows = false } = {}) {
+  const normalized = buildNormalizedPricingBookSeedStatus(seed);
+  if (normalized.summaryApplied !== true) {
+    return false;
+  }
+  if (requireRows && normalized.rowsWritten <= 0) {
+    return false;
+  }
+  if (requireDivisionRows && normalized.divisionRowsWritten <= 0) {
+    return false;
+  }
+  return true;
 }
 
 async function createPricingBookWorkbookFromService({
@@ -3252,11 +3389,14 @@ app.post("/api/quote", async (req, res) => {
     const sourceScopeNote = quoteBody || generatedScopeNote;
     let quoteScopeNote = sourceScopeNote;
     const scopePolishMeta = {
-      attempted: Boolean(sourceScopeNote),
+      attempted: false,
       generatedByAI: false,
       notes: ""
     };
-    if (sourceScopeNote) {
+    if (quoteBody) {
+      scopePolishMeta.notes = "Client-finalized scope reused for quote creation.";
+    } else if (sourceScopeNote) {
+      scopePolishMeta.attempted = true;
       try {
         const grammarPolish = await polishQuoteBodyWithAI({
           apiKey: config.openaiApiKey,
@@ -3417,6 +3557,19 @@ app.post("/api/quote", async (req, res) => {
 
     const quoteAttributes = mergeAttributeLists(requiredOpportunityAttributes);
 
+    let quotePayloadMeta = {
+      entityName: cleanString(config.acumatica?.quoteEntity || ""),
+      fields: [],
+      details: []
+    };
+    try {
+      quotePayloadMeta = await acumatica.resolveQuoteMeta();
+    } catch (error) {
+      console.warn(
+        `[${correlationId}] Quote metadata lookup warning before create: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
     const templateCandidates = resolveProjectTemplateCandidates(payload);
     let quoteCreateResult = null;
     let usedProjectTemplate = "";
@@ -3424,10 +3577,12 @@ app.post("/api/quote", async (req, res) => {
 
     for (const projectTemplate of templateCandidates) {
       try {
-        const quotePayload = acumatica.buildQuotePayload({ fields: [] }, quoteDescription, {
+        const quotePayload = acumatica.buildQuotePayload(quotePayloadMeta, quoteDescription, {
           businessAccountId: businessAccount.id,
           contactId: contact.id,
           opportunityId,
+          ownerId: cleanFieldValue(signedInQuoteOwner?.ownerId),
+          owner: cleanFieldValue(signedInQuoteOwner?.ownerId || signedInQuoteOwner?.ownerName),
           projectTemplate,
           subject: quoteDescription,
           description: quoteDescription,
@@ -3461,6 +3616,60 @@ app.post("/api/quote", async (req, res) => {
       throw new AcumaticaUpstreamError("quote_create", new Error("Acumatica did not return a quote number."));
     }
 
+    if (signedInOwnerId) {
+      try {
+        const quoteOwnerAlreadyApplied = await withUpstreamStep("quote_owner_verify", () =>
+          acumatica.quoteMatchesOwner(
+            {
+              quoteNbr,
+              quoteId: extractedQuoteId || quoteId
+            },
+            signedInOwnerId,
+            {
+              entityName: quoteMeta?.entityName
+            }
+          )
+        );
+        if (!quoteOwnerAlreadyApplied) {
+          await withUpstreamStep("quote_owner_update", () =>
+            acumatica.updateQuoteFields(
+              {
+                quoteNbr,
+                quoteId: extractedQuoteId || quoteId
+              },
+              {
+                Owner: { value: signedInOwnerId }
+              },
+              {
+                entityName: quoteMeta?.entityName
+              }
+            )
+          );
+          const quoteOwnerUpdated = await withUpstreamStep("quote_owner_verify", () =>
+            acumatica.quoteMatchesOwner(
+              {
+                quoteNbr,
+                quoteId: extractedQuoteId || quoteId
+              },
+              signedInOwnerId,
+              {
+                entityName: quoteMeta?.entityName
+              }
+            )
+          );
+          if (!quoteOwnerUpdated) {
+            console.warn(
+              `[${correlationId}] Quote ${quoteNbr} owner verification did not confirm signed-in owner "${signedInOwnerId}" after update.`
+            );
+          }
+        }
+      } catch (error) {
+        console.warn(
+          `[${correlationId}] Quote ${quoteNbr} owner assignment warning: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+
     if (tasks.length || lines.length) {
       try {
         await withUpstreamStep("quote_update", () =>
@@ -3490,6 +3699,15 @@ app.post("/api/quote", async (req, res) => {
     };
     quoteTotals.tax = roundTo(quoteTotals.subtotal * quoteTotals.taxRate, 2);
     quoteTotals.total = roundTo(quoteTotals.subtotal + quoteTotals.tax, 2);
+    const pricingBookSeedPreviewRows = buildPricingBookSeedRows(breakdowns);
+    const pricingBookSeedPreviewSections = buildPricingBookScopeSections(breakdowns);
+    const pricingBookSeedPreviewMainEstimate = buildPricingBookMainEstimate({
+      payload,
+      quoteSummary: quoteDescription,
+      divisionRows: pricingBookSeedPreviewRows,
+      opportunityId,
+      quoteNbr
+    });
 
     const quoteFile = {
       attempted: false,
@@ -3816,6 +4034,9 @@ app.post("/api/quote", async (req, res) => {
         }
       }
 
+      const pricingBookSeedRequiresRows =
+        pricingBookSeedPreviewRows.length > 0 || pricingBookSeedPreviewMainEstimate.grandTotal > 0;
+
       if (pricingBook.created && pricingBookFileId) {
         const structuredWorkbookResult = await applyStructuredPricingBookWorkbook({
           fileId: pricingBookFileId,
@@ -3826,27 +4047,116 @@ app.post("/api/quote", async (req, res) => {
           breakdowns,
           quoteBackupSummary
         });
-        if (structuredWorkbookResult?.attempted) {
-          const existingSeed = pricingBook.seed || {};
-          pricingBook.seed = {
-            attempted: Boolean(existingSeed?.attempted) || Boolean(structuredWorkbookResult?.attempted),
-            seeded: Boolean(existingSeed?.seeded) || Boolean(structuredWorkbookResult?.seeded),
-            rowsWritten:
-              parseNumber(existingSeed?.rowsWritten, 0) + parseNumber(structuredWorkbookResult?.rowsWritten, 0),
-            sheetsTouched: Math.max(
-              parseNumber(existingSeed?.sheetsTouched, 0),
-              parseNumber(structuredWorkbookResult?.sheetsTouched, 0)
-            ),
-            summaryApplied:
-              Boolean(existingSeed?.summaryApplied) || Boolean(structuredWorkbookResult?.summaryApplied),
-            message: [cleanString(existingSeed?.message), cleanString(structuredWorkbookResult?.message)]
+        pricingBook.seed = mergePricingBookSeedStatus(
+          buildNormalizedPricingBookSeedStatus(pricingBook.seed),
+          buildNormalizedPricingBookSeedStatus(structuredWorkbookResult)
+        );
+      }
+
+      const currentPricingBookSeedStatus = buildNormalizedPricingBookSeedStatus(pricingBook.seed);
+      const currentSeedReady = isPricingBookSeedReady(currentPricingBookSeedStatus, {
+        requireRows: pricingBookSeedRequiresRows,
+        requireDivisionRows: pricingBookSeedPreviewRows.length > 0
+      });
+      const needsPricingBookRecovery =
+        pricingBook.created &&
+        pricingBookSeedRequiresRows &&
+        (!pricingBookFileId || !currentSeedReady);
+
+      if (needsPricingBookRecovery) {
+        try {
+          const recoveryServiceResult = await createPricingBookWorkbookFromService({
+            payload,
+            businessAccount,
+            contact,
+            quoteNbr,
+            opportunityId,
+            quoteSummary: quoteDescription,
+            breakdowns,
+            quoteBackupSummary
+          });
+          if (recoveryServiceResult?.created && recoveryServiceResult?.sheetUrl) {
+            const recoveredSheetUrl = normalizeSpreadsheetEditUrl(recoveryServiceResult.sheetUrl);
+            const recoveredFileId = cleanString(
+              recoveryServiceResult.fileId || extractSpreadsheetIdFromUrl(recoveredSheetUrl)
+            );
+            let recoveredSeed = buildNormalizedPricingBookSeedStatus(recoveryServiceResult.seed);
+
+            if (recoveredFileId) {
+              const structuredRecoveryResult = await applyStructuredPricingBookWorkbook({
+                fileId: recoveredFileId,
+                payload,
+                quoteSummary: quoteDescription,
+                quoteNbr,
+                opportunityId,
+                breakdowns,
+                quoteBackupSummary
+              });
+              recoveredSeed = mergePricingBookSeedStatus(
+                recoveredSeed,
+                buildNormalizedPricingBookSeedStatus(structuredRecoveryResult)
+              );
+            }
+
+            const recoveredSeedReady = isPricingBookSeedReady(recoveredSeed, {
+              requireRows: pricingBookSeedRequiresRows,
+              requireDivisionRows: pricingBookSeedPreviewRows.length > 0
+            });
+            const recoveredSeedBetter =
+              recoveredSeedReady ||
+              (!currentSeedReady &&
+                (parseNumber(recoveredSeed.rowsWritten, 0) > parseNumber(currentPricingBookSeedStatus.rowsWritten, 0) ||
+                  parseNumber(recoveredSeed.sheetsTouched, 0) >
+                    parseNumber(currentPricingBookSeedStatus.sheetsTouched, 0)));
+
+            if (recoveredSeedBetter) {
+              pricingBook.created = true;
+              pricingBook.mode = cleanString(
+                recoveryServiceResult.mode || (cleanString(pricingBook.mode).toLowerCase() === "service" ? "service_regen" : "service_recovery")
+              );
+              pricingBook.sheetUrl = recoveredSheetUrl;
+              pricingBook.fileId = recoveredFileId;
+              pricingBook.seed = recoveredSeed;
+              pricingBookSheetUrl = recoveredSheetUrl;
+              pricingBookFileId = recoveredFileId;
+              pricingBook.message = [
+                cleanString(pricingBook.message),
+                currentSeedReady
+                  ? "Recovered workbook was verified and replaced the earlier pricing book."
+                  : "Original pricing book workbook did not seed correctly; switched to a recovered verified workbook."
+              ]
+                .filter(Boolean)
+                .join(" | ");
+            } else {
+              pricingBook.message = [
+                cleanString(pricingBook.message),
+                cleanString(recoveryServiceResult.message || ""),
+                "Pricing-book recovery workbook did not improve the structured seed result, so the original workbook was kept."
+              ]
+                .filter(Boolean)
+                .join(" | ");
+            }
+          } else {
+            pricingBook.message = [
+              cleanString(pricingBook.message),
+              cleanString(recoveryServiceResult?.message || ""),
+              "Pricing-book recovery did not return a workbook URL."
+            ]
               .filter(Boolean)
-              .join(" | ")
-          };
+              .join(" | ");
+          }
+        } catch (error) {
+          const recoveryError = error instanceof Error ? error.message : String(error || "Unknown pricing-book recovery error");
+          pricingBook.message = [cleanString(pricingBook.message), recoveryError].filter(Boolean).join(" | ");
         }
       }
 
-      const seedReadyForBackupLink = !pricingBook.seed?.attempted || pricingBook.seed?.summaryApplied === true;
+      const seedReadyForBackupLink =
+        !pricingBook.seed?.attempted ||
+        isPricingBookSeedReady(pricingBook.seed, {
+          requireRows: pricingBookSeedRequiresRows,
+          requireDivisionRows: pricingBookSeedPreviewRows.length > 0
+        });
       if (pricingBookSheetUrl && seedReadyForBackupLink) {
         try {
           const pricingBookLinkUpdateResult = await withUpstreamStep("pricing_book_link_update", () =>
@@ -3949,15 +4259,6 @@ app.post("/api/quote", async (req, res) => {
     }
 
     const quoteUrl = buildAcumaticaQuoteUrl(quoteNbr);
-    const pricingBookSeedPreviewRows = buildPricingBookSeedRows(breakdowns);
-    const pricingBookSeedPreviewSections = buildPricingBookScopeSections(breakdowns);
-    const pricingBookSeedPreviewMainEstimate = buildPricingBookMainEstimate({
-      payload,
-      quoteSummary: quoteDescription,
-      divisionRows: pricingBookSeedPreviewRows,
-      opportunityId,
-      quoteNbr
-    });
     pricingBook.seedPreview = {
       divisionCount: pricingBookSeedPreviewSections.length,
       projectBudget: pricingBookSeedPreviewMainEstimate.projectBudget,

@@ -235,6 +235,7 @@ let prototypeStatusStartedAt = 0;
 let prototypeStatusBaseMessage = "";
 let estimatorQuestionsAutoOpenSignature = "";
 let estimatorQuestionsCompletionScopeSignature = "";
+let pendingQuoteCreateAfterClarifications = false;
 const builderAccordionState = {
   step3: true,
   step4: false,
@@ -1133,8 +1134,8 @@ function syncExistingOpportunityUi() {
   }
   if (el.step5Hint) {
     el.step5Hint.textContent = existingMode
-      ? "AI validation runs automatically when you create the project quote for this linked opportunity. No new opportunity will be created."
-      : "AI validation now runs automatically when you create the quote. You can still open it directly in Acumatica or download the backup quote PDF.";
+      ? "The last step now runs AI validation, asks any remaining estimator questions, and then creates the project quote on this linked opportunity."
+      : "The last step now runs AI validation, asks any remaining estimator questions, and then creates the opportunity and project quote.";
   }
   if (el.createQuoteBtn) {
     el.createQuoteBtn.textContent = existingMode
@@ -7711,6 +7712,7 @@ async function handleScopeFinalizeOneClick() {
 async function prepareEstimateForQuoteAction({
   aiRequired = true,
   autoOpenEstimatorQuestions = true,
+  resumeCreateAfterClarifications = false,
   showProgressStatus = true,
   showSuccessStatus = true
 } = {}) {
@@ -7792,6 +7794,7 @@ async function prepareEstimateForQuoteAction({
           : "";
 
     if (!validationResult.ok) {
+      pendingQuoteCreateAfterClarifications = false;
       const validationMessage = cleanString(validationResult?.error?.message || "AI validation did not complete.");
       if (aiRequired) {
         showStatus(validationMessage, "error");
@@ -7799,6 +7802,29 @@ async function prepareEstimateForQuoteAction({
       }
       warnings.push(validationMessage);
     }
+
+    const requiresClarificationAnswers =
+      autoOpenEstimatorQuestions &&
+      hasUnansweredEstimatorClarifications() &&
+      !isEstimatorClarificationPassCompletedForCurrentScope();
+
+    if (requiresClarificationAnswers) {
+      pendingQuoteCreateAfterClarifications = Boolean(resumeCreateAfterClarifications);
+      openEstimatorQuestionsModal({ focusFirstUnanswered: true });
+      showStatus(
+        "Answer the estimator questions to finish scope validation before the quote is created.",
+        "error"
+      );
+      return {
+        ok: false,
+        needsClarifications: true,
+        warnings,
+        validationOk: Boolean(validationResult.ok),
+        lintHint
+      };
+    }
+
+    pendingQuoteCreateAfterClarifications = false;
 
     if (showSuccessStatus) {
       showStatus(
@@ -8866,14 +8892,15 @@ async function handleCreateQuote() {
   setBusy(el.createQuoteBtn, true);
   showStatus(
     isExistingOpportunityMode()
-      ? "Validating estimate with AI and creating project quote on the linked opportunity..."
-      : "Validating estimate with AI and creating opportunity/project quote..."
+      ? "Validating estimate, tightening scope, and creating the linked project quote..."
+      : "Validating estimate, tightening scope, and creating the opportunity/project quote..."
   );
 
   try {
     const preparationResult = await prepareEstimateForQuoteAction({
-      aiRequired: false,
-      autoOpenEstimatorQuestions: false,
+      aiRequired: true,
+      autoOpenEstimatorQuestions: true,
+      resumeCreateAfterClarifications: true,
       showProgressStatus: false,
       showSuccessStatus: false
     });
@@ -9087,7 +9114,12 @@ async function handleSaveEstimatorQuestions() {
   closeEstimatorQuestionsModal();
 
   if (!buildEstimatorClarificationPayload().length) {
+    const shouldResumeQuoteCreate = pendingQuoteCreateAfterClarifications;
+    pendingQuoteCreateAfterClarifications = false;
     showStatus("Estimator question pass completed. AI will keep unresolved details generic for this scope.", "success");
+    if (shouldResumeQuoteCreate) {
+      await handleCreateQuote();
+    }
     return;
   }
 
@@ -9095,6 +9127,21 @@ async function handleSaveEstimatorQuestions() {
   if (el.saveEstimatorQuestionsBtn) setBusy(el.saveEstimatorQuestionsBtn, true);
   try {
     await applyEstimatorClarificationsToAi();
+    const shouldResumeQuoteCreate = pendingQuoteCreateAfterClarifications;
+    if (hasUnansweredEstimatorClarifications()) {
+      pendingQuoteCreateAfterClarifications = shouldResumeQuoteCreate;
+      if (shouldResumeQuoteCreate) {
+        showStatus(
+          "More estimator questions are still open. Answer them to finish validation before the quote is created.",
+          "error"
+        );
+      }
+      return;
+    }
+    pendingQuoteCreateAfterClarifications = false;
+    if (shouldResumeQuoteCreate) {
+      await handleCreateQuote();
+    }
   } finally {
     if (el.saveEstimatorQuestionsBtn) setBusy(el.saveEstimatorQuestionsBtn, false);
   }

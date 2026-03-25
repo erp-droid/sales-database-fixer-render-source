@@ -34,6 +34,7 @@ const FIELD_CANDIDATES = {
   businessAccount: ["BusinessAccount", "BusinessAccountID", "BusinessAccountCD", "BAccountID", "AccountID"],
   contact: ["Contact", "ContactID", "ContactId"],
   date: ["Date", "QuoteDate"],
+  owner: ["Owner", "OwnerID", "OwnerEmployeeID", "WorkgroupOwner"],
   projectTemplate: ["ProjectTemplate", "Template", "ProjectTemplateID"],
   task: ["Task", "ProjectTask", "TaskID", "TaskCD", "ProjectTaskID"],
   taskDescription: ["Description", "TaskDescription"],
@@ -2735,6 +2736,7 @@ export class AcumaticaClient {
     const businessAccountField = resolveFieldName(fields, FIELD_CANDIDATES.businessAccount);
     const contactField = resolveFieldName(fields, FIELD_CANDIDATES.contact);
     const dateField = resolveFieldName(fields, FIELD_CANDIDATES.date);
+    const ownerField = resolveFieldName(fields, FIELD_CANDIDATES.owner);
     const projectTemplateField = resolveFieldName(fields, FIELD_CANDIDATES.projectTemplate);
     const subjectField = resolveFieldName(fields, FIELD_CANDIDATES.quoteSubject);
     const descriptionField = resolveFieldName(fields, FIELD_CANDIDATES.description);
@@ -2766,6 +2768,7 @@ export class AcumaticaClient {
     setValue(businessAccountField, "BusinessAccount", options.businessAccountId);
     setValue(contactField, "Contact", contactNumeric);
     setValue(dateField, "Date", quoteDate);
+    setValue(ownerField, "Owner", options.ownerId || options.owner);
     setValue(projectTemplateField, "ProjectTemplate", options.projectTemplate);
     setValue(descriptionField, "Description", descriptionText);
     setValue(subjectField, "Subject", subjectText);
@@ -3168,6 +3171,108 @@ export class AcumaticaClient {
 
     if (lastRecoverableError) throw lastRecoverableError;
     throw new Error("Unable to resolve a valid Project Quote entity for attribute update.");
+  }
+
+  async updateQuoteFields(quoteRef, fields = {}, options = {}) {
+    const normalizedQuoteRef =
+      quoteRef && typeof quoteRef === "object"
+        ? {
+            quoteNbr: stringValue(quoteRef.quoteNbr || quoteRef.key || quoteRef.quoteNumber),
+            quoteId: stringValue(quoteRef.quoteId || quoteRef.id)
+          }
+        : { quoteNbr: stringValue(quoteRef), quoteId: "" };
+
+    if (!normalizedQuoteRef.quoteNbr && !normalizedQuoteRef.quoteId) {
+      throw new Error("Unable to resolve quote key fields for Project Quote update.");
+    }
+
+    const payload = {};
+    if (normalizedQuoteRef.quoteNbr) {
+      payload.QuoteNbr = { value: normalizedQuoteRef.quoteNbr };
+    }
+    if (normalizedQuoteRef.quoteId) {
+      payload.QuoteID = { value: normalizedQuoteRef.quoteId };
+    }
+    Object.entries(fields || {}).forEach(([fieldName, fieldValue]) => {
+      if (!fieldName || fieldValue === undefined || fieldValue === null) return;
+      payload[fieldName] = fieldValue;
+    });
+
+    const entityCandidates = dedupeBy(
+      [options.entityName, this.settings.quoteEntity, ...this.getQuoteEntityCandidates()]
+        .map((value) => stringValue(value))
+        .filter(Boolean),
+      (value) => normalizeName(value)
+    );
+
+    let lastRecoverableError = null;
+    for (const entityCandidate of entityCandidates) {
+      try {
+        return await this.updateQuote(entityCandidate, payload);
+      } catch (error) {
+        const status = extractAcumaticaStatusCode(error);
+        const isRecoverable =
+          status === 400 || status === 404 || status === 405 || status === 406 || status === 422 || status === 500;
+        if (!isRecoverable) throw error;
+        lastRecoverableError = error;
+      }
+    }
+
+    if (lastRecoverableError) throw lastRecoverableError;
+    throw new Error("Unable to resolve a valid Project Quote entity for update.");
+  }
+
+  async quoteMatchesOwner(quoteRef, ownerId, options = {}) {
+    const normalizedQuoteRef =
+      quoteRef && typeof quoteRef === "object"
+        ? {
+            quoteNbr: stringValue(quoteRef.quoteNbr || quoteRef.key || quoteRef.quoteNumber),
+            quoteId: stringValue(quoteRef.quoteId || quoteRef.id)
+          }
+        : { quoteNbr: stringValue(quoteRef), quoteId: "" };
+    const normalizedOwnerId = stringValue(ownerId);
+    if ((!normalizedQuoteRef.quoteNbr && !normalizedQuoteRef.quoteId) || !normalizedOwnerId) {
+      return false;
+    }
+
+    const entityCandidates = dedupeBy(
+      [options.entityName, this.settings.quoteEntity, ...this.getQuoteEntityCandidates()]
+        .map((value) => stringValue(value))
+        .filter(Boolean),
+      (value) => normalizeName(value)
+    );
+
+    const escapedOwnerId = normalizedOwnerId.replace(/'/g, "''");
+    const keysToTry = [
+      normalizedQuoteRef.quoteNbr
+        ? `QuoteNbr eq '${normalizedQuoteRef.quoteNbr.replace(/'/g, "''")}'`
+        : "",
+      normalizedQuoteRef.quoteId
+        ? `QuoteID eq '${normalizedQuoteRef.quoteId.replace(/'/g, "''")}'`
+        : ""
+    ].filter(Boolean);
+
+    for (const entityName of entityCandidates) {
+      for (const quoteFilter of keysToTry) {
+        const query = [
+          "$top=1",
+          "$select=QuoteNbr",
+          `$filter=${encodeURIComponent(`${quoteFilter} and Owner eq '${escapedOwnerId}'`)}`
+        ].join("&");
+        try {
+          const payload = await this.request(`${entityName}?${query}`, { method: "GET" });
+          const records = extractRecords(payload);
+          if (records.length) return true;
+        } catch (error) {
+          if (isRecoverableEntityCandidateError(error)) {
+            continue;
+          }
+          throw error;
+        }
+      }
+    }
+
+    return false;
   }
 
   async getQuoteBackupLink(quoteRef, options = {}) {
