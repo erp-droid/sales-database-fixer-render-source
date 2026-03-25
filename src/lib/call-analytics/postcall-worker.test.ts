@@ -688,6 +688,65 @@ describe("post-call activity sync worker", () => {
     expect(bodyHtml).toContain("Transcript from local fallback.");
   });
 
+  it("keeps the upstream model error when local transcription is unavailable", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Recordings/")) {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "audio/mpeg" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/audio/transcriptions") {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "Project does not have access to model gpt-4o-mini-transcribe",
+              code: "model_not_found",
+            },
+          }),
+          {
+            status: 403,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("Unexpected fetch", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    execFileMock.mockImplementation((file, args, options, callback) => {
+      const error = Object.assign(new Error("spawn python3 ENOENT"), { code: "ENOENT" });
+      callback?.(error, "", "");
+      return {} as never;
+    });
+
+    readCallSessionByIdMock.mockReturnValue(buildSession());
+    serviceFetchContactByIdMock.mockResolvedValue({
+      id: "contact-note-id",
+      NoteID: { value: "contact-note-id" },
+    });
+
+    const { upsertQueuedCallActivitySync } = await import("@/lib/call-analytics/postcall-store");
+    const { processCallActivitySyncJob } = await import("@/lib/call-analytics/postcall-worker");
+
+    upsertQueuedCallActivitySync({
+      sessionId: "call-1",
+      recordingSid: "RE123",
+      recordingStatus: "completed",
+      recordingDurationSeconds: 42,
+    });
+
+    const result = await processCallActivitySyncJob("call-1");
+
+    expect(result?.status).toBe("failed");
+    expect(result?.error).toContain("does not have access to model");
+    expect(result?.error).toContain("local fallback failed");
+    expect(result?.error).toContain("spawn python3 ENOENT");
+    expect(serviceCreateActivityMock).not.toHaveBeenCalled();
+  });
+
   it("preserves transcript and summary on Acumatica failure and retries without retranscribing", async () => {
     let fetchCount = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
