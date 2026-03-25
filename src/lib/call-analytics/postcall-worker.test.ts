@@ -12,6 +12,7 @@ const readCallLegsBySessionIdMock = vi.fn<() => CallLegRecord[]>();
 const readCallSessionByIdMock = vi.fn<(sessionId: string) => CallSessionRecord | null>();
 const readCallSessionsMock = vi.fn<() => CallSessionRecord[]>();
 const serviceFetchContactByIdMock = vi.fn();
+const serviceFetchContactsByBusinessAccountIdsMock = vi.fn();
 const serviceFetchBusinessAccountByIdMock = vi.fn();
 const serviceCreateActivityMock = vi.fn();
 const getTwilioRestConfigMock = vi.fn();
@@ -34,6 +35,7 @@ vi.mock("@/lib/call-analytics/sessionize", () => ({
 
 vi.mock("@/lib/acumatica-service-auth", () => ({
   serviceFetchContactById: serviceFetchContactByIdMock,
+  serviceFetchContactsByBusinessAccountIds: serviceFetchContactsByBusinessAccountIdsMock,
   serviceFetchBusinessAccountById: serviceFetchBusinessAccountByIdMock,
   serviceCreateActivity: serviceCreateActivityMock,
 }));
@@ -148,6 +150,8 @@ describe("post-call activity sync worker", () => {
     readCallSessionsMock.mockReset();
     readCallSessionsMock.mockReturnValue([]);
     serviceFetchContactByIdMock.mockReset();
+    serviceFetchContactsByBusinessAccountIdsMock.mockReset();
+    serviceFetchContactsByBusinessAccountIdsMock.mockResolvedValue([]);
     serviceFetchBusinessAccountByIdMock.mockReset();
     serviceCreateActivityMock.mockReset();
     getTwilioRestConfigMock.mockReset();
@@ -225,6 +229,39 @@ describe("post-call activity sync worker", () => {
       .prepare("SELECT COUNT(*) AS count FROM call_activity_sync")
       .get() as { count: number };
     expect(countRow.count).toBe(1);
+  });
+
+  it("accepts recording callbacks validated against APP_BASE_URL instead of the internal request url", async () => {
+    process.env.APP_BASE_URL = "https://sales-meadowb.onrender.com";
+    validateRequestMock.mockImplementation(
+      (_token, _signature, url) =>
+        url === "https://sales-meadowb.onrender.com/api/twilio/voice/recording?sessionId=call-1",
+    );
+    readCallSessionByIdMock.mockReturnValue(null);
+
+    const { processTwilioRecordingCallback } = await import("@/lib/call-analytics/postcall-worker");
+    const { readCallActivitySyncBySessionId } = await import("@/lib/call-analytics/postcall-store");
+
+    const request = new NextRequest("http://127.0.0.1:10000/api/twilio/voice/recording?sessionId=call-1", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-twilio-signature": "valid",
+        host: "127.0.0.1:10000",
+        "x-forwarded-host": "sales-meadowb.onrender.com",
+        "x-forwarded-proto": "https",
+      },
+      body: new URLSearchParams({
+        RecordingSid: "RE123",
+        RecordingStatus: "completed",
+        RecordingDuration: "42",
+      }),
+    });
+
+    const result = await processTwilioRecordingCallback(request);
+
+    expect(result?.sessionId).toBe("call-1");
+    expect(readCallActivitySyncBySessionId("call-1")?.recordingSid).toBe("RE123");
   });
 
   it("creates one Acumatica phone activity with summary first and transcript second", async () => {
@@ -377,6 +414,88 @@ describe("post-call activity sync worker", () => {
       expect.objectContaining({
         summary: "Phone call with Alex Prospect",
         type: "P",
+      }),
+    );
+  });
+
+  it("re-resolves the contact from the matched business account when the stored contact id is stale", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Recordings/")) {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "audio/mpeg" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/audio/transcriptions") {
+        return new Response(JSON.stringify({ text: "Talked through timeline and materials." }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/chat/completions") {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "Reviewed timing and agreed to send pricing." } }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("Unexpected fetch", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    readCallSessionByIdMock.mockReturnValue(
+      buildSession({
+        matchedContactId: 555,
+        linkedContactId: null,
+        matchedContactName: "Kris Wawak",
+        matchedCompanyName: "Linex Manufacturing",
+        matchedBusinessAccountId: "LINEX-1",
+        linkedBusinessAccountId: null,
+        counterpartyPhone: "+19055551234",
+        targetPhone: "+19055551234",
+      }),
+    );
+    serviceFetchContactByIdMock.mockRejectedValue(new Error("Contact not found"));
+    serviceFetchContactsByBusinessAccountIdsMock.mockResolvedValue([
+      {
+        id: "contact-note-kris",
+        NoteID: { value: "contact-note-kris" },
+        DisplayName: { value: "Kris Wawak" },
+        Phone1: { value: "905-555-1234" },
+      },
+    ]);
+    serviceCreateActivityMock.mockResolvedValue({
+      id: "activity-contact-fallback",
+      NoteID: { value: "activity-contact-fallback" },
+    });
+
+    const { upsertQueuedCallActivitySync } = await import("@/lib/call-analytics/postcall-store");
+    const { processCallActivitySyncJob } = await import("@/lib/call-analytics/postcall-worker");
+
+    upsertQueuedCallActivitySync({
+      sessionId: "call-1",
+      recordingSid: "RE123",
+      recordingStatus: "completed",
+      recordingDurationSeconds: 42,
+    });
+
+    const result = await processCallActivitySyncJob("call-1");
+
+    expect(result?.status).toBe("synced");
+    expect(serviceFetchContactsByBusinessAccountIdsMock).toHaveBeenCalledWith("jserrano", ["B2001", "LINEX-1"]);
+    expect(serviceCreateActivityMock).toHaveBeenCalledWith(
+      "jserrano",
+      expect.objectContaining({
+        relatedEntityNoteId: "contact-note-kris",
+        relatedEntityType: "PX.Objects.CR.Contact",
       }),
     );
   });
