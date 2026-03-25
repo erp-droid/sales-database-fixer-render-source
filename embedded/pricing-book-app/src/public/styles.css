@@ -646,6 +646,126 @@ input[type="radio"] {
     inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
+.department-option input:disabled + span {
+  cursor: default;
+  opacity: 0.82;
+}
+
+.linked-opportunity-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0 0 1rem;
+  padding: 0.58rem 0.9rem;
+  border: 1px solid rgba(100, 152, 122, 0.34);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(236, 245, 239, 0.98)),
+    #eff7f1;
+  color: var(--primary);
+  font-size: 0.9rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.linked-opportunity-banner.error {
+  border-color: rgba(165, 72, 52, 0.28);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(252, 243, 240, 0.98)),
+    #fff7f3;
+  color: #8b4330;
+}
+
+.linked-opportunity-card {
+  margin-top: 0.3rem;
+  padding: 1.05rem 1.08rem 1.12rem;
+  border: 1px solid rgba(191, 210, 199, 0.92);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top right, rgba(221, 238, 228, 0.72), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(240, 247, 242, 0.98)),
+    #eff7f1;
+  display: grid;
+  gap: 0.95rem;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.84),
+    0 14px 30px rgba(28, 60, 46, 0.05);
+}
+
+.linked-opportunity-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.9rem;
+}
+
+.linked-opportunity-head .hint {
+  margin: 0.2rem 0 0;
+}
+
+.linked-opportunity-pill {
+  align-self: center;
+  border: 1px solid rgba(44, 102, 77, 0.18);
+  border-radius: 999px;
+  background: rgba(34, 79, 61, 0.08);
+  color: #204c3a;
+  padding: 0.38rem 0.74rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.linked-opportunity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.7rem;
+}
+
+.linked-opportunity-field,
+.linked-opportunity-detail,
+.linked-opportunity-placeholder {
+  padding: 0.84rem 0.92rem;
+  border: 1px solid rgba(191, 210, 199, 0.95);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(247, 251, 248, 0.98)),
+    #f6fbf7;
+}
+
+.linked-opportunity-field span,
+.linked-opportunity-detail span {
+  display: block;
+  margin-bottom: 0.3rem;
+  color: #557060;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.linked-opportunity-field strong,
+.linked-opportunity-detail strong,
+.linked-opportunity-placeholder p {
+  display: block;
+  color: var(--primary);
+  font-size: 0.98rem;
+  line-height: 1.45;
+}
+
+.linked-opportunity-placeholder.error,
+.linked-opportunity-banner.error + .linked-opportunity-card {
+  border-color: rgba(165, 72, 52, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(252, 243, 240, 0.98)),
+    #fff7f3;
+}
+
+.linked-opportunity-placeholder.error p {
+  color: #8b4330;
+}
+
 .btn {
   border: 1px solid var(--line);
   min-height: 48px;
@@ -1699,24 +1819,111 @@ textarea[data-field="scope"] {
 
 .quote-review-shell {
   margin: 0 0 1rem;
-  padding: 1rem 1.05rem;
-  border: 1px solid #d2ddd5;
-  border-radius: 22px;
+  padding: 1.05rem 1.08rem 1.12rem;
+  border: 1px solid rgba(191, 210, 199, 0.92);
+  border-radius: 24px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(241, 247, 243, 0.95)),
+    radial-gradient(circle at top right, rgba(221, 238, 228, 0.78), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(240, 247, 242, 0.98)),
     #eff7f1;
   display: grid;
-  gap: 0.8rem;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.84);
+  gap: 0.95rem;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.84),
+    0 14px 30px rgba(28, 60, 46, 0.06);
+}
+
+.quote-review-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.9rem;
+}
+
+.quote-review-header .hint {
+  margin: 0.2rem 0 0;
+}
+
+.quote-review-badge {
+  align-self: center;
+  border: 1px solid rgba(44, 102, 77, 0.18);
+  border-radius: 999px;
+  background: rgba(34, 79, 61, 0.08);
+  color: #204c3a;
+  padding: 0.38rem 0.74rem;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.quote-review-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.9rem;
+  align-items: flex-start;
+  padding: 0.95rem 1rem;
+  border: 1px solid rgba(191, 210, 199, 0.95);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(247, 251, 248, 0.98)),
+    #f6fbf7;
+  cursor: pointer;
 }
 
 .quote-review-check {
-  align-items: flex-start;
-  line-height: 1.5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.3rem;
+  height: 2.3rem;
+  border-radius: 999px;
+  background: rgba(34, 79, 61, 0.08);
+  border: 1px solid rgba(44, 102, 77, 0.15);
 }
 
 .quote-review-check input {
-  margin-top: 0.18rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+}
+
+.quote-review-copy {
+  display: grid;
+  gap: 0.24rem;
+}
+
+.quote-review-title {
+  color: #1f4736;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.quote-review-caption {
+  color: #365f4c;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.quote-review-form {
+  display: grid;
+  grid-template-columns: minmax(240px, 420px) minmax(0, 1fr);
+  gap: 0.95rem 1rem;
+  align-items: end;
+}
+
+.quote-review-field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.quote-review-field span {
+  color: #234636;
+  font-weight: 800;
+}
+
+.quote-review-field input {
+  min-height: 3rem;
 }
 
 .quote-markup-summary h3 {
@@ -1758,6 +1965,27 @@ textarea[data-field="scope"] {
 
 .quote-markup-row:last-child {
   border-bottom: 0;
+}
+
+@media (max-width: 840px) {
+  .quote-review-header,
+  .quote-review-form {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .quote-review-badge {
+    justify-self: start;
+  }
+
+  .quote-review-card {
+    grid-template-columns: 1fr;
+  }
+
+  .quote-review-check {
+    width: 2.6rem;
+    height: 2.6rem;
+  }
 }
 
 .ai-item {
