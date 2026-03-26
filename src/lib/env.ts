@@ -60,6 +60,7 @@ const schema = z.object({
   MAIL_SERVICE_SHARED_SECRET: z.string().min(1).optional(),
   MAIL_INTERNAL_DOMAIN: z.string().min(1).default("meadowb.com"),
   MAIL_CONNECT_RETURN_PATH: z.string().min(1).default("/mail"),
+  WATCHDOG_SECRET: z.string().min(1).optional(),
   TWILIO_ACCOUNT_SID: z.string().min(1).optional(),
   TWILIO_API_KEY_SID: z.string().min(1).optional(),
   TWILIO_API_KEY_SECRET: z.string().min(1).optional(),
@@ -139,6 +140,7 @@ export type AppEnv = {
   MAIL_SERVICE_SHARED_SECRET?: string;
   MAIL_INTERNAL_DOMAIN: string;
   MAIL_CONNECT_RETURN_PATH: string;
+  WATCHDOG_SECRET?: string;
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_API_KEY_SID?: string;
   TWILIO_API_KEY_SECRET?: string;
@@ -252,6 +254,7 @@ export function getEnv(): AppEnv {
     MAIL_SERVICE_SHARED_SECRET: emptyToUndefined(process.env.MAIL_SERVICE_SHARED_SECRET),
     MAIL_INTERNAL_DOMAIN: emptyToUndefined(process.env.MAIL_INTERNAL_DOMAIN),
     MAIL_CONNECT_RETURN_PATH: emptyToUndefined(process.env.MAIL_CONNECT_RETURN_PATH),
+    WATCHDOG_SECRET: emptyToUndefined(process.env.WATCHDOG_SECRET),
     TWILIO_ACCOUNT_SID: emptyToUndefined(process.env.TWILIO_ACCOUNT_SID),
     TWILIO_API_KEY_SID: emptyToUndefined(process.env.TWILIO_API_KEY_SID),
     TWILIO_API_KEY_SECRET: emptyToUndefined(process.env.TWILIO_API_KEY_SECRET),

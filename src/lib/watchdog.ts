@@ -1,31 +1,17 @@
 /**
- * Watchdog agent — monitors the app for errors and auto-fixes them.
- *
- * Triggers:
- *   1. Failed call-activity sync jobs (recording, transcription, Acumatica post failures)
- *   2. Stuck "waiting_for_recording" jobs that have been waiting too long
- *   3. Failed business-account saves (snapshot validation, legacy data)
- *   4. Acumatica session/auth failures
- *
- * Does NOT run on a timer — it runs on demand via POST /api/watchdog/run
- * and should be called by an external cron (Render cron job, etc).
+ * Watchdog agent monitors call-activity sync failures and retries safe repairs.
  */
 
 import {
-  listPendingCallActivitySyncJobs,
   markCallActivitySyncFailed,
   markCallActivitySyncSkipped,
-  readCallActivitySyncBySessionId,
   requeueCallActivitySyncJob,
 } from "@/lib/call-analytics/postcall-store";
 import {
   processCallActivitySyncJob,
   resolveActivityTarget,
 } from "@/lib/call-analytics/postcall-worker";
-import {
-  readCallSessionById,
-  readCallLegsBySessionId,
-} from "@/lib/call-analytics/sessionize";
+import { readCallSessionById } from "@/lib/call-analytics/sessionize";
 import { reconcileTwilioSession } from "@/lib/call-analytics/ingest";
 import { getErrorMessage } from "@/lib/errors";
 import { getReadModelDb } from "@/lib/read-model/db";
@@ -60,6 +46,8 @@ const STALE_FAILURE_THRESHOLD_MS = 48 * 60 * 60 * 1000; // 48 hours
 
 /** Max retry attempts before the watchdog gives up and marks the job as permanently failed. */
 const MAX_WATCHDOG_RETRY_ATTEMPTS = 5;
+
+let watchdogRunPromise: Promise<WatchdogReport> | null = null;
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -344,7 +332,7 @@ async function diagnoseAndRepairJob(job: {
 
 // ── Main Entry Point ───────────────────────────────────────────────────
 
-export async function runWatchdog(): Promise<WatchdogReport> {
+async function runWatchdogCycle(): Promise<WatchdogReport> {
   const startMs = Date.now();
   const actions: WatchdogAction[] = [];
 
@@ -387,4 +375,16 @@ export async function runWatchdog(): Promise<WatchdogReport> {
   }
 
   return report;
+}
+
+export async function runWatchdog(): Promise<WatchdogReport> {
+  if (watchdogRunPromise) {
+    return watchdogRunPromise;
+  }
+
+  watchdogRunPromise = runWatchdogCycle().finally(() => {
+    watchdogRunPromise = null;
+  });
+
+  return watchdogRunPromise;
 }

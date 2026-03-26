@@ -1,24 +1,35 @@
 /**
  * Watchdog email notifications.
  *
- * Sends a summary email via the mail service when the watchdog
- * detects and acts on errors.
+ * Sends a summary email via the configured mail service when the watchdog
+ * takes a meaningful repair action.
  */
 
-import { getEnv } from "@/lib/env";
+import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
 import { getErrorMessage } from "@/lib/errors";
 import { buildMailServiceAssertion, ensureMailServiceConfigured } from "@/lib/mail-auth";
+import type { MailComposePayload } from "@/types/mail-compose";
 import type { WatchdogAction, WatchdogReport } from "@/lib/watchdog";
 
-const WATCHDOG_RECIPIENT = "jserrano@meadowb.com";
-const WATCHDOG_SENDER_LOGIN = "watchdog";
-const WATCHDOG_SENDER_NAME = "Sales App Watchdog";
+const WATCHDOG_RECIPIENT_EMAIL = "jserrano@meadowb.com";
+const WATCHDOG_RECIPIENT_LOGIN = "jserrano";
+
+type WatchdogMailbox = {
+  loginName: string;
+  displayName: string;
+  senderEmail: string;
+  contactId: number;
+};
+
+function normalizeComparable(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
 
 function buildSubject(report: WatchdogReport): string {
-  const fixed = report.actions.filter((a) => a.result === "fixed").length;
-  const failed = report.actions.filter((a) => a.result === "failed").length;
-  const requeued = report.actions.filter((a) => a.result === "requeued").length;
-  const skipped = report.actions.filter((a) => a.result === "skipped").length;
+  const fixed = report.actions.filter((action) => action.result === "fixed").length;
+  const failed = report.actions.filter((action) => action.result === "failed").length;
+  const requeued = report.actions.filter((action) => action.result === "requeued").length;
+  const skipped = report.actions.filter((action) => action.result === "skipped").length;
 
   const parts: string[] = [];
   if (fixed > 0) parts.push(`${fixed} fixed`);
@@ -26,27 +37,25 @@ function buildSubject(report: WatchdogReport): string {
   if (skipped > 0) parts.push(`${skipped} skipped`);
   if (failed > 0) parts.push(`${failed} failed`);
 
-  const summary = parts.join(", ");
-  const icon = failed > 0 ? "⚠️" : "✅";
-  return `${icon} Watchdog: ${summary}`;
+  return `[watchdog] ${parts.join(", ") || "no changes"}`;
 }
 
-function formatAction(action: WatchdogAction): string {
-  const badge =
-    action.result === "fixed"
-      ? "✅"
-      : action.result === "requeued"
-        ? "🔄"
-        : action.result === "skipped"
-          ? "⏭️"
-          : "❌";
-
+function formatActionHtml(action: WatchdogAction): string {
   return [
-    `${badge} <strong>${action.sessionId}</strong>`,
+    `<strong>${action.sessionId}</strong>`,
     `Issue: ${action.issue}`,
-    `Action: ${action.action} → ${action.result}`,
+    `Action: ${action.action} -> ${action.result}`,
     `Detail: ${action.detail}`,
   ].join("<br>");
+}
+
+function formatActionText(action: WatchdogAction): string {
+  return [
+    action.sessionId,
+    `Issue: ${action.issue}`,
+    `Action: ${action.action} -> ${action.result}`,
+    `Detail: ${action.detail}`,
+  ].join("\n");
 }
 
 function buildBodyHtml(report: WatchdogReport): string {
@@ -59,16 +68,87 @@ function buildBodyHtml(report: WatchdogReport): string {
     minute: "2-digit",
   });
 
-  const header = `<p>Watchdog ran at <strong>${timestamp}</strong> — checked ${report.checked} jobs in ${report.durationMs}ms.</p>`;
-
-  const sections = report.actions.map(formatAction).join("<hr style='border:none;border-top:1px solid #ddd;margin:12px 0'>");
+  const header = `<p>Watchdog ran at <strong>${timestamp}</strong>. Checked ${report.checked} jobs in ${report.durationMs}ms.</p>`;
+  const sections = report.actions
+    .map(formatActionHtml)
+    .join("<hr style='border:none;border-top:1px solid #ddd;margin:12px 0'>");
 
   return `${header}<div style="font-family:monospace;font-size:13px;line-height:1.6">${sections}</div>`;
 }
 
+function buildBodyText(report: WatchdogReport): string {
+  const header = `Watchdog ran at ${report.ranAt}. Checked ${report.checked} jobs in ${report.durationMs}ms.`;
+  const sections = report.actions.map(formatActionText).join("\n\n---\n\n");
+  return `${header}\n\n${sections}`.trim();
+}
+
+function resolveWatchdogMailbox(): WatchdogMailbox | null {
+  const directory = readCallEmployeeDirectory();
+  const normalizedEmail = normalizeComparable(WATCHDOG_RECIPIENT_EMAIL);
+  const normalizedLogin = normalizeComparable(WATCHDOG_RECIPIENT_LOGIN);
+
+  const employee =
+    directory.find((item) => normalizeComparable(item.email) === normalizedEmail) ??
+    directory.find((item) => normalizeComparable(item.loginName) === normalizedLogin) ??
+    null;
+
+  if (!employee?.email || !employee.contactId) {
+    return null;
+  }
+
+  return {
+    loginName: employee.loginName,
+    displayName: employee.displayName || employee.loginName,
+    senderEmail: employee.email,
+    contactId: employee.contactId,
+  };
+}
+
+function buildNotificationPayload(
+  report: WatchdogReport,
+  mailbox: WatchdogMailbox,
+): MailComposePayload {
+  const recipient = {
+    email: mailbox.senderEmail,
+    name: mailbox.displayName,
+    contactId: mailbox.contactId,
+    businessAccountRecordId: null,
+    businessAccountId: null,
+  };
+
+  return {
+    threadId: null,
+    draftId: null,
+    subject: buildSubject(report),
+    htmlBody: buildBodyHtml(report),
+    textBody: buildBodyText(report),
+    to: [recipient],
+    cc: [],
+    bcc: [],
+    linkedContact: {
+      contactId: mailbox.contactId,
+      businessAccountRecordId: null,
+      businessAccountId: null,
+      contactName: mailbox.displayName,
+      companyName: null,
+    },
+    matchedContacts: [
+      {
+        contactId: mailbox.contactId,
+        businessAccountRecordId: null,
+        businessAccountId: null,
+        contactName: mailbox.displayName,
+        companyName: null,
+        email: mailbox.senderEmail,
+      },
+    ],
+    attachments: [],
+    sourceSurface: "mail",
+  };
+}
+
 export async function sendWatchdogNotification(report: WatchdogReport): Promise<void> {
-  // Only notify if the watchdog actually did something
-  const meaningful = report.actions.filter((a) => a.result !== "skipped");
+  const meaningful = report.actions.filter((action) => action.result !== "skipped");
   if (meaningful.length === 0) {
     return;
   }
@@ -78,43 +158,45 @@ export async function sendWatchdogNotification(report: WatchdogReport): Promise<
     const config = ensureMailServiceConfigured();
     serviceUrl = config.serviceUrl;
   } catch {
-    console.warn("[watchdog] Mail service not configured — skipping notification.");
+    console.warn("[watchdog] mail service is not configured; skipping notification");
+    return;
+  }
+
+  const mailbox = resolveWatchdogMailbox();
+  if (!mailbox) {
+    console.warn("[watchdog] notification mailbox is unavailable; skipping email");
     return;
   }
 
   const assertion = buildMailServiceAssertion({
-    loginName: WATCHDOG_SENDER_LOGIN,
-    senderEmail: WATCHDOG_RECIPIENT,
-    displayName: WATCHDOG_SENDER_NAME,
+    loginName: mailbox.loginName,
+    senderEmail: mailbox.senderEmail,
+    displayName: mailbox.displayName,
   });
-
   const normalizedBase = serviceUrl.replace(/\/$/, "");
+  const payload = buildNotificationPayload(report, mailbox);
 
   try {
     const response = await fetch(`${normalizedBase}/api/mail/messages/send`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
         Accept: "application/json",
         Authorization: `Bearer ${assertion}`,
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        to: WATCHDOG_RECIPIENT,
-        subject: buildSubject(report),
-        htmlBody: buildBodyHtml(report),
-      }),
+      body: JSON.stringify(payload),
       cache: "no-store",
     });
 
     if (!response.ok) {
       const text = await response.text();
-      console.warn("[watchdog] Notification email failed.", {
+      console.warn("[watchdog] notification email failed", {
         status: response.status,
         body: text.slice(0, 500),
       });
     }
   } catch (error) {
-    console.warn("[watchdog] Notification email error.", {
+    console.warn("[watchdog] notification email error", {
       error: getErrorMessage(error),
     });
   }

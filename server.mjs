@@ -36,15 +36,40 @@ server.listen(port, hostname, () => {
   console.log(`embedded pricing-book-app mounted at ${quotesMountPath}`);
   startPricingBookAutoSync(console);
 
-  // Watchdog: check for stuck/failed jobs every 5 minutes
   const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
   setInterval(async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60_000);
+
     try {
-      const { runWatchdog } = await import("./src/lib/watchdog.ts");
-      const report = await runWatchdog();
+      const response = await fetch(`http://127.0.0.1:${port}/api/watchdog/run`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          ...(process.env.WATCHDOG_SECRET
+            ? { "x-watchdog-secret": process.env.WATCHDOG_SECRET }
+            : {}),
+        },
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null);
+
+      if (!response.ok && response.status !== 207) {
+        console.error("[watchdog] cycle request failed", {
+          status: response.status,
+          body: payload,
+        });
+        return;
+      }
+
+      const report = payload && typeof payload === "object" ? payload : null;
+      if (!report || !Array.isArray(report.actions)) {
+        console.error("[watchdog] cycle returned an invalid payload", payload);
+        return;
+      }
 
       if (report.actions.length === 0) {
-        console.log(`[watchdog] ✓ All clear — checked ${report.checked} jobs in ${report.durationMs}ms`);
+        console.log(`[watchdog] all clear; checked ${report.checked} jobs in ${report.durationMs}ms`);
         return;
       }
 
@@ -59,15 +84,20 @@ server.listen(port, hostname, () => {
       if (skipped > 0) parts.push(`${skipped} skipped`);
       if (failed > 0) parts.push(`${failed} failed`);
 
-      const icon = failed > 0 ? "⚠️" : "✅";
-      console.log(`[watchdog] ${icon} ${parts.join(", ")} — checked ${report.checked} jobs in ${report.durationMs}ms`);
+      console.log(
+        `[watchdog] ${parts.join(", ")}; checked ${report.checked} jobs in ${report.durationMs}ms`,
+      );
 
       for (const action of report.actions) {
-        console.log(`[watchdog]   ${action.sessionId}: ${action.issue} → ${action.result} — ${action.detail}`);
+        console.log(
+          `[watchdog]   ${action.sessionId}: ${action.issue} -> ${action.result} - ${action.detail}`,
+        );
       }
     } catch (error) {
-      console.error("[watchdog] Cycle failed:", error);
+      console.error("[watchdog] cycle failed", error);
+    } finally {
+      clearTimeout(timeoutId);
     }
   }, WATCHDOG_INTERVAL_MS);
-  console.log(`[watchdog] Started — checking every ${WATCHDOG_INTERVAL_MS / 1000}s`);
+  console.log(`[watchdog] started; checking every ${WATCHDOG_INTERVAL_MS / 1000}s`);
 });
