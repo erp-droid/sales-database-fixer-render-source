@@ -61,6 +61,13 @@ const schema = z.object({
   MAIL_INTERNAL_DOMAIN: z.string().min(1).default("meadowb.com"),
   MAIL_CONNECT_RETURN_PATH: z.string().min(1).default("/mail"),
   WATCHDOG_SECRET: z.string().min(1).optional(),
+  DAILY_CALL_COACHING_SECRET: z.string().min(1).optional(),
+  DAILY_CALL_COACHING_ENABLED: z.enum(["true", "false"]).optional(),
+  DAILY_CALL_COACHING_SENDER_LOGIN: z.string().min(1).default("jserrano"),
+  DAILY_CALL_COACHING_TIME_ZONE: z.string().min(1).default("America/Toronto"),
+  DAILY_CALL_COACHING_SCHEDULE_HOUR: z.string().default("7"),
+  DAILY_CALL_COACHING_SCHEDULE_MINUTE: z.string().default("0"),
+  DAILY_CALL_COACHING_LOOKBACK_DAYS: z.string().default("1"),
   TWILIO_ACCOUNT_SID: z.string().min(1).optional(),
   TWILIO_API_KEY_SID: z.string().min(1).optional(),
   TWILIO_API_KEY_SECRET: z.string().min(1).optional(),
@@ -141,6 +148,13 @@ export type AppEnv = {
   MAIL_INTERNAL_DOMAIN: string;
   MAIL_CONNECT_RETURN_PATH: string;
   WATCHDOG_SECRET?: string;
+  DAILY_CALL_COACHING_SECRET?: string;
+  DAILY_CALL_COACHING_ENABLED: boolean;
+  DAILY_CALL_COACHING_SENDER_LOGIN: string;
+  DAILY_CALL_COACHING_TIME_ZONE: string;
+  DAILY_CALL_COACHING_SCHEDULE_HOUR: number;
+  DAILY_CALL_COACHING_SCHEDULE_MINUTE: number;
+  DAILY_CALL_COACHING_LOOKBACK_DAYS: number;
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_API_KEY_SID?: string;
   TWILIO_API_KEY_SECRET?: string;
@@ -255,6 +269,13 @@ export function getEnv(): AppEnv {
     MAIL_INTERNAL_DOMAIN: emptyToUndefined(process.env.MAIL_INTERNAL_DOMAIN),
     MAIL_CONNECT_RETURN_PATH: emptyToUndefined(process.env.MAIL_CONNECT_RETURN_PATH),
     WATCHDOG_SECRET: emptyToUndefined(process.env.WATCHDOG_SECRET),
+    DAILY_CALL_COACHING_SECRET: emptyToUndefined(process.env.DAILY_CALL_COACHING_SECRET),
+    DAILY_CALL_COACHING_ENABLED: process.env.DAILY_CALL_COACHING_ENABLED,
+    DAILY_CALL_COACHING_SENDER_LOGIN: emptyToUndefined(process.env.DAILY_CALL_COACHING_SENDER_LOGIN),
+    DAILY_CALL_COACHING_TIME_ZONE: emptyToUndefined(process.env.DAILY_CALL_COACHING_TIME_ZONE),
+    DAILY_CALL_COACHING_SCHEDULE_HOUR: emptyToUndefined(process.env.DAILY_CALL_COACHING_SCHEDULE_HOUR),
+    DAILY_CALL_COACHING_SCHEDULE_MINUTE: emptyToUndefined(process.env.DAILY_CALL_COACHING_SCHEDULE_MINUTE),
+    DAILY_CALL_COACHING_LOOKBACK_DAYS: emptyToUndefined(process.env.DAILY_CALL_COACHING_LOOKBACK_DAYS),
     TWILIO_ACCOUNT_SID: emptyToUndefined(process.env.TWILIO_ACCOUNT_SID),
     TWILIO_API_KEY_SID: emptyToUndefined(process.env.TWILIO_API_KEY_SID),
     TWILIO_API_KEY_SECRET: emptyToUndefined(process.env.TWILIO_API_KEY_SECRET),
@@ -344,6 +365,22 @@ export function getEnv(): AppEnv {
     READ_MODEL_ENABLED: parsed.data.READ_MODEL_ENABLED === "true",
     READ_MODEL_AUTO_SYNC_ENABLED:
       parsed.data.READ_MODEL_AUTO_SYNC_ENABLED === "true",
+    DAILY_CALL_COACHING_ENABLED:
+      parsed.data.DAILY_CALL_COACHING_ENABLED !== undefined
+        ? parsed.data.DAILY_CALL_COACHING_ENABLED === "true"
+        : process.env.NODE_ENV === "production",
+    DAILY_CALL_COACHING_SCHEDULE_HOUR: Math.min(
+      23,
+      Math.max(0, Number(parsed.data.DAILY_CALL_COACHING_SCHEDULE_HOUR) || 7),
+    ),
+    DAILY_CALL_COACHING_SCHEDULE_MINUTE: Math.min(
+      59,
+      Math.max(0, Number(parsed.data.DAILY_CALL_COACHING_SCHEDULE_MINUTE) || 0),
+    ),
+    DAILY_CALL_COACHING_LOOKBACK_DAYS: Math.max(
+      1,
+      Math.trunc(Number(parsed.data.DAILY_CALL_COACHING_LOOKBACK_DAYS) || 1),
+    ),
     READ_MODEL_SQLITE_PATH: readModelSqlitePath,
     DATA_QUALITY_HISTORY_PATH: dataQualityHistoryPath,
     READ_MODEL_STALE_AFTER_MS: Math.max(

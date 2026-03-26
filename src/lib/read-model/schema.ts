@@ -290,6 +290,30 @@ CREATE INDEX IF NOT EXISTS idx_call_activity_sync_status
 CREATE INDEX IF NOT EXISTS idx_call_activity_sync_recording_sid
   ON call_activity_sync(recording_sid);
 
+CREATE TABLE IF NOT EXISTS daily_call_coaching_reports (
+  report_date TEXT NOT NULL,
+  subject_login_name TEXT NOT NULL,
+  recipient_email TEXT NOT NULL,
+  sender_login_name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  preview_mode INTEGER NOT NULL DEFAULT 0,
+  session_count INTEGER NOT NULL DEFAULT 0,
+  analyzed_call_count INTEGER NOT NULL DEFAULT 0,
+  transcript_call_count INTEGER NOT NULL DEFAULT 0,
+  subject_line TEXT,
+  report_json TEXT,
+  error_message TEXT,
+  sent_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (report_date, subject_login_name, recipient_email)
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_call_coaching_reports_sent_at
+  ON daily_call_coaching_reports(sent_at);
+CREATE INDEX IF NOT EXISTS idx_daily_call_coaching_reports_status
+  ON daily_call_coaching_reports(status);
+
 CREATE TABLE IF NOT EXISTS meeting_bookings (
   id TEXT PRIMARY KEY,
   event_id TEXT NOT NULL,
