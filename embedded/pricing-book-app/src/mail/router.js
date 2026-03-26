@@ -50,6 +50,16 @@ function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanString(value));
 }
 
+function readInternalMailDomain() {
+  return cleanString(process.env.MAIL_INTERNAL_DOMAIN || "meadowb.com").toLowerCase();
+}
+
+function isAllowedInternalRecipientEmail(value) {
+  const email = normalizeEmail(value);
+  const domain = readInternalMailDomain();
+  return Boolean(email && domain && email.endsWith(`@${domain}`));
+}
+
 function toInteger(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? Math.trunc(numeric) : null;
@@ -204,6 +214,10 @@ function collectUnresolvedRecipients(payload) {
     }
 
     if (resolvedEmails.has(email)) {
+      return;
+    }
+
+    if (isAllowedInternalRecipientEmail(email)) {
       return;
     }
 
@@ -999,12 +1013,23 @@ router.post("/messages/send", async (req, res, next) => {
     const auth = requireMailAssertion(req);
     const connection = await ensureConnectedMailbox(auth);
     const acumaticaCookieHeader = cleanString(req.get("x-mb-acumatica-cookie"));
+    const skipActivitySync = cleanString(req.get("x-mb-skip-activity-sync")) === "1";
     const activityClient = getMailActivityAcumaticaClient({
       cookieHeader: acumaticaCookieHeader
     });
     const payload = prepareSendPayload(normalizeComposePayload(req.body));
     assertResolvedRecipients(payload);
     const response = await sendMessage(connection, payload);
+    if (skipActivitySync) {
+      res.json({
+        ...response,
+        activitySyncStatus: "not_linked",
+        activityId: null,
+        activityIds: [],
+        activityError: null
+      });
+      return;
+    }
     const synced = await syncThreadActivities(auth.loginName, response.threadId, activityClient);
     res.json(attachFinalActivitySyncStatus(response, synced));
   } catch (error) {

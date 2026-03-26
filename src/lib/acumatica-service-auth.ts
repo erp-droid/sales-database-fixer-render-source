@@ -6,6 +6,7 @@ import {
   fetchContactsByBusinessAccountIds,
   fetchBusinessAccountById,
   fetchContactById,
+  findContactsByEmailSubstring,
 } from "@/lib/acumatica";
 import {
   buildStoredAuthCookieValueFromSetCookies,
@@ -202,6 +203,15 @@ export async function serviceFetchActivities(
 ): Promise<RawActivity[]> {
   return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
     fetchActivities(cookieValue, options, authCookieRefresh),
+  );
+}
+
+export async function serviceFindContactsByEmailSubstring(
+  loginName: string | null | undefined,
+  emailFragment: string,
+): Promise<Record<string, unknown>[]> {
+  return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
+    findContactsByEmailSubstring(cookieValue, emailFragment, authCookieRefresh),
   );
 }
 

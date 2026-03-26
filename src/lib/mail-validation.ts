@@ -181,6 +181,16 @@ function normalizeComparableEmail(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? "";
 }
 
+function isAllowedInternalMailboxEmail(value: string | null | undefined): boolean {
+  const comparableEmail = normalizeComparableEmail(value);
+  if (!comparableEmail) {
+    return false;
+  }
+
+  const domain = (process.env.MAIL_INTERNAL_DOMAIN ?? "meadowb.com").trim().toLowerCase();
+  return Boolean(domain) && comparableEmail.endsWith(`@${domain}`);
+}
+
 export function collectUnresolvedMailRecipientEmails(
   payload: Partial<Pick<MailComposePayload, "to" | "cc" | "bcc" | "matchedContacts">>,
 ): string[] {
@@ -197,7 +207,11 @@ export function collectUnresolvedMailRecipientEmails(
       continue;
     }
 
-    if ((recipient.contactId ?? 0) > 0 || matchedEmails.has(comparableEmail)) {
+    if (
+      (recipient.contactId ?? 0) > 0 ||
+      matchedEmails.has(comparableEmail) ||
+      isAllowedInternalMailboxEmail(comparableEmail)
+    ) {
       continue;
     }
 
