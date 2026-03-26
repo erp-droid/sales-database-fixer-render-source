@@ -509,6 +509,98 @@ describe("post-call activity sync worker", () => {
     );
   });
 
+  it("prefers the exact business-account contact match over a conflicting linked primary contact", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Recordings/")) {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "audio/mpeg" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/audio/transcriptions") {
+        return new Response(JSON.stringify({ text: "Discussed order timing and next steps." }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/chat/completions") {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "Reviewed timing and confirmed a follow-up." } }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("Unexpected fetch", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    readCallSessionByIdMock.mockReturnValue(
+      buildSession({
+        matchedContactId: null,
+        linkedContactId: 111,
+        matchedContactName: "Andrii Medvediev",
+        matchedCompanyName: "Monaghan Mushrooms Ltd",
+        matchedBusinessAccountId: "B200001105",
+        linkedBusinessAccountId: "B200001105",
+        counterpartyPhone: "+19058789375",
+        targetPhone: "+19058789375",
+      }),
+    );
+    serviceFetchContactByIdMock.mockResolvedValue({
+      id: "contact-note-hanna",
+      NoteID: { value: "contact-note-hanna" },
+      DisplayName: { value: "Hanna Barsukova" },
+      Phone1: { value: "905-878-9375" },
+    });
+    serviceFetchContactsByBusinessAccountIdsMock.mockResolvedValue([
+      {
+        id: "contact-note-hanna",
+        NoteID: { value: "contact-note-hanna" },
+        DisplayName: { value: "Hanna Barsukova" },
+        Phone1: { value: "905-878-9375" },
+      },
+      {
+        id: "contact-note-andrii",
+        NoteID: { value: "contact-note-andrii" },
+        DisplayName: { value: "Andrii Medvediev" },
+        Phone1: { value: "905-878-9375" },
+      },
+    ]);
+    serviceCreateActivityMock.mockResolvedValue({
+      id: "activity-andrii",
+      NoteID: { value: "activity-andrii" },
+    });
+
+    const { upsertQueuedCallActivitySync } = await import("@/lib/call-analytics/postcall-store");
+    const { processCallActivitySyncJob } = await import("@/lib/call-analytics/postcall-worker");
+
+    upsertQueuedCallActivitySync({
+      sessionId: "call-1",
+      recordingSid: "RE123",
+      recordingStatus: "completed",
+      recordingDurationSeconds: 42,
+    });
+
+    const result = await processCallActivitySyncJob("call-1");
+
+    expect(result?.status).toBe("synced");
+    expect(serviceCreateActivityMock).toHaveBeenCalledWith(
+      "jserrano",
+      expect.objectContaining({
+        relatedEntityNoteId: "contact-note-andrii",
+        relatedEntityType: "PX.Objects.CR.Contact",
+      }),
+    );
+  });
+
   it("marks unanswered calls as skipped", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

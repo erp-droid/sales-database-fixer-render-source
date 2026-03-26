@@ -778,10 +778,21 @@ export async function resolveActivityTarget(
   const candidateContactIds = [...new Set([session.linkedContactId, session.matchedContactId])]
     .filter((value): value is number => typeof value === "number" && Number.isInteger(value) && value > 0);
 
-  for (const contactId of candidateContactIds) {
+  const candidateBusinessAccountIds = [
+    ...new Set([
+      cleanText(session.linkedBusinessAccountId),
+      cleanText(session.matchedBusinessAccountId),
+    ]),
+  ].filter(Boolean);
+
+  if (candidateBusinessAccountIds.length > 0) {
     try {
-      const contact = (await serviceFetchContactById(session.employeeLoginName, contactId)) as RawContact;
-      const noteId = readRecordIdentity(contact);
+      const contacts = (await serviceFetchContactsByBusinessAccountIds(
+        session.employeeLoginName,
+        candidateBusinessAccountIds,
+      )) as RawContact[];
+      const resolvedContact = resolveRelatedContactByPhoneOrName(session, contacts);
+      const noteId = resolvedContact ? readRecordIdentity(resolvedContact) : null;
       if (noteId) {
         return {
           relatedEntityNoteId: noteId,
@@ -789,16 +800,40 @@ export async function resolveActivityTarget(
         };
       }
     } catch {
+      // Fall through to explicit contact ids or a business-account-level target.
+    }
+  }
+
+  const candidateContacts: RawContact[] = [];
+  for (const contactId of candidateContactIds) {
+    try {
+      const contact = (await serviceFetchContactById(session.employeeLoginName, contactId)) as RawContact;
+      candidateContacts.push(contact);
+    } catch {
       // Fall through to the next candidate.
     }
   }
 
-  const candidateBusinessAccountIds = [
-    ...new Set([
-      cleanText(session.linkedBusinessAccountId),
-      cleanText(session.matchedBusinessAccountId),
-    ]),
-  ].filter(Boolean);
+  const resolvedCandidateContact = resolveRelatedContactByPhoneOrName(session, candidateContacts);
+  const resolvedCandidateContactNoteId = resolvedCandidateContact
+    ? readRecordIdentity(resolvedCandidateContact)
+    : null;
+  if (resolvedCandidateContactNoteId) {
+    return {
+      relatedEntityNoteId: resolvedCandidateContactNoteId,
+      relatedEntityType: "PX.Objects.CR.Contact",
+    };
+  }
+
+  for (const contact of candidateContacts) {
+    const noteId = readRecordIdentity(contact);
+    if (noteId) {
+      return {
+        relatedEntityNoteId: noteId,
+        relatedEntityType: "PX.Objects.CR.Contact",
+      };
+    }
+  }
 
   if (candidateBusinessAccountIds.length > 0) {
     try {
