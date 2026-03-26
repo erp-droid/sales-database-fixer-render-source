@@ -125,4 +125,24 @@ describe("business account save errors", () => {
       fieldErrors: {},
     });
   });
+
+  it("surfaces flattened zod field errors instead of the generic invalid payload message", () => {
+    const feedback = buildBusinessAccountSaveErrorFeedback(
+      {
+        error: "Invalid update payload",
+        details: {
+          fieldErrors: {
+            baseSnapshot: ["Phone number must use the format ###-###-####."],
+          },
+          formErrors: [],
+        },
+      },
+      buildDraft(),
+    );
+
+    expect(feedback).toEqual({
+      message: "Phone number must use the format ###-###-####.",
+      fieldErrors: {},
+    });
+  });
 });

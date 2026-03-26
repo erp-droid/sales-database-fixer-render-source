@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "backfill:business-account-class-region": "node scripts/backfill-business-account-class-region.cjs",
+    "backfill:call-activities": "tsx scripts/backfill-call-activities.ts",
     "login:local": "node scripts/mail-activity-smoke.cjs --login-only",
     "verify:mail-activity": "node scripts/mail-activity-smoke.cjs"
   },
@@ -37,6 +38,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "tsx": "^4.21.0",
     "typescript": "^5",
     "vitest": "^3.2.4"
   }

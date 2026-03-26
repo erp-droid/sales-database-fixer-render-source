@@ -340,6 +340,15 @@ describe("post-call activity sync worker", () => {
         summary: "Phone call with Alex Prospect",
       }),
     );
+    const summaryFetchCall = fetchMock.mock.calls.find(
+      ([input]) => String(input) === "https://api.openai.com/v1/chat/completions",
+    );
+    expect(summaryFetchCall).toBeTruthy();
+    const summaryPayload = JSON.parse(String(summaryFetchCall?.[1]?.body ?? "{}")) as {
+      messages?: Array<{ content?: unknown }>;
+    };
+    expect(typeof summaryPayload.messages?.[1]?.content).toBe("string");
+    expect(String(summaryPayload.messages?.[1]?.content ?? "")).toContain("Transcript:");
 
     const bodyHtml = serviceCreateActivityMock.mock.calls[0]?.[1]?.bodyHtml as string;
     expect(bodyHtml.indexOf("Call Summary")).toBeLessThan(bodyHtml.indexOf("Transcript"));
@@ -605,6 +614,73 @@ describe("post-call activity sync worker", () => {
     expect(result?.status).toBe("failed");
     expect(result?.error).toContain("OpenAI transcription failed");
     expect(serviceCreateActivityMock).not.toHaveBeenCalled();
+  });
+
+  it("creates the activity with a transcript-based fallback when OpenAI summary generation fails", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Recordings/")) {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "audio/mpeg" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/audio/transcriptions") {
+        return new Response(
+          JSON.stringify({ text: "Customer confirmed the site visit timing and requested a follow-up quote." }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      if (url === "https://api.openai.com/v1/chat/completions") {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: "We could not parse the JSON body of your request.",
+            },
+          }),
+          {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("Unexpected fetch", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    readCallSessionByIdMock.mockReturnValue(buildSession());
+    serviceFetchContactByIdMock.mockResolvedValue({
+      id: "contact-note-id",
+      NoteID: { value: "contact-note-id" },
+    });
+    serviceCreateActivityMock.mockResolvedValue({
+      id: "activity-summary-fallback",
+      NoteID: { value: "activity-summary-fallback" },
+    });
+
+    const { upsertQueuedCallActivitySync } = await import("@/lib/call-analytics/postcall-store");
+    const { processCallActivitySyncJob } = await import("@/lib/call-analytics/postcall-worker");
+
+    upsertQueuedCallActivitySync({
+      sessionId: "call-1",
+      recordingSid: "RE123",
+      recordingStatus: "completed",
+      recordingDurationSeconds: 42,
+    });
+
+    const result = await processCallActivitySyncJob("call-1");
+
+    expect(result?.status).toBe("synced");
+    expect(serviceCreateActivityMock).toHaveBeenCalled();
+    const bodyHtml = serviceCreateActivityMock.mock.calls[0]?.[1]?.bodyHtml as string;
+    expect(bodyHtml).toContain("AI summary unavailable.");
+    expect(bodyHtml).toContain("Customer confirmed the site visit timing");
+    expect(bodyHtml).toContain("Transcript");
   });
 
   it("falls back to local transcription when the OpenAI project lacks audio models", async () => {

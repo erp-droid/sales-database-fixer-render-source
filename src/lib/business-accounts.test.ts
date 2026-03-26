@@ -314,6 +314,41 @@ describe("normalizeBusinessAccountRows", () => {
     expect(rows[0]?.category).toBe("A");
   });
 
+  it("supports wrapped MainAddress and PrimaryContact objects", () => {
+    const row = normalizeBusinessAccount(
+      makePayload({
+        MainAddress: {
+          value: {
+            AddressLine1: { value: "8301 WINSTON CHURCHILL BLVD" },
+            City: { value: "Brampton" },
+            State: { value: "ON" },
+            PostalCode: { value: "L6Y 0A2" },
+            Country: { value: "CA" },
+          },
+        },
+        PrimaryContact: {
+          value: {
+            ContactID: { value: 157497 },
+            DisplayName: { value: "Jorge Serrano" },
+            Email: { value: "jorge@example.com" },
+            Phone1: { value: "4162304681" },
+          },
+        },
+      }),
+    );
+
+    expect(row).toMatchObject({
+      addressLine1: "8301 WINSTON CHURCHILL BLVD",
+      city: "Brampton",
+      state: "ON",
+      postalCode: "L6Y 0A2",
+      country: "CA",
+      primaryContactId: 157497,
+      primaryContactName: "Jorge Serrano",
+      primaryContactEmail: "jorge@example.com",
+    });
+  });
+
   it("marks only the PrimaryContact entry as primary", () => {
     const rows = normalizeBusinessAccountRows(
       makePayload({

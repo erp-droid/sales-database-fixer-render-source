@@ -713,6 +713,13 @@ type FetchEventsOptions = {
   filter?: string;
 };
 
+type FetchActivitiesOptions = {
+  maxRecords?: number;
+  batchSize?: number;
+  initialSkip?: number;
+  filter?: string;
+};
+
 export function readWrappedString(record: unknown, key: string): string {
   if (!record || typeof record !== "object") {
     return "";
@@ -1132,6 +1139,22 @@ function buildEventCollectionPath(options: {
   }
 
   return `/Event?${query.toString()}`;
+}
+
+function buildActivityCollectionPath(options: {
+  top: number;
+  skip: number;
+  filter?: string;
+}): string {
+  const query = new URLSearchParams({
+    $top: String(options.top),
+    $skip: String(options.skip),
+  });
+  if (options.filter?.trim()) {
+    query.set("$filter", options.filter);
+  }
+
+  return `/Activity?${query.toString()}`;
 }
 
 function readBusinessAccountIdentity(record: RawBusinessAccount): string {
@@ -1854,6 +1877,61 @@ export async function fetchEvents(
       );
     }
     const rows = unwrapCollection<RawEvent>(payload);
+    if (rows.length === 0) {
+      break;
+    }
+
+    allRows.push(...rows);
+    if (rows.length < top) {
+      break;
+    }
+  }
+
+  return allRows;
+}
+
+export async function fetchActivities(
+  cookieValue: string,
+  options?: FetchActivitiesOptions,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawActivity[]> {
+  const hasMaxRecords =
+    typeof options?.maxRecords === "number" &&
+    Number.isFinite(options.maxRecords);
+  const maxRecords = hasMaxRecords
+    ? Math.max(1, Math.trunc(options?.maxRecords as number))
+    : null;
+  const initialSkip = Math.max(0, Math.trunc(options?.initialSkip ?? 0));
+  const batchSize = Math.max(1, Math.min(options?.batchSize ?? 100, 500));
+  const filter = options?.filter;
+  const allRows: RawActivity[] = [];
+
+  for (let skip = initialSkip; ; skip += batchSize) {
+    if (maxRecords !== null && allRows.length >= maxRecords) {
+      break;
+    }
+
+    const top =
+      maxRecords === null
+        ? batchSize
+        : Math.min(batchSize, maxRecords - allRows.length);
+    if (top <= 0) {
+      break;
+    }
+
+    const payload = await requestAcumatica<unknown>(
+      getActiveCookieValue(cookieValue, authCookieRefresh),
+      buildActivityCollectionPath({
+        top,
+        skip,
+        filter,
+      }),
+      {
+        authCookieRefresh,
+      },
+    );
+
+    const rows = unwrapCollection<RawActivity>(payload);
     if (rows.length === 0) {
       break;
     }

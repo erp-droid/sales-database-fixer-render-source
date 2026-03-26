@@ -226,6 +226,25 @@ export function buildActivitySummary(session: CallSessionRecord): string {
   return value.length > 255 ? `${value.slice(0, 252).trim()}...` : value;
 }
 
+function buildFallbackSummaryText(transcriptText: string): string {
+  const normalized = cleanText(transcriptText).replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "AI summary unavailable. See transcript below.";
+  }
+
+  const sentences = (normalized.match(/[^.!?]+[.!?]?/g) ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const excerpt = (sentences.slice(0, 2).join(" ") || normalized).trim();
+  const prefix = "AI summary unavailable. ";
+  const maxLength = 500;
+  if (excerpt.length <= maxLength - prefix.length) {
+    return `${prefix}${excerpt}`;
+  }
+
+  return `${prefix}${excerpt.slice(0, maxLength - prefix.length - 3).trim()}...`;
+}
+
 function formatDateTime(value: string | null | undefined): string {
   if (!value) {
     return "Unknown";
@@ -601,6 +620,18 @@ async function summarizeTranscriptWithModel(
   model: string,
 ): Promise<string> {
   const apiKey = readOpenAiApiKey();
+  const userPrompt = [
+    `Employee: ${cleanText(session.employeeDisplayName) || cleanText(session.employeeLoginName) || "Unknown"}`,
+    `Company: ${cleanText(session.matchedCompanyName) || "Unknown"}`,
+    `Contact: ${cleanText(session.matchedContactName) || "Unknown"}`,
+    `Phone: ${cleanText(session.counterpartyPhone) || cleanText(session.targetPhone) || "Unknown"}`,
+    `Started: ${formatDateTime(session.startedAt)}`,
+    `Talk duration: ${formatDuration(session.talkDurationSeconds)}`,
+    "",
+    "Transcript:",
+    transcriptText,
+  ].join("\n");
+
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -618,17 +649,7 @@ async function summarizeTranscriptWithModel(
         },
         {
           role: "user",
-          content: [
-            `Employee: ${cleanText(session.employeeDisplayName) || cleanText(session.employeeLoginName) || "Unknown"}`,
-            `Company: ${cleanText(session.matchedCompanyName) || "Unknown"}`,
-            `Contact: ${cleanText(session.matchedContactName) || "Unknown"}`,
-            `Phone: ${cleanText(session.counterpartyPhone) || cleanText(session.targetPhone) || "Unknown"}`,
-            `Started: ${formatDateTime(session.startedAt)}`,
-            `Talk duration: ${formatDuration(session.talkDurationSeconds)}`,
-            "",
-            "Transcript:",
-            transcriptText,
-          ].join("\n"),
+          content: userPrompt,
         },
       ],
     }),
@@ -987,7 +1008,15 @@ export async function processCallActivitySyncJob(
     }
 
     if (!summaryText) {
-      summaryText = await summarizeTranscriptWithOpenAi(session, transcriptText);
+      try {
+        summaryText = await summarizeTranscriptWithOpenAi(session, transcriptText);
+      } catch (error) {
+        summaryText = buildFallbackSummaryText(transcriptText);
+        console.warn("[call-activity-sync] AI summary unavailable; using transcript fallback.", {
+          sessionId,
+          error: getErrorMessage(error),
+        });
+      }
     }
 
     if (!cleanText(claimed.transcriptText) || !cleanText(claimed.summaryText)) {

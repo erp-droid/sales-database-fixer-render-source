@@ -11,6 +11,7 @@ import {
   type CreateContactAccountOption,
 } from "@/components/create-contact-drawer";
 import { buildDataQualityIssueKey } from "@/lib/data-quality";
+import { buildBusinessAccountConcurrencySnapshot } from "@/lib/business-account-concurrency";
 import { BUSINESS_ACCOUNT_REGION_VALUES } from "@/lib/business-account-region-values";
 import {
   formatPhoneDraftValue,
@@ -863,6 +864,10 @@ export function TasksClient() {
     }
   });
 
+  const refreshTasksFromLive = useEffectEvent(() => {
+    void loadTasks(true);
+  });
+
   useEffect(() => {
     let cancelled = false;
 
@@ -899,6 +904,24 @@ export function TasksClient() {
       window.clearInterval(intervalId);
     };
   }, []);
+
+  useEffect(() => {
+    if (!session?.authenticated) {
+      return;
+    }
+
+    const eventSource = new EventSource("/api/business-accounts/stream");
+    const handleChanged = () => {
+      refreshTasksFromLive();
+    };
+
+    eventSource.addEventListener("changed", handleChanged as EventListener);
+
+    return () => {
+      eventSource.removeEventListener("changed", handleChanged as EventListener);
+      eventSource.close();
+    };
+  }, [refreshTasksFromLive, session?.authenticated]);
 
   useEffect(() => {
     if (!tasksResponse) {
@@ -1157,6 +1180,7 @@ export function TasksClient() {
       category: sourceRow.category ?? null,
       notes: sourceRow.notes ?? null,
       expectedLastModified: sourceRow.lastModifiedIso ?? null,
+      baseSnapshot: buildBusinessAccountConcurrencySnapshot(sourceRow),
       ...overrides,
     };
   }

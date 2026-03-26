@@ -123,6 +123,14 @@ const nullablePhoneSchema = nullableStringSchema
     return normalizePhoneForSave(value) as string;
   });
 
+const nullableSnapshotPhoneSchema = nullableStringSchema.transform((value) => {
+  if (value === null) {
+    return null;
+  }
+
+  return normalizePhoneForSave(value);
+});
+
 const nullableExtensionSchema = nullableStringSchema
   .refine((value) => {
     if (value === null) {
@@ -142,6 +150,27 @@ const nullableExtensionSchema = nullableStringSchema
     return normalizeExtensionForSave(value) as string;
   });
 
+const nullableSnapshotExtensionSchema = nullableStringSchema.transform((value) => {
+  if (value === null) {
+    return null;
+  }
+
+  const normalized = normalizeExtensionForSave(value);
+  if (!normalized || !/^[0-9]{1,5}$/.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
+});
+
+const nullableSnapshotEmailSchema = nullableStringSchema.transform((value) => {
+  if (value === null) {
+    return null;
+  }
+
+  return z.string().email().safeParse(value).success ? value : null;
+});
+
 const nullableCountrySchema = z
   .union([z.string(), z.null(), z.undefined()])
   .transform((value) => {
@@ -156,6 +185,64 @@ const nullableCountrySchema = z
 const nullableExpectedLastModifiedSchema = z
   .union([z.string(), z.null(), z.undefined()])
   .transform((value) => value ?? null);
+
+const businessAccountConcurrencySnapshotSchema = z.object({
+  companyName: z.string().trim().min(1).max(255),
+  companyDescription: nullableStringSchema.default(null),
+  assignedBusinessAccountRecordId: nullableStringSchema.default(null),
+  assignedBusinessAccountId: nullableStringSchema.default(null),
+  addressLine1: z.string().trim().min(1).max(255),
+  addressLine2: z.string().trim().max(255).default(""),
+  city: z.string().trim().min(1).max(100),
+  state: z.string().trim().min(1).max(100),
+  postalCode: z.string().trim().min(1).max(20),
+  country: z
+    .union([z.string(), z.null(), z.undefined()])
+    .transform((value) => normalizeCountryCode(value ?? null))
+    .refine((value) => value.length >= 2 && value.length <= 3, {
+      message: "Country is required.",
+    }),
+  targetContactId: z
+    .union([z.number(), z.string(), z.null(), z.undefined()])
+    .transform((value) => {
+      if (value === null || value === undefined || value === "") {
+        return null;
+      }
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    })
+    .default(null),
+  salesRepId: nullableStringSchema.default(null),
+  salesRepName: nullableStringSchema.default(null),
+  industryType: nullableStringSchema.default(null),
+  subCategory: nullableStringSchema.default(null),
+  companyRegion: nullableStringSchema.default(null),
+  week: nullableStringSchema.default(null),
+  companyPhone: nullableSnapshotPhoneSchema.default(null),
+  primaryContactName: nullableStringSchema.default(null),
+  primaryContactJobTitle: nullableStringSchema.default(null),
+  primaryContactPhone: nullableSnapshotPhoneSchema.default(null),
+  primaryContactExtension: nullableSnapshotExtensionSchema.default(null),
+  primaryContactEmail: nullableSnapshotEmailSchema.default(null),
+  category: nullableStringSchema
+    .refine((value) => value === null || (CATEGORY_VALUES as readonly string[]).includes(value), {
+      message: "Category must be one of A, B, C, or D.",
+    })
+    .transform((value) => value as Category | null)
+    .default(null),
+  notes: nullableStringSchema.default(null),
+  primaryContactId: z
+    .union([z.number(), z.string(), z.null(), z.undefined()])
+    .transform((value) => {
+      if (value === null || value === undefined || value === "") {
+        return null;
+      }
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : null;
+    })
+    .default(null),
+  lastModifiedIso: nullableExpectedLastModifiedSchema,
+});
 
 export const updateRequestSchema = z.object({
   companyName: z.string().trim().min(1, "Company name is required").max(255),
@@ -205,6 +292,7 @@ export const updateRequestSchema = z.object({
     .transform((value) => value as Category | null),
   notes: nullableStringSchema,
   expectedLastModified: z.union([z.string(), z.null()]),
+  baseSnapshot: businessAccountConcurrencySnapshotSchema.nullish().default(null),
 });
 
 const contactOnlyUpdateRequestSchema = z.object({
@@ -251,6 +339,7 @@ const contactOnlyUpdateRequestSchema = z.object({
     .default(null),
   notes: nullableStringSchema.default(null),
   expectedLastModified: nullableExpectedLastModifiedSchema,
+  baseSnapshot: businessAccountConcurrencySnapshotSchema.nullish().default(null),
 });
 
 export const businessAccountCreateRequestSchema = z.object({

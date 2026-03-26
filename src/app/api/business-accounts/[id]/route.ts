@@ -31,6 +31,11 @@ import {
   readContactCompanyName,
 } from "@/lib/contact-business-account";
 import {
+  buildRebasedUpdateRequest,
+  collectConflictingConcurrencyFields,
+  formatConcurrencyConflictFields,
+} from "@/lib/business-account-concurrency";
+import {
   buildPrimaryOnlyUpdateRequest,
   isPrimaryOnlyConflictRetryAllowed,
   isPrimaryOnlyUpdate,
@@ -40,6 +45,7 @@ import {
   applyOptimisticSavedUpdateToRows,
   responseRowMatchesSavedUpdate,
 } from "@/lib/business-account-save-verification";
+import { publishBusinessAccountChanged } from "@/lib/business-account-live";
 import { setBusinessAccountPrimaryContact } from "@/lib/contact-merge-server";
 import {
   shouldValidateWithAddressComplete,
@@ -704,6 +710,18 @@ function withLocalCompanyDescription(
   return applyLocalAccountMetadataToRow(row) ?? row;
 }
 
+function buildConcurrencyConflictMessage(conflictingFields: string[]): string {
+  if (conflictingFields.length === 0) {
+    return "This record was modified in Acumatica after you loaded it. Reload and try again.";
+  }
+
+  if (conflictingFields.length === 1) {
+    return `This record changed while you were editing it. Reload to review the latest ${conflictingFields[0]}.`;
+  }
+
+  return `This record changed while you were editing it. Reload to review the latest ${conflictingFields.join(", ")}.`;
+}
+
 export async function GET(
   request: NextRequest,
   context: RouteContext,
@@ -1020,7 +1038,7 @@ export async function PUT(
         id,
         cachedContactComparisonRow,
       );
-      const effectiveContactOnlyUpdateRequest = buildContactOnlyUpdateRequestFromCurrentRow(
+      let effectiveContactOnlyUpdateRequest = buildContactOnlyUpdateRequestFromCurrentRow(
         currentTargetRow,
         cachedTargetContactId,
         updateRequest,
@@ -1033,10 +1051,24 @@ export async function PUT(
         currentTargetRow.lastModifiedIso &&
         effectiveContactOnlyUpdateRequest.expectedLastModified !== currentTargetRow.lastModifiedIso
       ) {
-        throw new HttpError(
-          409,
-          "This record was modified in Acumatica after you loaded it. Reload and try again.",
+        const conflictingFields = formatConcurrencyConflictFields(
+          collectConflictingConcurrencyFields(
+            currentTargetRow,
+            currentTargetRow,
+            effectiveContactOnlyUpdateRequest,
+          ),
         );
+
+        if (effectiveContactOnlyUpdateRequest.baseSnapshot && conflictingFields.length === 0) {
+          effectiveContactOnlyUpdateRequest = buildRebasedUpdateRequest(
+            currentTargetRow,
+            currentTargetRow,
+            effectiveContactOnlyUpdateRequest,
+            cachedTargetContactId,
+          );
+        } else {
+          throw new HttpError(409, buildConcurrencyConflictMessage(conflictingFields));
+        }
       }
 
       const contactPayload = buildPrimaryContactUpdatePayload(
@@ -1229,10 +1261,24 @@ export async function PUT(
       !primaryOnlyUpdate &&
       !primaryOnlyConflictRetryAllowed
     ) {
-      throw new HttpError(
-        409,
-        "This record was modified in Acumatica after you loaded it. Reload and try again.",
+      const conflictingFields = formatConcurrencyConflictFields(
+        collectConflictingConcurrencyFields(
+          currentAccountRow,
+          currentRowForContactComparison,
+          normalizedUpdateRequest,
+        ),
       );
+
+      if (normalizedUpdateRequest.baseSnapshot && conflictingFields.length === 0) {
+        normalizedUpdateRequest = buildRebasedUpdateRequest(
+          currentAccountRow,
+          currentRowForContactComparison,
+          normalizedUpdateRequest,
+          effectiveTargetContactId,
+        );
+      } else {
+        throw new HttpError(409, buildConcurrencyConflictMessage(conflictingFields));
+      }
     }
 
     let effectiveUpdateRequest = primaryOnlyUpdate && effectiveTargetContactId !== null
@@ -1564,6 +1610,12 @@ export async function PUT(
     });
 
     const responseRow = await executePutWithCookie(cookieValue, authCookieRefresh);
+    publishBusinessAccountChanged({
+      accountRecordId: responseRow.accountRecordId ?? responseRow.id,
+      businessAccountId: responseRow.businessAccountId || null,
+      targetContactId: responseRow.contactId ?? responseRow.primaryContactId ?? null,
+      reason: "business-account-updated",
+    });
     const response = NextResponse.json(responseRow);
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
@@ -1589,6 +1641,12 @@ export async function PUT(
           retryCookieValue,
           retryAuthCookieRefresh,
         );
+        publishBusinessAccountChanged({
+          accountRecordId: responseRow.accountRecordId ?? responseRow.id,
+          businessAccountId: responseRow.businessAccountId || null,
+          targetContactId: responseRow.contactId ?? responseRow.primaryContactId ?? null,
+          reason: "business-account-updated",
+        });
         const response = NextResponse.json(responseRow);
         if (retryAuthCookieRefresh.value) {
           setAuthCookie(response, retryAuthCookieRefresh.value);

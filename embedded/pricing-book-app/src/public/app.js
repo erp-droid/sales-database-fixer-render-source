@@ -1775,7 +1775,7 @@ function getQuoteReviewStatement() {
 }
 
 function isQuoteReviewConfirmationComplete() {
-  return Boolean(state.quoteReviewConfirmed) && Boolean(cleanString(state.quoteReviewSignerName));
+  return Boolean(state.quoteReviewConfirmed);
 }
 
 function resetQuoteReviewConfirmation({ keepSignerName = true } = {}) {
@@ -4875,7 +4875,7 @@ function renderDivisions() {
             </label>
 
             <label>
-              Estimator *
+              Estimator
               <select
                 data-division="${sectionId}"
                 data-field="estimatorId"
@@ -5656,9 +5656,6 @@ function buildPayload() {
   if (!state.quoteReviewConfirmed) {
     errors.push("Cost review confirmation is required before creating the quote.");
   }
-  if (!cleanString(state.quoteReviewSignerName)) {
-    errors.push("Enter the estimator name confirming the cost review.");
-  }
 
   const divisionPayload = selectedDivisions.map((division) => {
     applyDivisionModeRules(division);
@@ -5667,9 +5664,6 @@ function buildPayload() {
     const { materialLines, subcontractorLines } = validateDivisionCostRequirements(division, errors);
     const estimatorId = cleanString(division.estimatorId || division.templateEstimator).toUpperCase();
     const estimatorName = cleanString(division.estimatorName);
-    if (!estimatorId) {
-      errors.push(`${getDivisionDisplayTitle(division)} estimator is required.`);
-    }
 
     return {
       id: division.id,
@@ -7719,6 +7713,12 @@ async function prepareEstimateForQuoteAction({
   const mappingStatus = await ensureScopeMappings({ silent: false });
   if (!mappingStatus.ok) return { ok: false, warnings: [] };
 
+  const emptyCostConfirmation = confirmEmptyDivisionCostsBeforeValidation();
+  if (!emptyCostConfirmation.ok) {
+    showStatus(emptyCostConfirmation.message || "Validation was canceled.", "error");
+    return { ok: false, warnings: [] };
+  }
+
   const stepThreeValidation = validateStepThreeCostCompletion();
   if (!stepThreeValidation.valid) {
     showStatus(stepThreeValidation.errors[0], "error");
@@ -7918,6 +7918,77 @@ function validateStepThreeCostCompletion() {
     valid: errors.length === 0,
     errors
   };
+}
+
+function confirmEmptyDivisionCostsBeforeValidation() {
+  const confirmDialog =
+    typeof globalThis.confirm === "function" ? globalThis.confirm.bind(globalThis) : null;
+  if (!confirmDialog) {
+    return {
+      ok: false,
+      message: "Validation could not open the cost confirmation prompt. Refresh and try again."
+    };
+  }
+
+  const confirmations = [];
+  getSelectedDivisionSections().forEach((division) => {
+    applyDivisionModeRules(division);
+    const divisionName = getDivisionDisplayTitle(division);
+    const isGlendale = isGlendaleDivisionId(division.id);
+    const subcontractorLabel = isGlendale ? "consultant" : "subtrade";
+    const materialLines = (division.materialLines || []).map(normalizeLineForPayload);
+    const subcontractorLines = (division.subcontractorLines || []).map(normalizeLineForPayload);
+
+    if (!isGlendale && !division.materialNoCost && !materialLines.some(hasMeaningfulCostLineInput)) {
+      confirmations.push({
+        division,
+        field: "materialNoCost",
+        costLabel: "material",
+        divisionName
+      });
+    }
+
+    if (!division.subcontractorNoCost && !subcontractorLines.some(hasMeaningfulCostLineInput)) {
+      confirmations.push({
+        division,
+        field: "subcontractorNoCost",
+        costLabel: subcontractorLabel,
+        divisionName
+      });
+    }
+  });
+
+  if (!confirmations.length) {
+    return { ok: true, changed: false };
+  }
+
+  let changed = false;
+  for (const confirmation of confirmations) {
+    const accepted = confirmDialog(
+      `${confirmation.divisionName} ${confirmation.costLabel} cost is currently empty. Continue and mark this section as no ${confirmation.costLabel} cost?`
+    );
+    if (!accepted) {
+      return {
+        ok: false,
+        changed,
+        message: `Validation paused. Add ${confirmation.costLabel} cost or mark ${confirmation.divisionName} as no ${confirmation.costLabel} cost.`
+      };
+    }
+    if (!changed) {
+      recordUndoSnapshot("Auto-mark empty cost sections as no cost");
+    }
+    confirmation.division[confirmation.field] = true;
+    applyDivisionModeRules(confirmation.division);
+    changed = true;
+  }
+
+  if (changed) {
+    resetQuoteReviewConfirmation({ keepSignerName: true });
+    renderDivisions();
+    renderAiValidation();
+  }
+
+  return { ok: true, changed };
 }
 
 function summarizeScopeLintForSelectedDivisions() {

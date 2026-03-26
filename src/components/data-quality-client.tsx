@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -48,6 +49,7 @@ import {
   buildAcumaticaBusinessAccountUrl,
   buildAcumaticaContactUrl,
 } from "@/lib/acumatica-links";
+import { buildBusinessAccountConcurrencySnapshot } from "@/lib/business-account-concurrency";
 import { BUSINESS_ACCOUNT_REGION_VALUES } from "@/lib/business-account-region-values";
 import { enforceSinglePrimaryPerAccountRows } from "@/lib/business-accounts";
 import {
@@ -1787,6 +1789,28 @@ export function DataQualityClient({
     setIssuesPage(1);
   }, [selectedBasis]);
 
+  const refreshFromBusinessAccountLive = useEffectEvent(() => {
+    void handleRefreshNow();
+  });
+
+  useEffect(() => {
+    if (!session?.authenticated) {
+      return;
+    }
+
+    const eventSource = new EventSource("/api/business-accounts/stream");
+    const handleChanged = () => {
+      refreshFromBusinessAccountLive();
+    };
+
+    eventSource.addEventListener("changed", handleChanged as EventListener);
+
+    return () => {
+      eventSource.removeEventListener("changed", handleChanged as EventListener);
+      eventSource.close();
+    };
+  }, [refreshFromBusinessAccountLive, session?.authenticated]);
+
   function persistCachedRows(nextRows: BusinessAccountRow[]) {
     setCachedRows(nextRows);
 
@@ -1977,6 +2001,7 @@ export function DataQualityClient({
       category: sourceRow.category ?? null,
       notes: sourceRow.notes ?? null,
       expectedLastModified: sourceRow.lastModifiedIso ?? null,
+      baseSnapshot: buildBusinessAccountConcurrencySnapshot(sourceRow),
       ...overrides,
     };
   }

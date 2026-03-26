@@ -209,6 +209,8 @@ describe("rebuildCallSessions", () => {
         employeeDisplayName: "Jorge Serrano",
         employeePhone: "+14162304681",
         targetPhone: "+14163153228",
+        answered: false,
+        outcome: "no_answer",
       }),
     );
     expect(upsertCallAuditEvent).toHaveBeenCalledTimes(1);
@@ -382,6 +384,113 @@ describe("rebuildCallSessions", () => {
         employeeContactId: 91,
         employeePhone: "+14162304681",
         targetPhone: "+14163153228",
+      }),
+    );
+  });
+
+  it("does not mark provisional root-only bridge calls as answered before the destination leg exists", async () => {
+    const db = new Database(":memory:");
+    ensureReadModelSchema(db);
+
+    db.prepare(
+      `
+      INSERT INTO call_legs (
+        sid,
+        parent_sid,
+        session_id,
+        direction,
+        from_number,
+        to_number,
+        status,
+        answered,
+        answered_at,
+        started_at,
+        ended_at,
+        duration_seconds,
+        ring_duration_seconds,
+        price,
+        price_unit,
+        source,
+        leg_type,
+        raw_json,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "CA-root-only",
+      null,
+      "call-root-only",
+      "outbound-api",
+      "+16474929859",
+      "+14162304681",
+      "completed",
+      1,
+      null,
+      "2026-03-10T16:53:18.000Z",
+      "2026-03-10T16:53:38.000Z",
+      20,
+      null,
+      null,
+      "USD",
+      "app_bridge",
+      "root",
+      JSON.stringify({
+        sid: "CA-root-only",
+        direction: "outbound-api",
+        from: "+16474929859",
+        to: "+14162304681",
+        status: "completed",
+        appContext: {
+          sessionId: "call-root-only",
+          loginName: "jserrano",
+          displayName: "Jorge Serrano",
+          userPhone: "+14162304681",
+          callerId: "+14162304681",
+          bridgeNumber: "+16474929859",
+          sourcePage: "accounts",
+        },
+        provisional: true,
+        targetPhone: "+14163153228",
+        events: [],
+      }),
+      "2026-03-10T16:53:38.000Z",
+    );
+
+    readCallEmployeeDirectory.mockReturnValue([
+      {
+        loginName: "jserrano",
+        contactId: 45,
+        displayName: "Jorge Serrano",
+        email: "jserrano@meadowb.com",
+        normalizedPhone: "+14162304681",
+        callerIdPhone: "+14162304681",
+        isActive: true,
+        updatedAt: "2026-03-18T16:40:27.333Z",
+      },
+    ]);
+    readCallEmployeeDirectoryMeta.mockReturnValue({
+      total: 1,
+      latestUpdatedAt: "2026-03-18T16:40:27.333Z",
+    });
+    readAllCallerPhoneOverrides.mockReturnValue([]);
+
+    vi.doMock("@/lib/read-model/db", () => ({
+      getReadModelDb: () => db,
+    }));
+
+    const module = await import("@/lib/call-analytics/sessionize");
+    const sessions = module.rebuildCallSessions({
+      bridgeNumbers: ["+16474929859"],
+    });
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toEqual(
+      expect.objectContaining({
+        sessionId: "call-root-only",
+        employeeLoginName: "jserrano",
+        targetPhone: "+14163153228",
+        answered: false,
+        outcome: "unknown",
       }),
     );
   });
