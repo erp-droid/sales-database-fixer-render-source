@@ -1022,6 +1022,8 @@ export async function refreshCallAnalytics(
 
     void import("@/lib/call-analytics/postcall-worker")
       .then(({ runDueCallActivitySyncJobs }) => runDueCallActivitySyncJobs(5))
+      .then(() => import("@/lib/watchdog"))
+      .then(({ runWatchdog }) => runWatchdog())
       .catch(() => undefined);
 
     return nextState;
