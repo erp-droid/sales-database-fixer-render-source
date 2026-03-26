@@ -46,6 +46,7 @@ type StoredCallLegRow = {
 };
 
 type ParsedLegMetadata = {
+  targetPhone?: string | null;
   appContext?: {
     sessionId?: string;
     loginName?: string;
@@ -446,6 +447,17 @@ function choosePrimaryLeg(
   return group[0] ?? null;
 }
 
+function chooseBridgeConversationLeg(
+  rootSid: string,
+  group: CallLegRecord[],
+): CallLegRecord | null {
+  return (
+    group.find((leg) => leg.parentSid === rootSid && looksOutbound(leg.direction)) ??
+    group.find((leg) => leg.legType === "destination" && looksOutbound(leg.direction)) ??
+    null
+  );
+}
+
 function determineDirection(
   primaryLeg: CallLegRecord | null,
   isBridge: boolean,
@@ -594,6 +606,16 @@ function readCounterpartyPhone(
   return formatPhoneForTwilioDial(primaryLeg.toNumber);
 }
 
+function readProvisionalTargetPhone(
+  rootLeg: CallLegRecord | null,
+): string | null {
+  if (!rootLeg) {
+    return null;
+  }
+
+  return formatPhoneForTwilioDial(parseLegMetadata(rootLeg.rawJson).targetPhone);
+}
+
 function buildSessionRecord(
   rootSid: string,
   group: CallLegRecord[],
@@ -606,14 +628,17 @@ function buildSessionRecord(
   const bridgeNumbers = new Set((options.bridgeNumbers ?? []).map((value) => formatPhoneForTwilioDial(value)).filter((value): value is string => Boolean(value)));
   const isBridge = detectBridgeCall(rootLeg, group, employeeIndex, bridgeNumbers) || Boolean(appContext?.sourcePage);
   const primaryLeg = choosePrimaryLeg(group, isBridge);
+  const conversationLeg = isBridge ? chooseBridgeConversationLeg(rootSid, group) : primaryLeg;
   const direction = determineDirection(primaryLeg, isBridge);
   const source = determineSource(group, direction, isBridge, appContext);
-  const outcomeData = computeOutcome(primaryLeg);
+  const outcomeData = computeOutcome(conversationLeg);
   const attribution = determineEmployeeAttribution(primaryLeg, rootLeg, direction, appContext, employeeIndex);
   const startedAt = minIso(group.map((leg) => leg.startedAt));
-  const answeredAt = primaryLeg?.answeredAt ?? null;
+  const answeredAt = conversationLeg?.answeredAt ?? null;
   const endedAt = maxIso(group.map((leg) => leg.endedAt));
-  const counterpartyPhone = readCounterpartyPhone(primaryLeg, direction);
+  const counterpartyPhone =
+    readCounterpartyPhone(conversationLeg, direction) ??
+    (direction === "outbound" ? readProvisionalTargetPhone(rootLeg) : null);
   const match = matchPhoneToAccountWithIndex(phoneIndex, counterpartyPhone);
   const sessionId = determineSessionId(rootSid, group, appContext);
 
@@ -628,9 +653,9 @@ function buildSessionRecord(
     startedAt,
     answeredAt,
     endedAt,
-    talkDurationSeconds: primaryLeg?.durationSeconds ?? null,
+    talkDurationSeconds: conversationLeg?.durationSeconds ?? null,
     ringDurationSeconds:
-      primaryLeg?.ringDurationSeconds ??
+      conversationLeg?.ringDurationSeconds ??
       computeRingDuration(startedAt, answeredAt, endedAt, outcomeData.answered),
     employeeLoginName:
       (appContext?.loginName?.trim() || attribution.employee?.loginName) ?? null,
@@ -647,8 +672,8 @@ function buildSessionRecord(
     bridgeNumber: formatPhoneForTwilioDial(appContext?.bridgeNumber) ?? formatPhoneForTwilioDial(rootLeg?.fromNumber),
     targetPhone:
       direction === "outbound"
-        ? formatPhoneForTwilioDial(primaryLeg?.toNumber)
-        : formatPhoneForTwilioDial(primaryLeg?.fromNumber),
+        ? formatPhoneForTwilioDial(conversationLeg?.toNumber) ?? readProvisionalTargetPhone(rootLeg)
+        : formatPhoneForTwilioDial(conversationLeg?.fromNumber),
     counterpartyPhone,
     matchedContactId: match.matchedContactId,
     matchedContactName: match.matchedContactName,

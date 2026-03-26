@@ -103,6 +103,26 @@ function buildUpdateRequest(
 }
 
 describe("business account concurrency", () => {
+  it("sanitizes legacy placeholder contact snapshot values", () => {
+    const row = buildRow({
+      id: "acct-legacy",
+      businessAccountId: "BA-200",
+      companyName: "Jones DesLauriers",
+      companyPhone: "-",
+      primaryContactPhone: "-",
+      primaryContactRawPhone: "-",
+      primaryContactExtension: "-",
+      primaryContactEmail: "-",
+    });
+
+    const snapshot = buildBusinessAccountConcurrencySnapshot(row);
+
+    expect(snapshot.companyPhone).toBeNull();
+    expect(snapshot.primaryContactPhone).toBeNull();
+    expect(snapshot.primaryContactExtension).toBeNull();
+    expect(snapshot.primaryContactEmail).toBeNull();
+  });
+
   it("rebases a stale save when only untouched fields changed on the server", () => {
     const baseRow = buildRow({
       id: "acct-1",

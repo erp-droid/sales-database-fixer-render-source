@@ -176,6 +176,48 @@ describe("parseUpdatePayload", () => {
     expect(parsed.targetContactId).toBe(157315);
   });
 
+  it("tolerates legacy placeholder values inside the hidden base snapshot", () => {
+    const parsed = parseUpdatePayload({
+      ...validPayload,
+      primaryContactExtension: "2359",
+      baseSnapshot: {
+        companyName: "Alpha Inc",
+        companyDescription: null,
+        assignedBusinessAccountRecordId: "account-1",
+        assignedBusinessAccountId: "AC-100",
+        addressLine1: "5579 McAdam Road",
+        addressLine2: "",
+        city: "Mississauga",
+        state: "ON",
+        postalCode: "L4Z1N4",
+        country: "CA",
+        targetContactId: 100,
+        salesRepId: "109343",
+        salesRepName: "Jorge Serrano",
+        industryType: null,
+        subCategory: null,
+        companyRegion: "Region 6",
+        week: null,
+        companyPhone: "-",
+        primaryContactName: "Carol B",
+        primaryContactJobTitle: null,
+        primaryContactPhone: "-",
+        primaryContactExtension: "-",
+        primaryContactEmail: "-",
+        category: null,
+        notes: null,
+        primaryContactId: 156595,
+        lastModifiedIso: "2026-03-09T20:08:29.353+00:00",
+      },
+    });
+
+    expect(parsed.baseSnapshot).not.toBeNull();
+    expect(parsed.baseSnapshot?.companyPhone).toBeNull();
+    expect(parsed.baseSnapshot?.primaryContactPhone).toBeNull();
+    expect(parsed.baseSnapshot?.primaryContactExtension).toBeNull();
+    expect(parsed.baseSnapshot?.primaryContactEmail).toBeNull();
+  });
+
   it("rejects invalid category", () => {
     expect(() =>
       parseUpdatePayload({

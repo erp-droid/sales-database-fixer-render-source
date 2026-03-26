@@ -101,6 +101,31 @@ function readDetailsMessage(details: unknown): string | null {
     }
   }
 
+  const fieldErrors = record.fieldErrors;
+  if (fieldErrors && typeof fieldErrors === "object") {
+    const entries = Object.entries(fieldErrors as Record<string, unknown>);
+    for (const [field, value] of entries) {
+      const first = Array.isArray(value)
+        ? value.map(readText).find((item) => Boolean(item))
+        : readText(value);
+      if (first) {
+        return field.trim().length > 0 &&
+          field !== "baseSnapshot" &&
+          field !== "expectedLastModified"
+          ? `${field}: ${first}`
+          : first;
+      }
+    }
+  }
+
+  const formErrors = record.formErrors;
+  if (Array.isArray(formErrors)) {
+    const first = formErrors.map(readText).find((item) => Boolean(item));
+    if (first) {
+      return first;
+    }
+  }
+
   const nestedError = record.error;
   if (nestedError && typeof nestedError === "object") {
     return readDetailsMessage(nestedError);
@@ -117,9 +142,11 @@ export function parseApiErrorMessage(payload: unknown): string {
   const record = payload as Record<string, unknown>;
   const errorValue = readText(record.error);
   const detailsValue = readDetailsMessage(record.details);
+  const normalizedErrorValue = (errorValue ?? "").toLowerCase();
   const isGenericError =
-    (errorValue ?? "").toLowerCase() === "an error has occurred." ||
-    (errorValue ?? "").toLowerCase() === "an error has occurred";
+    normalizedErrorValue === "an error has occurred." ||
+    normalizedErrorValue === "an error has occurred" ||
+    normalizedErrorValue === "invalid update payload";
 
   if (errorValue && detailsValue && isGenericError) {
     return detailsValue;
@@ -158,7 +185,7 @@ function collectStructuredFieldErrors(
   let sawGenericValueField = false;
   const record = source as Record<string, unknown>;
 
-  for (const bucketKey of ["modelState", "errors"] as const) {
+  for (const bucketKey of ["modelState", "errors", "fieldErrors"] as const) {
     const bucket = record[bucketKey];
     if (!bucket || typeof bucket !== "object") {
       continue;

@@ -123,6 +123,14 @@ const nullablePhoneSchema = nullableStringSchema
     return normalizePhoneForSave(value) as string;
   });
 
+const nullableSnapshotPhoneSchema = nullableStringSchema.transform((value) => {
+  if (value === null) {
+    return null;
+  }
+
+  return normalizePhoneForSave(value);
+});
+
 const nullableExtensionSchema = nullableStringSchema
   .refine((value) => {
     if (value === null) {
@@ -141,6 +149,27 @@ const nullableExtensionSchema = nullableStringSchema
 
     return normalizeExtensionForSave(value) as string;
   });
+
+const nullableSnapshotExtensionSchema = nullableStringSchema.transform((value) => {
+  if (value === null) {
+    return null;
+  }
+
+  const normalized = normalizeExtensionForSave(value);
+  if (!normalized || !/^[0-9]{1,5}$/.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
+});
+
+const nullableSnapshotEmailSchema = nullableStringSchema.transform((value) => {
+  if (value === null) {
+    return null;
+  }
+
+  return z.string().email().safeParse(value).success ? value : null;
+});
 
 const nullableCountrySchema = z
   .union([z.string(), z.null(), z.undefined()])
@@ -189,12 +218,12 @@ const businessAccountConcurrencySnapshotSchema = z.object({
   subCategory: nullableStringSchema.default(null),
   companyRegion: nullableStringSchema.default(null),
   week: nullableStringSchema.default(null),
-  companyPhone: nullablePhoneSchema.default(null),
+  companyPhone: nullableSnapshotPhoneSchema.default(null),
   primaryContactName: nullableStringSchema.default(null),
   primaryContactJobTitle: nullableStringSchema.default(null),
-  primaryContactPhone: nullablePhoneSchema.default(null),
-  primaryContactExtension: nullableExtensionSchema.default(null),
-  primaryContactEmail: nullableEmailSchema.default(null),
+  primaryContactPhone: nullableSnapshotPhoneSchema.default(null),
+  primaryContactExtension: nullableSnapshotExtensionSchema.default(null),
+  primaryContactEmail: nullableSnapshotEmailSchema.default(null),
   category: nullableStringSchema
     .refine((value) => value === null || (CATEGORY_VALUES as readonly string[]).includes(value), {
       message: "Category must be one of A, B, C, or D.",

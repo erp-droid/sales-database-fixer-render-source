@@ -4,7 +4,11 @@ import type {
   BusinessAccountUpdateRequest,
 } from "@/types/business-account";
 import { resolveCompanyPhone, sanitizeNullableInput } from "@/lib/business-accounts";
-import { phoneValuesEquivalent } from "@/lib/phone";
+import {
+  normalizeExtensionForSave,
+  normalizePhoneForSave,
+  phoneValuesEquivalent,
+} from "@/lib/phone";
 
 const TRACKED_CONCURRENCY_FIELDS = [
   "companyName",
@@ -70,6 +74,35 @@ function normalizeRequiredText(value: string | null | undefined): string {
 
 function normalizeCountryCode(value: string | null | undefined): string {
   return value?.trim().toUpperCase() ?? "";
+}
+
+const SIMPLE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function sanitizeSnapshotPhone(value: string | null | undefined): string | null {
+  const sanitized = sanitizeNullableInput(value);
+  if (!sanitized) {
+    return null;
+  }
+
+  return normalizePhoneForSave(sanitized);
+}
+
+function sanitizeSnapshotExtension(value: string | null | undefined): string | null {
+  const sanitized = sanitizeNullableInput(value);
+  if (!sanitized) {
+    return null;
+  }
+
+  return normalizeExtensionForSave(sanitized);
+}
+
+function sanitizeSnapshotEmail(value: string | null | undefined): string | null {
+  const sanitized = sanitizeNullableInput(value);
+  if (!sanitized) {
+    return null;
+  }
+
+  return SIMPLE_EMAIL_PATTERN.test(sanitized) ? sanitized : null;
 }
 
 function valuesEquivalent(
@@ -210,12 +243,12 @@ export function buildBusinessAccountConcurrencySnapshot(
     subCategory: row.subCategory,
     companyRegion: row.companyRegion,
     week: row.week,
-    companyPhone: resolveCompanyPhone(row),
+    companyPhone: sanitizeSnapshotPhone(resolveCompanyPhone(row)),
     primaryContactName: row.primaryContactName,
     primaryContactJobTitle: row.primaryContactJobTitle ?? null,
-    primaryContactPhone: row.primaryContactPhone,
-    primaryContactExtension: row.primaryContactExtension ?? null,
-    primaryContactEmail: row.primaryContactEmail,
+    primaryContactPhone: sanitizeSnapshotPhone(row.primaryContactPhone),
+    primaryContactExtension: sanitizeSnapshotExtension(row.primaryContactExtension ?? null),
+    primaryContactEmail: sanitizeSnapshotEmail(row.primaryContactEmail),
     category: row.category,
     notes: row.notes,
     primaryContactId: row.primaryContactId,

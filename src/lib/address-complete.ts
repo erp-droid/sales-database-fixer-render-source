@@ -22,6 +22,7 @@ export type AddressCompleteSuggestion = {
 type FindResultItem = {
   Id?: string;
   Type?: string;
+  Next?: string;
   Text?: string;
   Description?: string;
   Error?: string;
@@ -119,8 +120,8 @@ function assertAddressCompleteSuccess(items: Array<{ Error?: string; Cause?: str
 }
 
 function pickAddressCandidate(items: FindResultItem[]): FindResultItem | null {
-  const directAddress = items.find((item) => item.Type?.toLowerCase() === "address");
-  return directAddress ?? items[0] ?? null;
+  const directAddress = items.find((item) => isRetrieveReadyFindItem(item));
+  return directAddress ?? null;
 }
 
 function normalizePostalCode(value: string): string {
@@ -154,6 +155,29 @@ function isFallbackSuggestionId(id: string): boolean {
 
 function isValidFindItem(item: FindResultItem): boolean {
   return !item.Error || item.Error === "0";
+}
+
+function isRetrieveReadyFindItem(item: FindResultItem): boolean {
+  const next = item.Next?.trim().toLowerCase() ?? "";
+  if (next === "retrieve") {
+    return true;
+  }
+
+  return item.Type?.trim().toLowerCase() === "address";
+}
+
+function toSuggestion(item: FindResultItem): AddressCompleteSuggestion | null {
+  const id = typeof item.Id === "string" ? item.Id.trim() : "";
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    type: item.Type?.trim() || "Address",
+    text: item.Text?.trim() || "Address",
+    description: item.Description?.trim() || "",
+  };
 }
 
 function isValidRetrieveItem(item: RetrieveResultItem): boolean {
@@ -506,40 +530,77 @@ export async function findCanadaPostAddressCompleteSuggestions(input: {
       "ADDRESS_COMPLETE_API_KEY is required for Canada Post address lookup.",
     );
   }
+  const apiKey = env.ADDRESS_COMPLETE_API_KEY;
 
-  const findParams = new URLSearchParams({
-    Key: env.ADDRESS_COMPLETE_API_KEY,
-    SearchTerm: query,
-    Country: toCountryCode3(input.country),
-    LanguagePreference: "EN",
-    Limit: String(limit),
-  });
+  async function requestFind(lastId?: string): Promise<FindResultItem[]> {
+    const findParams = new URLSearchParams({
+      Key: apiKey,
+      SearchTerm: query,
+      Country: toCountryCode3(input.country),
+      LanguagePreference: "EN",
+      Limit: String(limit),
+    });
+    if (lastId) {
+      findParams.set("LastId", lastId);
+    }
 
-  const response = await fetch(`${env.ADDRESS_COMPLETE_FIND_URL}?${findParams.toString()}`, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-    },
-    cache: "no-store",
-  });
+    const response = await fetch(`${env.ADDRESS_COMPLETE_FIND_URL}?${findParams.toString()}`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+      },
+      cache: "no-store",
+    });
 
-  if (!response.ok) {
-    throw new HttpError(502, "AddressComplete find request failed. Please retry.");
+    if (!response.ok) {
+      throw new HttpError(502, "AddressComplete find request failed. Please retry.");
+    }
+
+    const payload = await response.json().catch(() => null);
+    const rawItems = parseFindItems(payload);
+    assertAddressCompleteSuccess(rawItems);
+    return rawItems.filter(isValidFindItem);
   }
 
-  const payload = await response.json().catch(() => null);
-  const rawItems = parseFindItems(payload);
-  assertAddressCompleteSuccess(rawItems);
+  const suggestions: AddressCompleteSuggestion[] = [];
+  const seenSuggestionIds = new Set<string>();
+  const pendingContainerIds: string[] = [];
+  const seenContainerIds = new Set<string>();
 
-  return rawItems
-    .filter(isValidFindItem)
-    .filter((item) => typeof item.Id === "string" && item.Id.trim().length > 0)
-    .map((item) => ({
-      id: String(item.Id),
-      type: item.Type?.trim() || "Address",
-      text: item.Text?.trim() || "Address",
-      description: item.Description?.trim() || "",
-    }));
+  function collect(items: FindResultItem[]) {
+    for (const item of items) {
+      if (isRetrieveReadyFindItem(item)) {
+        const suggestion = toSuggestion(item);
+        if (!suggestion || seenSuggestionIds.has(suggestion.id)) {
+          continue;
+        }
+        seenSuggestionIds.add(suggestion.id);
+        suggestions.push(suggestion);
+        continue;
+      }
+
+      const containerId = typeof item.Id === "string" ? item.Id.trim() : "";
+      if (!containerId || seenContainerIds.has(containerId)) {
+        continue;
+      }
+      seenContainerIds.add(containerId);
+      pendingContainerIds.push(containerId);
+    }
+  }
+
+  collect(await requestFind());
+
+  let expansionAttempts = 0;
+  while (suggestions.length < limit && pendingContainerIds.length > 0 && expansionAttempts < 12) {
+    expansionAttempts += 1;
+    const nextContainerId = pendingContainerIds.shift();
+    if (!nextContainerId) {
+      break;
+    }
+    collect(await requestFind(nextContainerId));
+  }
+
+  return suggestions.slice(0, limit);
 }
 
 export async function retrieveAddressCompleteAddress(input: {
