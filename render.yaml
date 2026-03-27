@@ -10,7 +10,7 @@ services:
     dockerContext: .
     autoDeploy: true
     numInstances: 1
-    healthCheckPath: /api/health
+    healthCheckPath: /api/healthz
     disk:
       name: sales-database-data
       mountPath: /app/data
