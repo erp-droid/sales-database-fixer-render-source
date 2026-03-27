@@ -37,6 +37,46 @@ export function isPrimaryOnlyConflictRetryAllowed(
   );
 }
 
+export function isContactOnlyUpdate(
+  currentAccountRow: BusinessAccountRow,
+  updateRequest: BusinessAccountUpdateRequest,
+): boolean {
+  if (updateRequest.targetContactId === null || updateRequest.setAsPrimaryContact) {
+    return false;
+  }
+
+  if (updateRequest.contactOnlyIntent === true) {
+    return true;
+  }
+
+  return (
+    sameRequiredText(currentAccountRow.companyName, updateRequest.companyName) &&
+    sameNullableText(
+      currentAccountRow.accountRecordId ?? currentAccountRow.id,
+      updateRequest.assignedBusinessAccountRecordId,
+    ) &&
+    sameNullableText(
+      currentAccountRow.businessAccountId,
+      updateRequest.assignedBusinessAccountId,
+    ) &&
+    sameRequiredText(currentAccountRow.addressLine1, updateRequest.addressLine1) &&
+    sameRequiredText(currentAccountRow.addressLine2, updateRequest.addressLine2) &&
+    sameRequiredText(currentAccountRow.city, updateRequest.city) &&
+    sameRequiredText(currentAccountRow.state, updateRequest.state) &&
+    sameRequiredText(currentAccountRow.postalCode, updateRequest.postalCode) &&
+    normalizeCountryCode(currentAccountRow.country) ===
+      normalizeCountryCode(updateRequest.country) &&
+    sameNullableText(currentAccountRow.salesRepId, updateRequest.salesRepId) &&
+    sameNullableText(currentAccountRow.salesRepName, updateRequest.salesRepName) &&
+    sameNullableText(currentAccountRow.industryType, updateRequest.industryType) &&
+    sameNullableText(currentAccountRow.subCategory, updateRequest.subCategory) &&
+    sameNullableText(currentAccountRow.companyRegion, updateRequest.companyRegion) &&
+    sameNullableText(currentAccountRow.week, updateRequest.week) &&
+    currentAccountRow.category === updateRequest.category &&
+    sameNullableText(resolveCompanyPhone(currentAccountRow), updateRequest.companyPhone)
+  );
+}
+
 export function isPrimaryOnlyUpdate(
   currentAccountRow: BusinessAccountRow,
   currentRowForContactComparison: BusinessAccountRow,

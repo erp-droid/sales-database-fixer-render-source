@@ -1890,11 +1890,12 @@ export function readRawBusinessAccountPrimaryContactId(rawAccount: unknown): num
   }
 
   const primary = rawAccount.PrimaryContact;
-  return (
+  const resolved =
     readNullableNumber(primary, "ContactID") ??
     readNullableNumber(rawAccount, "PrimaryContactID") ??
-    readNullableNumber(rawAccount, "MainContactID")
-  );
+    readNullableNumber(rawAccount, "MainContactID");
+
+  return resolved !== null && resolved > 0 ? resolved : null;
 }
 
 export function resolveBusinessAccountRecordId(

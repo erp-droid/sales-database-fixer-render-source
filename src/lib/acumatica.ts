@@ -688,6 +688,11 @@ export type EmployeeProfileItem = {
 };
 export type BusinessAccountProfile = "sync" | "detail" | "list" | "map" | "quality";
 
+type EmployeeProfileHydrationOptions = {
+  hydrateMissingEmail?: boolean;
+  hydrateMissingPhone?: boolean;
+};
+
 export type CreateActivityInput = {
   summary: string;
   bodyHtml: string;
@@ -2217,8 +2222,17 @@ function collectUniqueEmployeeProfiles(rows: RawEmployee[]): EmployeeProfileItem
   );
 }
 
-function shouldHydrateEmployeeProfile(profile: EmployeeProfileItem): boolean {
-  return !profile.email || !profile.phone;
+function shouldHydrateEmployeeProfile(
+  profile: EmployeeProfileItem,
+  options?: EmployeeProfileHydrationOptions,
+): boolean {
+  const hydrateMissingEmail = options?.hydrateMissingEmail !== false;
+  const hydrateMissingPhone = options?.hydrateMissingPhone !== false;
+
+  return (
+    (hydrateMissingEmail && !profile.email) ||
+    (hydrateMissingPhone && !profile.phone)
+  );
 }
 
 function shouldPreferEmployeeProfile(
@@ -2589,11 +2603,14 @@ async function hydrateEmployeeProfiles(
   cookieValue: string,
   profiles: EmployeeProfileItem[],
   authCookieRefresh?: AuthCookieRefreshState,
+  options?: EmployeeProfileHydrationOptions,
 ): Promise<EmployeeProfileItem[]> {
   const hydratedById = new Map(
     profiles.map((profile) => [profile.employeeId, profile] as const),
   );
-  const profilesNeedingHydration = profiles.filter(shouldHydrateEmployeeProfile);
+  const profilesNeedingHydration = profiles.filter((profile) =>
+    shouldHydrateEmployeeProfile(profile, options),
+  );
 
   for (const batch of chunkArray(profilesNeedingHydration, 10)) {
     const detailedResults = await Promise.allSettled(
@@ -2675,6 +2692,7 @@ export async function searchEmployeeProfiles(
 export async function fetchEmployeeProfiles(
   cookieValue: string,
   authCookieRefresh?: AuthCookieRefreshState,
+  options?: EmployeeProfileHydrationOptions,
 ): Promise<EmployeeProfileItem[]> {
   const endpointCandidates = ["/Employee", "/EPEmployee"] as const;
   const collectedRows: RawEmployee[] = [];
@@ -2719,6 +2737,7 @@ export async function fetchEmployeeProfiles(
     cookieValue,
     collectUniqueEmployeeProfiles(collectedRows),
     authCookieRefresh,
+    options,
   );
 }
 

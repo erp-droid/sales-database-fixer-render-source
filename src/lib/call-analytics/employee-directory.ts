@@ -273,7 +273,9 @@ export async function syncCallEmployeeDirectory(
   if (!callEmployeeDirectorySyncPromise) {
     callEmployeeDirectorySyncPromise = (async () => {
       const [profiles, contacts] = await Promise.all([
-        fetchEmployeeProfiles(cookieValue, authCookieRefresh),
+        fetchEmployeeProfiles(cookieValue, authCookieRefresh, {
+          hydrateMissingPhone: false,
+        }),
         fetchContacts(
           cookieValue,
           {

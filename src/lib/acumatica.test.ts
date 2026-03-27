@@ -571,6 +571,60 @@ describe("fetchEmployeeProfiles", () => {
       },
     ]);
   });
+
+  it("skips phone-only hydration when disabled for background directory sync", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes("/Employee?") && url.includes("top=200") && url.includes("skip=0")) {
+        return jsonResponse({
+          status: 200,
+          body: [
+            {
+              EmployeeID: { value: "E0000153" },
+              EmployeeName: { value: "Simon Doal" },
+              Status: { value: "Active" },
+              Email: { value: "sdoal@meadowb.com" },
+            },
+          ],
+        });
+      }
+
+      if (url.includes("/Employee?") && url.includes("top=200") && url.includes("skip=200")) {
+        return jsonResponse({ status: 200, body: [] });
+      }
+
+      if (url.includes("/Employee/E0000153?$expand=ContactInfo")) {
+        throw new Error("Unexpected employee detail hydration request");
+      }
+
+      if (url.includes("/EPEmployee?") || url.includes("/EPEmployee/")) {
+        return jsonResponse({
+          status: 404,
+          body: { message: "Entity EPEmployee not found" },
+        });
+      }
+
+      return jsonResponse({ status: 200, body: [] });
+    });
+
+    const { fetchEmployeeProfiles } = await import("@/lib/acumatica");
+
+    await expect(
+      fetchEmployeeProfiles("cookie", undefined, {
+        hydrateMissingPhone: false,
+      }),
+    ).resolves.toEqual([
+      {
+        employeeId: "E0000153",
+        contactId: null,
+        displayName: "Simon Doal",
+        email: "sdoal@meadowb.com",
+        phone: null,
+        isActive: true,
+      },
+    ]);
+  });
 });
 
 describe("fetchEmployees", () => {

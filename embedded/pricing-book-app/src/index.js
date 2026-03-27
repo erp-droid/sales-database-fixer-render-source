@@ -1873,6 +1873,56 @@ function isPricingBookSeedReady(seed, { requireRows = false, requireDivisionRows
   return true;
 }
 
+async function verifyQuoteBackupLink({
+  acumatica,
+  quoteRef,
+  entityName,
+  expectedUrl,
+  attempts = 5,
+  retryBaseMs = 350
+}) {
+  const normalizedExpectedUrl = normalizeSpreadsheetEditUrl(expectedUrl);
+  let resolvedUrl = "";
+  let resolvedFileId = "";
+  let lastErrorMessage = "";
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const backupRef = await acumatica.getQuoteBackupLink(quoteRef, { entityName });
+      resolvedUrl = normalizeSpreadsheetEditUrl(backupRef?.link);
+      resolvedFileId = cleanString(
+        backupRef?.fileId || extractSpreadsheetIdFromUrl(resolvedUrl)
+      );
+      if (resolvedUrl && (!normalizedExpectedUrl || resolvedUrl === normalizedExpectedUrl)) {
+        return {
+          resolvedUrl,
+          resolvedFileId,
+          matchesExpected: !normalizedExpectedUrl || resolvedUrl === normalizedExpectedUrl,
+          errorMessage: ""
+        };
+      }
+    } catch (error) {
+      lastErrorMessage =
+        error instanceof Error ? error.message : String(error || "Unknown pricing book link verify error");
+    }
+
+    if (attempt < attempts) {
+      await delay(retryBaseMs * attempt);
+    }
+  }
+
+  return {
+    resolvedUrl,
+    resolvedFileId,
+    matchesExpected: Boolean(
+      normalizedExpectedUrl &&
+      resolvedUrl &&
+      resolvedUrl === normalizedExpectedUrl
+    ),
+    errorMessage: lastErrorMessage
+  };
+}
+
 async function createPricingBookWorkbookFromService({
   payload,
   businessAccount,
@@ -4175,27 +4225,40 @@ app.post("/api/quote", async (req, res) => {
 
           const expectedPricingBookUrl = normalizeSpreadsheetEditUrl(pricingBookSheetUrl);
           let resolvedPricingBookUrl = normalizeSpreadsheetEditUrl(pricingBookLinkUpdateResult?.backupLink);
+          let resolvedPricingBookFileId = cleanString(
+            pricingBookFileId || extractSpreadsheetIdFromUrl(resolvedPricingBookUrl)
+          );
 
-          if (!resolvedPricingBookUrl) {
-            try {
-              const backupRef = await withUpstreamStep("pricing_book_link_verify", () =>
-                acumatica.getQuoteBackupLink(
-                  {
-                    quoteNbr,
-                    quoteId: extractedQuoteId || quoteId
-                  },
-                  {
-                    entityName: cleanString(pricingBookLinkUpdateResult?.entityName || quoteMeta?.entityName)
-                  }
-                )
-              );
-              resolvedPricingBookUrl = normalizeSpreadsheetEditUrl(backupRef?.link);
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error || "Unknown pricing book link verify error");
-              pricingBookLinkMessage = [cleanString(pricingBookLinkMessage), `Pricing book BACKUP verification failed: ${message}`]
+          if (!resolvedPricingBookUrl || resolvedPricingBookUrl !== expectedPricingBookUrl) {
+            const verificationResult = await withUpstreamStep("pricing_book_link_verify", () =>
+              verifyQuoteBackupLink({
+                acumatica,
+                quoteRef: {
+                  quoteNbr,
+                  quoteId: extractedQuoteId || quoteId
+                },
+                entityName: cleanString(
+                  pricingBookLinkUpdateResult?.entityName || quoteMeta?.entityName
+                ),
+                expectedUrl: expectedPricingBookUrl
+              })
+            );
+            resolvedPricingBookUrl = normalizeSpreadsheetEditUrl(
+              verificationResult?.resolvedUrl || resolvedPricingBookUrl
+            );
+            resolvedPricingBookFileId = cleanString(
+              verificationResult?.resolvedFileId ||
+              resolvedPricingBookFileId ||
+              extractSpreadsheetIdFromUrl(resolvedPricingBookUrl)
+            );
+            if (verificationResult?.errorMessage) {
+              pricingBookLinkMessage = [
+                cleanString(pricingBookLinkMessage),
+                `Pricing book BACKUP verification failed: ${verificationResult.errorMessage}`
+              ]
                 .filter(Boolean)
                 .join(" | ");
-              console.warn(`[${correlationId}] ${message}`);
+              console.warn(`[${correlationId}] ${verificationResult.errorMessage}`);
             }
           }
 
@@ -4207,6 +4270,9 @@ app.post("/api/quote", async (req, res) => {
           pricingBook.backupAttributeUpdated = backupLinkMatches;
           if (resolvedPricingBookUrl) {
             pricingBook.backupAttributeResolvedUrl = resolvedPricingBookUrl;
+          }
+          if (resolvedPricingBookFileId && !pricingBookFileId) {
+            pricingBookFileId = resolvedPricingBookFileId;
           }
 
           if (!backupLinkMatches) {
@@ -4243,6 +4309,12 @@ app.post("/api/quote", async (req, res) => {
       if (pricingBookLinkMessage) {
         pricingBook.message = [cleanString(pricingBook.message), pricingBookLinkMessage].filter(Boolean).join(" | ");
       }
+      pricingBook.cloudBackupReady = Boolean(
+        pricingBook.created &&
+        pricingBookSheetUrl &&
+        seedReadyForBackupLink &&
+        pricingBook.backupAttributeUpdated === true
+      );
 
       if (config.acumatica?.pricingBook?.required && !pricingBook.created) {
         throw new AcumaticaUpstreamError(

@@ -282,4 +282,55 @@ describe("syncCallEmployeeDirectory", () => {
 
     expect(rebuildCallSessions).toHaveBeenCalledTimes(1);
   });
+
+  it("skips phone-only hydration during full directory sync", async () => {
+    const fetchEmployeeProfiles = vi.fn(async () => [
+      buildEmployee({
+        employeeId: "E000153",
+        contactId: 101,
+        displayName: "Simon MeadowBrook",
+        email: "simon@meadowb.com",
+        phone: null,
+      }),
+    ]);
+    const fetchContacts = vi.fn(async () => [
+      buildContact({
+        contactId: 101,
+        email: "simon@meadowb.com",
+      }),
+    ]);
+
+    vi.doMock("@/lib/acumatica", () => ({
+      fetchEmployeeProfiles,
+      fetchContacts,
+      readWrappedNumber: (record: Record<string, { value?: unknown }>, field: string) => {
+        const value = record[field]?.value;
+        return typeof value === "number" ? value : null;
+      },
+      readWrappedString: (record: Record<string, { value?: unknown }>, field: string) => {
+        const value = record[field]?.value;
+        return typeof value === "string" ? value : "";
+      },
+    }));
+
+    vi.doMock("@/lib/read-model/db", () => ({
+      getReadModelDb: () => ({
+        transaction: <T extends (...args: unknown[]) => unknown>(callback: T) => callback,
+        prepare: () => ({
+          run: () => undefined,
+          all: () => [],
+        }),
+      }),
+    }));
+
+    const module = await import("@/lib/call-analytics/employee-directory");
+
+    await module.syncCallEmployeeDirectory("cookie");
+
+    expect(fetchEmployeeProfiles).toHaveBeenCalledWith(
+      "cookie",
+      undefined,
+      { hydrateMissingPhone: false },
+    );
+  });
 });
