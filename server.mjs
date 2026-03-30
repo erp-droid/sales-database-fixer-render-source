@@ -82,8 +82,20 @@ await nextApp.prepare();
 
 const handle = nextApp.getRequestHandler();
 const server = express();
+const startedAt = new Date();
 
 server.disable("x-powered-by");
+server.get("/api/healthz", (req, res) => {
+  res.status(200).json({
+    ok: true,
+    uptimeSeconds: Math.floor(process.uptime()),
+    startedAt: startedAt.toISOString(),
+    timestamp: new Date().toISOString(),
+  });
+});
+server.head("/api/healthz", (req, res) => {
+  res.status(200).end();
+});
 server.use(quotesMountPath, pricingBookApp);
 server.all("*", (req, res) => handle(req, res));
 

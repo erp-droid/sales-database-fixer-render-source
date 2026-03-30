@@ -84,6 +84,14 @@ type TwilioCallRecordLike = {
 };
 
 let refreshInFlight: Promise<CallIngestState> | null = null;
+const CALL_SESSION_REBUILD_DEBOUNCE_MS = 250;
+const CALL_SESSION_REBUILD_SLOW_MS = 2000;
+let scheduledSessionRebuild: ReturnType<typeof setTimeout> | null = null;
+let sessionRebuildInFlight = false;
+let pendingBridgeNumbers = new Set<string>();
+let pendingSessionRebuildPromise: Promise<void> | null = null;
+let pendingSessionRebuildResolve: (() => void) | null = null;
+let pendingSessionRebuildReject: ((error: unknown) => void) | null = null;
 
 export type CallAnalyticsRefreshEligibility = Pick<
   CallIngestState,
@@ -94,6 +102,74 @@ export type CallEmployeeDirectoryRefreshEligibility = {
   total: number;
   latestUpdatedAt: string | null;
 };
+
+export type TwilioStatusCallbackResult = {
+  sessionId: string;
+  source: CallAnalyticsSource;
+  answered: boolean;
+  endedAt: string | null;
+  rebuildPromise: Promise<void> | null;
+};
+
+function scheduleCallSessionRebuild(bridgeNumbers: string[] = []): Promise<void> {
+  for (const number of bridgeNumbers) {
+    if (number) {
+      pendingBridgeNumbers.add(number);
+    }
+  }
+
+  if (!pendingSessionRebuildPromise) {
+    pendingSessionRebuildPromise = new Promise<void>((resolve, reject) => {
+      pendingSessionRebuildResolve = resolve;
+      pendingSessionRebuildReject = reject;
+    });
+  }
+
+  if (!scheduledSessionRebuild) {
+    scheduledSessionRebuild = setTimeout(runScheduledSessionRebuild, CALL_SESSION_REBUILD_DEBOUNCE_MS);
+  }
+
+  return pendingSessionRebuildPromise;
+}
+
+function runScheduledSessionRebuild(): void {
+  if (sessionRebuildInFlight) {
+    scheduledSessionRebuild = setTimeout(runScheduledSessionRebuild, CALL_SESSION_REBUILD_DEBOUNCE_MS);
+    return;
+  }
+
+  scheduledSessionRebuild = null;
+  const resolve = pendingSessionRebuildResolve;
+  const reject = pendingSessionRebuildReject;
+  pendingSessionRebuildResolve = null;
+  pendingSessionRebuildReject = null;
+  pendingSessionRebuildPromise = null;
+
+  const bridgeNumbers = [...pendingBridgeNumbers];
+  pendingBridgeNumbers.clear();
+
+  const startedAt = Date.now();
+  sessionRebuildInFlight = true;
+  try {
+    rebuildCallSessions({ bridgeNumbers });
+    resolve?.();
+  } catch (error) {
+    reject?.(error);
+  } finally {
+    sessionRebuildInFlight = false;
+    const durationMs = Date.now() - startedAt;
+    if (durationMs > CALL_SESSION_REBUILD_SLOW_MS) {
+      console.warn("[call-sessions] rebuild took longer than expected", {
+        durationMs,
+        bridgeNumbers: bridgeNumbers.length,
+      });
+    }
+
+    if (pendingBridgeNumbers.size > 0 && !scheduledSessionRebuild) {
+      scheduledSessionRebuild = setTimeout(runScheduledSessionRebuild, CALL_SESSION_REBUILD_DEBOUNCE_MS);
+    }
+  }
+}
 
 function parseProgressJson(value: string | null): CallIngestState["progress"] {
   if (!value) {
@@ -1071,7 +1147,7 @@ export function maybeTriggerCallAnalyticsRefresh(
 
 export async function processTwilioStatusCallback(
   request: NextRequest,
-): Promise<CallSessionRecord | null> {
+): Promise<TwilioStatusCallbackResult> {
   const config = getTwilioRestConfig();
   if (!config) {
     throw new HttpError(503, "Twilio is not configured.");
@@ -1104,6 +1180,10 @@ export async function processTwilioStatusCallback(
   const eventTimestamp = toIso(params.Timestamp ?? null) ?? new Date().toISOString();
   const status = params.CallStatus?.trim() ?? null;
   const answered = computeAnswered(status, durationSeconds, status === "in-progress" ? "answered" : null);
+  const endedAt =
+    status && ["completed", "busy", "failed", "no-answer", "canceled"].includes(status)
+      ? eventTimestamp
+      : null;
 
   upsertCallLeg({
     sid: callSid,
@@ -1116,11 +1196,7 @@ export async function processTwilioStatusCallback(
     answered,
     answeredAt: status === "in-progress" ? eventTimestamp : null,
     startedAt: toIso(params.Timestamp ?? null),
-    endedAt:
-      status &&
-      ["completed", "busy", "failed", "no-answer", "canceled"].includes(status)
-        ? eventTimestamp
-        : null,
+    endedAt,
     durationSeconds,
     source,
     legType: determineLegType(params.Direction, params.ParentCallSid, legHint),
@@ -1133,16 +1209,30 @@ export async function processTwilioStatusCallback(
     },
   });
 
-  const inventory = await readTwilioPhoneInventory();
-  rebuildCallSessions({ bridgeNumbers: inventory.voiceNumbers });
-  const session = readCallSessionById(sessionId);
+  const rebuildPromise = (async () => {
+    try {
+      const inventory = await readTwilioPhoneInventory();
+      return scheduleCallSessionRebuild(inventory.voiceNumbers);
+    } catch (error) {
+      console.warn("[twilio] phone inventory refresh failed during status callback", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return scheduleCallSessionRebuild();
+    }
+  })();
   invalidateDashboardSnapshotCache();
   writeCallIngestState({
     status: readCallIngestState().fullHistoryComplete ? "complete" : "idle",
     lastWebhookAt: new Date().toISOString(),
     lastError: null,
   });
-  return session;
+  return {
+    sessionId,
+    source,
+    answered,
+    endedAt,
+    rebuildPromise,
+  };
 }
 
 export function buildTwilioBridgeCallbacks(

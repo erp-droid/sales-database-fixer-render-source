@@ -8,9 +8,22 @@ import { HttpError, getErrorMessage } from "@/lib/errors";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
-    const session = await processTwilioStatusCallback(request);
-    if (session?.source === "app_bridge" && session.answered && session.endedAt) {
-      void ensureCallActivitySyncQueuedForSession(session.sessionId).catch(() => undefined);
+    const result = await processTwilioStatusCallback(request);
+    if (result.source === "app_bridge" && result.answered && result.endedAt) {
+      void (async () => {
+        try {
+          if (result.rebuildPromise) {
+            await result.rebuildPromise;
+          }
+        } catch (error) {
+          console.error("[call-activity-sync] status callback rebuild failed", {
+            sessionId: result.sessionId,
+            error: getErrorMessage(error),
+          });
+        }
+
+        await ensureCallActivitySyncQueuedForSession(result.sessionId).catch(() => undefined);
+      })();
     }
     return NextResponse.json({ ok: true });
   } catch (error) {
