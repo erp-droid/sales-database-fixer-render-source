@@ -1234,6 +1234,19 @@
   gap: 12px;
 }
 
+.drawerFieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.drawerFieldset:disabled {
+  opacity: 0.76;
+}
+
 .drawerBody h3 {
   margin: 10px 0 0;
   font-size: 15px;

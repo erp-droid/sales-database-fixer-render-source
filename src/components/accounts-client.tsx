@@ -916,6 +916,24 @@ function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
   };
 }
 
+function rebaseDraftOntoLiveRow(
+  liveRow: BusinessAccountRow,
+  currentDraft: BusinessAccountUpdateRequest,
+): BusinessAccountUpdateRequest {
+  const nextDraft = buildDraft(liveRow);
+
+  for (const field of collectUpdatedConcurrencyFields(currentDraft)) {
+    nextDraft[field] = currentDraft[field] as never;
+  }
+
+  nextDraft.targetContactId = currentDraft.targetContactId ?? nextDraft.targetContactId;
+  nextDraft.setAsPrimaryContact = currentDraft.setAsPrimaryContact;
+  nextDraft.primaryOnlyIntent = currentDraft.primaryOnlyIntent;
+  nextDraft.contactOnlyIntent = currentDraft.contactOnlyIntent;
+
+  return nextDraft;
+}
+
 function isDraftDirty(draft: BusinessAccountUpdateRequest | null): boolean {
   if (!draft) {
     return false;
@@ -2019,15 +2037,23 @@ function resolveRowBusinessAccountRecordId(row: BusinessAccountRow): string {
 function buildBusinessAccountDetailUrl(
   accountRecordId: string,
   contactId?: number | null,
+  options?: { live?: boolean },
 ): string {
   const basePath = `/api/business-accounts/${encodeURIComponent(accountRecordId.trim())}`;
-  if (contactId === null || contactId === undefined) {
+  const params = new URLSearchParams();
+
+  if (contactId !== null && contactId !== undefined) {
+    params.set("contactId", String(contactId));
+  }
+
+  if (options?.live) {
+    params.set("live", "1");
+  }
+
+  if (params.size === 0) {
     return basePath;
   }
 
-  const params = new URLSearchParams({
-    contactId: String(contactId),
-  });
   return `${basePath}?${params.toString()}`;
 }
 
@@ -2239,6 +2265,7 @@ export function AccountsClient({
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeletingContact, setIsDeletingContact] = useState(false);
+  const [isDrawerRefreshingLive, setIsDrawerRefreshingLive] = useState(false);
   const [isDeletingSelectedContacts, setIsDeletingSelectedContacts] = useState(false);
   const [employeeOptions, setEmployeeOptions] = useState<EmployeeOption[]>([]);
   const [isEmployeesLoading, setIsEmployeesLoading] = useState(false);
@@ -2265,6 +2292,7 @@ export function AccountsClient({
   const meetingOptionsPrefetchKeyRef = useRef<string | null>(null);
   const employeesFetchAttemptedRef = useRef(false);
   const employeesFetchRequestRef = useRef(0);
+  const drawerLiveRefreshRequestRef = useRef(0);
   const notesFieldRef = useRef<HTMLTextAreaElement | null>(null);
   const createMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const currentContactEnhanceRequest = useMemo(
@@ -4689,6 +4717,7 @@ export function AccountsClient({
   }
 
   function closeDrawer(options?: { preserveNotice?: boolean }) {
+    drawerLiveRefreshRequestRef.current += 1;
     setSelected(null);
     setDraft(null);
     setDrawerFocusTarget(null);
@@ -4698,6 +4727,7 @@ export function AccountsClient({
       setSaveNotice(null);
     }
     setIsDeletingContact(false);
+    setIsDrawerRefreshingLive(false);
     setAddressSuggestions([]);
     setAddressLookupError(null);
     setIsAddressLookupLoading(false);
@@ -4762,11 +4792,16 @@ export function AccountsClient({
     resetContactEnhanceState();
     resetCompanyAttributeSuggestionState();
     setEmployeesError(null);
+    const liveRefreshRequestId = drawerLiveRefreshRequestRef.current + 1;
+    drawerLiveRefreshRequestRef.current = liveRefreshRequestId;
+    setIsDrawerRefreshingLive(true);
 
     try {
       const accountRecordId = row.accountRecordId ?? row.id;
       const response = await fetch(
-        buildBusinessAccountDetailUrl(accountRecordId, resolveRowContactId(row)),
+        buildBusinessAccountDetailUrl(accountRecordId, resolveRowContactId(row), {
+          live: true,
+        }),
         {
           cache: "no-store",
         },
@@ -4774,6 +4809,10 @@ export function AccountsClient({
       const payload = await readJsonResponse<
         BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
       >(response);
+
+      if (drawerLiveRefreshRequestRef.current !== liveRefreshRequestId) {
+        return;
+      }
 
       if (response.status === 401) {
         setSaveError(
@@ -4839,9 +4878,17 @@ export function AccountsClient({
         );
       }
       setSelected(mergedRow);
-      setDraft(buildDraft(mergedRow));
+      setDraft((currentDraft) =>
+        currentDraft && isDraftDirty(currentDraft)
+          ? rebaseDraftOntoLiveRow(mergedRow, currentDraft)
+          : buildDraft(mergedRow),
+      );
     } catch {
       // Keep base row loaded in drawer if detail fetch fails.
+    } finally {
+      if (drawerLiveRefreshRequestRef.current === liveRefreshRequestId) {
+        setIsDrawerRefreshingLive(false);
+      }
     }
   }
 
@@ -4939,6 +4986,9 @@ export function AccountsClient({
     sourceDraft: BusinessAccountUpdateRequest,
   ): Promise<boolean> {
     const sourceRowKey = getRowKey(sourceRow);
+    const accountRecordId = sourceRow.accountRecordId ?? sourceRow.id;
+    const selectedBusinessAccountId = sourceRow.businessAccountId;
+    const selectedContactId = sourceRow.contactId ?? sourceRow.primaryContactId ?? null;
     setIsSaving(true);
     setSaveError(null);
     setSaveFieldErrors({});
@@ -4973,9 +5023,6 @@ export function AccountsClient({
         };
       }
 
-      const accountRecordId = sourceRow.accountRecordId ?? sourceRow.id;
-      const selectedBusinessAccountId = sourceRow.businessAccountId;
-      const selectedContactId = sourceRow.contactId ?? sourceRow.primaryContactId ?? null;
       const response = await fetch(`/api/business-accounts/${accountRecordId}`, {
         method: "PUT",
         headers: {
@@ -5225,6 +5272,73 @@ export function AccountsClient({
       clearCachedMapData();
       saved = true;
     } catch (saveRequestError) {
+      if (
+        saveRequestError instanceof SaveDraftError &&
+        /modified in acumatica after you loaded it|changed while you were editing it/i.test(
+          saveRequestError.message,
+        )
+      ) {
+        try {
+          const conflictRefreshResponse = await fetch(
+            buildBusinessAccountDetailUrl(
+              accountRecordId,
+              sourceDraft.targetContactId ?? selectedContactId,
+              { live: true },
+            ),
+            {
+              cache: "no-store",
+            },
+          );
+          const conflictRefreshPayload = await readJsonResponse<
+            BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
+          >(conflictRefreshResponse);
+
+          if (conflictRefreshResponse.ok) {
+            const refreshedRows =
+              readDetailResponseRows(conflictRefreshPayload) ??
+              (() => {
+                const refreshedRow = readDetailResponseRow(conflictRefreshPayload);
+                return refreshedRow ? [refreshedRow] : null;
+              })();
+            const refreshedRow =
+              (refreshedRows && findMatchingAccountRow(refreshedRows, sourceRow)) ??
+              readDetailResponseRow(conflictRefreshPayload) ??
+              refreshedRows?.[0] ??
+              null;
+
+            if (refreshedRows && refreshedRows.length > 0 && refreshedRow) {
+              const refreshedAccountRecordId =
+                refreshedRow.accountRecordId ?? refreshedRow.id ?? accountRecordId;
+
+              setAllRows((currentRows) =>
+                replaceRowsForAccount(
+                  currentRows,
+                  refreshedRows,
+                  refreshedAccountRecordId,
+                  refreshedRow.businessAccountId,
+                ),
+              );
+
+              if (selected && getRowKey(selected) === sourceRowKey) {
+                const nextSelected =
+                  findMatchingAccountRow(refreshedRows, sourceRow) ?? refreshedRow;
+                setSelected(nextSelected);
+                setDraft(rebaseDraftOntoLiveRow(nextSelected, sourceDraft));
+              }
+
+              clearCachedMapData();
+              setSaveFieldErrors({});
+              setSaveError(
+                "This record changed in Acumatica while you were editing. The latest version was loaded and your draft was preserved. Review it and click Save again.",
+              );
+              return saved;
+            }
+          }
+        } catch {
+          // Fall back to the original save error if the live refresh fails.
+        }
+      }
+
       setSaveFieldErrors(
         saveRequestError instanceof SaveDraftError ? saveRequestError.fieldErrors : {},
       );
@@ -6916,6 +7030,16 @@ export function AccountsClient({
 
         {selected && draft ? (
           <div className={styles.drawerBody}>
+            {isDrawerRefreshingLive ? (
+              <p className={styles.lookupLoading}>
+                Refreshing the latest Acumatica data before editing...
+              </p>
+            ) : null}
+
+            <fieldset
+              className={styles.drawerFieldset}
+              disabled={isSaving || isDeletingContact || isDrawerRefreshingLive}
+            >
             <label>
               Company Name
               {drawerNeedsCompanyAssignment ? (
@@ -7669,6 +7793,7 @@ export function AccountsClient({
                 {isDeletingContact ? "Deleting..." : "Delete contact"}
               </button>
             </div>
+            </fieldset>
           </div>
         ) : (
           <div className={styles.drawerBody}>
