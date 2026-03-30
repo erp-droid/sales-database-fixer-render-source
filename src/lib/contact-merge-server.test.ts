@@ -4,18 +4,33 @@ import {
   buildDeletedContactRowKey,
   buildDeletedContactRowKeys,
   fetchSelectedContactsForMerge,
+  setBusinessAccountPrimaryContact,
   validateContactMergeScope,
 } from "@/lib/contact-merge-server";
 
-const { fetchContactByIdMock } = vi.hoisted(() => ({
+const {
+  fetchBusinessAccountByIdMock,
+  fetchContactByIdMock,
+  invokeBusinessAccountActionMock,
+  updateBusinessAccountMock,
+  updateCustomerMock,
+} = vi.hoisted(() => ({
+  fetchBusinessAccountByIdMock: vi.fn(),
   fetchContactByIdMock: vi.fn(),
+  invokeBusinessAccountActionMock: vi.fn(),
+  updateBusinessAccountMock: vi.fn(),
+  updateCustomerMock: vi.fn(),
 }));
 
 vi.mock("@/lib/acumatica", async () => {
   const actual = await vi.importActual<typeof import("@/lib/acumatica")>("@/lib/acumatica");
   return {
     ...actual,
+    fetchBusinessAccountById: fetchBusinessAccountByIdMock,
     fetchContactById: fetchContactByIdMock,
+    invokeBusinessAccountAction: invokeBusinessAccountActionMock,
+    updateBusinessAccount: updateBusinessAccountMock,
+    updateCustomer: updateCustomerMock,
   };
 });
 
@@ -117,5 +132,54 @@ describe("contact merge server helpers", () => {
           }).ContactID?.value ?? null,
       ),
     ).toEqual([158410, 157497, 158410]);
+  });
+
+  it("uses body-first business-account fallback when forcing a primary contact switch", async () => {
+    const baseAccount = makeRawAccount({
+      Contacts: [makeRawContact(157497), makeRawContact(158410)],
+    });
+    const switchedAccount = makeRawAccount({
+      PrimaryContact: {
+        ContactID: { value: 158410 },
+        DisplayName: { value: "Jorge Serrano" },
+      },
+      Contacts: [makeRawContact(157497), makeRawContact(158410)],
+    });
+
+    fetchBusinessAccountByIdMock
+      .mockResolvedValueOnce(baseAccount)
+      .mockResolvedValueOnce(switchedAccount);
+    updateCustomerMock.mockRejectedValueOnce(new Error("Customer update rejected"));
+    invokeBusinessAccountActionMock.mockRejectedValueOnce(new Error("Action rejected"));
+    updateBusinessAccountMock.mockResolvedValueOnce(undefined);
+
+    await setBusinessAccountPrimaryContact(
+      "cookie",
+      {
+        rawAccount: baseAccount,
+        rawAccountWithContacts: baseAccount,
+        resolvedRecordId: "account-1",
+        updateIdentifiers: ["AC-100", "account-1"],
+        identityPayload: {
+          id: "account-1",
+          BusinessAccountID: { value: "AC-100" },
+        },
+      },
+      158410,
+      { value: null },
+      makeRawContact(158410),
+    );
+
+    expect(updateBusinessAccountMock).toHaveBeenCalledWith(
+      "cookie",
+      ["AC-100", "account-1"],
+      expect.objectContaining({
+        BusinessAccountID: { value: "AC-100" },
+      }),
+      { value: null },
+      {
+        strategy: "body-first",
+      },
+    );
   });
 });

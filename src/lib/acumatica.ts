@@ -2746,8 +2746,12 @@ export async function updateBusinessAccount(
   id: string | string[],
   payload: Record<string, unknown>,
   authCookieRefresh?: AuthCookieRefreshState,
+  options?: {
+    strategy?: "path-first" | "body-first";
+  },
 ): Promise<void> {
   const candidates = [...new Set((Array.isArray(id) ? id : [id]).map((value) => value.trim()).filter(Boolean))];
+  const strategy = options?.strategy ?? "path-first";
 
   if (candidates.length === 0) {
     throw new HttpError(400, "Business account identifier is required for update.");
@@ -2755,40 +2759,6 @@ export async function updateBusinessAccount(
 
   const pathErrors: Array<{ identifier: string; status?: number; message: string }> = [];
   let lastError: unknown = null;
-  for (const candidate of candidates) {
-    try {
-      await requestAcumatica(
-        getActiveCookieValue(cookieValue, authCookieRefresh),
-        `/BusinessAccount/${encodeURIComponent(candidate)}`,
-        {
-          method: "PUT",
-          body: JSON.stringify(payload),
-          authCookieRefresh,
-        },
-      );
-      return;
-    } catch (error) {
-      lastError = error;
-      if (error instanceof HttpError) {
-        pathErrors.push({
-          identifier: candidate,
-          status: error.status,
-          message: error.message,
-        });
-      } else if (error instanceof Error) {
-        pathErrors.push({
-          identifier: candidate,
-          message: error.message,
-        });
-      }
-      if (
-        error instanceof HttpError &&
-        (error.status === 401 || error.status === 403)
-      ) {
-        throw error;
-      }
-    }
-  }
 
   const bodyAttempts: Record<string, unknown>[] = [];
   bodyAttempts.push(payload);
@@ -2812,33 +2782,92 @@ export async function updateBusinessAccount(
     });
   }
 
-  const seenBodyFingerprints = new Set<string>();
-  for (const body of bodyAttempts) {
-    const fingerprint = JSON.stringify(body);
-    if (seenBodyFingerprints.has(fingerprint)) {
-      continue;
-    }
-    seenBodyFingerprints.add(fingerprint);
-
-    try {
-      await requestAcumatica(
-        getActiveCookieValue(cookieValue, authCookieRefresh),
-        "/BusinessAccount",
-        {
-          method: "PUT",
-          body: JSON.stringify(body),
-          authCookieRefresh,
-        },
-      );
-      return;
-    } catch (error) {
-      lastError = error;
-      if (
-        error instanceof HttpError &&
-        (error.status === 401 || error.status === 403)
-      ) {
-        throw error;
+  const tryBodyAttempts = async (): Promise<boolean> => {
+    const seenBodyFingerprints = new Set<string>();
+    for (const body of bodyAttempts) {
+      const fingerprint = JSON.stringify(body);
+      if (seenBodyFingerprints.has(fingerprint)) {
+        continue;
       }
+      seenBodyFingerprints.add(fingerprint);
+
+      try {
+        await requestAcumatica(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          "/BusinessAccount",
+          {
+            method: "PUT",
+            body: JSON.stringify(body),
+            authCookieRefresh,
+          },
+        );
+        return true;
+      } catch (error) {
+        lastError = error;
+        if (
+          error instanceof HttpError &&
+          (error.status === 401 || error.status === 403)
+        ) {
+          throw error;
+        }
+      }
+    }
+
+    return false;
+  };
+
+  const tryPathAttempts = async (): Promise<boolean> => {
+    for (const candidate of candidates) {
+      try {
+        await requestAcumatica(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          `/BusinessAccount/${encodeURIComponent(candidate)}`,
+          {
+            method: "PUT",
+            body: JSON.stringify(payload),
+            authCookieRefresh,
+          },
+        );
+        return true;
+      } catch (error) {
+        lastError = error;
+        if (error instanceof HttpError) {
+          pathErrors.push({
+            identifier: candidate,
+            status: error.status,
+            message: error.message,
+          });
+        } else if (error instanceof Error) {
+          pathErrors.push({
+            identifier: candidate,
+            message: error.message,
+          });
+        }
+        if (
+          error instanceof HttpError &&
+          (error.status === 401 || error.status === 403)
+        ) {
+          throw error;
+        }
+      }
+    }
+
+    return false;
+  };
+
+  if (strategy === "body-first") {
+    if (await tryBodyAttempts()) {
+      return;
+    }
+    if (await tryPathAttempts()) {
+      return;
+    }
+  } else {
+    if (await tryPathAttempts()) {
+      return;
+    }
+    if (await tryBodyAttempts()) {
+      return;
     }
   }
 

@@ -134,6 +134,9 @@ export async function executeContactMergeRequest(
         ...primaryPayload,
       },
       activeAuthCookieRefresh,
+      {
+        strategy: "body-first",
+      },
     );
     await setBusinessAccountPrimaryContact(
       cookieValue,
@@ -407,6 +410,9 @@ export async function executeDeferredContactMergeRequest(
         ...primaryPayload,
       },
       activeAuthCookieRefresh,
+      {
+        strategy: "body-first",
+      },
     );
     await setBusinessAccountPrimaryContact(
       cookieValue,

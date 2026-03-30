@@ -1353,6 +1353,9 @@ export async function PUT(
           ...accountPayload,
         },
         activeAuthCookieRefresh,
+        {
+          strategy: "body-first",
+        },
       );
     }
 
@@ -1445,6 +1448,9 @@ export async function PUT(
               ...fallbackPayload,
             },
             activeAuthCookieRefresh,
+            {
+              strategy: "body-first",
+            },
           );
 
           primaryVerificationRaw = await fetchBusinessAccountById(

@@ -1089,6 +1089,64 @@ describe("Acumatica entity creation", () => {
     expect(requestInit?.method).toBe("PUT");
   });
 
+  it("prefers collection updates for business-account saves when requested", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ status: 200, body: { id: "account" } }));
+
+    const { updateBusinessAccount } = await import("@/lib/acumatica");
+    await updateBusinessAccount(
+      "cookie",
+      ["B200001337", "94f9367f-472c-f111-8373-025dbe72350a"],
+      {
+        BusinessAccountID: { value: "B200001337" },
+        ContactID: { value: 154474 },
+      },
+      undefined,
+      {
+        strategy: "body-first",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/entity/lightspeed/24.200.001/BusinessAccount",
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain(
+      "/BusinessAccount/B200001337",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("PUT");
+  });
+
+  it("falls back to keyed business-account updates after collection update failures", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes("/BusinessAccount/B200001337")) {
+        return jsonResponse({ status: 200, body: { id: "account" } });
+      }
+
+      if (url.endsWith("/BusinessAccount")) {
+        return jsonResponse({ status: 500, body: { message: "Server error" } });
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+
+    const { updateBusinessAccount } = await import("@/lib/acumatica");
+    await updateBusinessAccount(
+      "cookie",
+      "B200001337",
+      {},
+      undefined,
+      {
+        strategy: "body-first",
+      },
+    );
+
+    expect(fetchMock.mock.calls.some((call) =>
+      String(call[0]).includes("/BusinessAccount/B200001337"),
+    )).toBe(true);
+  });
+
   it("creates opportunities with PUT on the configured opportunity entity before falling back", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ status: 200, body: { OpportunityID: { value: "000777" } } }),
