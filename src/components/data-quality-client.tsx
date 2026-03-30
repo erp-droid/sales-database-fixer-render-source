@@ -81,6 +81,7 @@ import type {
 import styles from "./data-quality-client.module.css";
 const REVIEWED_ISSUES_STORAGE_KEY = "dataQuality.reviewedIssues.v1";
 const LIVE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const LIVE_EVENT_REFRESH_DEBOUNCE_MS = 1_500;
 const ISSUES_PAGE_SIZE = 25;
 const ALL_SALES_REP_FILTER = "__all__";
 const UNASSIGNED_SALES_REP_FILTER = "__unassigned__";
@@ -865,6 +866,10 @@ export function DataQualityClient({
   const [createContactIssue, setCreateContactIssue] = useState<DataQualityIssueRow | null>(null);
   const [hoveredActivityDay, setHoveredActivityDay] = useState<string | null>(null);
   const issuesRequestSequenceRef = useRef(0);
+  const liveRefreshTimerRef = useRef<number | null>(null);
+  const liveRefreshPendingWhileHiddenRef = useRef(false);
+  const refreshInFlightRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
 
   const issuesPageSize = isDuplicateMetric(selectedMetric) ? 200 : ISSUES_PAGE_SIZE;
   const currentIssuesKey = `${selectedMetric}|${selectedBasis}|${selectedIssueSalesRep}|${issuesPage}|${issuesPageSize}`;
@@ -1643,6 +1648,9 @@ export function DataQualityClient({
 
     void fetchLiveDashboard(false);
     const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
       void fetchLiveDashboard(false);
     }, LIVE_REFRESH_INTERVAL_MS);
 
@@ -1790,6 +1798,35 @@ export function DataQualityClient({
   }, [selectedBasis]);
 
   const refreshFromBusinessAccountLive = useEffectEvent(() => {
+    if (!session?.authenticated) {
+      return;
+    }
+
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      liveRefreshPendingWhileHiddenRef.current = true;
+      return;
+    }
+
+    if (liveRefreshTimerRef.current !== null) {
+      return;
+    }
+
+    liveRefreshTimerRef.current = window.setTimeout(() => {
+      liveRefreshTimerRef.current = null;
+      void handleRefreshNow();
+    }, LIVE_EVENT_REFRESH_DEBOUNCE_MS);
+  });
+
+  const flushPendingBusinessAccountLiveRefresh = useEffectEvent(() => {
+    liveRefreshPendingWhileHiddenRef.current = false;
+    if (liveRefreshTimerRef.current !== null) {
+      clearTimeout(liveRefreshTimerRef.current);
+      liveRefreshTimerRef.current = null;
+    }
+    void handleRefreshNow();
+  });
+
+  const rerunQueuedDataQualityRefresh = useEffectEvent(() => {
     void handleRefreshNow();
   });
 
@@ -1810,6 +1847,31 @@ export function DataQualityClient({
       eventSource.close();
     };
   }, [refreshFromBusinessAccountLive, session?.authenticated]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible" || !liveRefreshPendingWhileHiddenRef.current) {
+        return;
+      }
+
+      flushPendingBusinessAccountLiveRefresh();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (liveRefreshTimerRef.current !== null) {
+        clearTimeout(liveRefreshTimerRef.current);
+        liveRefreshTimerRef.current = null;
+      }
+      liveRefreshPendingWhileHiddenRef.current = false;
+    };
+  }, [flushPendingBusinessAccountLiveRefresh, session?.authenticated]);
 
   function persistCachedRows(nextRows: BusinessAccountRow[]) {
     setCachedRows(nextRows);
@@ -2442,6 +2504,13 @@ export function DataQualityClient({
       return;
     }
 
+    if (refreshInFlightRef.current) {
+      refreshQueuedRef.current = true;
+      return;
+    }
+
+    refreshInFlightRef.current = true;
+
     let issuesRequestId: number | null = null;
     setIsRefreshingSummary(true);
     if (activeView === "issues") {
@@ -2541,6 +2610,13 @@ export function DataQualityClient({
         ) {
           setIsLoadingIssues(false);
         }
+      }
+      refreshInFlightRef.current = false;
+      if (refreshQueuedRef.current) {
+        refreshQueuedRef.current = false;
+        window.setTimeout(() => {
+          rerunQueuedDataQualityRefresh();
+        }, 0);
       }
     }
   }

@@ -126,6 +126,7 @@ import styles from "./accounts-client.module.css";
 import type { SyncStatusResponse } from "@/types/sync";
 
 const PAGE_SIZE = 25;
+const LIVE_ACCOUNT_REFRESH_DEBOUNCE_MS = 750;
 
 type SessionResponse = {
   authenticated: boolean;
@@ -2293,6 +2294,10 @@ export function AccountsClient({
   const employeesFetchAttemptedRef = useRef(false);
   const employeesFetchRequestRef = useRef(0);
   const drawerLiveRefreshRequestRef = useRef(0);
+  const queuedLiveAccountEventsRef = useRef(new Map<string, BusinessAccountLiveEvent>());
+  const liveAccountRefreshTimerRef = useRef<number | null>(null);
+  const liveAccountRefreshInFlightRef = useRef(false);
+  const liveAccountRefreshPendingWhileHiddenRef = useRef(false);
   const notesFieldRef = useRef<HTMLTextAreaElement | null>(null);
   const createMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const currentContactEnhanceRequest = useMemo(
@@ -3166,7 +3171,7 @@ export function AccountsClient({
     });
   }, [router]);
 
-  const refreshLiveUpdatedAccount = useEffectEvent(
+  const refreshLiveUpdatedAccountNow = useEffectEvent(
     async (event: BusinessAccountLiveEvent): Promise<void> => {
       if (!session?.authenticated || isSavingRef.current) {
         return;
@@ -3241,6 +3246,73 @@ export function AccountsClient({
     },
   );
 
+  const flushQueuedLiveUpdatedAccounts = useEffectEvent(async (): Promise<void> => {
+    if (liveAccountRefreshInFlightRef.current) {
+      return;
+    }
+
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      liveAccountRefreshPendingWhileHiddenRef.current = true;
+      return;
+    }
+
+    const queuedEvents = [...queuedLiveAccountEventsRef.current.values()];
+    if (queuedEvents.length === 0) {
+      return;
+    }
+
+    queuedLiveAccountEventsRef.current.clear();
+    liveAccountRefreshPendingWhileHiddenRef.current = false;
+    liveAccountRefreshInFlightRef.current = true;
+
+    try {
+      for (const event of queuedEvents) {
+        await refreshLiveUpdatedAccountNow(event);
+      }
+    } finally {
+      liveAccountRefreshInFlightRef.current = false;
+
+      if (queuedLiveAccountEventsRef.current.size > 0) {
+        if (liveAccountRefreshTimerRef.current !== null) {
+          clearTimeout(liveAccountRefreshTimerRef.current);
+          liveAccountRefreshTimerRef.current = null;
+        }
+
+        liveAccountRefreshTimerRef.current = window.setTimeout(() => {
+          liveAccountRefreshTimerRef.current = null;
+          void flushQueuedLiveUpdatedAccounts();
+        }, LIVE_ACCOUNT_REFRESH_DEBOUNCE_MS);
+      }
+    }
+  });
+
+  const queueLiveUpdatedAccountRefresh = useEffectEvent((event: BusinessAccountLiveEvent): void => {
+    const eventKey =
+      event.accountRecordId.trim() ||
+      event.businessAccountId?.trim() ||
+      String(event.targetContactId ?? "");
+
+    if (!eventKey) {
+      return;
+    }
+
+    queuedLiveAccountEventsRef.current.set(eventKey, event);
+
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      liveAccountRefreshPendingWhileHiddenRef.current = true;
+      return;
+    }
+
+    if (liveAccountRefreshTimerRef.current !== null) {
+      return;
+    }
+
+    liveAccountRefreshTimerRef.current = window.setTimeout(() => {
+      liveAccountRefreshTimerRef.current = null;
+      void flushQueuedLiveUpdatedAccounts();
+    }, LIVE_ACCOUNT_REFRESH_DEBOUNCE_MS);
+  });
+
   useEffect(() => {
     if (!session?.authenticated) {
       return;
@@ -3251,7 +3323,7 @@ export function AccountsClient({
       try {
         const parsed = JSON.parse(rawEvent.data) as BusinessAccountLiveEvent;
         if (parsed && parsed.type === "changed" && parsed.accountRecordId) {
-          void refreshLiveUpdatedAccount(parsed);
+          queueLiveUpdatedAccountRefresh(parsed);
         }
       } catch {
         // Ignore malformed live update events.
@@ -3264,7 +3336,45 @@ export function AccountsClient({
       eventSource.removeEventListener("changed", handleChanged as EventListener);
       eventSource.close();
     };
-  }, [refreshLiveUpdatedAccount, session?.authenticated]);
+  }, [queueLiveUpdatedAccountRefresh, session?.authenticated]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+
+      if (
+        !liveAccountRefreshPendingWhileHiddenRef.current &&
+        queuedLiveAccountEventsRef.current.size === 0
+      ) {
+        return;
+      }
+
+      liveAccountRefreshPendingWhileHiddenRef.current = false;
+      if (liveAccountRefreshTimerRef.current !== null) {
+        clearTimeout(liveAccountRefreshTimerRef.current);
+        liveAccountRefreshTimerRef.current = null;
+      }
+      void flushQueuedLiveUpdatedAccounts();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (liveAccountRefreshTimerRef.current !== null) {
+        clearTimeout(liveAccountRefreshTimerRef.current);
+        liveAccountRefreshTimerRef.current = null;
+      }
+      queuedLiveAccountEventsRef.current.clear();
+      liveAccountRefreshPendingWhileHiddenRef.current = false;
+    };
+  }, [flushQueuedLiveUpdatedAccounts]);
 
   useEffect(() => {
     if (!session?.authenticated || !selected) {

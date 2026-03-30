@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 import { AppChrome } from "@/components/app-chrome";
@@ -45,6 +45,7 @@ import type {
 import styles from "./tasks-client.module.css";
 
 const LIVE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const LIVE_EVENT_REFRESH_DEBOUNCE_MS = 1_500;
 
 type SessionResponse = {
   authenticated: boolean;
@@ -789,8 +790,20 @@ export function TasksClient() {
   const [createContactTask, setCreateContactTask] = useState<DataQualityTask | null>(null);
   const [mergeTask, setMergeTask] = useState<DataQualityTask | null>(null);
   const [showReviewBucket, setShowReviewBucket] = useState(false);
+  const liveRefreshTimerRef = useRef<number | null>(null);
+  const liveRefreshPendingWhileHiddenRef = useRef(false);
+  const tasksLoadInFlightRef = useRef(false);
+  const queuedLoadRef = useRef(false);
+  const queuedLoadNeedsRefreshRef = useRef(false);
 
   const loadTasks = async (refresh = false) => {
+    if (tasksLoadInFlightRef.current) {
+      queuedLoadRef.current = true;
+      queuedLoadNeedsRefreshRef.current = queuedLoadNeedsRefreshRef.current || refresh;
+      return;
+    }
+
+    tasksLoadInFlightRef.current = true;
     if (refresh) {
       setIsRefreshingTasks(true);
     } else {
@@ -815,8 +828,21 @@ export function TasksClient() {
     } finally {
       setIsLoadingTasks(false);
       setIsRefreshingTasks(false);
+      tasksLoadInFlightRef.current = false;
+      if (queuedLoadRef.current) {
+        const nextRefresh = queuedLoadNeedsRefreshRef.current;
+        queuedLoadRef.current = false;
+        queuedLoadNeedsRefreshRef.current = false;
+        window.setTimeout(() => {
+          rerunQueuedTasksLoad(nextRefresh);
+        }, 0);
+      }
     }
   };
+
+  const rerunQueuedTasksLoad = useEffectEvent((refresh: boolean) => {
+    void loadTasks(refresh);
+  });
 
   const loadEmployees = useEffectEvent(async () => {
     if (isLoadingEmployees || employeeOptions.length > 0) {
@@ -865,6 +891,27 @@ export function TasksClient() {
   });
 
   const refreshTasksFromLive = useEffectEvent(() => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      liveRefreshPendingWhileHiddenRef.current = true;
+      return;
+    }
+
+    if (liveRefreshTimerRef.current !== null) {
+      return;
+    }
+
+    liveRefreshTimerRef.current = window.setTimeout(() => {
+      liveRefreshTimerRef.current = null;
+      void loadTasks(true);
+    }, LIVE_EVENT_REFRESH_DEBOUNCE_MS);
+  });
+
+  const flushPendingTasksRefresh = useEffectEvent(() => {
+    liveRefreshPendingWhileHiddenRef.current = false;
+    if (liveRefreshTimerRef.current !== null) {
+      clearTimeout(liveRefreshTimerRef.current);
+      liveRefreshTimerRef.current = null;
+    }
     void loadTasks(true);
   });
 
@@ -896,6 +943,9 @@ export function TasksClient() {
     void loadEmployees();
 
     const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
       void loadTasks();
     }, LIVE_REFRESH_INTERVAL_MS);
 
@@ -922,6 +972,31 @@ export function TasksClient() {
       eventSource.close();
     };
   }, [refreshTasksFromLive, session?.authenticated]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible" || !liveRefreshPendingWhileHiddenRef.current) {
+        return;
+      }
+
+      flushPendingTasksRefresh();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (liveRefreshTimerRef.current !== null) {
+        clearTimeout(liveRefreshTimerRef.current);
+        liveRefreshTimerRef.current = null;
+      }
+      liveRefreshPendingWhileHiddenRef.current = false;
+    };
+  }, [flushPendingTasksRefresh]);
 
   useEffect(() => {
     if (!tasksResponse) {
