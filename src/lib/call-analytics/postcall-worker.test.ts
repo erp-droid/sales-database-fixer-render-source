@@ -658,7 +658,7 @@ describe("post-call activity sync worker", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("marks transcription failures as failed", async () => {
+  it("creates the activity with a fallback note when transcription fails upstream", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/Recordings/")) {
@@ -690,6 +690,10 @@ describe("post-call activity sync worker", () => {
       id: "contact-note-id",
       NoteID: { value: "contact-note-id" },
     });
+    serviceCreateActivityMock.mockResolvedValue({
+      id: "activity-transcription-fallback",
+      NoteID: { value: "activity-transcription-fallback" },
+    });
 
     const { upsertQueuedCallActivitySync } = await import("@/lib/call-analytics/postcall-store");
     const { processCallActivitySyncJob } = await import("@/lib/call-analytics/postcall-worker");
@@ -703,9 +707,11 @@ describe("post-call activity sync worker", () => {
 
     const result = await processCallActivitySyncJob("call-1");
 
-    expect(result?.status).toBe("failed");
-    expect(result?.error).toContain("OpenAI transcription failed");
-    expect(serviceCreateActivityMock).not.toHaveBeenCalled();
+    expect(result?.status).toBe("synced");
+    expect(serviceCreateActivityMock).toHaveBeenCalled();
+    const bodyHtml = serviceCreateActivityMock.mock.calls[0]?.[1]?.bodyHtml as string;
+    expect(bodyHtml).toContain("Automatic transcription unavailable.");
+    expect(bodyHtml).toContain("Automatic transcription was unavailable for this call recording.");
   });
 
   it("creates the activity with a transcript-based fallback when OpenAI summary generation fails", async () => {
@@ -856,7 +862,7 @@ describe("post-call activity sync worker", () => {
     expect(bodyHtml).toContain("Transcript from local fallback.");
   });
 
-  it("keeps the upstream model error when local transcription is unavailable", async () => {
+  it("still syncs the activity when both OpenAI and local transcription are unavailable", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/Recordings/")) {
@@ -895,6 +901,46 @@ describe("post-call activity sync worker", () => {
       id: "contact-note-id",
       NoteID: { value: "contact-note-id" },
     });
+    serviceCreateActivityMock.mockResolvedValue({
+      id: "activity-transcription-unavailable",
+      NoteID: { value: "activity-transcription-unavailable" },
+    });
+
+    const { upsertQueuedCallActivitySync } = await import("@/lib/call-analytics/postcall-store");
+    const { processCallActivitySyncJob } = await import("@/lib/call-analytics/postcall-worker");
+
+    upsertQueuedCallActivitySync({
+      sessionId: "call-1",
+      recordingSid: "RE123",
+      recordingStatus: "completed",
+      recordingDurationSeconds: 42,
+    });
+
+    const result = await processCallActivitySyncJob("call-1");
+
+    expect(result?.status).toBe("synced");
+    expect(execFileMock).toHaveBeenCalled();
+    expect(serviceCreateActivityMock).toHaveBeenCalled();
+    const bodyHtml = serviceCreateActivityMock.mock.calls[0]?.[1]?.bodyHtml as string;
+    expect(bodyHtml).toContain("Automatic transcription unavailable.");
+    expect(bodyHtml).toContain("Automatic transcription was unavailable for this call recording.");
+  });
+
+  it("still fails when the Twilio recording itself cannot be downloaded", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Recordings/")) {
+        return new Response("Twilio unavailable", { status: 502 });
+      }
+
+      return new Response("Unexpected fetch", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    readCallSessionByIdMock.mockReturnValue(buildSession());
+    serviceFetchContactByIdMock.mockResolvedValue({
+      id: "contact-note-id",
+      NoteID: { value: "contact-note-id" },
+    });
 
     const { upsertQueuedCallActivitySync } = await import("@/lib/call-analytics/postcall-store");
     const { processCallActivitySyncJob } = await import("@/lib/call-analytics/postcall-worker");
@@ -909,9 +955,7 @@ describe("post-call activity sync worker", () => {
     const result = await processCallActivitySyncJob("call-1");
 
     expect(result?.status).toBe("failed");
-    expect(result?.error).toContain("does not have access to model");
-    expect(result?.error).toContain("local fallback failed");
-    expect(result?.error).toContain("spawn python3 ENOENT");
+    expect(result?.error).toContain("Unable to download Twilio recording");
     expect(serviceCreateActivityMock).not.toHaveBeenCalled();
   });
 
