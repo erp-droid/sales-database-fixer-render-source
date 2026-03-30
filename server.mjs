@@ -4,6 +4,41 @@ import next from "next";
 
 import { app as pricingBookApp, startPricingBookAutoSync } from "./embedded/pricing-book-app/src/index.js";
 
+function logProcessEvent(label, detail) {
+  if (detail instanceof Error) {
+    console.error(label, {
+      message: detail.message,
+      stack: detail.stack,
+    });
+    return;
+  }
+
+  console.error(label, detail);
+}
+
+process.on("uncaughtExceptionMonitor", (error, origin) => {
+  logProcessEvent("[process] uncaught exception", {
+    origin,
+    error,
+  });
+});
+
+process.on("unhandledRejection", (reason) => {
+  logProcessEvent("[process] unhandled rejection", reason);
+});
+
+process.on("SIGTERM", () => {
+  console.warn("[process] received SIGTERM");
+});
+
+process.on("SIGINT", () => {
+  console.warn("[process] received SIGINT");
+});
+
+process.on("exit", (code) => {
+  console.warn("[process] exiting", { code });
+});
+
 function normalizeMountPath(value, fallback = "/quotes") {
   const raw = String(value || "").trim();
   if (!raw) return fallback;
