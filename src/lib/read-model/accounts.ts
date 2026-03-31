@@ -2,6 +2,7 @@ import {
   queryBusinessAccounts,
   resolveCompanyPhone,
 } from "@/lib/business-accounts";
+import { filterRowsForCurrentVariant } from "@/lib/app-variant";
 import { applyDeferredActionsToRows } from "@/lib/deferred-actions-store";
 import { invalidateReadModelCaches, registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import { applyLocalAccountMetadataToRows } from "@/lib/read-model/account-local-metadata";
@@ -116,6 +117,7 @@ export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
     .filter((row): row is BusinessAccountRow => row !== null);
   allRowsCache = applyDeferredActionsToRows(allRowsCache);
   allRowsCache = applyLocalAccountMetadataToRows(allRowsCache);
+  allRowsCache = filterRowsForCurrentVariant(allRowsCache);
   allRowsCacheVersion = nextVersion;
 
   return allRowsCache;

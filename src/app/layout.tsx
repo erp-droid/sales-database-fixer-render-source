@@ -3,6 +3,7 @@ import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 
 import { AuthSessionGuard } from "@/components/auth-session-guard";
 import { TwilioCallProvider } from "@/components/twilio-call-provider";
+import { getAppBranding } from "@/lib/app-variant";
 
 import "./globals.css";
 
@@ -17,10 +18,14 @@ const monoFont = IBM_Plex_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: "Sales MeadowBrook",
-  description: "Business account and contact management with live Acumatica updates",
-};
+export function generateMetadata(): Metadata {
+  const branding = getAppBranding();
+
+  return {
+    title: branding.appTitle,
+    description: "Business account and contact management with live Acumatica updates",
+  };
+}
 
 export default function RootLayout({
   children,

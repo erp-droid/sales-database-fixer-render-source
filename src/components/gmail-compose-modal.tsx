@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 
+import { getAppBranding } from "@/lib/app-variant";
 import { dedupeMailRecipients } from "@/lib/mail-ui";
 import type { MailSessionResponse } from "@/types/mail";
 import type {
@@ -19,6 +20,8 @@ import type {
 } from "@/types/mail-compose";
 
 import styles from "./gmail-compose-modal.module.css";
+
+const appBranding = getAppBranding();
 
 type RecipientField = "to" | "cc" | "bcc";
 type ComposeSendMode = "compose" | "reply" | "forward";
@@ -753,7 +756,7 @@ export function GmailComposeModal({
         <header className={styles.topBar}>
           <div className={styles.topBarTitle}>
             <strong>{title}</strong>
-            <span>{formatComposeModeLabel(sendMode)} in MeadowBrook Mail</span>
+            <span>{formatComposeModeLabel(sendMode)} in {appBranding.mailLabel}</span>
           </div>
           <div className={styles.windowActions}>
             <button onClick={() => setIsMinimized((current) => !current)} type="button">

@@ -32,12 +32,12 @@ const FALLBACK_DIVISION_TEMPLATES = {
     uom: "EACH"
   },
   hvac: {
-    taskCd: "HVACGEN",
-    description: "HVAC Generic Scope",
-    costCode: "230500",
+    taskCd: "HVACGRAL",
+    description: "HVAC General",
+    costCode: "23-0000",
     accountGroup: "R",
     taxCategory: "H",
-    uom: "EACH"
+    uom: "HOUR"
   },
   glendale: {
     taskCd: "GLENGEN",
@@ -9011,6 +9011,7 @@ async function handleCreateQuote() {
     const pricingBookMessage = cleanString(result?.pricingBook?.message);
     const pricingBookSeedAttempted = Boolean(result?.pricingBook?.seed?.attempted);
     const pricingBookSummaryApplied = Boolean(result?.pricingBook?.seed?.summaryApplied);
+    const pricingBookCloudBackupReady = Boolean(result?.pricingBook?.cloudBackupReady);
     const pricingBookSeedPreviewGrandTotal = parseNumber(result?.pricingBook?.seedPreview?.grandTotal, 0);
     const linesCount = parseNumber(result?.linesCount, 0);
     const scopePolishAttempted = Boolean(result?.scopePolish?.attempted);
@@ -9021,6 +9022,13 @@ async function handleCreateQuote() {
     }
     if (pricingBookCreated && pricingBookSeedAttempted && !pricingBookSummaryApplied) {
       warnings.push("Pricing book summary was not applied. BACKUP link was not updated.");
+    }
+    if (pricingBookCreated && pricingBookSummaryApplied && !pricingBookCloudBackupReady) {
+      warnings.push(
+        `Cloud backup was not fully verified: ${
+          pricingBookMessage || "Pricing book workbook exists, but the BACKUP link was not confirmed on the quote."
+        }`
+      );
     }
     if (pricingBookCreated && linesCount > 0 && pricingBookSeedPreviewGrandTotal <= 0) {
       warnings.push("Pricing-book seed input grand total was $0.00. Review division cost inputs/template mapping.");

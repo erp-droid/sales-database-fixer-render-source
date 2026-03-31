@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 
 import { config } from "./config.js";
+import { buildGoogleAuth } from "./googleServiceAuth.js";
 
 const GOOGLE_SHEETS_READONLY_SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"];
 const ESTIMATOR_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -141,8 +142,10 @@ function escapeSheetTitle(title = "") {
 }
 
 async function loadEstimatorsFromGoogleSheet() {
-  const auth = new google.auth.GoogleAuth({
-    scopes: GOOGLE_SHEETS_READONLY_SCOPES
+  const auth = buildGoogleAuth({
+    scopes: GOOGLE_SHEETS_READONLY_SCOPES,
+    jsonEnvNames: ["GOOGLE_SERVICE_ACCOUNT_JSON", "QUOTE_DOC_GOOGLE_SERVICE_ACCOUNT_JSON"],
+    keyFileEnvNames: ["GOOGLE_SERVICE_ACCOUNT_KEY_FILE", "QUOTE_DOC_GOOGLE_SERVICE_ACCOUNT_KEY_FILE"]
   });
   const client = await auth.getClient();
   const sheets = google.sheets({ version: "v4", auth: client });

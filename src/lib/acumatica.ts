@@ -130,7 +130,8 @@ function isEntityNotFoundMessage(
     normalized.includes("entity was not found") ||
     normalized.includes("specified entity was not found") ||
     normalized.includes("not found in the endpoint") ||
-    normalized.includes("entity is not available in the endpoint")
+    normalized.includes("entity is not available in the endpoint") ||
+    (normalized.includes("entity") && normalized.includes("not found"))
   ) {
     return true;
   }
@@ -667,6 +668,7 @@ export type RawBusinessAccount = Record<string, unknown>;
 export type RawContact = Record<string, unknown>;
 export type RawEmployee = Record<string, unknown>;
 export type RawOpportunity = Record<string, unknown>;
+export type RawPaymentTerm = Record<string, unknown>;
 export type RawActivity = Record<string, unknown>;
 export type RawEvent = Record<string, unknown>;
 export type EmployeeDirectoryItem = {
@@ -688,6 +690,11 @@ export type EmployeeProfileItem = {
 };
 export type BusinessAccountProfile = "sync" | "detail" | "list" | "map" | "quality";
 
+type EmployeeProfileHydrationOptions = {
+  hydrateMissingEmail?: boolean;
+  hydrateMissingPhone?: boolean;
+};
+
 export type CreateActivityInput = {
   summary: string;
   bodyHtml: string;
@@ -704,6 +711,23 @@ type FetchContactsOptions = {
   batchSize?: number;
   initialSkip?: number;
   filter?: string;
+};
+
+type FetchOpportunitiesOptions = {
+  maxRecords?: number;
+  batchSize?: number;
+  initialSkip?: number;
+  filter?: string;
+  select?: string[];
+  expand?: string;
+};
+
+type FetchPaymentTermsOptions = {
+  maxRecords?: number;
+  batchSize?: number;
+  initialSkip?: number;
+  filter?: string;
+  select?: string[];
 };
 
 type FetchEventsOptions = {
@@ -1095,6 +1119,63 @@ function buildContactCollectionPath(options: {
   }
 
   return `/Contact?${query.toString()}`;
+}
+
+function buildOpportunityCollectionPath(
+  entityName: string,
+  options: {
+    top: number;
+    skip: number;
+    filter?: string;
+    select?: string[];
+    expand?: string;
+  },
+): string {
+  const query = new URLSearchParams({
+    $top: String(options.top),
+    $skip: String(options.skip),
+  });
+
+  if (options.filter) {
+    query.set("$filter", options.filter);
+  }
+
+  if (options.select && options.select.length > 0) {
+    query.set("$select", options.select.join(","));
+  }
+
+  if (options.expand) {
+    query.set("$expand", options.expand);
+  }
+
+  const encodedEntity = encodeURIComponent(entityName);
+  return `/${encodedEntity}?${query.toString()}`;
+}
+
+function buildPaymentTermsCollectionPath(
+  entityName: string,
+  options: {
+    top: number;
+    skip: number;
+    filter?: string;
+    select?: string[];
+  },
+): string {
+  const query = new URLSearchParams({
+    $top: String(options.top),
+    $skip: String(options.skip),
+  });
+
+  if (options.filter) {
+    query.set("$filter", options.filter);
+  }
+
+  if (options.select && options.select.length > 0) {
+    query.set("$select", options.select.join(","));
+  }
+
+  const encodedEntity = encodeURIComponent(entityName);
+  return `/${encodedEntity}?${query.toString()}`;
 }
 
 function escapeODataStringLiteral(value: string): string {
@@ -2000,6 +2081,203 @@ export async function fetchContacts(
   return allRows;
 }
 
+function isRecoverableOpportunityFetchError(error: unknown): boolean {
+  return (
+    error instanceof HttpError &&
+    [400, 404, 405, 500].includes(error.status)
+  );
+}
+
+export async function fetchOpportunities(
+  cookieValue: string,
+  options?: FetchOpportunitiesOptions,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawOpportunity[]> {
+  const env = getEnv();
+  const entityCandidates = [
+    env.ACUMATICA_OPPORTUNITY_ENTITY,
+    "Opportunity",
+    "Opportunities",
+    "CROpportunity",
+  ]
+    .map((value) => value?.trim())
+    .filter((value, index, array) => value && array.indexOf(value) === index) as string[];
+
+  const hasMaxRecords =
+    typeof options?.maxRecords === "number" &&
+    Number.isFinite(options.maxRecords);
+  const maxRecords = hasMaxRecords
+    ? Math.max(1, Math.trunc(options?.maxRecords as number))
+    : null;
+  const initialSkip = Math.max(0, Math.trunc(options?.initialSkip ?? 0));
+  const batchSize = Math.max(1, Math.min(options?.batchSize ?? 200, 500));
+
+  let lastRecoverableError: unknown = null;
+
+  for (const entityName of entityCandidates) {
+    const allRows: RawOpportunity[] = [];
+
+    try {
+      for (let skip = initialSkip; ; skip += batchSize) {
+        if (maxRecords !== null && allRows.length >= maxRecords) {
+          break;
+        }
+
+        const top =
+          maxRecords === null
+            ? batchSize
+            : Math.min(batchSize, maxRecords - allRows.length);
+        if (top <= 0) {
+          break;
+        }
+
+        const payload = await requestAcumatica<unknown>(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          buildOpportunityCollectionPath(entityName, {
+            top,
+            skip,
+            filter: options?.filter,
+            select: options?.select,
+            expand: options?.expand,
+          }),
+          {
+            authCookieRefresh,
+          },
+        );
+
+        const rows = unwrapCollection<RawOpportunity>(payload);
+        if (rows.length === 0) {
+          break;
+        }
+
+        allRows.push(...rows);
+        if (rows.length < top) {
+          break;
+        }
+      }
+
+      return allRows;
+    } catch (error) {
+      if (!isRecoverableOpportunityFetchError(error)) {
+        throw error;
+      }
+
+      lastRecoverableError = error;
+    }
+  }
+
+  if (lastRecoverableError instanceof Error) {
+    throw lastRecoverableError;
+  }
+
+  return [];
+}
+
+function isRecoverablePaymentTermsError(error: unknown): boolean {
+  if (!(error instanceof HttpError)) {
+    return false;
+  }
+
+  if ([400, 404, 405, 500].includes(error.status)) {
+    return true;
+  }
+
+  if (error.status === 502) {
+    const message = error.message.toLowerCase();
+    return message.includes("entity") && message.includes("not found");
+  }
+
+  return false;
+}
+
+export async function fetchPaymentTerms(
+  cookieValue: string,
+  options?: FetchPaymentTermsOptions,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawPaymentTerm[]> {
+  const entityCandidates = [
+    "PaymentTerms2",
+    "CS-Credit Terms",
+    "CS-CreditTerms",
+    "CS_CreditTerms",
+    "CSCreditTerms",
+    "MB_CreditTerms",
+    "CreditTerms",
+    "PaymentTerms",
+    "PaymentTerm",
+    "Terms",
+  ];
+
+  const hasMaxRecords =
+    typeof options?.maxRecords === "number" &&
+    Number.isFinite(options.maxRecords);
+  const maxRecords = hasMaxRecords
+    ? Math.max(1, Math.trunc(options?.maxRecords as number))
+    : null;
+  const initialSkip = Math.max(0, Math.trunc(options?.initialSkip ?? 0));
+  const batchSize = Math.max(1, Math.min(options?.batchSize ?? 200, 500));
+
+  let lastRecoverableError: unknown = null;
+
+  for (const entityName of entityCandidates) {
+    const allRows: RawPaymentTerm[] = [];
+
+    try {
+      for (let skip = initialSkip; ; skip += batchSize) {
+        if (maxRecords !== null && allRows.length >= maxRecords) {
+          break;
+        }
+
+        const top =
+          maxRecords === null
+            ? batchSize
+            : Math.min(batchSize, maxRecords - allRows.length);
+        if (top <= 0) {
+          break;
+        }
+
+        const payload = await requestAcumatica<unknown>(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          buildPaymentTermsCollectionPath(entityName, {
+            top,
+            skip,
+            filter: options?.filter,
+            select: options?.select,
+          }),
+          {
+            authCookieRefresh,
+            retryOnEntityNotFound: true,
+          },
+        );
+
+        const rows = unwrapCollection<RawPaymentTerm>(payload);
+        if (rows.length === 0) {
+          break;
+        }
+
+        allRows.push(...rows);
+        if (rows.length < top) {
+          break;
+        }
+      }
+
+      return allRows;
+    } catch (error) {
+      if (!isRecoverablePaymentTermsError(error)) {
+        throw error;
+      }
+
+      lastRecoverableError = error;
+    }
+  }
+
+  if (lastRecoverableError instanceof Error) {
+    throw lastRecoverableError;
+  }
+
+  return [];
+}
+
 function chunkArray<T>(values: T[], size: number): T[][];
 function chunkArray<T>(values: T[], size: number): T[][] {
   if (size <= 0) {
@@ -2217,8 +2495,17 @@ function collectUniqueEmployeeProfiles(rows: RawEmployee[]): EmployeeProfileItem
   );
 }
 
-function shouldHydrateEmployeeProfile(profile: EmployeeProfileItem): boolean {
-  return !profile.email || !profile.phone;
+function shouldHydrateEmployeeProfile(
+  profile: EmployeeProfileItem,
+  options?: EmployeeProfileHydrationOptions,
+): boolean {
+  const hydrateMissingEmail = options?.hydrateMissingEmail !== false;
+  const hydrateMissingPhone = options?.hydrateMissingPhone !== false;
+
+  return (
+    (hydrateMissingEmail && !profile.email) ||
+    (hydrateMissingPhone && !profile.phone)
+  );
 }
 
 function shouldPreferEmployeeProfile(
@@ -2589,11 +2876,14 @@ async function hydrateEmployeeProfiles(
   cookieValue: string,
   profiles: EmployeeProfileItem[],
   authCookieRefresh?: AuthCookieRefreshState,
+  options?: EmployeeProfileHydrationOptions,
 ): Promise<EmployeeProfileItem[]> {
   const hydratedById = new Map(
     profiles.map((profile) => [profile.employeeId, profile] as const),
   );
-  const profilesNeedingHydration = profiles.filter(shouldHydrateEmployeeProfile);
+  const profilesNeedingHydration = profiles.filter((profile) =>
+    shouldHydrateEmployeeProfile(profile, options),
+  );
 
   for (const batch of chunkArray(profilesNeedingHydration, 10)) {
     const detailedResults = await Promise.allSettled(
@@ -2675,6 +2965,7 @@ export async function searchEmployeeProfiles(
 export async function fetchEmployeeProfiles(
   cookieValue: string,
   authCookieRefresh?: AuthCookieRefreshState,
+  options?: EmployeeProfileHydrationOptions,
 ): Promise<EmployeeProfileItem[]> {
   const endpointCandidates = ["/Employee", "/EPEmployee"] as const;
   const collectedRows: RawEmployee[] = [];
@@ -2719,6 +3010,7 @@ export async function fetchEmployeeProfiles(
     cookieValue,
     collectUniqueEmployeeProfiles(collectedRows),
     authCookieRefresh,
+    options,
   );
 }
 
@@ -2727,8 +3019,12 @@ export async function updateBusinessAccount(
   id: string | string[],
   payload: Record<string, unknown>,
   authCookieRefresh?: AuthCookieRefreshState,
+  options?: {
+    strategy?: "path-first" | "body-first";
+  },
 ): Promise<void> {
   const candidates = [...new Set((Array.isArray(id) ? id : [id]).map((value) => value.trim()).filter(Boolean))];
+  const strategy = options?.strategy ?? "path-first";
 
   if (candidates.length === 0) {
     throw new HttpError(400, "Business account identifier is required for update.");
@@ -2736,40 +3032,6 @@ export async function updateBusinessAccount(
 
   const pathErrors: Array<{ identifier: string; status?: number; message: string }> = [];
   let lastError: unknown = null;
-  for (const candidate of candidates) {
-    try {
-      await requestAcumatica(
-        getActiveCookieValue(cookieValue, authCookieRefresh),
-        `/BusinessAccount/${encodeURIComponent(candidate)}`,
-        {
-          method: "PUT",
-          body: JSON.stringify(payload),
-          authCookieRefresh,
-        },
-      );
-      return;
-    } catch (error) {
-      lastError = error;
-      if (error instanceof HttpError) {
-        pathErrors.push({
-          identifier: candidate,
-          status: error.status,
-          message: error.message,
-        });
-      } else if (error instanceof Error) {
-        pathErrors.push({
-          identifier: candidate,
-          message: error.message,
-        });
-      }
-      if (
-        error instanceof HttpError &&
-        (error.status === 401 || error.status === 403)
-      ) {
-        throw error;
-      }
-    }
-  }
 
   const bodyAttempts: Record<string, unknown>[] = [];
   bodyAttempts.push(payload);
@@ -2793,33 +3055,92 @@ export async function updateBusinessAccount(
     });
   }
 
-  const seenBodyFingerprints = new Set<string>();
-  for (const body of bodyAttempts) {
-    const fingerprint = JSON.stringify(body);
-    if (seenBodyFingerprints.has(fingerprint)) {
-      continue;
-    }
-    seenBodyFingerprints.add(fingerprint);
-
-    try {
-      await requestAcumatica(
-        getActiveCookieValue(cookieValue, authCookieRefresh),
-        "/BusinessAccount",
-        {
-          method: "PUT",
-          body: JSON.stringify(body),
-          authCookieRefresh,
-        },
-      );
-      return;
-    } catch (error) {
-      lastError = error;
-      if (
-        error instanceof HttpError &&
-        (error.status === 401 || error.status === 403)
-      ) {
-        throw error;
+  const tryBodyAttempts = async (): Promise<boolean> => {
+    const seenBodyFingerprints = new Set<string>();
+    for (const body of bodyAttempts) {
+      const fingerprint = JSON.stringify(body);
+      if (seenBodyFingerprints.has(fingerprint)) {
+        continue;
       }
+      seenBodyFingerprints.add(fingerprint);
+
+      try {
+        await requestAcumatica(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          "/BusinessAccount",
+          {
+            method: "PUT",
+            body: JSON.stringify(body),
+            authCookieRefresh,
+          },
+        );
+        return true;
+      } catch (error) {
+        lastError = error;
+        if (
+          error instanceof HttpError &&
+          (error.status === 401 || error.status === 403)
+        ) {
+          throw error;
+        }
+      }
+    }
+
+    return false;
+  };
+
+  const tryPathAttempts = async (): Promise<boolean> => {
+    for (const candidate of candidates) {
+      try {
+        await requestAcumatica(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          `/BusinessAccount/${encodeURIComponent(candidate)}`,
+          {
+            method: "PUT",
+            body: JSON.stringify(payload),
+            authCookieRefresh,
+          },
+        );
+        return true;
+      } catch (error) {
+        lastError = error;
+        if (error instanceof HttpError) {
+          pathErrors.push({
+            identifier: candidate,
+            status: error.status,
+            message: error.message,
+          });
+        } else if (error instanceof Error) {
+          pathErrors.push({
+            identifier: candidate,
+            message: error.message,
+          });
+        }
+        if (
+          error instanceof HttpError &&
+          (error.status === 401 || error.status === 403)
+        ) {
+          throw error;
+        }
+      }
+    }
+
+    return false;
+  };
+
+  if (strategy === "body-first") {
+    if (await tryBodyAttempts()) {
+      return;
+    }
+    if (await tryPathAttempts()) {
+      return;
+    }
+  } else {
+    if (await tryPathAttempts()) {
+      return;
+    }
+    if (await tryBodyAttempts()) {
+      return;
     }
   }
 

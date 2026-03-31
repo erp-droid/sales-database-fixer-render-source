@@ -82,6 +82,23 @@ Open `http://localhost:3000`.
 - `POST /api/auth/logout`
 - `GET /api/business-accounts?q=&category=&sortBy=&sortDir=&page=&pageSize=`
 - `PUT /api/business-accounts/:id`
+- `POST /api/onboarding/scan`
+- `POST /api/onboarding/requests`
+- `GET /api/onboarding/requests/:token`
+- `POST /api/onboarding/requests/:token/submit`
+
+## Customer onboarding automation
+
+The onboarding flow emails a secure form when a won opportunity is detected for a non-customer
+business account. The flow is backed by Firestore and uses service Acumatica credentials.
+
+Key pieces:
+
+- Public form: `/onboarding/:token`
+- Scan trigger (Cloud Scheduler or curl): `POST /api/onboarding/scan`
+- Manual trigger (internal): `POST /api/onboarding/requests`
+
+Configure SMTP and onboarding env values from `env.example`.
 
 ## Tests
 

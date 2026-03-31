@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { AppChrome } from "@/components/app-chrome";
+import { getAppBranding } from "@/lib/app-variant";
 import type {
   BusinessAccountDetailResponse,
   BusinessAccountMapPoint,
@@ -45,8 +46,10 @@ type SessionResponse = {
 };
 
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
-const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v4";
-const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
+const appBranding = getAppBranding();
+const MAP_CACHE_STORAGE_KEY = `businessAccounts.mapCache.v5.${appBranding.storageNamespace}`;
+const MAP_PANEL_PREFERENCES_STORAGE_KEY =
+  `businessAccounts.mapPanelPrefs.v2.${appBranding.storageNamespace}`;
 
 const MAP_DETAIL_FIELD_KEYS = [
   "fullAddress",
@@ -1899,7 +1902,7 @@ export function AccountsMapClient({
   return (
     <AppChrome
       contentClassName={styles.pageContent}
-      subtitle="Sales MeadowBrook Map"
+      subtitle={appBranding.mapSubtitle}
       title="Contacts Location View"
       userName={session?.user?.name ?? "Signed in"}
     >

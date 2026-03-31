@@ -5,6 +5,7 @@ import { useEffect, useEffectEvent, useState } from "react";
 
 import { AppChrome } from "@/components/app-chrome";
 import { GmailComposeModal, type GmailComposeInitialState } from "@/components/gmail-compose-modal";
+import { getAppBranding } from "@/lib/app-variant";
 import {
   buildMailContactSuggestions,
   dedupeMailRecipients,
@@ -23,6 +24,7 @@ import type {
 import styles from "./mail-client.module.css";
 
 const MAILBOX_THREAD_LIMIT = 6;
+const appBranding = getAppBranding();
 
 type ComposeState = {
   initialState: GmailComposeInitialState | null;
@@ -892,7 +894,7 @@ export function MailClient() {
                   ? session?.connectionError ||
                     "Google sign-in may still be finishing. Retry mailbox in a few seconds."
                   : sessionError?.message ||
-                  "Mail stays read-only until your signed-in Acumatica login maps to a MeadowBrook mailbox and Gmail is connected."}
+                  `Mail stays read-only until your signed-in Acumatica login maps to a ${appBranding.companyName} mailbox and Gmail is connected.`}
               </p>
               <button
                 className={mailboxPending ? styles.secondaryButton : styles.primaryButton}

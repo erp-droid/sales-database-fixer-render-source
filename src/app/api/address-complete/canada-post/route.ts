@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireAuthCookieValue } from "@/lib/auth";
+import { getAuthCookieValue } from "@/lib/auth";
 import {
   findCanadaPostAddressCompleteSuggestions,
   retrieveCanadaPostAddressCompleteAddress,
   type AddressInput,
 } from "@/lib/address-complete";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { getOnboardingRequest } from "@/lib/onboarding-store";
 
 function empty(value: string | null): string {
   return (value ?? "").trim();
@@ -14,9 +15,17 @@ function empty(value: string | null): string {
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
-    requireAuthCookieValue(request);
-
     const searchParams = request.nextUrl.searchParams;
+    const authCookie = getAuthCookieValue(request);
+    const onboardingToken = empty(searchParams.get("token"));
+    const hasOnboardingAccess = onboardingToken
+      ? Boolean(await getOnboardingRequest(onboardingToken))
+      : false;
+
+    if (!authCookie && !hasOnboardingAccess) {
+      throw new HttpError(401, "Not authenticated");
+    }
+
     const id = empty(searchParams.get("id"));
 
     if (id) {

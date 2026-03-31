@@ -27,6 +27,7 @@ import { logBusinessAccountCreateAudit } from "@/lib/audit-log-store";
 import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { filterRowsForCurrentVariant } from "@/lib/app-variant";
 import { resolvePrimaryContactPhoneFields } from "@/lib/phone";
 import {
   enforceSinglePrimaryPerAccountRows,
@@ -869,13 +870,15 @@ async function queryAccountsWithCookie(
         !isExcludedInternalCompanyName(readBusinessAccountName(account))),
   );
 
-  const normalizedRows = filterSuppressedBusinessAccountRows(
-    allowedRawAccounts
-    .flatMap((item) => normalizeBusinessAccountRows(item))
-    .filter((item) => Boolean(item.id || item.businessAccountId || item.companyName)),
-    {
-      includeInternalRows: options?.includeInternal,
-    },
+  const normalizedRows = filterRowsForCurrentVariant(
+    filterSuppressedBusinessAccountRows(
+      allowedRawAccounts
+        .flatMap((item) => normalizeBusinessAccountRows(item))
+        .filter((item) => Boolean(item.id || item.businessAccountId || item.companyName)),
+      {
+        includeInternalRows: options?.includeInternal,
+      },
+    ),
   );
   const queried = queryBusinessAccounts(normalizedRows, {
     ...params,
@@ -1002,18 +1005,20 @@ async function querySyncBatchWithCookie(
     );
   });
 
-  const normalizedRows = filterSuppressedBusinessAccountRows(
-    buildSyncRowsFromContacts(rawContacts, rawAccounts).filter((row) => {
-      const normalizedBusinessId = normalizeBusinessAccountCode(row.businessAccountId);
-      if (!normalizedBusinessId) {
-        return false;
-      }
+  const normalizedRows = filterRowsForCurrentVariant(
+    filterSuppressedBusinessAccountRows(
+      buildSyncRowsFromContacts(rawContacts, rawAccounts).filter((row) => {
+        const normalizedBusinessId = normalizeBusinessAccountCode(row.businessAccountId);
+        if (!normalizedBusinessId) {
+          return false;
+        }
 
-      return accountTypeByBusinessId.get(normalizedBusinessId) === "allowed";
-    }),
-    {
-      includeInternalRows: options?.includeInternal,
-    },
+        return accountTypeByBusinessId.get(normalizedBusinessId) === "allowed";
+      }),
+      {
+        includeInternalRows: options?.includeInternal,
+      },
+    ),
   );
   const queried = queryBusinessAccounts(normalizedRows, {
     ...params,

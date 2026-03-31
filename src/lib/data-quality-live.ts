@@ -28,6 +28,7 @@ import {
   enforceSinglePrimaryPerAccountRows,
   selectPrimaryContactIndex,
 } from "@/lib/business-accounts";
+import { filterRowsForCurrentVariant } from "@/lib/app-variant";
 import {
   readContactBusinessAccountCode,
   readContactCompanyName,
@@ -657,11 +658,13 @@ export async function fetchAllSyncRows(
       ),
     );
 
-  return filterSuppressedBusinessAccountRows(
-    dedupeRows([...normalizedAccountRows, ...normalizedContactRows]),
-    {
-      includeInternalRows: includeInternal,
-    },
+  return filterRowsForCurrentVariant(
+    filterSuppressedBusinessAccountRows(
+      dedupeRows([...normalizedAccountRows, ...normalizedContactRows]),
+      {
+        includeInternalRows: includeInternal,
+      },
+    ),
   );
 }
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { CreateContactDrawer } from "@/components/create-contact-drawer";
+import { getAppBranding } from "@/lib/app-variant";
 import {
   buildMeetingDateTimeRange,
   DEFAULT_MEETING_TIME_ZONE,
@@ -33,6 +34,8 @@ import type {
 import type { GoogleCalendarSessionResponse } from "@/types/google-calendar";
 
 import styles from "./create-meeting-drawer.module.css";
+
+const appBranding = getAppBranding();
 
 type CreateMeetingDrawerProps = {
   isLoadingOptions: boolean;
@@ -1685,7 +1688,7 @@ export function CreateMeetingDrawer({
                       </span>
                       <span className={styles.lookupSuggestionMeta}>
                         {suggestion.contact.isInternal
-                          ? "MeadowBrook employee"
+                          ? appBranding.employeeLabel
                           : suggestion.contact.companyName ?? "No account"}
                       </span>
                       <span className={styles.lookupSuggestionMeta}>
@@ -1702,7 +1705,7 @@ export function CreateMeetingDrawer({
                       <span className={styles.lookupSuggestionTitle}>
                         {suggestion.employee.employeeName}
                       </span>
-                      <span className={styles.lookupSuggestionMeta}>MeadowBrook employee</span>
+                      <span className={styles.lookupSuggestionMeta}>{appBranding.employeeLabel}</span>
                       <span className={styles.lookupSuggestionMeta}>
                         {suggestion.employee.email}
                       </span>
@@ -1742,7 +1745,7 @@ export function CreateMeetingDrawer({
                       <div className={styles.attendeeMeta}>
                         <span>
                           {attendee.isInternal
-                            ? "MeadowBrook employee"
+                            ? appBranding.employeeLabel
                             : attendee.companyName ?? "No account"}
                         </span>
                         <span>{attendee.email ?? "No email"}</span>
@@ -1772,7 +1775,7 @@ export function CreateMeetingDrawer({
                     <div className={styles.attendeeMeta}>
                       <span>
                         {employeeByEmail.has(email)
-                          ? "MeadowBrook employee"
+                          ? appBranding.employeeLabel
                           : "Direct email invite"}
                       </span>
                       <span>{email}</span>

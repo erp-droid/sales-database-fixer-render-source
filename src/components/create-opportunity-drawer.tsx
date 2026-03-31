@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { getAppBranding } from "@/lib/app-variant";
 import type {
   BusinessAccountDetailResponse,
   BusinessAccountRow,
@@ -14,6 +15,8 @@ import type {
 import type { CreateContactAccountOption } from "@/components/create-contact-drawer";
 
 import styles from "./create-opportunity-drawer.module.css";
+
+const appBranding = getAppBranding();
 
 type EmployeeOption = {
   id: string;
@@ -1077,7 +1080,7 @@ export function CreateOpportunityDrawer({
             </label>
 
             <p className={styles.lookupHint}>
-              These fields are required for the MeadowBrook opportunity contract.
+              These fields are required for the {appBranding.companyName} opportunity contract.
             </p>
           </section>
 

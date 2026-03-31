@@ -245,4 +245,139 @@ describe("contact merge execution", () => {
       expect.any(Array),
     );
   });
+
+  it("uses body-first business-account updates when the kept contact becomes primary", async () => {
+    const { executeContactMergeRequest } = await import("@/lib/contact-merge-execution");
+
+    const keepContact = {
+      id: "contact-1",
+      ContactID: field(157497),
+      BusinessAccountID: field("BA0001"),
+      BusinessAccount: field("BA0001"),
+      DisplayName: field("Jorge Serrano"),
+      Phone1: field("416-000-0000"),
+      Email: field("keep@meadowb.com"),
+      LastModifiedDateTime: field("2026-03-12T12:00:00.000Z"),
+    };
+    const loserContact = {
+      id: "contact-2",
+      ContactID: field(157498),
+      BusinessAccountID: field("BA0001"),
+      BusinessAccount: field("BA0001"),
+      DisplayName: field("Jordan Smith"),
+      Phone1: field("416-000-0001"),
+      Email: field("lose@meadowb.com"),
+      LastModifiedDateTime: field("2026-03-12T12:00:00.000Z"),
+    };
+    const rawAccount = {
+      id: "record-1",
+      BusinessAccountID: field("BA0001"),
+      Name: field("Alpha Foods"),
+      LastModifiedDateTime: field("2026-03-12T12:00:00.000Z"),
+      Contacts: [keepContact, loserContact],
+      PrimaryContact: {
+        ContactID: field(157498),
+      },
+    };
+
+    fetchContactMergeServerContextMock
+      .mockResolvedValueOnce({
+        rawAccount,
+        rawAccountWithContacts: rawAccount,
+        resolvedRecordId: "record-1",
+        updateIdentifiers: ["BA0001", "record-1"],
+        identityPayload: {
+          id: "record-1",
+          BusinessAccountID: { value: "BA0001" },
+        },
+      })
+      .mockResolvedValueOnce({
+        rawAccount,
+        rawAccountWithContacts: rawAccount,
+        resolvedRecordId: "record-1",
+        updateIdentifiers: ["BA0001", "record-1"],
+        identityPayload: {
+          id: "record-1",
+          BusinessAccountID: { value: "BA0001" },
+        },
+      });
+    fetchSelectedContactsForMergeMock.mockResolvedValue([keepContact, loserContact]);
+    validateContactMergeScopeMock.mockReturnValue({
+      warnings: [],
+      keepIsPrimary: false,
+      primaryContactId: 157498,
+    });
+    buildPrimaryContactFallbackPayloadsMock.mockReturnValue([
+      {
+        PrimaryContactID: { value: 157497 },
+      },
+    ]);
+    buildAccountRowsFromRawAccountMock.mockReturnValue([
+      {
+        rowKey: "record-1:contact:157497",
+        id: "record-1",
+        accountRecordId: "record-1",
+        businessAccountId: "BA0001",
+        companyName: "Alpha Foods",
+        contactId: 157497,
+        primaryContactId: 157497,
+        isPrimaryContact: true,
+        primaryContactName: "Jorge Serrano",
+        primaryContactJobTitle: "Sales Manager",
+        primaryContactPhone: "416-230-4681",
+        primaryContactEmail: "keep@meadowb.com",
+        notes: "Merged notes",
+      },
+    ]);
+    updateContactMock.mockResolvedValue(undefined);
+    updateBusinessAccountMock.mockResolvedValue(undefined);
+    setBusinessAccountPrimaryContactMock.mockResolvedValue(rawAccount);
+    deleteContactMock.mockResolvedValue(undefined);
+
+    const result = await executeContactMergeRequest(
+      "cookie",
+      {
+        businessAccountRecordId: "record-1",
+        businessAccountId: "BA0001",
+        keepContactId: 157497,
+        selectedContactIds: [157497, 157498],
+        setKeptAsPrimary: true,
+        expectedAccountLastModified: "2026-03-12T12:00:00.000Z",
+        expectedContactLastModifieds: [
+          { contactId: 157497, lastModified: "2026-03-12T12:00:00.000Z" },
+          { contactId: 157498, lastModified: "2026-03-12T12:00:00.000Z" },
+        ],
+        fieldChoices: [{ field: "displayName", sourceContactId: 157497 }],
+      },
+      { value: null },
+    );
+
+    expect(updateBusinessAccountMock).toHaveBeenCalledWith(
+      "cookie",
+      ["BA0001", "record-1"],
+      expect.objectContaining({
+        id: "record-1",
+        BusinessAccountID: { value: "BA0001" },
+        PrimaryContactID: { value: 157497 },
+      }),
+      { value: null },
+      {
+        strategy: "body-first",
+      },
+    );
+    expect(setBusinessAccountPrimaryContactMock).toHaveBeenCalledWith(
+      "cookie",
+      expect.objectContaining({
+        resolvedRecordId: "record-1",
+      }),
+      157497,
+      { value: null },
+      keepContact,
+    );
+    expect(result).toMatchObject({
+      merged: true,
+      keptContactId: 157497,
+      deletedContactIds: [157498],
+    });
+  });
 });

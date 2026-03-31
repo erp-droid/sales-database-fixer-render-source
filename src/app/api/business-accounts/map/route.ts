@@ -8,6 +8,7 @@ import {
   filterSuppressedBusinessAccountRows,
   normalizeBusinessAccount,
 } from "@/lib/business-accounts";
+import { filterRowsForCurrentVariant } from "@/lib/app-variant";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { geocodeAddress, type GeocodeResult } from "@/lib/geocode";
@@ -414,15 +415,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             authCookieRefresh,
           );
 
-          const normalizedRows = filterSuppressedBusinessAccountRows(
-            rawAccounts
-              .filter(
-                (account) =>
-                  isAllowedBusinessAccountType(account) &&
-                  !isExcludedInternalCompanyName(readBusinessAccountName(account)),
-              )
-              .map((item) => normalizeBusinessAccount(item))
-              .filter((row) => Boolean(row.id && row.addressLine1 && row.city)),
+          const normalizedRows = filterRowsForCurrentVariant(
+            filterSuppressedBusinessAccountRows(
+              rawAccounts
+                .filter(
+                  (account) =>
+                    isAllowedBusinessAccountType(account) &&
+                    !isExcludedInternalCompanyName(readBusinessAccountName(account)),
+                )
+                .map((item) => normalizeBusinessAccount(item))
+                .filter((row) => Boolean(row.id && row.addressLine1 && row.city)),
+            ),
           );
 
           const filteredRows = normalizedSearch

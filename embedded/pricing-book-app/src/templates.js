@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import OpenAI from "openai";
 import { config } from "./config.js";
+import { buildGoogleAuth } from "./googleServiceAuth.js";
 
 const TEMPLATE_SHEETS = {
   plumbing: "Template Plumbing",
@@ -65,13 +66,13 @@ const FALLBACK_TEMPLATE_ITEMS = {
     plannedEnd: ""
   },
   hvac: {
-    taskCd: "HVACGEN",
-    costCode: "230500",
+    taskCd: "HVACGRAL",
+    costCode: "23-0000",
     accountGroup: "R",
-    description: "HVAC Generic Scope",
-    uom: "EACH",
-    sellRate: 0,
-    costRate: 0,
+    description: "HVAC General",
+    uom: "HOUR",
+    sellRate: 140,
+    costRate: 93,
     type: "Cost and Revenue Task",
     taxCategory: "H",
     plannedStart: "",
@@ -203,8 +204,10 @@ export async function loadTemplates() {
   try {
     let sheets = null;
     try {
-      const auth = new google.auth.GoogleAuth({
-        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+      const auth = buildGoogleAuth({
+        scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+        jsonEnvNames: ["GOOGLE_SERVICE_ACCOUNT_JSON", "QUOTE_DOC_GOOGLE_SERVICE_ACCOUNT_JSON"],
+        keyFileEnvNames: ["GOOGLE_SERVICE_ACCOUNT_KEY_FILE", "QUOTE_DOC_GOOGLE_SERVICE_ACCOUNT_KEY_FILE"]
       });
       const client = await auth.getClient();
       sheets = google.sheets({ version: "v4", auth: client });

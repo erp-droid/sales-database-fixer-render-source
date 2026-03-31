@@ -20,6 +20,7 @@ import {
 } from "@/lib/call-analytics/employee-directory";
 import type { CallEmployeeDirectoryItem } from "@/lib/call-analytics/types";
 import { withServiceAcumaticaSession } from "@/lib/acumatica-service-auth";
+import { filterRowsForCurrentVariant } from "@/lib/app-variant";
 import { getEnv } from "@/lib/env";
 import {
   buildMeetingAccountOptionsFromRows,
@@ -364,10 +365,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           authCookieRefresh,
         ),
       ]);
-      const accountRows = rawAccounts
-        .filter((account) => isAllowedMeetingBusinessAccount(account))
-        .flatMap((account) => normalizeBusinessAccountRows(account));
+      const accountRows = filterRowsForCurrentVariant(
+        rawAccounts
+          .filter((account) => isAllowedMeetingBusinessAccount(account))
+          .flatMap((account) => normalizeBusinessAccountRows(account)),
+      );
       accountOptions = buildMeetingAccountOptionsFromRows(accountRows);
+      const allowedBusinessIds = new Set(
+        accountRows
+          .map((row) => normalizeBusinessAccountCode(row.businessAccountId))
+          .filter((value) => value.length > 0),
+      );
       const allowedAccountsByBusinessId = new Map(
         rawAccounts
           .filter((account) => isAllowedMeetingBusinessAccount(account))
@@ -387,7 +395,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
               },
             ] as const;
           })
-          .filter(([businessAccountId]) => businessAccountId.length > 0),
+          .filter(
+            ([businessAccountId]) =>
+              businessAccountId.length > 0 && allowedBusinessIds.has(businessAccountId),
+          ),
       );
       contacts = buildMeetingContactOptionsFromContacts(
         rawContacts,

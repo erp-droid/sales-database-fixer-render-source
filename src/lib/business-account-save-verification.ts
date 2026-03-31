@@ -4,6 +4,7 @@ import type {
   CompanyPhoneSource,
 } from "@/types/business-account";
 import {
+  enforceSinglePrimaryPerAccountRows,
   hasBusinessAccountChanges,
   hasPrimaryContactChanges,
   sanitizeNullableInput,
@@ -152,4 +153,73 @@ export function applyOptimisticSavedUpdateToRows(
       effectiveTargetContactId,
     ),
   );
+}
+
+export function mergeSavedResponseRowIntoRows(
+  rows: BusinessAccountRow[],
+  responseRow: BusinessAccountRow,
+): BusinessAccountRow[] {
+  const responseContactId = responseRow.contactId ?? null;
+  const responsePrimaryContactId = responseRow.primaryContactId ?? null;
+  let matched = false;
+
+  const nextRows = rows.map((row) => {
+    const nextPrimaryContactId =
+      responsePrimaryContactId !== null ? responsePrimaryContactId : row.primaryContactId;
+    const nextIsPrimaryContact =
+      responsePrimaryContactId !== null &&
+      row.contactId !== null &&
+      row.contactId !== undefined
+        ? row.contactId === responsePrimaryContactId
+        : row.isPrimaryContact;
+
+    if (responseContactId === null || row.contactId !== responseContactId) {
+      if (
+        nextPrimaryContactId === row.primaryContactId &&
+        nextIsPrimaryContact === row.isPrimaryContact
+      ) {
+        return row;
+      }
+
+      return {
+        ...row,
+        primaryContactId: nextPrimaryContactId,
+        isPrimaryContact: nextIsPrimaryContact,
+      };
+    }
+
+    matched = true;
+    return {
+      ...row,
+      ...responseRow,
+      id: row.id,
+      accountRecordId: row.accountRecordId ?? responseRow.accountRecordId ?? responseRow.id,
+      rowKey:
+        responseRow.rowKey ??
+        row.rowKey ??
+        `${row.accountRecordId ?? responseRow.accountRecordId ?? row.id}:contact:${responseContactId}`,
+      primaryContactId: nextPrimaryContactId,
+      isPrimaryContact:
+        responsePrimaryContactId !== null
+          ? responseContactId === responsePrimaryContactId
+          : responseRow.isPrimaryContact,
+    };
+  });
+
+  const mergedRows =
+    matched || responseContactId === null
+      ? nextRows
+      : [
+          ...nextRows,
+          {
+            ...responseRow,
+            primaryContactId: responsePrimaryContactId ?? responseRow.primaryContactId,
+            isPrimaryContact:
+              responsePrimaryContactId !== null
+                ? responseContactId === responsePrimaryContactId
+                : responseRow.isPrimaryContact,
+          },
+        ];
+
+  return enforceSinglePrimaryPerAccountRows(mergedRows);
 }

@@ -1,6 +1,7 @@
 import Image from "next/image";
 
 import { SignInForm } from "@/components/signin-form";
+import { getAppBranding } from "@/lib/app-variant";
 
 import styles from "./signin.module.css";
 
@@ -13,18 +14,19 @@ type SignInPageProps = {
 export default async function SignInPage({ searchParams }: SignInPageProps) {
   const resolvedParams = (await searchParams) ?? {};
   const nextPath = resolvedParams.next || "/accounts";
+  const branding = getAppBranding();
 
   return (
     <main className={styles.page}>
       <section className={styles.card}>
-        <div className={styles.brandTop} aria-label="MeadowBrook logo">
+        <div className={styles.brandTop} aria-label={`${branding.companyName} logo`}>
           <Image
-            alt="MeadowBrook"
+            alt={branding.logoAlt}
             className={styles.brandLogo}
-            height={202}
+            height={branding.logoHeight}
             priority
-            src="/mb-logo.png"
-            width={712}
+            src={branding.logoSrc}
+            width={branding.logoWidth}
           />
         </div>
         <p className={styles.eyebrow}></p>

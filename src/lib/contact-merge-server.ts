@@ -371,6 +371,9 @@ export async function setBusinessAccountPrimaryContact(
           ...fallbackPayload,
         },
         authCookieRefresh,
+        {
+          strategy: "body-first",
+        },
       );
 
       verificationRaw = await fetchBusinessAccountById(

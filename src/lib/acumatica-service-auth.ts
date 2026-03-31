@@ -1,14 +1,23 @@
 import {
   type AuthCookieRefreshState,
   type RawActivity,
+  type RawOpportunity,
+  type RawPaymentTerm,
   createActivity,
+  createContact,
+  fetchOpportunities,
+  fetchPaymentTerms,
   fetchActivities,
   fetchContactsByBusinessAccountIds,
   fetchBusinessAccountById,
   fetchContactById,
   findContactsByEmailSubstring,
+  invokeBusinessAccountAction,
+  updateBusinessAccount,
+  updateCustomer,
 } from "@/lib/acumatica";
 import {
+  buildCookieHeader,
   buildStoredAuthCookieValueFromSetCookies,
   getSetCookieHeaders,
 } from "@/lib/auth";
@@ -92,8 +101,35 @@ async function loginServiceSession(preferredLoginName?: string | null): Promise<
     });
 
     if (!response.ok) {
-      const message = await response.text();
-      throw new Error(`Acumatica service login failed (${response.status}): ${message || "Unknown error"}`);
+      const raw = await response.text();
+      let message = raw || "Unknown error";
+      let exceptionMessage = "";
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const parsedMessage =
+          typeof parsed.message === "string" ? parsed.message : "";
+        exceptionMessage =
+          typeof parsed.exceptionMessage === "string"
+            ? parsed.exceptionMessage
+            : "";
+        message =
+          exceptionMessage || parsedMessage || raw || "Unknown error";
+      } catch {
+        // keep raw text
+      }
+
+      if (message.toLowerCase().includes("api login limit")) {
+        throw new HttpError(
+          503,
+          "Acumatica API login limit reached. Please close other API sessions or wait a few minutes, then refresh.",
+          { status: response.status, message },
+        );
+      }
+
+      throw new HttpError(
+        response.status,
+        `Acumatica service login failed (${response.status}): ${message}`,
+      );
     }
 
     const cookieValue = buildStoredAuthCookieValueFromSetCookies(
@@ -126,12 +162,25 @@ async function getServiceCookie(
   return loginServiceSession(preferredLoginName);
 }
 
+async function logoutServiceSession(cookieValue: string): Promise<void> {
+  const env = getEnv();
+  await fetch(`${env.ACUMATICA_BASE_URL}/entity/auth/logout`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Cookie: buildCookieHeader(cookieValue),
+    },
+    cache: "no-store",
+  }).catch(() => null);
+}
+
 export async function withServiceAcumaticaSession<T>(
   preferredLoginName: string | null | undefined,
   operation: (cookieValue: string, authCookieRefresh: AuthCookieRefreshState) => Promise<T>,
 ): Promise<T> {
   let forceRefresh = false;
   const cacheKey = readServiceCredentials(preferredLoginName).loginNameKey;
+  const logoutAfterRequest = getEnv().ACUMATICA_SERVICE_LOGOUT_AFTER_REQUEST;
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const cookieValue = await getServiceCookie(preferredLoginName, forceRefresh);
@@ -141,6 +190,10 @@ export async function withServiceAcumaticaSession<T>(
       const result = await operation(cookieValue, authCookieRefresh);
       if (authCookieRefresh.value) {
         cachedCookieValues.set(cacheKey, authCookieRefresh.value);
+      }
+      if (logoutAfterRequest) {
+        cachedCookieValues.delete(cacheKey);
+        await logoutServiceSession(authCookieRefresh.value ?? cookieValue);
       }
       return result;
     } catch (error) {
@@ -152,6 +205,11 @@ export async function withServiceAcumaticaSession<T>(
         cachedCookieValues.delete(cacheKey);
         forceRefresh = true;
         continue;
+      }
+
+      if (logoutAfterRequest) {
+        cachedCookieValues.delete(cacheKey);
+        await logoutServiceSession(authCookieRefresh.value ?? cookieValue);
       }
 
       throw error;
@@ -203,6 +261,69 @@ export async function serviceFetchActivities(
 ): Promise<RawActivity[]> {
   return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
     fetchActivities(cookieValue, options, authCookieRefresh),
+  );
+}
+
+export async function serviceFetchOpportunities(
+  loginName: string | null | undefined,
+  options?: Parameters<typeof fetchOpportunities>[1],
+): Promise<RawOpportunity[]> {
+  return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
+    fetchOpportunities(cookieValue, options, authCookieRefresh),
+  );
+}
+
+export async function serviceFetchPaymentTerms(
+  loginName: string | null | undefined,
+  options?: Parameters<typeof fetchPaymentTerms>[1],
+): Promise<RawPaymentTerm[]> {
+  return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
+    fetchPaymentTerms(cookieValue, options, authCookieRefresh),
+  );
+}
+
+export async function serviceUpdateBusinessAccount(
+  loginName: string | null | undefined,
+  id: string | string[],
+  payload: Record<string, unknown>,
+): Promise<void> {
+  return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
+    updateBusinessAccount(cookieValue, id, payload, authCookieRefresh),
+  );
+}
+
+export async function serviceCreateContact(
+  loginName: string | null | undefined,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
+    createContact(cookieValue, payload, authCookieRefresh),
+  );
+}
+
+export async function serviceUpdateCustomer(
+  loginName: string | null | undefined,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
+    updateCustomer(cookieValue, payload, authCookieRefresh),
+  );
+}
+
+export async function serviceInvokeBusinessAccountAction(
+  loginName: string | null | undefined,
+  actionName: string,
+  entity: Record<string, unknown>,
+  parameters?: Record<string, unknown>,
+): Promise<void> {
+  return withServiceAcumaticaSession(loginName, (cookieValue, authCookieRefresh) =>
+    invokeBusinessAccountAction(
+      cookieValue,
+      actionName,
+      entity,
+      parameters ?? {},
+      authCookieRefresh,
+    ),
   );
 }
 

@@ -5,21 +5,26 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 
 import { AppPageNav } from "@/components/app-page-nav";
+import { getAppBranding } from "@/lib/app-variant";
 
 import styles from "./app-chrome.module.css";
 
 function buildUserInitials(userName: string | null | undefined): string {
+  const branding = getAppBranding();
   const value = userName?.trim() ?? "";
   if (!value) {
-    return "MB";
+    return branding.defaultUserInitials;
   }
 
   const parts = value.split(/\s+/).filter(Boolean);
   if (parts.length === 1) {
-    return parts[0]?.slice(0, 2).toUpperCase() ?? "MB";
+    return parts[0]?.slice(0, 2).toUpperCase() ?? branding.defaultUserInitials;
   }
 
-  return `${parts[0]?.[0] ?? ""}${parts[parts.length - 1]?.[0] ?? ""}`.toUpperCase() || "MB";
+  return (
+    `${parts[0]?.[0] ?? ""}${parts[parts.length - 1]?.[0] ?? ""}`.toUpperCase() ||
+    branding.defaultUserInitials
+  );
 }
 
 export function AppChrome({
@@ -42,6 +47,7 @@ export function AppChrome({
   contentClassName?: string;
 }) {
   const router = useRouter();
+  const branding = useMemo(() => getAppBranding(), []);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement | null>(null);
   const resolvedUserName = userName?.trim() || "Signed in";
@@ -102,12 +108,12 @@ export function AppChrome({
       <header className={styles.appBar}>
         <div className={styles.appBrand}>
           <Image
-            alt="MeadowBrook"
+            alt={branding.logoAlt}
             className={styles.appLogo}
-            height={136}
+            height={branding.logoHeight}
             priority
-            src="/mb-logo.png"
-            width={478}
+            src={branding.logoSrc}
+            width={branding.logoWidth}
           />
         </div>
         <nav aria-label="Primary" className={styles.appNav}>

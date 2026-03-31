@@ -1,5 +1,6 @@
 "use client";
 
+import { getAppBranding } from "@/lib/app-variant";
 import type { BusinessAccountRow } from "@/types/business-account";
 
 const LEGACY_DATASET_STORAGE_KEYS = [
@@ -9,10 +10,14 @@ const LEGACY_DATASET_STORAGE_KEYS = [
   "businessAccounts.dataset.v1",
 ] as const;
 
-export const DATASET_STORAGE_KEYS = ["businessAccounts.dataset.v5"] as const;
+const { storageNamespace } = getAppBranding();
+
+export const DATASET_STORAGE_KEYS = [
+  `businessAccounts.dataset.v6.${storageNamespace}`,
+] as const;
 
 const CURRENT_DATASET_STORAGE_KEY = DATASET_STORAGE_KEYS[0];
-const SYNC_META_STORAGE_KEY = "businessAccounts.syncMeta.v1";
+const SYNC_META_STORAGE_KEY = `businessAccounts.syncMeta.v2.${storageNamespace}`;
 
 export type CachedDataset = {
   rows: BusinessAccountRow[];

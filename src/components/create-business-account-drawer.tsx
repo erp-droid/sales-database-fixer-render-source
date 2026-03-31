@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { getAppBranding } from "@/lib/app-variant";
 import {
   BUSINESS_ACCOUNT_CLASS_OPTIONS,
   CATEGORY_OPTIONS,
@@ -30,6 +31,8 @@ import type {
 } from "@/types/company-attribute-suggestion";
 
 import styles from "./create-business-account-drawer.module.css";
+
+const appBranding = getAppBranding();
 
 type AddressLookupSuggestion = {
   id: string;
@@ -1126,7 +1129,7 @@ export function CreateBusinessAccountDrawer({
                       </p>
                     ) : (
                       <p className={styles.lookupHint}>
-                        OpenAI looks online for company evidence, writes a local-only company description, and also uses MeadowBrook's postal-code region map.
+                        OpenAI looks online for company evidence, writes a local-only company description, and also uses {appBranding.companyName}&apos;s postal-code region map.
                       </p>
                     )}
                   </div>

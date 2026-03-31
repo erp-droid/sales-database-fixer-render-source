@@ -10,6 +10,7 @@ import {
   normalizeBusinessAccount,
   normalizeBusinessAccountRows,
   queryBusinessAccounts,
+  readRawBusinessAccountPrimaryContactId,
   selectPrimaryContactIndex,
 } from "@/lib/business-accounts";
 import type { BusinessAccountRow } from "@/types/business-account";
@@ -77,6 +78,19 @@ function makePayload(overrides?: Record<string, unknown>): Record<string, unknow
 }
 
 describe("normalizeBusinessAccount", () => {
+  it("treats non-positive primary contact ids as missing", () => {
+    expect(
+      readRawBusinessAccountPrimaryContactId(
+        makePayload({
+          PrimaryContact: {
+            ContactID: { value: -2147483647 },
+          },
+          PrimaryContactID: { value: -2147483647 },
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it("maps values from payload and formats address", () => {
     const row = normalizeBusinessAccount(makePayload());
 

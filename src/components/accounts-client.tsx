@@ -36,6 +36,7 @@ import {
   queryBusinessAccounts,
   resolveCompanyPhone,
 } from "@/lib/business-accounts";
+import { getAppBranding } from "@/lib/app-variant";
 import {
   buildBusinessAccountConcurrencySnapshot,
   collectUpdatedConcurrencyFields,
@@ -126,6 +127,7 @@ import styles from "./accounts-client.module.css";
 import type { SyncStatusResponse } from "@/types/sync";
 
 const PAGE_SIZE = 25;
+const LIVE_ACCOUNT_REFRESH_DEBOUNCE_MS = 750;
 
 type SessionResponse = {
   authenticated: boolean;
@@ -416,13 +418,17 @@ const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   lastModified: "",
 };
 
-const COLUMN_STORAGE_KEY = "businessAccounts.columnOrder.v2";
+const appBranding = getAppBranding();
+
+const COLUMN_STORAGE_KEY = `businessAccounts.columnOrder.v3.${appBranding.storageNamespace}`;
 const LEGACY_COLUMN_STORAGE_KEYS = ["businessAccounts.columnOrder.v1"] as const;
-const COLUMN_VISIBILITY_STORAGE_KEY = "businessAccounts.visibleColumns.v2";
+const COLUMN_VISIBILITY_STORAGE_KEY =
+  `businessAccounts.visibleColumns.v3.${appBranding.storageNamespace}`;
 const LEGACY_COLUMN_VISIBILITY_STORAGE_KEYS = [
   "businessAccounts.visibleColumns.v1",
 ] as const;
-const COLUMN_PREF_RESET_STORAGE_KEY = "businessAccounts.resetColumnsOnNextLoad.v1";
+const COLUMN_PREF_RESET_STORAGE_KEY =
+  `businessAccounts.resetColumnsOnNextLoad.v2.${appBranding.storageNamespace}`;
 
 type AttributeOption = {
   value: string;
@@ -914,6 +920,24 @@ function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
     expectedLastModified: row.lastModifiedIso,
     baseSnapshot: buildBusinessAccountConcurrencySnapshot(row),
   };
+}
+
+function rebaseDraftOntoLiveRow(
+  liveRow: BusinessAccountRow,
+  currentDraft: BusinessAccountUpdateRequest,
+): BusinessAccountUpdateRequest {
+  const nextDraft = buildDraft(liveRow);
+
+  for (const field of collectUpdatedConcurrencyFields(currentDraft)) {
+    nextDraft[field] = currentDraft[field] as never;
+  }
+
+  nextDraft.targetContactId = currentDraft.targetContactId ?? nextDraft.targetContactId;
+  nextDraft.setAsPrimaryContact = currentDraft.setAsPrimaryContact;
+  nextDraft.primaryOnlyIntent = currentDraft.primaryOnlyIntent;
+  nextDraft.contactOnlyIntent = currentDraft.contactOnlyIntent;
+
+  return nextDraft;
 }
 
 function isDraftDirty(draft: BusinessAccountUpdateRequest | null): boolean {
@@ -2019,15 +2043,23 @@ function resolveRowBusinessAccountRecordId(row: BusinessAccountRow): string {
 function buildBusinessAccountDetailUrl(
   accountRecordId: string,
   contactId?: number | null,
+  options?: { live?: boolean },
 ): string {
   const basePath = `/api/business-accounts/${encodeURIComponent(accountRecordId.trim())}`;
-  if (contactId === null || contactId === undefined) {
+  const params = new URLSearchParams();
+
+  if (contactId !== null && contactId !== undefined) {
+    params.set("contactId", String(contactId));
+  }
+
+  if (options?.live) {
+    params.set("live", "1");
+  }
+
+  if (params.size === 0) {
     return basePath;
   }
 
-  const params = new URLSearchParams({
-    contactId: String(contactId),
-  });
   return `${basePath}?${params.toString()}`;
 }
 
@@ -2239,6 +2271,7 @@ export function AccountsClient({
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeletingContact, setIsDeletingContact] = useState(false);
+  const [isDrawerRefreshingLive, setIsDrawerRefreshingLive] = useState(false);
   const [isDeletingSelectedContacts, setIsDeletingSelectedContacts] = useState(false);
   const [employeeOptions, setEmployeeOptions] = useState<EmployeeOption[]>([]);
   const [isEmployeesLoading, setIsEmployeesLoading] = useState(false);
@@ -2265,6 +2298,11 @@ export function AccountsClient({
   const meetingOptionsPrefetchKeyRef = useRef<string | null>(null);
   const employeesFetchAttemptedRef = useRef(false);
   const employeesFetchRequestRef = useRef(0);
+  const drawerLiveRefreshRequestRef = useRef(0);
+  const queuedLiveAccountEventsRef = useRef(new Map<string, BusinessAccountLiveEvent>());
+  const liveAccountRefreshTimerRef = useRef<number | null>(null);
+  const liveAccountRefreshInFlightRef = useRef(false);
+  const liveAccountRefreshPendingWhileHiddenRef = useRef(false);
   const notesFieldRef = useRef<HTMLTextAreaElement | null>(null);
   const createMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const currentContactEnhanceRequest = useMemo(
@@ -3138,7 +3176,7 @@ export function AccountsClient({
     });
   }, [router]);
 
-  const refreshLiveUpdatedAccount = useEffectEvent(
+  const refreshLiveUpdatedAccountNow = useEffectEvent(
     async (event: BusinessAccountLiveEvent): Promise<void> => {
       if (!session?.authenticated || isSavingRef.current) {
         return;
@@ -3213,6 +3251,73 @@ export function AccountsClient({
     },
   );
 
+  const flushQueuedLiveUpdatedAccounts = useEffectEvent(async (): Promise<void> => {
+    if (liveAccountRefreshInFlightRef.current) {
+      return;
+    }
+
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      liveAccountRefreshPendingWhileHiddenRef.current = true;
+      return;
+    }
+
+    const queuedEvents = [...queuedLiveAccountEventsRef.current.values()];
+    if (queuedEvents.length === 0) {
+      return;
+    }
+
+    queuedLiveAccountEventsRef.current.clear();
+    liveAccountRefreshPendingWhileHiddenRef.current = false;
+    liveAccountRefreshInFlightRef.current = true;
+
+    try {
+      for (const event of queuedEvents) {
+        await refreshLiveUpdatedAccountNow(event);
+      }
+    } finally {
+      liveAccountRefreshInFlightRef.current = false;
+
+      if (queuedLiveAccountEventsRef.current.size > 0) {
+        if (liveAccountRefreshTimerRef.current !== null) {
+          clearTimeout(liveAccountRefreshTimerRef.current);
+          liveAccountRefreshTimerRef.current = null;
+        }
+
+        liveAccountRefreshTimerRef.current = window.setTimeout(() => {
+          liveAccountRefreshTimerRef.current = null;
+          void flushQueuedLiveUpdatedAccounts();
+        }, LIVE_ACCOUNT_REFRESH_DEBOUNCE_MS);
+      }
+    }
+  });
+
+  const queueLiveUpdatedAccountRefresh = useEffectEvent((event: BusinessAccountLiveEvent): void => {
+    const eventKey =
+      event.accountRecordId.trim() ||
+      event.businessAccountId?.trim() ||
+      String(event.targetContactId ?? "");
+
+    if (!eventKey) {
+      return;
+    }
+
+    queuedLiveAccountEventsRef.current.set(eventKey, event);
+
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      liveAccountRefreshPendingWhileHiddenRef.current = true;
+      return;
+    }
+
+    if (liveAccountRefreshTimerRef.current !== null) {
+      return;
+    }
+
+    liveAccountRefreshTimerRef.current = window.setTimeout(() => {
+      liveAccountRefreshTimerRef.current = null;
+      void flushQueuedLiveUpdatedAccounts();
+    }, LIVE_ACCOUNT_REFRESH_DEBOUNCE_MS);
+  });
+
   useEffect(() => {
     if (!session?.authenticated) {
       return;
@@ -3223,7 +3328,7 @@ export function AccountsClient({
       try {
         const parsed = JSON.parse(rawEvent.data) as BusinessAccountLiveEvent;
         if (parsed && parsed.type === "changed" && parsed.accountRecordId) {
-          void refreshLiveUpdatedAccount(parsed);
+          queueLiveUpdatedAccountRefresh(parsed);
         }
       } catch {
         // Ignore malformed live update events.
@@ -3236,7 +3341,45 @@ export function AccountsClient({
       eventSource.removeEventListener("changed", handleChanged as EventListener);
       eventSource.close();
     };
-  }, [refreshLiveUpdatedAccount, session?.authenticated]);
+  }, [queueLiveUpdatedAccountRefresh, session?.authenticated]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+
+      if (
+        !liveAccountRefreshPendingWhileHiddenRef.current &&
+        queuedLiveAccountEventsRef.current.size === 0
+      ) {
+        return;
+      }
+
+      liveAccountRefreshPendingWhileHiddenRef.current = false;
+      if (liveAccountRefreshTimerRef.current !== null) {
+        clearTimeout(liveAccountRefreshTimerRef.current);
+        liveAccountRefreshTimerRef.current = null;
+      }
+      void flushQueuedLiveUpdatedAccounts();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (liveAccountRefreshTimerRef.current !== null) {
+        clearTimeout(liveAccountRefreshTimerRef.current);
+        liveAccountRefreshTimerRef.current = null;
+      }
+      queuedLiveAccountEventsRef.current.clear();
+      liveAccountRefreshPendingWhileHiddenRef.current = false;
+    };
+  }, [flushQueuedLiveUpdatedAccounts]);
 
   useEffect(() => {
     if (!session?.authenticated || !selected) {
@@ -4689,6 +4832,7 @@ export function AccountsClient({
   }
 
   function closeDrawer(options?: { preserveNotice?: boolean }) {
+    drawerLiveRefreshRequestRef.current += 1;
     setSelected(null);
     setDraft(null);
     setDrawerFocusTarget(null);
@@ -4698,6 +4842,7 @@ export function AccountsClient({
       setSaveNotice(null);
     }
     setIsDeletingContact(false);
+    setIsDrawerRefreshingLive(false);
     setAddressSuggestions([]);
     setAddressLookupError(null);
     setIsAddressLookupLoading(false);
@@ -4762,11 +4907,16 @@ export function AccountsClient({
     resetContactEnhanceState();
     resetCompanyAttributeSuggestionState();
     setEmployeesError(null);
+    const liveRefreshRequestId = drawerLiveRefreshRequestRef.current + 1;
+    drawerLiveRefreshRequestRef.current = liveRefreshRequestId;
+    setIsDrawerRefreshingLive(true);
 
     try {
       const accountRecordId = row.accountRecordId ?? row.id;
       const response = await fetch(
-        buildBusinessAccountDetailUrl(accountRecordId, resolveRowContactId(row)),
+        buildBusinessAccountDetailUrl(accountRecordId, resolveRowContactId(row), {
+          live: true,
+        }),
         {
           cache: "no-store",
         },
@@ -4774,6 +4924,10 @@ export function AccountsClient({
       const payload = await readJsonResponse<
         BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
       >(response);
+
+      if (drawerLiveRefreshRequestRef.current !== liveRefreshRequestId) {
+        return;
+      }
 
       if (response.status === 401) {
         setSaveError(
@@ -4839,9 +4993,17 @@ export function AccountsClient({
         );
       }
       setSelected(mergedRow);
-      setDraft(buildDraft(mergedRow));
+      setDraft((currentDraft) =>
+        currentDraft && isDraftDirty(currentDraft)
+          ? rebaseDraftOntoLiveRow(mergedRow, currentDraft)
+          : buildDraft(mergedRow),
+      );
     } catch {
       // Keep base row loaded in drawer if detail fetch fails.
+    } finally {
+      if (drawerLiveRefreshRequestRef.current === liveRefreshRequestId) {
+        setIsDrawerRefreshingLive(false);
+      }
     }
   }
 
@@ -4939,6 +5101,9 @@ export function AccountsClient({
     sourceDraft: BusinessAccountUpdateRequest,
   ): Promise<boolean> {
     const sourceRowKey = getRowKey(sourceRow);
+    const accountRecordId = sourceRow.accountRecordId ?? sourceRow.id;
+    const selectedBusinessAccountId = sourceRow.businessAccountId;
+    const selectedContactId = sourceRow.contactId ?? sourceRow.primaryContactId ?? null;
     setIsSaving(true);
     setSaveError(null);
     setSaveFieldErrors({});
@@ -4973,9 +5138,6 @@ export function AccountsClient({
         };
       }
 
-      const accountRecordId = sourceRow.accountRecordId ?? sourceRow.id;
-      const selectedBusinessAccountId = sourceRow.businessAccountId;
-      const selectedContactId = sourceRow.contactId ?? sourceRow.primaryContactId ?? null;
       const response = await fetch(`/api/business-accounts/${accountRecordId}`, {
         method: "PUT",
         headers: {
@@ -5225,6 +5387,73 @@ export function AccountsClient({
       clearCachedMapData();
       saved = true;
     } catch (saveRequestError) {
+      if (
+        saveRequestError instanceof SaveDraftError &&
+        /modified in acumatica after you loaded it|changed while you were editing it/i.test(
+          saveRequestError.message,
+        )
+      ) {
+        try {
+          const conflictRefreshResponse = await fetch(
+            buildBusinessAccountDetailUrl(
+              accountRecordId,
+              sourceDraft.targetContactId ?? selectedContactId,
+              { live: true },
+            ),
+            {
+              cache: "no-store",
+            },
+          );
+          const conflictRefreshPayload = await readJsonResponse<
+            BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
+          >(conflictRefreshResponse);
+
+          if (conflictRefreshResponse.ok) {
+            const refreshedRows =
+              readDetailResponseRows(conflictRefreshPayload) ??
+              (() => {
+                const refreshedRow = readDetailResponseRow(conflictRefreshPayload);
+                return refreshedRow ? [refreshedRow] : null;
+              })();
+            const refreshedRow =
+              (refreshedRows && findMatchingAccountRow(refreshedRows, sourceRow)) ??
+              readDetailResponseRow(conflictRefreshPayload) ??
+              refreshedRows?.[0] ??
+              null;
+
+            if (refreshedRows && refreshedRows.length > 0 && refreshedRow) {
+              const refreshedAccountRecordId =
+                refreshedRow.accountRecordId ?? refreshedRow.id ?? accountRecordId;
+
+              setAllRows((currentRows) =>
+                replaceRowsForAccount(
+                  currentRows,
+                  refreshedRows,
+                  refreshedAccountRecordId,
+                  refreshedRow.businessAccountId,
+                ),
+              );
+
+              if (selected && getRowKey(selected) === sourceRowKey) {
+                const nextSelected =
+                  findMatchingAccountRow(refreshedRows, sourceRow) ?? refreshedRow;
+                setSelected(nextSelected);
+                setDraft(rebaseDraftOntoLiveRow(nextSelected, sourceDraft));
+              }
+
+              clearCachedMapData();
+              setSaveFieldErrors({});
+              setSaveError(
+                "This record changed in Acumatica while you were editing. The latest version was loaded and your draft was preserved. Review it and click Save again.",
+              );
+              return saved;
+            }
+          }
+        } catch {
+          // Fall back to the original save error if the live refresh fails.
+        }
+      }
+
       setSaveFieldErrors(
         saveRequestError instanceof SaveDraftError ? saveRequestError.fieldErrors : {},
       );
@@ -6183,7 +6412,7 @@ export function AccountsClient({
           </>
         )
       }
-      title="Sales MeadowBrook"
+      title={appBranding.appTitle}
       userName={session?.user?.name ?? "Signed in"}
     >
 
@@ -6916,6 +7145,16 @@ export function AccountsClient({
 
         {selected && draft ? (
           <div className={styles.drawerBody}>
+            {isDrawerRefreshingLive ? (
+              <p className={styles.lookupLoading}>
+                Refreshing the latest Acumatica data before editing...
+              </p>
+            ) : null}
+
+            <fieldset
+              className={styles.drawerFieldset}
+              disabled={isSaving || isDeletingContact || isDrawerRefreshingLive}
+            >
             <label>
               Company Name
               {drawerNeedsCompanyAssignment ? (
@@ -7495,7 +7734,7 @@ export function AccountsClient({
                   </p>
                 ) : (
                   <p className={styles.lookupHint}>
-                    OpenAI looks online for company evidence, writes a local-only company description, and also uses MeadowBrook&apos;s postal-code region map.
+                    OpenAI looks online for company evidence, writes a local-only company description, and also uses {appBranding.companyName}&apos;s postal-code region map.
                   </p>
                 )}
               </div>
@@ -7669,6 +7908,7 @@ export function AccountsClient({
                 {isDeletingContact ? "Deleting..." : "Delete contact"}
               </button>
             </div>
+            </fieldset>
           </div>
         ) : (
           <div className={styles.drawerBody}>

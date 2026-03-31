@@ -12,7 +12,11 @@ const SESSION_INVALID_CONFIRMATION_DELAY_MS = 750;
 const FORCED_SIGN_OUT_BROADCAST_KEY = "businessAccounts.authSignedOutAt.v1";
 
 function isPublicPath(pathname: string | null): boolean {
-  return pathname === "/signin";
+  if (!pathname) {
+    return false;
+  }
+
+  return pathname === "/signin" || pathname.startsWith("/onboarding");
 }
 
 function resolveRequestPath(input: RequestInfo | URL): string | null {
