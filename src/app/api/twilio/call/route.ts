@@ -9,7 +9,7 @@ import {
   setAuthCookie,
 } from "@/lib/auth";
 import { type AuthCookieRefreshState, validateSessionWithAcumatica } from "@/lib/acumatica";
-import { ensureCallActivitySyncQueuedForSession } from "@/lib/call-analytics/postcall-worker";
+import { queueCallActivitySyncForSession } from "@/lib/call-analytics/postcall-worker";
 import {
   findRecentBridgeCallSessionForEmployee,
   readCallSessionById,
@@ -37,7 +37,10 @@ type StartPayload = {
 };
 
 const ACTIVE_BRIDGE_CALL_LOOKBACK_MS = 45_000;
+const ACTIVE_SESSION_RECONCILE_INTERVAL_MS = 5_000;
 const pendingBridgeCallStarts = new Map<string, Promise<BridgeCallStartResult>>();
+const pendingSessionReconciles = new Map<string, Promise<unknown>>();
+const lastSessionReconcileAt = new Map<string, number>();
 
 type EndPayload = {
   callSid?: string;
@@ -138,6 +141,32 @@ async function startOrJoinPendingBridgeCall(
   }
 }
 
+function maybeStartSessionReconcile(sessionId: string): void {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  if (pendingSessionReconciles.has(normalizedSessionId)) {
+    return;
+  }
+
+  const now = Date.now();
+  const lastStartedAt = lastSessionReconcileAt.get(normalizedSessionId) ?? 0;
+  if (now - lastStartedAt < ACTIVE_SESSION_RECONCILE_INTERVAL_MS) {
+    return;
+  }
+
+  lastSessionReconcileAt.set(normalizedSessionId, now);
+  const reconcilePromise = reconcileTwilioSession(normalizedSessionId)
+    .catch(() => undefined)
+    .finally(() => {
+      pendingSessionReconciles.delete(normalizedSessionId);
+    });
+
+  pendingSessionReconciles.set(normalizedSessionId, reconcilePromise);
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const cookieValue = getAuthCookieValue(request);
   if (!cookieValue) {
@@ -155,11 +184,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   if (!session.endedAt || session.outcome === "in_progress") {
-    session = (await reconcileTwilioSession(sessionId)) ?? session;
+    maybeStartSessionReconcile(sessionId);
+    session = readCallSessionById(sessionId) ?? session;
+  } else {
+    pendingSessionReconciles.delete(sessionId);
+    lastSessionReconcileAt.delete(sessionId);
   }
 
   if (session.answered && session.endedAt) {
-    void ensureCallActivitySyncQueuedForSession(sessionId).catch(() => undefined);
+    queueCallActivitySyncForSession(sessionId);
   }
 
   return NextResponse.json({

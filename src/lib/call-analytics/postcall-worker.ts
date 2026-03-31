@@ -245,6 +245,14 @@ function buildFallbackSummaryText(transcriptText: string): string {
   return `${prefix}${excerpt.slice(0, maxLength - prefix.length - 3).trim()}...`;
 }
 
+function buildTranscriptionUnavailableSummaryText(): string {
+  return "Automatic transcription unavailable. The recording was captured, but a transcript could not be generated.";
+}
+
+function buildTranscriptionUnavailableTranscriptText(): string {
+  return "Automatic transcription was unavailable for this call recording.";
+}
+
 function formatDateTime(value: string | null | undefined): string {
   if (!value) {
     return "Unknown";
@@ -494,6 +502,16 @@ function shouldUseLocalTranscriptionFallback(error: unknown): boolean {
     message.includes("openai transcription failed (403)") ||
     message.includes("openai transcription failed (404)") ||
     message.includes("openai_api_key is required")
+  );
+}
+
+function shouldSyncWithoutTranscript(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    shouldUseLocalTranscriptionFallback(error) ||
+    message.includes("openai transcription failed") ||
+    message.includes("local transcription failed") ||
+    message.includes("transcription returned an empty transcript")
   );
 }
 
@@ -1039,7 +1057,26 @@ export async function processCallActivitySyncJob(
         recordingSid = cleanText(updated.recordingSid);
       }
 
-      transcriptText = await transcribeRecording(recordingSid);
+      try {
+        transcriptText = await transcribeRecording(recordingSid);
+      } catch (error) {
+        if (!shouldSyncWithoutTranscript(error)) {
+          throw error;
+        }
+
+        transcriptText = buildTranscriptionUnavailableTranscriptText();
+        if (!summaryText) {
+          summaryText = buildTranscriptionUnavailableSummaryText();
+        }
+        console.warn(
+          "[call-activity-sync] Transcription unavailable; syncing activity with fallback note.",
+          {
+            sessionId,
+            recordingSid,
+            error: getErrorMessage(error),
+          },
+        );
+      }
     }
 
     if (!summaryText) {
@@ -1154,16 +1191,6 @@ export async function processTwilioRecordingCallback(
     recordingDurationSeconds: parsed.payload.recordingDurationSeconds,
   });
 
-  void ensureCallActivitySyncQueuedForSession(parsed.sessionId)
-    .then((result) => {
-      logCallActivitySyncResult(parsed.sessionId, result, "recording_callback");
-    })
-    .catch((error) => {
-      console.error("[call-activity-sync] Recording callback processing crashed.", {
-        sessionId: parsed.sessionId,
-        error: getErrorMessage(error),
-      });
-    });
   return job;
 }
 
@@ -1220,4 +1247,25 @@ export async function ensureCallActivitySyncQueuedForSession(
   }
 
   return latestResult;
+}
+
+export function queueCallActivitySyncForSession(
+  sessionId: string,
+): CallActivitySyncRecord | null {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  let job = readCallActivitySyncBySessionId(normalizedSessionId);
+  if (!job) {
+    job = upsertQueuedCallActivitySync({
+      sessionId: normalizedSessionId,
+      recordingSid: null,
+      recordingStatus: null,
+      recordingDurationSeconds: null,
+    });
+  }
+
+  return job;
 }

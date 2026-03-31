@@ -12,7 +12,7 @@ const endBridgeCall = vi.fn();
 const readCallSessionById = vi.fn();
 const findRecentBridgeCallSessionForEmployee = vi.fn();
 const reconcileTwilioSession = vi.fn();
-const ensureCallActivitySyncQueuedForSession = vi.fn();
+const queueCallActivitySyncForSession = vi.fn();
 const createCallSessionId = vi.fn();
 const buildTwilioBridgeCallbacks = vi.fn();
 const recordProvisionalBridgeCall = vi.fn();
@@ -56,7 +56,7 @@ vi.mock("@/lib/call-analytics/ingest", () => ({
 }));
 
 vi.mock("@/lib/call-analytics/postcall-worker", () => ({
-  ensureCallActivitySyncQueuedForSession,
+  queueCallActivitySyncForSession,
 }));
 
 describe("POST /api/twilio/call", () => {

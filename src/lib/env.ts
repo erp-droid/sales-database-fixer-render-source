@@ -11,6 +11,17 @@ function emptyToUndefined(value: string | undefined): string | undefined {
   return trimmed.length === 0 ? undefined : trimmed;
 }
 
+function parseDelimitedList(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 const schema = z.object({
   AUTH_PROVIDER: z.enum(["acumatica", "custom"]).default("acumatica"),
   AUTH_LOGIN_URL: z.string().url().optional(),
@@ -60,7 +71,24 @@ const schema = z.object({
   MAIL_SERVICE_SHARED_SECRET: z.string().min(1).optional(),
   MAIL_INTERNAL_DOMAIN: z.string().min(1).default("meadowb.com"),
   MAIL_CONNECT_RETURN_PATH: z.string().min(1).default("/mail"),
+  ONBOARDING_TRIGGER_SECRET: z.string().min(1).optional(),
+  ONBOARDING_SCAN_LOOKBACK_HOURS: z.string().default("24"),
+  ONBOARDING_WON_STAGES: z.string().optional(),
+  ONBOARDING_WON_STATUSES: z.string().optional(),
+  ONBOARDING_DEFAULT_TERMS_ID: z.string().min(1).default("N30"),
+  ONBOARDING_CUSTOMER_PO_REQUIRED_FIELD: z.string().min(1).default("UsrPORequired"),
+  ONBOARDING_CUSTOMER_TERMS_FIELD: z.string().min(1).default("CreditTermsID"),
+  ONBOARDING_EMAIL_FROM: z.string().min(1).optional(),
+  ONBOARDING_EMAIL_REPLY_TO: z.string().min(1).optional(),
+  ONBOARDING_EMAIL_OVERRIDE_TO: z.string().min(1).optional(),
+  ONBOARDING_EMAIL_BCC: z.string().min(1).optional(),
+  ONBOARDING_SMTP_HOST: z.string().min(1).optional(),
+  ONBOARDING_SMTP_PORT: z.string().default("587"),
+  ONBOARDING_SMTP_SECURE: z.enum(["true", "false"]).optional(),
+  ONBOARDING_SMTP_USER: z.string().min(1).optional(),
+  ONBOARDING_SMTP_PASS: z.string().min(1).optional(),
   WATCHDOG_SECRET: z.string().min(1).optional(),
+  CALL_ACTIVITY_SYNC_SECRET: z.string().min(1).optional(),
   DAILY_CALL_COACHING_SECRET: z.string().min(1).optional(),
   DAILY_CALL_COACHING_ENABLED: z.enum(["true", "false"]).optional(),
   DAILY_CALL_COACHING_SENDER_LOGIN: z.string().min(1).default("jserrano"),
@@ -143,11 +171,28 @@ export type AppEnv = {
   ACUMATICA_OPPORTUNITY_ATTR_PROJECT_TYPE_ID: string;
   ACUMATICA_OPPORTUNITY_LINK_TO_DRIVE_DEFAULT: string;
   ACUMATICA_OPPORTUNITY_DEFAULT_LINK_TO_DRIVE: string;
-  MAIL_SERVICE_URL?: string;
-  MAIL_SERVICE_SHARED_SECRET?: string;
-  MAIL_INTERNAL_DOMAIN: string;
-  MAIL_CONNECT_RETURN_PATH: string;
+    MAIL_SERVICE_URL?: string;
+    MAIL_SERVICE_SHARED_SECRET?: string;
+    MAIL_INTERNAL_DOMAIN: string;
+    MAIL_CONNECT_RETURN_PATH: string;
+  ONBOARDING_TRIGGER_SECRET?: string;
+  ONBOARDING_SCAN_LOOKBACK_HOURS: number;
+  ONBOARDING_WON_STAGES: string[];
+  ONBOARDING_WON_STATUSES: string[];
+  ONBOARDING_DEFAULT_TERMS_ID: string;
+  ONBOARDING_CUSTOMER_PO_REQUIRED_FIELD: string;
+  ONBOARDING_CUSTOMER_TERMS_FIELD: string;
+  ONBOARDING_EMAIL_FROM?: string;
+  ONBOARDING_EMAIL_REPLY_TO?: string;
+  ONBOARDING_EMAIL_OVERRIDE_TO?: string;
+  ONBOARDING_EMAIL_BCC?: string;
+  ONBOARDING_SMTP_HOST?: string;
+  ONBOARDING_SMTP_PORT: number;
+  ONBOARDING_SMTP_SECURE: boolean;
+  ONBOARDING_SMTP_USER?: string;
+  ONBOARDING_SMTP_PASS?: string;
   WATCHDOG_SECRET?: string;
+  CALL_ACTIVITY_SYNC_SECRET?: string;
   DAILY_CALL_COACHING_SECRET?: string;
   DAILY_CALL_COACHING_ENABLED: boolean;
   DAILY_CALL_COACHING_SENDER_LOGIN: string;
@@ -268,7 +313,28 @@ export function getEnv(): AppEnv {
     MAIL_SERVICE_SHARED_SECRET: emptyToUndefined(process.env.MAIL_SERVICE_SHARED_SECRET),
     MAIL_INTERNAL_DOMAIN: emptyToUndefined(process.env.MAIL_INTERNAL_DOMAIN),
     MAIL_CONNECT_RETURN_PATH: emptyToUndefined(process.env.MAIL_CONNECT_RETURN_PATH),
+    ONBOARDING_TRIGGER_SECRET: emptyToUndefined(process.env.ONBOARDING_TRIGGER_SECRET),
+    ONBOARDING_SCAN_LOOKBACK_HOURS: emptyToUndefined(process.env.ONBOARDING_SCAN_LOOKBACK_HOURS),
+    ONBOARDING_WON_STAGES: emptyToUndefined(process.env.ONBOARDING_WON_STAGES),
+    ONBOARDING_WON_STATUSES: emptyToUndefined(process.env.ONBOARDING_WON_STATUSES),
+    ONBOARDING_DEFAULT_TERMS_ID: emptyToUndefined(process.env.ONBOARDING_DEFAULT_TERMS_ID),
+    ONBOARDING_CUSTOMER_PO_REQUIRED_FIELD: emptyToUndefined(
+      process.env.ONBOARDING_CUSTOMER_PO_REQUIRED_FIELD,
+    ),
+    ONBOARDING_CUSTOMER_TERMS_FIELD: emptyToUndefined(
+      process.env.ONBOARDING_CUSTOMER_TERMS_FIELD,
+    ),
+    ONBOARDING_EMAIL_FROM: emptyToUndefined(process.env.ONBOARDING_EMAIL_FROM),
+    ONBOARDING_EMAIL_REPLY_TO: emptyToUndefined(process.env.ONBOARDING_EMAIL_REPLY_TO),
+    ONBOARDING_EMAIL_OVERRIDE_TO: emptyToUndefined(process.env.ONBOARDING_EMAIL_OVERRIDE_TO),
+    ONBOARDING_EMAIL_BCC: emptyToUndefined(process.env.ONBOARDING_EMAIL_BCC),
+    ONBOARDING_SMTP_HOST: emptyToUndefined(process.env.ONBOARDING_SMTP_HOST),
+    ONBOARDING_SMTP_PORT: emptyToUndefined(process.env.ONBOARDING_SMTP_PORT),
+    ONBOARDING_SMTP_SECURE: process.env.ONBOARDING_SMTP_SECURE,
+    ONBOARDING_SMTP_USER: emptyToUndefined(process.env.ONBOARDING_SMTP_USER),
+    ONBOARDING_SMTP_PASS: emptyToUndefined(process.env.ONBOARDING_SMTP_PASS),
     WATCHDOG_SECRET: emptyToUndefined(process.env.WATCHDOG_SECRET),
+    CALL_ACTIVITY_SYNC_SECRET: emptyToUndefined(process.env.CALL_ACTIVITY_SYNC_SECRET),
     DAILY_CALL_COACHING_SECRET: emptyToUndefined(process.env.DAILY_CALL_COACHING_SECRET),
     DAILY_CALL_COACHING_ENABLED: process.env.DAILY_CALL_COACHING_ENABLED,
     DAILY_CALL_COACHING_SENDER_LOGIN: emptyToUndefined(process.env.DAILY_CALL_COACHING_SENDER_LOGIN),
@@ -360,6 +426,22 @@ export function getEnv(): AppEnv {
       parsed.data.ACUMATICA_OPPORTUNITY_LINK_TO_DRIVE_DEFAULT,
     ACUMATICA_OPPORTUNITY_ESTIMATION_OFFSET_DAYS:
       Number(parsed.data.ACUMATICA_OPPORTUNITY_ESTIMATION_OFFSET_DAYS) || 0,
+    ONBOARDING_SCAN_LOOKBACK_HOURS: Math.max(
+      1,
+      Number(parsed.data.ONBOARDING_SCAN_LOOKBACK_HOURS ?? "24") || 24,
+    ),
+    ONBOARDING_WON_STAGES: parseDelimitedList(parsed.data.ONBOARDING_WON_STAGES),
+    ONBOARDING_WON_STATUSES: parseDelimitedList(parsed.data.ONBOARDING_WON_STATUSES),
+    ONBOARDING_DEFAULT_TERMS_ID: parsed.data.ONBOARDING_DEFAULT_TERMS_ID,
+    ONBOARDING_CUSTOMER_PO_REQUIRED_FIELD:
+      parsed.data.ONBOARDING_CUSTOMER_PO_REQUIRED_FIELD,
+    ONBOARDING_CUSTOMER_TERMS_FIELD:
+      parsed.data.ONBOARDING_CUSTOMER_TERMS_FIELD,
+    ONBOARDING_SMTP_PORT: Math.max(
+      1,
+      Number(parsed.data.ONBOARDING_SMTP_PORT ?? "587") || 587,
+    ),
+    ONBOARDING_SMTP_SECURE: parsed.data.ONBOARDING_SMTP_SECURE === "true",
     ADDRESS_COMPLETE_GEOCODE_ENABLED:
       parsed.data.ADDRESS_COMPLETE_GEOCODE_ENABLED === "true",
     READ_MODEL_ENABLED: parsed.data.READ_MODEL_ENABLED === "true",

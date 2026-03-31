@@ -306,4 +306,95 @@ server.listen(port, hostname, () => {
   } else {
     console.log("[daily-call-coaching] disabled");
   }
+
+  const callActivitySyncEnabled =
+    process.env.CALL_ACTIVITY_SYNC_ENABLED !== undefined
+      ? String(process.env.CALL_ACTIVITY_SYNC_ENABLED).trim().toLowerCase() === "true"
+      : process.env.NODE_ENV === "production";
+  const CALL_ACTIVITY_SYNC_INTERVAL_MS = readBoundedInteger(
+    process.env.CALL_ACTIVITY_SYNC_INTERVAL_MS,
+    30_000,
+    5_000,
+    5 * 60_000,
+  );
+  const CALL_ACTIVITY_SYNC_BATCH_SIZE = readBoundedInteger(
+    process.env.CALL_ACTIVITY_SYNC_BATCH_SIZE,
+    2,
+    1,
+    25,
+  );
+  const CALL_ACTIVITY_SYNC_TIMEOUT_MS = readBoundedInteger(
+    process.env.CALL_ACTIVITY_SYNC_TIMEOUT_MS,
+    55_000,
+    5_000,
+    5 * 60_000,
+  );
+  let callActivitySyncInFlight = false;
+
+  async function runCallActivitySyncCycle(trigger) {
+    if (!callActivitySyncEnabled || callActivitySyncInFlight) {
+      return;
+    }
+
+    callActivitySyncInFlight = true;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CALL_ACTIVITY_SYNC_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/api/dashboard/calls/postcall/run-due?limit=${CALL_ACTIVITY_SYNC_BATCH_SIZE}`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            ...(process.env.CALL_ACTIVITY_SYNC_SECRET
+              ? { "x-call-activity-sync-secret": process.env.CALL_ACTIVITY_SYNC_SECRET }
+              : {}),
+          },
+          signal: controller.signal,
+        },
+      );
+      const payload = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        console.error("[call-activity-sync] worker request failed", {
+          trigger,
+          status: response.status,
+          body: payload,
+        });
+        return;
+      }
+
+      const processed = payload?.processedCount ?? 0;
+      const synced = payload?.syncedCount ?? 0;
+      const failed = payload?.failedCount ?? 0;
+      const skipped = payload?.skippedCount ?? 0;
+      console.log(
+        `[call-activity-sync] worker ${trigger}; processed ${processed} (synced ${synced}, failed ${failed}, skipped ${skipped})`,
+      );
+    } catch (error) {
+      console.error("[call-activity-sync] worker failed", {
+        trigger,
+        error,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+      callActivitySyncInFlight = false;
+    }
+  }
+
+  if (callActivitySyncEnabled) {
+    const initialDelayMs = 10_000;
+    setTimeout(() => {
+      void runCallActivitySyncCycle("startup");
+      setInterval(() => {
+        void runCallActivitySyncCycle("interval");
+      }, CALL_ACTIVITY_SYNC_INTERVAL_MS);
+    }, initialDelayMs);
+    console.log(
+      `[call-activity-sync] worker started; every ${Math.round(CALL_ACTIVITY_SYNC_INTERVAL_MS / 1000)}s, batch ${CALL_ACTIVITY_SYNC_BATCH_SIZE}`,
+    );
+  } else {
+    console.log("[call-activity-sync] worker disabled");
+  }
 });
