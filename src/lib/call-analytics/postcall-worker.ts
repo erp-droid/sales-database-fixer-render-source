@@ -74,6 +74,7 @@ const OPENAI_TRANSCRIPTION_FALLBACK_MODELS = [
   "gpt-4o-mini-transcribe",
   "whisper-1",
 ];
+const BACKGROUND_SERVICE_LOGIN_NAME: string | null = null;
 
 function cleanText(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -806,7 +807,7 @@ export async function resolveActivityTarget(
   if (candidateBusinessAccountIds.length > 0) {
     try {
       const contacts = (await serviceFetchContactsByBusinessAccountIds(
-        session.employeeLoginName,
+        BACKGROUND_SERVICE_LOGIN_NAME,
         candidateBusinessAccountIds,
       )) as RawContact[];
       const resolvedContact = resolveRelatedContactByPhoneOrName(session, contacts);
@@ -825,7 +826,10 @@ export async function resolveActivityTarget(
   const candidateContacts: RawContact[] = [];
   for (const contactId of candidateContactIds) {
     try {
-      const contact = (await serviceFetchContactById(session.employeeLoginName, contactId)) as RawContact;
+      const contact = (await serviceFetchContactById(
+        BACKGROUND_SERVICE_LOGIN_NAME,
+        contactId,
+      )) as RawContact;
       candidateContacts.push(contact);
     } catch {
       // Fall through to the next candidate.
@@ -856,7 +860,7 @@ export async function resolveActivityTarget(
   if (candidateBusinessAccountIds.length > 0) {
     try {
       const contacts = (await serviceFetchContactsByBusinessAccountIds(
-        session.employeeLoginName,
+        BACKGROUND_SERVICE_LOGIN_NAME,
         candidateBusinessAccountIds,
       )) as RawContact[];
       const resolvedContact = resolveRelatedContactByPhoneOrName(session, contacts);
@@ -875,7 +879,7 @@ export async function resolveActivityTarget(
   for (const businessAccountId of candidateBusinessAccountIds) {
     try {
       const businessAccount = (await serviceFetchBusinessAccountById(
-        session.employeeLoginName,
+        BACKGROUND_SERVICE_LOGIN_NAME,
         businessAccountId,
       )) as RawBusinessAccount;
       const noteId = readRecordIdentity(businessAccount);
@@ -931,7 +935,7 @@ async function createPhoneCallActivity(
   transcriptText: string,
   summaryText: string,
 ): Promise<string | null> {
-  const activity = await serviceCreateActivity(session.employeeLoginName, {
+  const activity = await serviceCreateActivity(BACKGROUND_SERVICE_LOGIN_NAME, {
     summary: buildActivitySummary(session),
     bodyHtml: buildActivityBodyHtml(session, summaryText, transcriptText),
     relatedEntityNoteId: target.relatedEntityNoteId,

@@ -183,9 +183,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // Keep sign-in responsive. Any prior browser session is logged out in the
-  // background instead of blocking the explicit login submit.
-  void logoutExistingSession(request, env).catch(() => undefined);
+  // Try to release any prior upstream browser session before opening a new one.
+  await logoutExistingSession(request, env);
 
   const loginPayload = isCustomAuth
     ? { username, password }

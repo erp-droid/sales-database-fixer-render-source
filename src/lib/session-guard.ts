@@ -34,12 +34,9 @@ export function shouldForceLogoutForApiResponse(
   requestPath: string | null,
   responseStatus: number,
 ): boolean {
-  return (
-    requestPath?.startsWith("/api/") === true &&
-    requestPath !== "/api/auth/logout" &&
-    requestPath !== "/api/auth/session" &&
-    responseStatus === 401
-  );
+  void requestPath;
+  void responseStatus;
+  return false;
 }
 
 export async function fetchSessionCheckOutcome(

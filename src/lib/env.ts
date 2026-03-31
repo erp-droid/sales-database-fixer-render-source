@@ -42,6 +42,7 @@ const schema = z.object({
   ACUMATICA_PASSWORD: z.string().min(1).optional(),
   ACUMATICA_SERVICE_USERNAME: z.string().min(1).optional(),
   ACUMATICA_SERVICE_PASSWORD: z.string().min(1).optional(),
+  ACUMATICA_SERVICE_LOGOUT_AFTER_REQUEST: z.enum(["true", "false"]).optional(),
   ACUMATICA_PHONE_CALL_ACTIVITY_TYPE: z.string().min(1).default("P"),
   ACUMATICA_OPPORTUNITY_ENTITY: z.string().min(1).default("Opportunity"),
   ACUMATICA_OPPORTUNITY_CLASS_DEFAULT: z.string().min(1).default("PRODUCTION"),
@@ -75,7 +76,7 @@ const schema = z.object({
   ONBOARDING_SCAN_LOOKBACK_HOURS: z.string().default("24"),
   ONBOARDING_WON_STAGES: z.string().optional(),
   ONBOARDING_WON_STATUSES: z.string().optional(),
-  ONBOARDING_DEFAULT_TERMS_ID: z.string().min(1).default("N30"),
+  ONBOARDING_DEFAULT_TERMS_ID: z.string().min(1).default("NET 30"),
   ONBOARDING_CUSTOMER_PO_REQUIRED_FIELD: z.string().min(1).default("UsrPORequired"),
   ONBOARDING_CUSTOMER_TERMS_FIELD: z.string().min(1).default("CreditTermsID"),
   ONBOARDING_EMAIL_FROM: z.string().min(1).optional(),
@@ -154,6 +155,7 @@ export type AppEnv = {
   ACUMATICA_PASSWORD?: string;
   ACUMATICA_SERVICE_USERNAME?: string;
   ACUMATICA_SERVICE_PASSWORD?: string;
+  ACUMATICA_SERVICE_LOGOUT_AFTER_REQUEST: boolean;
   ACUMATICA_PHONE_CALL_ACTIVITY_TYPE?: string;
   ACUMATICA_OPPORTUNITY_ENTITY: string;
   ACUMATICA_OPPORTUNITY_CLASS_DEFAULT: string;
@@ -255,6 +257,8 @@ export function getEnv(): AppEnv {
     ACUMATICA_PASSWORD: emptyToUndefined(process.env.ACUMATICA_PASSWORD),
     ACUMATICA_SERVICE_USERNAME: emptyToUndefined(process.env.ACUMATICA_SERVICE_USERNAME),
     ACUMATICA_SERVICE_PASSWORD: emptyToUndefined(process.env.ACUMATICA_SERVICE_PASSWORD),
+    ACUMATICA_SERVICE_LOGOUT_AFTER_REQUEST:
+      process.env.ACUMATICA_SERVICE_LOGOUT_AFTER_REQUEST,
     ACUMATICA_PHONE_CALL_ACTIVITY_TYPE: emptyToUndefined(
       process.env.ACUMATICA_PHONE_CALL_ACTIVITY_TYPE,
     ),
@@ -426,6 +430,10 @@ export function getEnv(): AppEnv {
       parsed.data.ACUMATICA_OPPORTUNITY_LINK_TO_DRIVE_DEFAULT,
     ACUMATICA_OPPORTUNITY_ESTIMATION_OFFSET_DAYS:
       Number(parsed.data.ACUMATICA_OPPORTUNITY_ESTIMATION_OFFSET_DAYS) || 0,
+    ACUMATICA_SERVICE_LOGOUT_AFTER_REQUEST:
+      parsed.data.ACUMATICA_SERVICE_LOGOUT_AFTER_REQUEST !== undefined
+        ? parsed.data.ACUMATICA_SERVICE_LOGOUT_AFTER_REQUEST === "true"
+        : process.env.NODE_ENV === "production",
     ONBOARDING_SCAN_LOOKBACK_HOURS: Math.max(
       1,
       Number(parsed.data.ONBOARDING_SCAN_LOOKBACK_HOURS ?? "24") || 24,

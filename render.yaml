@@ -10,7 +10,7 @@ services:
     dockerContext: .
     autoDeploy: true
     numInstances: 1
-    healthCheckPath: /api/health
+    healthCheckPath: /api/healthz
     disk:
       name: sales-database-data
       mountPath: /app/data
@@ -56,6 +56,8 @@ services:
         value: jserrano
       - key: ACUMATICA_SERVICE_PASSWORD
         sync: false
+      - key: ACUMATICA_SERVICE_LOGOUT_AFTER_REQUEST
+        value: "true"
       - key: ACUMATICA_PHONE_CALL_ACTIVITY_TYPE
         value: P
       - key: ACUMATICA_OPPORTUNITY_ENTITY

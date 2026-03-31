@@ -100,7 +100,7 @@ describe("mail send jobs", () => {
     await drainPendingMailSendJobs(10);
 
     expect(repairMailActivitySyncWithServiceSession).toHaveBeenCalledWith(
-      "jserrano",
+      null,
       expect.objectContaining({
         subject: "Test send",
       }),

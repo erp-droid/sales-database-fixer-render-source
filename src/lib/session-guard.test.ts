@@ -34,7 +34,7 @@ describe("session-guard helpers", () => {
   it("does not force logout for auth session probes", () => {
     expect(shouldForceLogoutForApiResponse("/api/auth/session", 401)).toBe(false);
     expect(shouldForceLogoutForApiResponse("/api/auth/logout", 401)).toBe(false);
-    expect(shouldForceLogoutForApiResponse("/api/contacts/merge", 401)).toBe(true);
+    expect(shouldForceLogoutForApiResponse("/api/contacts/merge", 401)).toBe(false);
   });
 
   it("reads the session outcome from the probe response", async () => {

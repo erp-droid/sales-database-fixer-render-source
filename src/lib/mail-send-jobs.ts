@@ -290,10 +290,10 @@ export async function processMailSendJob(id: string): Promise<MailSendJobRecord 
   try {
     const payload = parseJson<Partial<MailComposePayload>>(claimed.payloadJson, "mail payload");
     const upstreamResponse = parseJson<unknown>(claimed.responseJson, "mail response");
-    const repairedResponse =
-      isRepairableMailActivityPayload(upstreamResponse)
+      const repairedResponse =
+        isRepairableMailActivityPayload(upstreamResponse)
         ? await repairMailActivitySyncWithServiceSession(
-            claimed.requestedByLoginName,
+            null,
             payload,
             upstreamResponse,
           )
