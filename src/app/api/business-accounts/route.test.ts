@@ -11,6 +11,18 @@ const getEnv = vi.fn(() => ({
 const fetchAllSyncRows = vi.fn();
 const queryReadModelBusinessAccounts = vi.fn();
 const maybeTriggerReadModelSync = vi.fn();
+const readSyncStatus = vi.fn(() => ({
+  status: "idle",
+  phase: null,
+  startedAt: null,
+  completedAt: null,
+  lastSuccessfulSyncAt: null,
+  lastError: null,
+  rowsCount: 0,
+  accountsCount: 0,
+  contactsCount: 0,
+  progress: null,
+}));
 
 vi.mock("@/lib/auth", () => ({
   requireAuthCookieValue,
@@ -38,18 +50,7 @@ vi.mock("@/lib/read-model/account-local-metadata", () => ({
 
 vi.mock("@/lib/read-model/sync", () => ({
   maybeTriggerReadModelSync,
-  readSyncStatus: vi.fn(() => ({
-    status: "idle",
-    phase: null,
-    startedAt: null,
-    completedAt: null,
-    lastSuccessfulSyncAt: null,
-    lastError: null,
-    rowsCount: 0,
-    accountsCount: 0,
-    contactsCount: 0,
-    progress: null,
-  })),
+  readSyncStatus,
 }));
 
 function buildRow(input: Partial<BusinessAccountRow> & {
@@ -97,6 +98,18 @@ describe("GET /api/business-accounts", () => {
     requireAuthCookieValue.mockReturnValue("cookie");
     getEnv.mockReturnValue({
       READ_MODEL_ENABLED: false,
+    });
+    readSyncStatus.mockReturnValue({
+      status: "idle",
+      phase: null,
+      startedAt: null,
+      completedAt: null,
+      lastSuccessfulSyncAt: null,
+      lastError: null,
+      rowsCount: 0,
+      accountsCount: 0,
+      contactsCount: 0,
+      progress: null,
     });
     queryReadModelBusinessAccounts.mockReturnValue({
       items: [],
@@ -209,6 +222,18 @@ describe("GET /api/business-accounts", () => {
     getEnv.mockReturnValue({
       READ_MODEL_ENABLED: true,
     });
+    readSyncStatus.mockReturnValue({
+      status: "idle",
+      phase: null,
+      startedAt: null,
+      completedAt: "2026-03-31T18:58:00.000Z",
+      lastSuccessfulSyncAt: "2026-03-31T18:58:00.000Z",
+      lastError: null,
+      rowsCount: 1,
+      accountsCount: 1,
+      contactsCount: 1,
+      progress: null,
+    });
     queryReadModelBusinessAccounts
       .mockReturnValueOnce({
         items: [],
@@ -267,5 +292,58 @@ describe("GET /api/business-accounts", () => {
     );
     expect(payload.total).toBe(1);
     expect(payload.items[0]?.primaryContactName).toBe("Jacky Lee");
+  });
+
+  it("falls back to the live dataset while the first snapshot is still empty", async () => {
+    getEnv.mockReturnValue({
+      READ_MODEL_ENABLED: true,
+    });
+    readSyncStatus.mockReturnValue({
+      status: "running",
+      phase: "fetch",
+      startedAt: "2026-03-31T18:57:55.678Z",
+      completedAt: null,
+      lastSuccessfulSyncAt: null,
+      lastError: null,
+      rowsCount: 0,
+      accountsCount: 0,
+      contactsCount: 0,
+      progress: null,
+    });
+    fetchAllSyncRows.mockResolvedValue([
+      buildRow({
+        id: "acct-1",
+        businessAccountId: "BA0001",
+        companyName: "Glendale Group",
+        contactId: 101,
+        primaryContactName: "Travis Smith",
+        primaryContactEmail: "travis@example.com",
+      }),
+    ]);
+
+    const { GET } = await import("@/app/api/business-accounts/route");
+
+    const response = await GET(
+      new NextRequest(
+        "http://localhost/api/business-accounts?sortBy=companyName&sortDir=asc&page=1&pageSize=25&full=1&includeInternal=1",
+      ),
+    );
+    const payload = (await response.json()) as {
+      items: BusinessAccountRow[];
+      total: number;
+      page: number;
+      pageSize: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(maybeTriggerReadModelSync).toHaveBeenCalledWith("cookie", expect.any(Object));
+    expect(fetchAllSyncRows).toHaveBeenCalledWith(
+      "cookie",
+      expect.any(Object),
+      { includeInternal: true },
+    );
+    expect(queryReadModelBusinessAccounts).not.toHaveBeenCalled();
+    expect(payload.total).toBe(1);
+    expect(payload.items[0]?.companyName).toBe("Glendale Group");
   });
 });

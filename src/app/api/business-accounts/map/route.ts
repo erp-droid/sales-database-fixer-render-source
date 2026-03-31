@@ -16,7 +16,7 @@ import { isExcludedInternalCompanyName } from "@/lib/internal-records";
 import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import { registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import { buildAddressKeyFromRow, readReadyGeocodeMap } from "@/lib/read-model/geocodes";
-import { maybeTriggerReadModelSync } from "@/lib/read-model/sync";
+import { maybeTriggerReadModelSync, readSyncStatus } from "@/lib/read-model/sync";
 import type {
   BusinessAccountMapPoint,
   BusinessAccountRow,
@@ -30,6 +30,11 @@ const mapPayloadCache = new Map<
 >();
 const mapPayloadInFlight = new Map<string, Promise<BusinessAccountMapResponse>>();
 const MAP_PAYLOAD_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function hasUsableReadModelSnapshot(): boolean {
+  const status = readSyncStatus();
+  return Boolean(status.lastSuccessfulSyncAt) || status.rowsCount > 0;
+}
 
 registerReadModelCacheClearer(() => {
   mapPayloadCache.clear();
@@ -288,119 +293,121 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         try {
           if (getEnv().READ_MODEL_ENABLED) {
             maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
-            const grouped = new Map<string, BusinessAccountRow[]>();
-            filterSuppressedBusinessAccountRows(readAllAccountRowsFromReadModel()).forEach((row) => {
-              const key = readRowAccountKey(row);
-              if (!key) {
-                return;
-              }
-              const existing = grouped.get(key);
-              if (existing) {
-                existing.push(row);
-              } else {
-                grouped.set(key, [row]);
-              }
-            });
+            if (hasUsableReadModelSnapshot()) {
+              const grouped = new Map<string, BusinessAccountRow[]>();
+              filterSuppressedBusinessAccountRows(readAllAccountRowsFromReadModel()).forEach((row) => {
+                const key = readRowAccountKey(row);
+                if (!key) {
+                  return;
+                }
+                const existing = grouped.get(key);
+                if (existing) {
+                  existing.push(row);
+                } else {
+                  grouped.set(key, [row]);
+                }
+              });
 
-            const candidates = [...grouped.entries()]
-              .map(([accountKey, rows]) => {
-                const representativeRow = pickRepresentativeRow(rows);
-                const salesRepRow = pickSalesRepRow(rows);
-                const contacts = buildContactsFromRows(rows);
-                const haystack = [
-                  representativeRow.companyName,
-                  representativeRow.businessAccountId,
-                  salesRepRow.salesRepName,
-                  representativeRow.address,
-                  contacts
-                    .map((contact) =>
-                      [contact.name, contact.email, contact.phone].filter(Boolean).join(" "),
-                    )
-                    .join(" "),
-                ]
-                  .filter(Boolean)
-                  .join(" ")
-                  .toLowerCase();
+              const candidates = [...grouped.entries()]
+                .map(([accountKey, rows]) => {
+                  const representativeRow = pickRepresentativeRow(rows);
+                  const salesRepRow = pickSalesRepRow(rows);
+                  const contacts = buildContactsFromRows(rows);
+                  const haystack = [
+                    representativeRow.companyName,
+                    representativeRow.businessAccountId,
+                    salesRepRow.salesRepName,
+                    representativeRow.address,
+                    contacts
+                      .map((contact) =>
+                        [contact.name, contact.email, contact.phone].filter(Boolean).join(" "),
+                      )
+                      .join(" "),
+                  ]
+                    .filter(Boolean)
+                    .join(" ")
+                    .toLowerCase();
 
-                return {
-                  accountKey,
-                  representativeRow,
-                  salesRepRow,
-                  contacts,
-                  haystack,
-                };
-              })
-              .filter((candidate) =>
-                normalizedSearch ? candidate.haystack.includes(normalizedSearch) : true,
-              )
-              .filter((candidate) =>
-                matchesSalesRepFilters(
-                  candidate.salesRepRow.salesRepId,
-                  candidate.salesRepRow.salesRepName,
-                  normalizedSalesRepFilters,
-                ),
-              )
-              .filter((candidate) =>
-                Boolean(
-                  candidate.representativeRow.id &&
-                    candidate.representativeRow.addressLine1 &&
-                    candidate.representativeRow.city,
-                ),
+                  return {
+                    accountKey,
+                    representativeRow,
+                    salesRepRow,
+                    contacts,
+                    haystack,
+                  };
+                })
+                .filter((candidate) =>
+                  normalizedSearch ? candidate.haystack.includes(normalizedSearch) : true,
+                )
+                .filter((candidate) =>
+                  matchesSalesRepFilters(
+                    candidate.salesRepRow.salesRepId,
+                    candidate.salesRepRow.salesRepName,
+                    normalizedSalesRepFilters,
+                  ),
+                )
+                .filter((candidate) =>
+                  Boolean(
+                    candidate.representativeRow.id &&
+                      candidate.representativeRow.addressLine1 &&
+                      candidate.representativeRow.city,
+                  ),
+                );
+              const geocodeMap = readReadyGeocodeMap(
+                candidates.map((candidate) => buildAddressKeyFromRow(candidate.representativeRow)),
               );
-            const geocodeMap = readReadyGeocodeMap(
-              candidates.map((candidate) => buildAddressKeyFromRow(candidate.representativeRow)),
-            );
-            const items = candidates.flatMap((candidate) => {
-              const row = candidate.representativeRow;
-              const geocode = geocodeMap.get(buildAddressKeyFromRow(row));
-              if (!geocode) {
-                return [];
-              }
+              const items = candidates.flatMap((candidate) => {
+                const row = candidate.representativeRow;
+                const geocode = geocodeMap.get(buildAddressKeyFromRow(row));
+                if (!geocode) {
+                  return [];
+                }
 
-              const point: BusinessAccountMapPoint = {
-                id: row.id,
-                accountRecordId: row.accountRecordId,
-                businessAccountId: row.businessAccountId,
-                companyName: row.companyName,
-                salesRepId: candidate.salesRepRow.salesRepId,
-                salesRepName: candidate.salesRepRow.salesRepName,
-                fullAddress:
-                  row.address ||
-                  toFullAddress({
-                    addressLine1: row.addressLine1,
-                    addressLine2: row.addressLine2,
-                    city: row.city,
-                    state: row.state,
-                    postalCode: row.postalCode,
-                    country: row.country,
-                  }),
-                addressLine1: row.addressLine1,
-                addressLine2: row.addressLine2,
-                city: row.city,
-                state: row.state,
-                postalCode: row.postalCode,
-                country: row.country,
-                primaryContactName: row.primaryContactName,
-                primaryContactPhone: row.primaryContactPhone,
-                primaryContactEmail: row.primaryContactEmail,
-                category: row.category,
-                notes: row.notes,
-                lastModifiedIso: row.lastModifiedIso,
-                latitude: geocode.latitude,
-                longitude: geocode.longitude,
-                geocodeProvider: geocode.provider,
-                contacts: candidate.contacts,
+                const point: BusinessAccountMapPoint = {
+                  id: row.id,
+                  accountRecordId: row.accountRecordId,
+                  businessAccountId: row.businessAccountId,
+                  companyName: row.companyName,
+                  salesRepId: candidate.salesRepRow.salesRepId,
+                  salesRepName: candidate.salesRepRow.salesRepName,
+                  fullAddress:
+                    row.address ||
+                    toFullAddress({
+                      addressLine1: row.addressLine1,
+                      addressLine2: row.addressLine2,
+                      city: row.city,
+                      state: row.state,
+                      postalCode: row.postalCode,
+                      country: row.country,
+                    }),
+                  addressLine1: row.addressLine1,
+                  addressLine2: row.addressLine2,
+                  city: row.city,
+                  state: row.state,
+                  postalCode: row.postalCode,
+                  country: row.country,
+                  primaryContactName: row.primaryContactName,
+                  primaryContactPhone: row.primaryContactPhone,
+                  primaryContactEmail: row.primaryContactEmail,
+                  category: row.category,
+                  notes: row.notes,
+                  lastModifiedIso: row.lastModifiedIso,
+                  latitude: geocode.latitude,
+                  longitude: geocode.longitude,
+                  geocodeProvider: geocode.provider,
+                  contacts: candidate.contacts,
+                };
+
+                return [point];
+              });
+
+              return {
+                items,
+                totalCandidates: candidates.length,
+                geocodedCount: items.length,
+                unmappedCount: Math.max(0, candidates.length - items.length),
               };
-
-              return [point];
-            });
-
-            return {
-              items,
-              totalCandidates: candidates.length,
-              geocodedCount: items.length,
-              unmappedCount: Math.max(0, candidates.length - items.length),
-            };
+            }
           }
 
           const rawAccounts = await fetchBusinessAccounts(

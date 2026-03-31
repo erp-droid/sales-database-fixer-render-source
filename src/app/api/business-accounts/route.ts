@@ -54,7 +54,7 @@ import {
   applyLocalAccountMetadataToRows,
   saveAccountCompanyDescription,
 } from "@/lib/read-model/account-local-metadata";
-import { maybeTriggerReadModelSync } from "@/lib/read-model/sync";
+import { maybeTriggerReadModelSync, readSyncStatus } from "@/lib/read-model/sync";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type { BusinessAccountCreateResponse } from "@/types/business-account-create";
 import { parseBusinessAccountCreatePayload, parseListQuery } from "@/lib/validation";
@@ -64,6 +64,11 @@ type AuthCookieRefresh = {
 };
 
 type RawRecord = Record<string, unknown>;
+
+function hasUsableReadModelSnapshot(): boolean {
+  const status = readSyncStatus();
+  return Boolean(status.lastSuccessfulSyncAt) || status.rowsCount > 0;
+}
 
 function readArrayField(record: unknown, key: string): unknown[] {
   if (!record || typeof record !== "object") {
@@ -832,6 +837,8 @@ async function queryAccountsWithCookie(
   const { READ_MODEL_ENABLED } = getEnv();
   if (READ_MODEL_ENABLED) {
     maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+  }
+  if (READ_MODEL_ENABLED && hasUsableReadModelSnapshot()) {
     const total = options?.full
       ? queryReadModelBusinessAccounts({
           ...params,
@@ -918,6 +925,8 @@ async function querySyncBatchWithCookie(
   const { READ_MODEL_ENABLED } = getEnv();
   if (READ_MODEL_ENABLED) {
     maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+  }
+  if (READ_MODEL_ENABLED && hasUsableReadModelSnapshot()) {
     if (options?.full) {
       const total = queryReadModelBusinessAccounts({
         ...params,

@@ -2385,10 +2385,6 @@ export function AccountsClient({
           return cachedDataset.rows;
         }
 
-        if (!nextStatusPayload.lastSuccessfulSyncAt && nextStatusPayload.rowsCount === 0) {
-          setError("No local snapshot yet. Click Sync records to build the first snapshot.");
-          return [];
-        }
       }
     } catch {
       if (cachedDataset && isBusinessAccountRows(cachedDataset.rows) && cachedDataset.rows.length > 0) {
