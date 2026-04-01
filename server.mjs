@@ -100,7 +100,7 @@ server.use(quotesMountPath, pricingBookApp);
 server.all("*", (req, res) => handle(req, res));
 
 server.listen(port, hostname, () => {
-  console.log(`sales-database-fixer listening on http://${hostname}:${port}`);
+  console.log(`sales-meadowb listening on http://${hostname}:${port}`);
   console.log(`embedded pricing-book-app mounted at ${quotesMountPath}`);
   startPricingBookAutoSync(console);
 

@@ -10,6 +10,11 @@ const EXCLUDED_EMAIL_DOMAINS = new Set([
   "meadowbrookconstruction.ca",
 ]);
 
+const ALWAYS_EXCLUDED_ASSOCIATED_NAMES = [
+  "travis rumney",
+  "travis justin rumney",
+] as const;
+
 function normalizeText(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? "";
 }
@@ -42,6 +47,26 @@ export function isExcludedInternalContactEmail(value: string | null | undefined)
 
 export function isExcludedInternalCompanyName(value: string | null | undefined): boolean {
   return normalizeText(value).includes("meadowbrook");
+}
+
+function isAlwaysExcludedAssociatedName(value: string | null | undefined): boolean {
+  const normalized = normalizeText(value).replace(/\s+/g, " ");
+  if (!normalized) {
+    return false;
+  }
+
+  return ALWAYS_EXCLUDED_ASSOCIATED_NAMES.some(
+    (candidate) => normalized === candidate || normalized.includes(candidate),
+  );
+}
+
+export function isAlwaysExcludedBusinessAccountRow(
+  row: Pick<BusinessAccountRow, "salesRepName" | "primaryContactName">,
+): boolean {
+  return (
+    isAlwaysExcludedAssociatedName(row.salesRepName) ||
+    isAlwaysExcludedAssociatedName(row.primaryContactName)
+  );
 }
 
 export function isExcludedInternalBusinessAccountRow(

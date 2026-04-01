@@ -209,7 +209,7 @@ const businessAccountConcurrencySnapshotSchema = z.object({
         return null;
       }
       const numeric = Number(value);
-      return Number.isFinite(numeric) ? numeric : null;
+      return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
     })
     .default(null),
   salesRepId: nullableStringSchema.default(null),
@@ -238,7 +238,7 @@ const businessAccountConcurrencySnapshotSchema = z.object({
         return null;
       }
       const numeric = Number(value);
-      return Number.isFinite(numeric) ? numeric : null;
+      return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
     })
     .default(null),
   lastModifiedIso: nullableExpectedLastModifiedSchema,
@@ -267,7 +267,7 @@ export const updateRequestSchema = z.object({
         return null;
       }
       const numeric = Number(value);
-      return Number.isFinite(numeric) ? numeric : null;
+      return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
     })
     .default(null),
   setAsPrimaryContact: z.boolean().default(false),
@@ -313,7 +313,7 @@ const contactOnlyUpdateRequestSchema = z.object({
         return null;
       }
       const numeric = Number(value);
-      return Number.isFinite(numeric) ? numeric : null;
+      return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
     })
     .default(null),
   setAsPrimaryContact: z.boolean().default(false),

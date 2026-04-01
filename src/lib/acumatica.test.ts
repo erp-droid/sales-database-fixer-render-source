@@ -571,6 +571,60 @@ describe("fetchEmployeeProfiles", () => {
       },
     ]);
   });
+
+  it("skips phone-only hydration when disabled for background directory sync", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes("/Employee?") && url.includes("top=200") && url.includes("skip=0")) {
+        return jsonResponse({
+          status: 200,
+          body: [
+            {
+              EmployeeID: { value: "E0000153" },
+              EmployeeName: { value: "Simon Doal" },
+              Status: { value: "Active" },
+              Email: { value: "sdoal@meadowb.com" },
+            },
+          ],
+        });
+      }
+
+      if (url.includes("/Employee?") && url.includes("top=200") && url.includes("skip=200")) {
+        return jsonResponse({ status: 200, body: [] });
+      }
+
+      if (url.includes("/Employee/E0000153?$expand=ContactInfo")) {
+        throw new Error("Unexpected employee detail hydration request");
+      }
+
+      if (url.includes("/EPEmployee?") || url.includes("/EPEmployee/")) {
+        return jsonResponse({
+          status: 404,
+          body: { message: "Entity EPEmployee not found" },
+        });
+      }
+
+      return jsonResponse({ status: 200, body: [] });
+    });
+
+    const { fetchEmployeeProfiles } = await import("@/lib/acumatica");
+
+    await expect(
+      fetchEmployeeProfiles("cookie", undefined, {
+        hydrateMissingPhone: false,
+      }),
+    ).resolves.toEqual([
+      {
+        employeeId: "E0000153",
+        contactId: null,
+        displayName: "Simon Doal",
+        email: "sdoal@meadowb.com",
+        phone: null,
+        isActive: true,
+      },
+    ]);
+  });
 });
 
 describe("fetchEmployees", () => {
@@ -1033,6 +1087,255 @@ describe("Acumatica entity creation", () => {
 
     expect(requestUrl).toContain("/entity/lightspeed/24.200.001/Contact");
     expect(requestInit?.method).toBe("PUT");
+  });
+
+  it("falls back to a contact collection lookup when direct contact-id fetches fail", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Sequence contains more than one matching element" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: [
+            {
+              id: "0fa8bd1d-a7ef-f011-8370-025dbe72350a",
+              ContactID: { value: 157252 },
+              DisplayName: { value: "Rayo Golwala" },
+            },
+          ],
+        }),
+      );
+
+    const { fetchContactById } = await import("@/lib/acumatica");
+    const result = await fetchContactById("cookie", 157252);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/Contact/157252");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/Contact?");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("157252");
+    expect(result).toMatchObject({
+      id: "0fa8bd1d-a7ef-f011-8370-025dbe72350a",
+      ContactID: { value: 157252 },
+    });
+  });
+
+  it("retries contact creation on the Default endpoint after the duplicate-match error", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Sequence contains more than one matching element" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ status: 200, body: { ContactID: { value: 157497 } } }),
+      );
+
+    const { createContact } = await import("@/lib/acumatica");
+    await createContact("cookie", {
+      BusinessAccount: { value: "B200002424" },
+      CompanyName: { value: "Itipack Systems" },
+      DisplayName: { value: "Johann D'Souza" },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/entity/lightspeed/24.200.001/Contact",
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/entity/Default/24.200.001/Contact",
+    );
+  });
+
+  it("retries contact creation without CompanyName when Acumatica still reports a duplicate match", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Sequence contains more than one matching element" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Sequence contains more than one matching element" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ status: 200, body: { ContactID: { value: 157497 } } }),
+      );
+
+    const { createContact } = await import("@/lib/acumatica");
+    await createContact("cookie", {
+      BusinessAccount: { value: "B200002424" },
+      CompanyName: { value: "Itipack Systems" },
+      Type: { value: "Contact" },
+      DisplayName: { value: "Johann D'Souza" },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const finalBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body));
+    expect(finalBody.BusinessAccount).toEqual({ value: "B200002424" });
+    expect(finalBody.DisplayName).toEqual({ value: "Johann D'Souza" });
+    expect(finalBody).not.toHaveProperty("CompanyName");
+    expect(finalBody.Type).toEqual({ value: "Contact" });
+  });
+
+  it("retries contact updates on the Default endpoint after the duplicate-match error", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Sequence contains more than one matching element" },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: 200, body: { ContactID: { value: 157497 } } }));
+
+    const { updateContact } = await import("@/lib/acumatica");
+    await updateContact("cookie", 157497, {
+      BusinessAccount: { value: "B200002424" },
+      CompanyName: { value: "Itipack Systems" },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/entity/lightspeed/24.200.001/Contact",
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+      "/entity/Default/24.200.001/Contact",
+    );
+  });
+
+  it("retries contact updates without CompanyName when Acumatica still reports a duplicate match", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Sequence contains more than one matching element" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Sequence contains more than one matching element" },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: 200, body: { ContactID: { value: 157497 } } }));
+
+    const { updateContact } = await import("@/lib/acumatica");
+    await updateContact("cookie", 157497, {
+      BusinessAccount: { value: "B200002424" },
+      CompanyName: { value: "Itipack Systems" },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const finalBody = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body));
+    expect(finalBody.ContactID).toEqual({ value: 157497 });
+    expect(finalBody.BusinessAccount).toEqual({ value: "B200002424" });
+    expect(finalBody).not.toHaveProperty("CompanyName");
+  });
+
+  it("retries contact updates using the resolved Acumatica record id after duplicate-match failures", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Sequence contains more than one matching element" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Sequence contains more than one matching element" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: [
+            {
+              id: "0fa8bd1d-a7ef-f011-8370-025dbe72350a",
+              ContactID: { value: 157252 },
+              DisplayName: { value: "Rayo Golwala" },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: 200, body: { ContactID: { value: 157252 } } }));
+
+    const { updateContact } = await import("@/lib/acumatica");
+    await updateContact("cookie", 157252, {
+      note: { value: "Confirmed decision maker" },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/Contact?");
+    const finalBody = JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body));
+    expect(finalBody.ContactID).toEqual({ value: 157252 });
+    expect(finalBody.id).toBe("0fa8bd1d-a7ef-f011-8370-025dbe72350a");
+    expect(finalBody.note).toEqual({ value: "Confirmed decision maker" });
+  });
+
+  it("prefers collection updates for business-account saves when requested", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ status: 200, body: { id: "account" } }));
+
+    const { updateBusinessAccount } = await import("@/lib/acumatica");
+    await updateBusinessAccount(
+      "cookie",
+      ["B200001337", "94f9367f-472c-f111-8373-025dbe72350a"],
+      {
+        BusinessAccountID: { value: "B200001337" },
+        ContactID: { value: 154474 },
+      },
+      undefined,
+      {
+        strategy: "body-first",
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      "/entity/lightspeed/24.200.001/BusinessAccount",
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain(
+      "/BusinessAccount/B200001337",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("PUT");
+  });
+
+  it("falls back to keyed business-account updates after collection update failures", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.includes("/BusinessAccount/B200001337")) {
+        return jsonResponse({ status: 200, body: { id: "account" } });
+      }
+
+      if (url.endsWith("/BusinessAccount")) {
+        return jsonResponse({ status: 500, body: { message: "Server error" } });
+      }
+
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+
+    const { updateBusinessAccount } = await import("@/lib/acumatica");
+    await updateBusinessAccount(
+      "cookie",
+      "B200001337",
+      {},
+      undefined,
+      {
+        strategy: "body-first",
+      },
+    );
+
+    expect(fetchMock.mock.calls.some((call) =>
+      String(call[0]).includes("/BusinessAccount/B200001337"),
+    )).toBe(true);
   });
 
   it("creates opportunities with PUT on the configured opportunity entity before falling back", async () => {

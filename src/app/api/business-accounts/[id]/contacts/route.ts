@@ -98,7 +98,6 @@ export async function POST(
       buildContactCreatePayload({
         request: contactRequest,
         businessAccountId,
-        companyName: readBusinessAccountName(currentRawAccount),
       }),
       authCookieRefresh,
     );

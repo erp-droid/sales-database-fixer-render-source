@@ -174,7 +174,6 @@ describe("buildContactCreatePayload", () => {
         contactClass: "sales",
       },
       businessAccountId: "B200000003",
-      companyName: "Alpha Inc",
     });
 
     expect(payload).toMatchObject({
@@ -185,9 +184,9 @@ describe("buildContactCreatePayload", () => {
       Email: { value: "jserrano@meadowb.com" },
       Phone1: { value: "416-230-4681" },
       BusinessAccount: { value: "B200000003" },
-      CompanyName: { value: "Alpha Inc" },
-      Type: { value: "Contact" },
     });
+    expect(payload).not.toHaveProperty("CompanyName");
+    expect(payload).not.toHaveProperty("Type");
   });
 
   it("falls back to a last-name-only payload for single-word names", () => {
@@ -201,7 +200,6 @@ describe("buildContactCreatePayload", () => {
         contactClass: "sales",
       },
       businessAccountId: "B200000003",
-      companyName: "Alpha Inc",
     });
 
     expect(payload).toMatchObject({
@@ -222,7 +220,6 @@ describe("buildContactCreatePayload", () => {
         contactClass: "billing",
       },
       businessAccountId: "B200000003",
-      companyName: "Alpha Inc",
     });
 
     expect(payload).toMatchObject({
@@ -241,7 +238,6 @@ describe("buildContactCreatePayload", () => {
         contactClass: "sales",
       },
       businessAccountId: "B200000003",
-      companyName: "Alpha Inc",
     });
 
     expect(payload).toMatchObject({

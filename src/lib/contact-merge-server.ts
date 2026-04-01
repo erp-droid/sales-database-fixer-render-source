@@ -363,15 +363,25 @@ export async function setBusinessAccountPrimaryContact(
     );
 
     for (const fallbackPayload of fallbackPayloads) {
-      await updateBusinessAccount(
-        cookieValue,
-        context.updateIdentifiers,
-        {
-          ...context.identityPayload,
-          ...fallbackPayload,
-        },
-        authCookieRefresh,
-      );
+      try {
+        await updateBusinessAccount(
+          cookieValue,
+          context.updateIdentifiers,
+          {
+            ...context.identityPayload,
+            ...fallbackPayload,
+          },
+          authCookieRefresh,
+          {
+            strategy: "body-first",
+          },
+        );
+      } catch (error) {
+        if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
+          throw error;
+        }
+        continue;
+      }
 
       verificationRaw = await fetchBusinessAccountById(
         cookieValue,

@@ -350,7 +350,6 @@ export function buildBusinessAccountCreatePayload(
 export function buildContactCreatePayload(input: {
   request: BusinessAccountContactCreateRequest;
   businessAccountId: string;
-  companyName: string;
 }): Record<string, unknown> {
   const name = splitContactName(input.request.displayName);
   return {
@@ -388,12 +387,6 @@ export function buildContactCreatePayload(input: {
     },
     BusinessAccount: {
       value: input.businessAccountId,
-    },
-    CompanyName: {
-      value: input.companyName,
-    },
-    Type: {
-      value: "Contact",
     },
   };
 }

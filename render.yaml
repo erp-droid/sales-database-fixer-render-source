@@ -1,8 +1,8 @@
 services:
   - type: web
-    name: sales-database-fixer
+    name: sales-meadowb
     runtime: docker
-    repo: https://github.com/erp-droid/sales-database-fixer-business-accounts
+    repo: https://github.com/erp-droid/sales-database-fixer-render-source
     branch: main
     plan: starter
     region: ohio
@@ -27,7 +27,7 @@ services:
       - key: AUTH_TOKEN_SECRET
         sync: false
       - key: APP_BASE_URL
-        value: https://sales-database-fixer.onrender.com
+        value: https://sales-meadowb.onrender.com
       - key: MBQ_BASE_PATH
         value: /quotes
       - key: MBQ_INTEGRATED_AUTH_ENABLED
@@ -35,7 +35,7 @@ services:
       - key: MBQ_SIGNIN_PATH
         value: /signin
       - key: MBQ_GOOGLE_OAUTH_REDIRECT_URL
-        value: https://sales-database-fixer.onrender.com/quotes/api/mail/oauth/callback
+        value: https://sales-meadowb.onrender.com/quotes/api/mail/oauth/callback
       - key: USER_CREDENTIALS_SECRET
         generateValue: true
       - key: ACUMATICA_BASE_URL
@@ -121,7 +121,7 @@ services:
       - key: GOOGLE_OAUTH_CLIENT_SECRET
         sync: false
       - key: GOOGLE_OAUTH_REDIRECT_URL
-        value: https://sales-database-fixer.onrender.com/api/mail/oauth/callback
+        value: https://sales-meadowb.onrender.com/api/mail/oauth/callback
       - key: GOOGLE_OAUTH_ALLOWED_DOMAIN
         value: meadowb.com
       - key: GOOGLE_SERVICE_ACCOUNT_JSON

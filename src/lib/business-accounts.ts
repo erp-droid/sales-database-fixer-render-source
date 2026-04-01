@@ -7,7 +7,10 @@ import {
   type SortBy,
   type SortDir,
 } from "@/types/business-account";
-import { isExcludedInternalBusinessAccountRow } from "@/lib/internal-records";
+import {
+  isAlwaysExcludedBusinessAccountRow,
+  isExcludedInternalBusinessAccountRow,
+} from "@/lib/internal-records";
 import {
   extractNormalizedPhoneDigits,
   formatPhoneForDisplay,
@@ -210,6 +213,10 @@ function readNullableNumber(record: unknown, key: string): number | null {
 
   const numeric = Number(wrapped);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function isUsableContactId(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function toCategory(value: string | null): Category | null {
@@ -699,6 +706,10 @@ export function filterSuppressedBusinessAccountRows(
       return false;
     }
 
+    if (isAlwaysExcludedBusinessAccountRow(row)) {
+      return false;
+    }
+
     if (!options.includeInternalRows && isExcludedInternalBusinessAccountRow(row)) {
       return false;
     }
@@ -1144,7 +1155,10 @@ function normalizePrimaryContact(account: unknown): {
   notes: string | null;
 } {
   const primary = unwrapRecordValue(getField(account, "PrimaryContact"));
-  const primaryContactId = readNullableNumber(primary, "ContactID");
+  const rawPrimaryContactId = readNullableNumber(primary, "ContactID");
+  const primaryContactId = isUsableContactId(rawPrimaryContactId)
+    ? rawPrimaryContactId
+    : null;
   const primaryContactName = composeContactName(primary);
   const primaryContactEmail = readFirstString(primary, ["Email", "EMail"]) || null;
   const primaryEmailCandidates = splitEmailAddresses(primaryContactEmail);
@@ -1168,10 +1182,13 @@ function normalizePrimaryContact(account: unknown): {
           return contactCandidates.some((email) => primaryEmailCandidates.includes(email));
         })
       : null;
+  const soleVisibleContact = contacts.length === 1 ? contacts[0] : null;
   const matchingContact =
-    matchingContactById ?? matchingContactByName ?? matchingContactByEmail;
-  const resolvedContactId =
-    readNullableNumber(matchingContact, "ContactID") ?? primaryContactId;
+    matchingContactById ?? matchingContactByName ?? matchingContactByEmail ?? soleVisibleContact;
+  const matchingContactId = readNullableNumber(matchingContact, "ContactID");
+  const resolvedContactId = isUsableContactId(matchingContactId)
+    ? matchingContactId
+    : primaryContactId;
   const primaryPhone = readPrimaryContactPhone(primary);
   const matchingPhone = readPrimaryContactPhone(matchingContact);
 

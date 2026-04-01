@@ -9,12 +9,10 @@ import {
   type AuthCookieRefreshState,
   fetchBusinessAccountById,
   fetchContactById,
-  invokeBusinessAccountAction,
   updateBusinessAccount,
   updateContact,
 } from "@/lib/acumatica";
 import {
-  buildPrimaryContactFallbackPayloads,
   buildBusinessAccountUpdatePayload,
   buildPrimaryContactUpdatePayload,
   hasBusinessAccountChanges,
@@ -37,22 +35,29 @@ import {
 } from "@/lib/business-account-concurrency";
 import {
   buildPrimaryOnlyUpdateRequest,
+  isContactOnlyUpdate,
   isPrimaryOnlyConflictRetryAllowed,
   isPrimaryOnlyUpdate,
 } from "@/lib/business-account-update";
 import {
   applyOptimisticSavedUpdateToRow,
   applyOptimisticSavedUpdateToRows,
+  mergeSavedResponseRowIntoRows,
   responseRowMatchesSavedUpdate,
 } from "@/lib/business-account-save-verification";
 import { publishBusinessAccountChanged } from "@/lib/business-account-live";
 import { setBusinessAccountPrimaryContact } from "@/lib/contact-merge-server";
+import {
+  isBusinessAccountRowVisibleForCurrentVariant,
+  filterRowsForCurrentVariant,
+} from "@/lib/app-variant";
 import {
   shouldValidateWithAddressComplete,
   validateCanadianAddress,
 } from "@/lib/address-complete";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { isAlwaysExcludedBusinessAccountRow } from "@/lib/internal-records";
 import {
   normalizePhoneForSave,
   resolvePrimaryContactPhoneFields,
@@ -113,41 +118,6 @@ function selectDetailRow(
   }
 
   return rows.find((row) => row.isPrimaryContact) ?? fallbackRow ?? rows[0] ?? null;
-}
-
-function mergeResponseRowIntoRows(
-  rows: BusinessAccountRow[],
-  responseRow: BusinessAccountRow,
-): BusinessAccountRow[] {
-  const responseContactId = responseRow.contactId ?? null;
-  if (responseContactId === null) {
-    return rows;
-  }
-
-  let matched = false;
-  const nextRows = rows.map((row) => {
-    if (row.contactId !== responseContactId) {
-      return row;
-    }
-
-    matched = true;
-    return {
-      ...row,
-      ...responseRow,
-      id: row.id,
-      accountRecordId: row.accountRecordId ?? responseRow.accountRecordId ?? responseRow.id,
-      rowKey:
-        responseRow.rowKey ??
-        row.rowKey ??
-        `${row.accountRecordId ?? responseRow.accountRecordId ?? row.id}:contact:${responseContactId}`,
-    };
-  });
-
-  if (matched) {
-    return nextRows;
-  }
-
-  return [...rows, responseRow];
 }
 
 function schedulePostSyncAccountRefresh(
@@ -213,7 +183,7 @@ function schedulePostSyncAccountRefresh(
       const refreshedRows = normalizeBusinessAccountRows(refreshedRaw);
       replaceReadModelAccountRows(
         accountRecordId,
-        mergeResponseRowIntoRows(refreshedRows, refreshedResponseRow),
+        mergeSavedResponseRowIntoRows(refreshedRows, refreshedResponseRow),
       );
     } catch (error) {
       console.warn("[business-account-update]", {
@@ -306,6 +276,10 @@ function readWrappedNumber(record: unknown, key: string): number | null {
   const value = (field as Record<string, unknown>).value;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function isUsableContactId(contactId: number | null | undefined): contactId is number {
+  return Number.isInteger(contactId) && Number(contactId) > 0;
 }
 
 function readContactDisplayName(record: unknown): string | null {
@@ -429,7 +403,7 @@ function buildContactAccountAssignmentPayload(
           },
         }
       : {}),
-    ...(companyName
+    ...(!assignedBusinessAccountId && companyName
       ? {
           CompanyName: {
             value: companyName,
@@ -503,19 +477,6 @@ function buildContactOnlyUpdateRequestFromCurrentRow(
   }
 
   return nextRequest;
-}
-
-function readPrimaryContactIdFromRawAccount(rawAccount: unknown): number | null {
-  if (!rawAccount || typeof rawAccount !== "object") {
-    return null;
-  }
-
-  const primary = (rawAccount as Record<string, unknown>).PrimaryContact;
-  return (
-    readWrappedNumber(primary, "ContactID") ??
-    readWrappedNumber(rawAccount, "PrimaryContactID") ??
-    readWrappedNumber(rawAccount, "MainContactID")
-  );
 }
 
 function readAccountLocation(rawAccount: unknown): string | null {
@@ -605,7 +566,7 @@ async function normalizeWithContactNotes(
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<ReturnType<typeof normalizeBusinessAccount>> {
   const baseRow = normalizeBusinessAccount(rawAccount);
-  if (!baseRow.primaryContactId) {
+  if (!isUsableContactId(baseRow.primaryContactId)) {
     return baseRow;
   }
 
@@ -647,7 +608,7 @@ async function buildResponseRowFromRawAccount(
   );
 
   let responseRow = refreshedAccountRow;
-  if (targetContactId !== null) {
+  if (isUsableContactId(targetContactId)) {
     try {
       const refreshedTargetContact = await fetchContactById(
         cookieValue,
@@ -740,6 +701,9 @@ export async function GET(
       maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
       const cached = readBusinessAccountDetailFromReadModel(id, requestedContactId);
       if (cached) {
+        if (isAlwaysExcludedBusinessAccountRow(cached.row)) {
+          throw new HttpError(404, "Business account not found.");
+        }
         const response = NextResponse.json({
           ...cached,
           row: applyLocalAccountMetadataToRow(cached.row) ?? cached.row,
@@ -758,7 +722,16 @@ export async function GET(
       rawAccount,
       authCookieRefresh,
     );
-    const normalizedRows = normalizeBusinessAccountRows(rawAccount);
+    if (
+      isAlwaysExcludedBusinessAccountRow(normalized) ||
+      !isBusinessAccountRowVisibleForCurrentVariant(normalized)
+    ) {
+      throw new HttpError(404, "Business account not found.");
+    }
+
+    const normalizedRows = filterRowsForCurrentVariant(
+      normalizeBusinessAccountRows(rawAccount),
+    );
     const detailRow = selectDetailRow(normalizedRows, requestedContactId, normalized);
 
     if (getEnv().READ_MODEL_ENABLED) {
@@ -799,7 +772,16 @@ export async function GET(
           rawAccount,
           retryAuthCookieRefresh,
         );
-        const normalizedRows = normalizeBusinessAccountRows(rawAccount);
+        if (
+          isAlwaysExcludedBusinessAccountRow(normalized) ||
+          !isBusinessAccountRowVisibleForCurrentVariant(normalized)
+        ) {
+          throw new HttpError(404, "Business account not found.");
+        }
+
+        const normalizedRows = filterRowsForCurrentVariant(
+          normalizeBusinessAccountRows(rawAccount),
+        );
         const detailRow = selectDetailRow(normalizedRows, requestedContactId, normalized);
 
         const response = NextResponse.json({
@@ -901,6 +883,10 @@ export async function PUT(
         ? readBusinessAccountDetailFromReadModel(id, cachedTargetContactId)
         : cachedDetail;
     const cachedTargetRow = cachedTargetDetail?.row ?? cachedCurrentRow;
+    const implicitContactOnlyIntent =
+      cachedCurrentRow !== null &&
+      cachedTargetContactId !== null &&
+      isContactOnlyUpdate(cachedCurrentRow, updateRequest);
     const requestedAssignedBusinessAccountId = sanitizeNullableInput(
       updateRequest.assignedBusinessAccountId,
     );
@@ -1006,7 +992,10 @@ export async function PUT(
       );
     }
 
-    if (updateRequest.contactOnlyIntent === true && cachedTargetContactId !== null) {
+    if (
+      (updateRequest.contactOnlyIntent === true || implicitContactOnlyIntent) &&
+      cachedTargetContactId !== null
+    ) {
       const cachedContactComparisonRow =
         cachedTargetRow !== null
           ? {
@@ -1095,7 +1084,7 @@ export async function PUT(
       if (getEnv().READ_MODEL_ENABLED) {
         replaceReadModelAccountRows(
           refreshedRow.accountRecordId ?? id,
-          mergeResponseRowIntoRows(
+          mergeSavedResponseRowIntoRows(
             cachedTargetDetail?.rows ?? cachedDetail?.rows ?? [currentTargetRow],
             refreshedRow,
           ),
@@ -1374,10 +1363,13 @@ export async function PUT(
           ...accountPayload,
         },
         activeAuthCookieRefresh,
+        {
+          strategy: "body-first",
+        },
       );
     }
 
-    if (primaryOnlySwitch) {
+    if (effectiveUpdateRequest.setAsPrimaryContact && effectiveTargetContactId !== null) {
       await setBusinessAccountPrimaryContact(
         activeCookieValue,
         {
@@ -1393,104 +1385,6 @@ export async function PUT(
       );
     }
 
-    if (
-      effectiveUpdateRequest.setAsPrimaryContact &&
-      effectiveTargetContactId !== null &&
-      !primaryOnlySwitch
-    ) {
-      let primaryVerificationRaw = await fetchBusinessAccountById(
-        activeCookieValue,
-        resolvedRecordId,
-        activeAuthCookieRefresh,
-      );
-      let verifiedPrimaryContactId = readPrimaryContactIdFromRawAccount(primaryVerificationRaw);
-
-      if (verifiedPrimaryContactId !== effectiveTargetContactId) {
-        const targetContactRecordId =
-          currentTargetContactRaw &&
-          typeof currentTargetContactRaw === "object" &&
-          typeof (currentTargetContactRaw as Record<string, unknown>).id === "string"
-            ? ((currentTargetContactRaw as Record<string, unknown>).id as string).trim()
-            : "";
-
-        try {
-          await invokeBusinessAccountAction(
-            activeCookieValue,
-            "makeContactPrimary",
-            {
-              ...buildBusinessAccountIdentityPayload(primaryVerificationRaw),
-              Contacts: [
-                {
-                  ...(targetContactRecordId ? { id: targetContactRecordId } : {}),
-                  ContactID: {
-                    value: effectiveTargetContactId,
-                  },
-                },
-              ],
-            },
-            {},
-            activeAuthCookieRefresh,
-          );
-
-          primaryVerificationRaw = await fetchBusinessAccountById(
-            activeCookieValue,
-            resolvedRecordId,
-            activeAuthCookieRefresh,
-          );
-          verifiedPrimaryContactId = readPrimaryContactIdFromRawAccount(
-            primaryVerificationRaw,
-          );
-        } catch (primaryActionError) {
-          if (
-            primaryActionError instanceof HttpError &&
-            (primaryActionError.status === 401 || primaryActionError.status === 403)
-          ) {
-            throw primaryActionError;
-          }
-        }
-      }
-
-      if (verifiedPrimaryContactId !== effectiveTargetContactId) {
-        const fallbackPayloads = buildPrimaryContactFallbackPayloads(
-          primaryVerificationRaw,
-          effectiveTargetContactId,
-          currentTargetContactRaw,
-        );
-
-        for (const fallbackPayload of fallbackPayloads) {
-          await updateBusinessAccount(
-            activeCookieValue,
-            updateIdentifiers,
-            {
-              ...identityPayload,
-              ...fallbackPayload,
-            },
-            activeAuthCookieRefresh,
-          );
-
-          primaryVerificationRaw = await fetchBusinessAccountById(
-            activeCookieValue,
-            resolvedRecordId,
-            activeAuthCookieRefresh,
-          );
-          verifiedPrimaryContactId = readPrimaryContactIdFromRawAccount(
-            primaryVerificationRaw,
-          );
-
-          if (verifiedPrimaryContactId === effectiveTargetContactId) {
-            break;
-          }
-        }
-      }
-
-      if (verifiedPrimaryContactId !== effectiveTargetContactId) {
-        throw new HttpError(
-          422,
-          "Acumatica accepted the update but did not switch the primary contact. Please sync records and try again.",
-        );
-      }
-    }
-
     if (contactWasEdited && effectiveTargetContactId !== null) {
       const contactPayload = buildPrimaryContactUpdatePayload(effectiveUpdateRequest);
       await updateContact(
@@ -1504,7 +1398,7 @@ export async function PUT(
     const responseTargetContactId =
       effectiveTargetContactId ?? currentAccountRow.primaryContactId;
 
-    const verificationDelaysMs = [0, 180, 450, 900];
+    const verificationDelaysMs = [0, 250];
     let refreshedRaw: unknown = null;
     let refreshedAccountRow: BusinessAccountRow | null = null;
     let responseRow: BusinessAccountRow | null = null;
@@ -1567,7 +1461,7 @@ export async function PUT(
       if (getEnv().READ_MODEL_ENABLED) {
         replaceReadModelAccountRows(
           resolvedRecordId,
-          mergeResponseRowIntoRows(optimisticRows, responseRow),
+          mergeSavedResponseRowIntoRows(optimisticRows, responseRow),
         );
         schedulePostSyncAccountRefresh(
           activeCookieValue,
@@ -1587,7 +1481,7 @@ export async function PUT(
       const refreshedRows = normalizeBusinessAccountRows(refreshedRaw);
       replaceReadModelAccountRows(
         resolvedRecordId,
-        mergeResponseRowIntoRows(refreshedRows, responseRow),
+        mergeSavedResponseRowIntoRows(refreshedRows, responseRow),
       );
       schedulePostSyncAccountRefresh(
         activeCookieValue,

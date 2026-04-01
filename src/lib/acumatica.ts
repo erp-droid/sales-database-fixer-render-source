@@ -663,6 +663,35 @@ async function requestAcumatica<T>(
   return parseJsonPayload<T>(response, `requesting '${resourcePath}'`);
 }
 
+async function requestAcumaticaAtEntityPath<T>(
+  cookieValue: string,
+  entityPath: string,
+  resourcePath: string,
+  init?: RequestAcumaticaInit,
+): Promise<T> {
+  const response = await performAcumaticaFetchAtEntityPath(
+    cookieValue,
+    entityPath,
+    resourcePath,
+    init,
+  );
+
+  if (!response.ok) {
+    const errorResponse = await parseErrorResponse(response);
+    throw new HttpError(
+      response.status,
+      errorResponse.message,
+      errorResponse.details,
+    );
+  }
+
+  if (response.status === 204) {
+    return null as T;
+  }
+
+  return parseJsonPayload<T>(response, `requesting '${resourcePath}' via '${entityPath}'`);
+}
+
 export type RawBusinessAccount = Record<string, unknown>;
 export type RawContact = Record<string, unknown>;
 export type RawEmployee = Record<string, unknown>;
@@ -1691,13 +1720,33 @@ export async function fetchContactById(
   id: number,
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<RawContact> {
-  return requestAcumatica<RawContact>(
-    getActiveCookieValue(cookieValue, authCookieRefresh),
-    `/Contact/${encodeURIComponent(String(id))}`,
-    {
+  try {
+    return await requestAcumatica<RawContact>(
+      getActiveCookieValue(cookieValue, authCookieRefresh),
+      `/Contact/${encodeURIComponent(String(id))}`,
+      {
+        authCookieRefresh,
+      },
+    );
+  } catch (directError) {
+    if (
+      directError instanceof HttpError &&
+      (directError.status === 401 || directError.status === 403)
+    ) {
+      throw directError;
+    }
+
+    const exactMatches = await findContactsByContactId(
+      cookieValue,
+      id,
       authCookieRefresh,
-    },
-  );
+    );
+    if (exactMatches.length === 1) {
+      return exactMatches[0];
+    }
+
+    throw directError;
+  }
 }
 
 export async function createActivity(
@@ -2860,21 +2909,336 @@ export async function updateContact(
   contactId: number,
   payload: Record<string, unknown>,
   authCookieRefresh?: AuthCookieRefreshState,
+  options?: {
+    recordId?: string | null;
+  },
 ): Promise<void> {
-  await requestAcumatica(
-    getActiveCookieValue(cookieValue, authCookieRefresh),
-    "/Contact",
+  await writeContactEntity(
+    cookieValue,
     {
-      method: "PUT",
-      body: JSON.stringify({
-        ContactID: {
-          value: contactId,
-        },
-        ...payload,
-      }),
-      authCookieRefresh,
+      ContactID: {
+        value: contactId,
+      },
+      ...payload,
+    },
+    authCookieRefresh,
+    {
+      contactId,
+      seedIdentifiers: options?.recordId ? [options.recordId] : [],
     },
   );
+}
+
+function isDuplicateContactSelectionError(error: unknown): error is HttpError {
+  return (
+    error instanceof HttpError &&
+    error.status === 500 &&
+    error.message.trim().toLowerCase().includes("sequence contains more than one matching element")
+  );
+}
+
+function buildContactEntityRecoveryPayloads(
+  payload: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const variants: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+
+  const pushVariant = (fieldsToOmit: string[]) => {
+    const nextPayload = { ...payload };
+    let changed = false;
+    for (const field of fieldsToOmit) {
+      if (field in nextPayload) {
+        delete nextPayload[field];
+        changed = true;
+      }
+    }
+    if (!changed) {
+      return;
+    }
+
+    const fingerprint = JSON.stringify(nextPayload);
+    if (seen.has(fingerprint)) {
+      return;
+    }
+    seen.add(fingerprint);
+    variants.push(nextPayload);
+  };
+
+  // CompanyName is redundant when BusinessAccount is already present and can
+  // trigger ambiguous-account resolution upstream for duplicate customer names.
+  pushVariant(["CompanyName"]);
+  pushVariant(["CompanyName", "Type"]);
+
+  return variants;
+}
+
+async function findContactsByContactId(
+  cookieValue: string,
+  contactId: number,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawContact[]> {
+  if (!Number.isFinite(contactId) || contactId <= 0) {
+    return [];
+  }
+
+  const rows = await searchContacts(
+    cookieValue,
+    {
+      filter: `ContactID eq ${Math.trunc(contactId)}`,
+      top: 10,
+    },
+    authCookieRefresh,
+  );
+
+  const exactRows = rows.filter(
+    (row) => readWrappedNumber(row, "ContactID") === Math.trunc(contactId),
+  );
+  const uniqueRows = new Map<string, RawContact>();
+  for (const row of exactRows) {
+    uniqueRows.set(readContactIdentity(row), row);
+  }
+
+  return [...uniqueRows.values()];
+}
+
+async function resolveContactEntityIdentifiersByContactId(
+  cookieValue: string,
+  contactId: number,
+  authCookieRefresh?: AuthCookieRefreshState,
+  seedIdentifiers?: string[],
+): Promise<string[]> {
+  const identifiers = new Set(
+    (seedIdentifiers ?? []).map((value) => value.trim()).filter(Boolean),
+  );
+
+  try {
+    const matches = await findContactsByContactId(
+      cookieValue,
+      contactId,
+      authCookieRefresh,
+    );
+    for (const match of matches) {
+      const identity = readRecordIdentity(match);
+      if (identity) {
+        identifiers.add(identity);
+      }
+
+      const noteId = readWrappedString(match, "NoteID");
+      if (noteId) {
+        identifiers.add(noteId);
+      }
+    }
+  } catch (error) {
+    if (
+      error instanceof HttpError &&
+      (error.status === 401 || error.status === 403)
+    ) {
+      throw error;
+    }
+  }
+
+  return [...identifiers];
+}
+
+function buildContactIdentityRecoveryPayloads(
+  payload: Record<string, unknown>,
+  identifiers: string[],
+): Record<string, unknown>[] {
+  const variants: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+
+  for (const identifier of identifiers) {
+    const trimmed = identifier.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const idVariant = {
+      ...payload,
+      id: trimmed,
+    };
+    const noteIdVariant = {
+      ...payload,
+      NoteID: {
+        value: trimmed,
+      },
+    };
+
+    for (const variant of [idVariant, noteIdVariant]) {
+      const fingerprint = JSON.stringify(variant);
+      if (seen.has(fingerprint)) {
+        continue;
+      }
+      seen.add(fingerprint);
+      variants.push(variant);
+    }
+  }
+
+  return variants;
+}
+
+async function tryWriteContactEntityByIdentifiers<T>(
+  cookieValue: string,
+  payload: Record<string, unknown>,
+  identifiers: string[],
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<T | null> {
+  const activeCookieValue = getActiveCookieValue(cookieValue, authCookieRefresh);
+  const payloadAttempts = buildContactIdentityRecoveryPayloads(payload, identifiers);
+
+  for (const attemptPayload of payloadAttempts) {
+    try {
+      return await requestAcumatica<T>(activeCookieValue, "/Contact", {
+        method: "PUT",
+        body: JSON.stringify(attemptPayload),
+        authCookieRefresh,
+      });
+    } catch (error) {
+      if (
+        error instanceof HttpError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  for (const identifier of identifiers) {
+    const trimmed = identifier.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    try {
+      return await requestAcumatica<T>(
+        activeCookieValue,
+        `/Contact/${encodeURIComponent(trimmed)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(payload),
+          authCookieRefresh,
+        },
+      );
+    } catch (error) {
+      if (
+        error instanceof HttpError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function writeContactEntity<T>(
+  cookieValue: string,
+  payload: Record<string, unknown>,
+  authCookieRefresh?: AuthCookieRefreshState,
+  options?: {
+    contactId?: number;
+    seedIdentifiers?: string[];
+  },
+): Promise<T> {
+  const activeCookieValue = getActiveCookieValue(cookieValue, authCookieRefresh);
+  try {
+    return await requestAcumatica<T>(activeCookieValue, "/Contact", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+      authCookieRefresh,
+    });
+  } catch (error) {
+    const defaultEntityPath = deriveDefaultAcumaticaEntityPath(
+      getEnv().ACUMATICA_ENTITY_PATH,
+    );
+    if (!isDuplicateContactSelectionError(error)) {
+      throw error;
+    }
+
+    if (defaultEntityPath) {
+      try {
+        const response = await requestAcumaticaAtEntityPath<T>(
+          activeCookieValue,
+          defaultEntityPath,
+          "/Contact",
+          {
+            method: "PUT",
+            body: JSON.stringify(payload),
+            authCookieRefresh,
+          },
+        );
+        cacheResolvedAcumaticaEndpoint("/Contact", {
+          entityPath: defaultEntityPath,
+          source: "fallback-default",
+        });
+        return response;
+      } catch (defaultError) {
+        if (!isDuplicateContactSelectionError(defaultError)) {
+          throw defaultError;
+        }
+      }
+    }
+
+    const recoveryPayloads = buildContactEntityRecoveryPayloads(payload);
+    for (const recoveryPayload of recoveryPayloads) {
+      try {
+        return await requestAcumatica<T>(activeCookieValue, "/Contact", {
+          method: "PUT",
+          body: JSON.stringify(recoveryPayload),
+          authCookieRefresh,
+        });
+      } catch (recoveryError) {
+        if (!isDuplicateContactSelectionError(recoveryError)) {
+          throw recoveryError;
+        }
+      }
+
+      if (!defaultEntityPath) {
+        continue;
+      }
+
+      const response = await requestAcumaticaAtEntityPath<T>(
+        activeCookieValue,
+        defaultEntityPath,
+        "/Contact",
+        {
+          method: "PUT",
+          body: JSON.stringify(recoveryPayload),
+          authCookieRefresh,
+        },
+      );
+      cacheResolvedAcumaticaEndpoint("/Contact", {
+        entityPath: defaultEntityPath,
+        source: "fallback-default",
+      });
+      return response;
+    }
+
+    if (typeof options?.contactId === "number" && Number.isFinite(options.contactId)) {
+      const identifiers = await resolveContactEntityIdentifiersByContactId(
+        cookieValue,
+        options.contactId,
+        authCookieRefresh,
+        options.seedIdentifiers,
+      );
+      const identityPayloads = [payload, ...recoveryPayloads];
+
+      for (const identityPayload of identityPayloads) {
+        const response = await tryWriteContactEntityByIdentifiers<T>(
+          cookieValue,
+          identityPayload,
+          identifiers,
+          authCookieRefresh,
+        );
+        if (response !== null) {
+          return response;
+        }
+      }
+    }
+
+    throw error;
+  }
 }
 
 export async function createContact(
@@ -2882,15 +3246,7 @@ export async function createContact(
   payload: Record<string, unknown>,
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<RawContact> {
-  return requestAcumatica<RawContact>(
-    getActiveCookieValue(cookieValue, authCookieRefresh),
-    "/Contact",
-    {
-      method: "PUT",
-      body: JSON.stringify(payload),
-      authCookieRefresh,
-    },
-  );
+  return writeContactEntity<RawContact>(cookieValue, payload, authCookieRefresh);
 }
 
 export async function createOpportunity(
