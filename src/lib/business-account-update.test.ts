@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildPrimaryOnlyUpdateRequest,
+  isContactOnlyUpdate,
   isPrimaryOnlyConflictRetryAllowed,
   isPrimaryOnlyUpdate,
 } from "@/lib/business-account-update";
@@ -93,6 +94,25 @@ function buildRequest(
 }
 
 describe("business-account primary-only helpers", () => {
+  it("recognizes a pure contact edit as contact-only even without the explicit flag", () => {
+    const request = buildRequest({
+      setAsPrimaryContact: false,
+      primaryContactJobTitle: "Vice President",
+      notes: "Updated contact note",
+    });
+
+    expect(isContactOnlyUpdate(currentAccountRow, request)).toBe(true);
+  });
+
+  it("does not treat account field edits as contact-only", () => {
+    const request = buildRequest({
+      setAsPrimaryContact: false,
+      companyRegion: "Region 9",
+    });
+
+    expect(isContactOnlyUpdate(currentAccountRow, request)).toBe(false);
+  });
+
   it("recognizes a primary-only update when the submitted values match the latest rows", () => {
     const request = buildRequest();
 

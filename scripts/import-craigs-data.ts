@@ -1110,7 +1110,6 @@ function buildManualContactCreatePayload(input: {
       contactClass: input.stagedContact.contactClass,
     },
     businessAccountId: input.businessAccountId,
-    companyName: input.companyName,
   }) as Record<string, unknown>;
 
   if (input.stagedContact.extension) {
