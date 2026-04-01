@@ -48,10 +48,6 @@ import {
 import { publishBusinessAccountChanged } from "@/lib/business-account-live";
 import { setBusinessAccountPrimaryContact } from "@/lib/contact-merge-server";
 import {
-  isBusinessAccountRowVisibleForCurrentVariant,
-  filterRowsForCurrentVariant,
-} from "@/lib/app-variant";
-import {
   shouldValidateWithAddressComplete,
   validateCanadianAddress,
 } from "@/lib/address-complete";
@@ -722,16 +718,11 @@ export async function GET(
       rawAccount,
       authCookieRefresh,
     );
-    if (
-      isAlwaysExcludedBusinessAccountRow(normalized) ||
-      !isBusinessAccountRowVisibleForCurrentVariant(normalized)
-    ) {
+    if (isAlwaysExcludedBusinessAccountRow(normalized)) {
       throw new HttpError(404, "Business account not found.");
     }
 
-    const normalizedRows = filterRowsForCurrentVariant(
-      normalizeBusinessAccountRows(rawAccount),
-    );
+    const normalizedRows = normalizeBusinessAccountRows(rawAccount);
     const detailRow = selectDetailRow(normalizedRows, requestedContactId, normalized);
 
     if (getEnv().READ_MODEL_ENABLED) {
@@ -772,16 +763,11 @@ export async function GET(
           rawAccount,
           retryAuthCookieRefresh,
         );
-        if (
-          isAlwaysExcludedBusinessAccountRow(normalized) ||
-          !isBusinessAccountRowVisibleForCurrentVariant(normalized)
-        ) {
+        if (isAlwaysExcludedBusinessAccountRow(normalized)) {
           throw new HttpError(404, "Business account not found.");
         }
 
-        const normalizedRows = filterRowsForCurrentVariant(
-          normalizeBusinessAccountRows(rawAccount),
-        );
+        const normalizedRows = normalizeBusinessAccountRows(rawAccount);
         const detailRow = selectDetailRow(normalizedRows, requestedContactId, normalized);
 
         const response = NextResponse.json({
