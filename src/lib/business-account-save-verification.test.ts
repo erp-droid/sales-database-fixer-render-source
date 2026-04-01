@@ -4,6 +4,7 @@ import {
   applyOptimisticSavedUpdateToRow,
   applyOptimisticSavedUpdateToRows,
   buildVerificationUpdateRequest,
+  mergeSavedResponseRowIntoRows,
   responseRowMatchesSavedUpdate,
 } from "@/lib/business-account-save-verification";
 import type {
@@ -218,5 +219,73 @@ describe("business-account save verification", () => {
       primaryContactJobTitle: "Director",
       notes: "Updated note",
     });
+  });
+
+  it("propagates a verified primary contact switch across sibling rows when merging the response row", () => {
+    const currentPrimaryRow = buildRow({
+      rowKey: "account-1:contact:100",
+      contactId: 100,
+      isPrimaryContact: true,
+      primaryContactId: 100,
+      primaryContactName: "Jane Doe",
+    });
+    const targetRow = buildRow({
+      rowKey: "account-1:contact:101",
+      contactId: 101,
+      isPrimaryContact: false,
+      primaryContactId: 100,
+      primaryContactName: "John Roe",
+    });
+    const responseRow = buildRow({
+      rowKey: "account-1:contact:101",
+      contactId: 101,
+      isPrimaryContact: true,
+      primaryContactId: 101,
+      primaryContactName: "John Roe",
+    });
+
+    const merged = mergeSavedResponseRowIntoRows(
+      [currentPrimaryRow, targetRow],
+      responseRow,
+    );
+
+    expect(merged.find((row) => row.contactId === 100)).toMatchObject({
+      primaryContactId: 101,
+      isPrimaryContact: false,
+    });
+    expect(merged.find((row) => row.contactId === 101)).toMatchObject({
+      primaryContactId: 101,
+      isPrimaryContact: true,
+    });
+    expect(merged.filter((row) => row.isPrimaryContact)).toHaveLength(1);
+  });
+
+  it("adds a missing response row and clears the old primary when the new primary row was absent locally", () => {
+    const currentPrimaryRow = buildRow({
+      rowKey: "account-1:contact:100",
+      contactId: 100,
+      isPrimaryContact: true,
+      primaryContactId: 100,
+      primaryContactName: "Jane Doe",
+    });
+    const responseRow = buildRow({
+      rowKey: "account-1:contact:101",
+      contactId: 101,
+      isPrimaryContact: true,
+      primaryContactId: 101,
+      primaryContactName: "John Roe",
+    });
+
+    const merged = mergeSavedResponseRowIntoRows([currentPrimaryRow], responseRow);
+
+    expect(merged.find((row) => row.contactId === 100)).toMatchObject({
+      primaryContactId: 101,
+      isPrimaryContact: false,
+    });
+    expect(merged.find((row) => row.contactId === 101)).toMatchObject({
+      primaryContactId: 101,
+      isPrimaryContact: true,
+    });
+    expect(merged.filter((row) => row.isPrimaryContact)).toHaveLength(1);
   });
 });
