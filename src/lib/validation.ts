@@ -62,6 +62,7 @@ const sortDirValues = ["asc", "desc"] as const;
 export const listQuerySchema = z.object({
   q: z.string().optional(),
   category: z.enum(CATEGORY_VALUES).optional(),
+  filterCompanyInitial: z.string().optional(),
   filterCompanyName: z.string().optional(),
   filterSalesRep: z.string().optional(),
   filterIndustryType: z.string().optional(),
@@ -69,6 +70,7 @@ export const listQuerySchema = z.object({
   filterCompanyRegion: z.string().optional(),
   filterWeek: z.string().optional(),
   filterAddress: z.string().optional(),
+  filterCompanyPhone: z.string().optional(),
   filterPrimaryContactName: z.string().optional(),
   filterPrimaryContactJobTitle: z.string().optional(),
   filterPrimaryContactPhone: z.string().optional(),
@@ -186,16 +188,26 @@ const nullableExpectedLastModifiedSchema = z
   .union([z.string(), z.null(), z.undefined()])
   .transform((value) => value ?? null);
 
+const hiddenSnapshotRequiredTextSchema = (maxLength: number) =>
+  z
+    .union([z.string(), z.null(), z.undefined()])
+    .transform((value) => value?.trim() ?? "")
+    .refine((value) => value.length <= maxLength, {
+      message: `String must contain at most ${maxLength} character(s)`,
+    });
+
 const businessAccountConcurrencySnapshotSchema = z.object({
-  companyName: z.string().trim().min(1).max(255),
+  // Hidden concurrency snapshots need to preserve legacy blank values so users
+  // can fill missing address/company fields without the snapshot itself failing validation.
+  companyName: hiddenSnapshotRequiredTextSchema(255),
   companyDescription: nullableStringSchema.default(null),
   assignedBusinessAccountRecordId: nullableStringSchema.default(null),
   assignedBusinessAccountId: nullableStringSchema.default(null),
-  addressLine1: z.string().trim().min(1).max(255),
+  addressLine1: hiddenSnapshotRequiredTextSchema(255),
   addressLine2: z.string().trim().max(255).default(""),
-  city: z.string().trim().min(1).max(100),
-  state: z.string().trim().min(1).max(100),
-  postalCode: z.string().trim().min(1).max(20),
+  city: hiddenSnapshotRequiredTextSchema(100),
+  state: hiddenSnapshotRequiredTextSchema(100),
+  postalCode: hiddenSnapshotRequiredTextSchema(20),
   country: z
     .union([z.string(), z.null(), z.undefined()])
     .transform((value) => normalizeCountryCode(value ?? null))
@@ -702,6 +714,7 @@ export const contactMergeRequestSchema = z
 export type ParsedListQuery = {
   q?: string;
   category?: Category;
+  filterCompanyInitial?: string;
   filterCompanyName?: string;
   filterSalesRep?: string;
   filterIndustryType?: string;
@@ -709,6 +722,7 @@ export type ParsedListQuery = {
   filterCompanyRegion?: string;
   filterWeek?: string;
   filterAddress?: string;
+  filterCompanyPhone?: string;
   filterPrimaryContactName?: string;
   filterPrimaryContactJobTitle?: string;
   filterPrimaryContactPhone?: string;
@@ -761,6 +775,7 @@ export function parseListQuery(queryParams: URLSearchParams): ParsedListQuery {
   const parsed = listQuerySchema.parse({
     q: queryParams.get("q") ?? undefined,
     category: queryParams.get("category") ?? undefined,
+    filterCompanyInitial: queryParams.get("filterCompanyInitial") ?? undefined,
     filterCompanyName: queryParams.get("filterCompanyName") ?? undefined,
     filterSalesRep: queryParams.get("filterSalesRep") ?? undefined,
     filterIndustryType: queryParams.get("filterIndustryType") ?? undefined,
@@ -768,6 +783,7 @@ export function parseListQuery(queryParams: URLSearchParams): ParsedListQuery {
     filterCompanyRegion: queryParams.get("filterCompanyRegion") ?? undefined,
     filterWeek: queryParams.get("filterWeek") ?? undefined,
     filterAddress: queryParams.get("filterAddress") ?? undefined,
+    filterCompanyPhone: queryParams.get("filterCompanyPhone") ?? undefined,
     filterPrimaryContactName: queryParams.get("filterPrimaryContactName") ?? undefined,
     filterPrimaryContactJobTitle:
       queryParams.get("filterPrimaryContactJobTitle") ?? undefined,
@@ -788,6 +804,7 @@ export function parseListQuery(queryParams: URLSearchParams): ParsedListQuery {
   return {
     ...parsed,
     q: normalizeOptionalFilter(parsed.q),
+    filterCompanyInitial: normalizeOptionalFilter(parsed.filterCompanyInitial),
     filterCompanyName: normalizeOptionalFilter(parsed.filterCompanyName),
     filterSalesRep: normalizeOptionalFilter(parsed.filterSalesRep),
     filterIndustryType: normalizeOptionalFilter(parsed.filterIndustryType),
@@ -795,6 +812,7 @@ export function parseListQuery(queryParams: URLSearchParams): ParsedListQuery {
     filterCompanyRegion: normalizeOptionalFilter(parsed.filterCompanyRegion),
     filterWeek: normalizeOptionalFilter(parsed.filterWeek),
     filterAddress: normalizeOptionalFilter(parsed.filterAddress),
+    filterCompanyPhone: normalizeOptionalFilter(parsed.filterCompanyPhone),
     filterPrimaryContactName: normalizeOptionalFilter(parsed.filterPrimaryContactName),
     filterPrimaryContactJobTitle: normalizeOptionalFilter(parsed.filterPrimaryContactJobTitle),
     filterPrimaryContactPhone: normalizeOptionalFilter(parsed.filterPrimaryContactPhone),

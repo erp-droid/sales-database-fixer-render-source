@@ -416,6 +416,51 @@ const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   lastModified: "",
 };
 
+function buildAccountsCsvExportHref(input: {
+  q: string;
+  companyNameInitialFilter: string | null;
+  headerFilters: HeaderFilters;
+  sortBy: SortBy;
+  sortDir: SortDir;
+}): string {
+  const params = new URLSearchParams();
+
+  const append = (key: string, value: string | null | undefined) => {
+    const trimmed = value?.trim();
+    if (trimmed) {
+      params.set(key, trimmed);
+    }
+  };
+
+  append("q", input.q);
+  append("filterCompanyInitial", input.companyNameInitialFilter);
+  append("filterCompanyName", input.headerFilters.companyName);
+  append("filterSalesRep", input.headerFilters.salesRepName);
+  append("filterIndustryType", input.headerFilters.industryType);
+  append("filterSubCategory", input.headerFilters.subCategory);
+  append("filterCompanyRegion", input.headerFilters.companyRegion);
+  append("filterWeek", input.headerFilters.week);
+  append("filterAddress", input.headerFilters.address);
+  append("filterCompanyPhone", input.headerFilters.companyPhone);
+  append("filterPrimaryContactName", input.headerFilters.primaryContactName);
+  append("filterPrimaryContactJobTitle", input.headerFilters.primaryContactJobTitle);
+  append("filterPrimaryContactPhone", input.headerFilters.primaryContactPhone);
+  append("filterPrimaryContactExtension", input.headerFilters.primaryContactExtension);
+  append("filterPrimaryContactEmail", input.headerFilters.primaryContactEmail);
+  append("filterNotes", input.headerFilters.notes);
+  if (input.headerFilters.category) {
+    params.set("filterCategory", input.headerFilters.category);
+  }
+  append("filterLastEmailed", input.headerFilters.lastEmailed);
+  append("filterLastModified", input.headerFilters.lastModified);
+  params.set("sortBy", input.sortBy);
+  params.set("sortDir", input.sortDir);
+  params.set("page", "1");
+  params.set("pageSize", "1");
+
+  return `/api/business-accounts/export?${params.toString()}`;
+}
+
 const COLUMN_STORAGE_KEY = "businessAccounts.columnOrder.v2";
 const LEGACY_COLUMN_STORAGE_KEYS = ["businessAccounts.columnOrder.v1"] as const;
 const COLUMN_VISIBILITY_STORAGE_KEY = "businessAccounts.visibleColumns.v2";
@@ -2734,6 +2779,20 @@ export function AccountsClient({
     ],
   );
 
+  const canExportAccountsCsv =
+    session?.authenticated === true &&
+    session.user?.id?.trim().toLowerCase() === "jserrano";
+  const accountsCsvExportHref = useMemo(
+    () =>
+      buildAccountsCsvExportHref({
+        q: debouncedQ,
+        companyNameInitialFilter,
+        headerFilters: debouncedHeaderFilters,
+        sortBy,
+        sortDir,
+      }),
+    [companyNameInitialFilter, debouncedHeaderFilters, debouncedQ, sortBy, sortDir],
+  );
   const rows = queryResult.items;
   const total = queryResult.total;
   const selectedContactRows = useMemo(() => {
@@ -6095,6 +6154,11 @@ export function AccountsClient({
             <SyncIcon />
             <span>{isSyncing ? "Syncing..." : "Sync now"}</span>
           </button>
+          {canExportAccountsCsv ? (
+            <a className={styles.toolbarButton} href={accountsCsvExportHref}>
+              Export CSV
+            </a>
+          ) : null}
           <div className={styles.createMenu} data-transient-menu="true">
             <button
               aria-expanded={isCreateMenuOpen}

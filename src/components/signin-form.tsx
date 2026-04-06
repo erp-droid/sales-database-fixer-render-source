@@ -57,6 +57,16 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
 
   useEffect(() => {
     let isActive = true;
+    let sessionCheckSettled = false;
+    const fallbackTimeout = window.setTimeout(() => {
+      if (!isActive || sessionCheckSettled) {
+        return;
+      }
+
+      sessionCheckSettled = true;
+      setIsCheckingSession(false);
+      setError((current) => current ?? "Session check took too long. You can still sign in.");
+    }, SESSION_CHECK_TIMEOUT_MS + 1000);
 
     async function restoreSessionIfActive() {
       const response = await fetchWithTimeout(
@@ -68,9 +78,12 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
         | { authenticated?: boolean; degraded?: boolean }
         | null;
 
-      if (!isActive) {
+      if (!isActive || sessionCheckSettled) {
         return;
       }
+
+      sessionCheckSettled = true;
+      window.clearTimeout(fallbackTimeout);
 
       if (response.ok && payload?.authenticated && !payload.degraded) {
         router.replace(nextPath);
@@ -83,13 +96,16 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
 
     restoreSessionIfActive().catch(() => {
       // Ignore session-check errors on sign-in page.
-      if (isActive) {
+      if (isActive && !sessionCheckSettled) {
+        sessionCheckSettled = true;
+        window.clearTimeout(fallbackTimeout);
         setIsCheckingSession(false);
       }
     });
 
     return () => {
       isActive = false;
+      window.clearTimeout(fallbackTimeout);
     };
   }, [nextPath, router]);
 

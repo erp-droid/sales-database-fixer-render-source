@@ -31,6 +31,7 @@ describe("parseListQuery", () => {
       new URLSearchParams({
         q: "alpha",
         category: "B",
+        filterCompanyInitial: "A",
         filterCompanyName: "Alpha",
         filterSalesRep: "Jorge",
         filterIndustryType: "Distribution",
@@ -38,6 +39,7 @@ describe("parseListQuery", () => {
         filterCompanyRegion: "Region 1",
         filterWeek: "Week 1",
         filterAddress: "Road",
+        filterCompanyPhone: "905",
         filterPrimaryContactName: "Jorge",
         filterPrimaryContactPhone: "416",
         filterPrimaryContactEmail: "meadowb.com",
@@ -54,6 +56,7 @@ describe("parseListQuery", () => {
     expect(parsed).toEqual({
       q: "alpha",
       category: "B",
+      filterCompanyInitial: "A",
       filterCompanyName: "Alpha",
       filterSalesRep: "Jorge",
       filterIndustryType: "Distribution",
@@ -61,6 +64,7 @@ describe("parseListQuery", () => {
       filterCompanyRegion: "Region 1",
       filterWeek: "Week 1",
       filterAddress: "Road",
+      filterCompanyPhone: "905",
       filterPrimaryContactName: "Jorge",
       filterPrimaryContactPhone: "416",
       filterPrimaryContactEmail: "meadowb.com",
@@ -216,6 +220,49 @@ describe("parseUpdatePayload", () => {
     expect(parsed.baseSnapshot?.primaryContactPhone).toBeNull();
     expect(parsed.baseSnapshot?.primaryContactExtension).toBeNull();
     expect(parsed.baseSnapshot?.primaryContactEmail).toBeNull();
+  });
+
+  it("tolerates blank legacy required fields inside the hidden base snapshot", () => {
+    const parsed = parseUpdatePayload({
+      ...validPayload,
+      state: "ON",
+      primaryContactEmail: "mark@example.com",
+      notes: "Confirmed Decision Maker - April 2, 2026",
+      baseSnapshot: {
+        companyName: "Footage Tools",
+        companyDescription: null,
+        assignedBusinessAccountRecordId: "account-1",
+        assignedBusinessAccountId: "B200000049",
+        addressLine1: "54 AUDIA CT UNIT 11",
+        addressLine2: "",
+        city: "Concord",
+        state: "",
+        postalCode: "L4K3N4",
+        country: "CA",
+        targetContactId: 157315,
+        salesRepId: "109343",
+        salesRepName: "Jorge Serrano",
+        industryType: null,
+        subCategory: null,
+        companyRegion: "Region 5",
+        week: null,
+        companyPhone: null,
+        primaryContactName: "Mark Armstrong",
+        primaryContactJobTitle: null,
+        primaryContactPhone: null,
+        primaryContactExtension: null,
+        primaryContactEmail: null,
+        category: null,
+        notes: null,
+        primaryContactId: 157315,
+        lastModifiedIso: "2026-03-09T20:08:29.353+00:00",
+      },
+    });
+
+    expect(parsed.state).toBe("ON");
+    expect(parsed.primaryContactEmail).toBe("mark@example.com");
+    expect(parsed.notes).toBe("Confirmed Decision Maker - April 2, 2026");
+    expect(parsed.baseSnapshot?.state).toBe("");
   });
 
   it("rejects invalid category", () => {
