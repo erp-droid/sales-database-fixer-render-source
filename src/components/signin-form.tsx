@@ -145,11 +145,12 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isCheckingSession || retryAfterSeconds > 0) {
+    if (retryAfterSeconds > 0) {
       return;
     }
 
     setError(null);
+    setIsCheckingSession(false);
     setIsSubmitting(true);
 
     try {
@@ -252,18 +253,23 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
       </a>
 
       {error ? <p className={styles.error}>{error}</p> : null}
+      {isCheckingSession ? (
+        <p className={styles.hint}>
+          Checking for an existing session in the background. You can still sign in now.
+        </p>
+      ) : null}
 
       <button
         className={styles.submit}
-        disabled={isSubmitting || isCheckingSession || retryAfterSeconds > 0}
+        disabled={isSubmitting || retryAfterSeconds > 0}
         type="submit"
       >
-        {isCheckingSession
-          ? "Checking session..."
-          : retryAfterSeconds > 0
-            ? `Try again in ${retryAfterSeconds}s`
-            : isSubmitting
-              ? "Signing in..."
+        {retryAfterSeconds > 0
+          ? `Try again in ${retryAfterSeconds}s`
+          : isSubmitting
+            ? "Signing in..."
+            : isCheckingSession
+              ? "Continue to sign in"
               : "Sign in"}
       </button>
     </form>
