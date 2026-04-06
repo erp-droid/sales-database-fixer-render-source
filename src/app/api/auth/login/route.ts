@@ -92,6 +92,10 @@ type NormalizedUpstreamError = {
   status: number;
 };
 
+function cleanHeaderValue(value: string | null | undefined): string {
+  return value?.split(",")[0]?.trim() ?? "";
+}
+
 function normalizeNextPath(value: unknown): string {
   if (typeof value !== "string") {
     return "/accounts";
@@ -103,6 +107,31 @@ function normalizeNextPath(value: unknown): string {
   }
 
   return trimmed;
+}
+
+function resolvePublicOrigin(request: NextRequest, env: AppEnv): string {
+  const envBaseUrl = env.APP_BASE_URL?.trim();
+  if (envBaseUrl) {
+    return envBaseUrl;
+  }
+
+  const forwardedHost =
+    cleanHeaderValue(request.headers.get("x-forwarded-host")) ||
+    cleanHeaderValue(request.headers.get("host"));
+  if (forwardedHost) {
+    const forwardedProto = cleanHeaderValue(request.headers.get("x-forwarded-proto"));
+    const defaultProto =
+      forwardedHost.startsWith("localhost") || forwardedHost.startsWith("127.0.0.1")
+        ? "http"
+        : "https";
+    return `${forwardedProto || defaultProto}://${forwardedHost}`;
+  }
+
+  return request.nextUrl.origin;
+}
+
+function buildPublicRedirectUrl(request: NextRequest, env: AppEnv, path: string): URL {
+  return new URL(path, resolvePublicOrigin(request, env));
 }
 
 async function parseLoginRequest(request: NextRequest): Promise<ParsedLoginRequest> {
@@ -137,8 +166,13 @@ async function parseLoginRequest(request: NextRequest): Promise<ParsedLoginReque
   };
 }
 
-function buildSignInRedirect(request: NextRequest, nextPath: string, error?: string): URL {
-  const redirectUrl = new URL("/signin", request.url);
+function buildSignInRedirect(
+  request: NextRequest,
+  env: AppEnv,
+  nextPath: string,
+  error?: string,
+): URL {
+  const redirectUrl = buildPublicRedirectUrl(request, env, "/signin");
   redirectUrl.searchParams.set("next", nextPath);
   if (error) {
     redirectUrl.searchParams.set("error", error);
@@ -148,13 +182,14 @@ function buildSignInRedirect(request: NextRequest, nextPath: string, error?: str
 
 function buildLoginErrorResponse(
   request: NextRequest,
+  env: AppEnv,
   mode: LoginResponseMode,
   nextPath: string,
   status: number,
   message: string,
 ): NextResponse {
   if (mode === "form") {
-    return NextResponse.redirect(buildSignInRedirect(request, nextPath, message), {
+    return NextResponse.redirect(buildSignInRedirect(request, env, nextPath, message), {
       status: 303,
     });
   }
@@ -247,6 +282,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!username || !password) {
     return buildLoginErrorResponse(
       request,
+      env,
       mode,
       nextPath,
       400,
@@ -262,6 +298,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!loginUrl) {
     return buildLoginErrorResponse(
       request,
+      env,
       mode,
       nextPath,
       500,
@@ -302,6 +339,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (isAbortError(error)) {
       return buildLoginErrorResponse(
         request,
+        env,
         mode,
         nextPath,
         504,
@@ -319,6 +357,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
     return buildLoginErrorResponse(
       request,
+      env,
       mode,
       nextPath,
       normalizedError.status,
@@ -332,6 +371,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!cookieValue) {
     return buildLoginErrorResponse(
       request,
+      env,
       mode,
       nextPath,
       502,
@@ -341,7 +381,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const response =
     mode === "form"
-      ? NextResponse.redirect(new URL(nextPath, request.url), { status: 303 })
+      ? NextResponse.redirect(buildPublicRedirectUrl(request, env, nextPath), { status: 303 })
       : NextResponse.json({ ok: true });
   setAuthCookie(response, cookieValue);
   if (username) {

@@ -437,6 +437,50 @@ describe("auth route timeouts", () => {
     expect(setCookie).toContain(".ASPXAUTH=");
   });
 
+  it("redirects form-post sign-ins to APP_BASE_URL instead of the internal request origin", async () => {
+    process.env.APP_BASE_URL = "https://sales-meadowb.onrender.com";
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/entity/auth/login")) {
+        return Promise.resolve(
+          jsonResponse({
+            status: 200,
+            body: { ok: true },
+            headers: {
+              "set-cookie": ".ASPXAUTH=fresh-cookie; Path=/; HttpOnly",
+            },
+          }),
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { POST } = await import("@/app/api/auth/login/route");
+
+    const request = new NextRequest("http://0.0.0.0:10000/api/auth/login", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        host: "0.0.0.0:10000",
+        "x-forwarded-host": "sales-meadowb.onrender.com",
+        "x-forwarded-proto": "https",
+      },
+      body: new URLSearchParams({
+        username: "jserrano",
+        password: "secret",
+        next: "/accounts",
+      }).toString(),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("https://sales-meadowb.onrender.com/accounts");
+  });
+
   it("translates generic 429 login failures into the API login limit message", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
