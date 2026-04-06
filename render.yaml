@@ -148,6 +148,18 @@ services:
         value: "300000"
       - key: CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS
         value: "86400000"
+      - key: DAILY_CALL_COACHING_ENABLED
+        value: "true"
+      - key: DAILY_CALL_COACHING_SENDER_LOGIN
+        value: jserrano
+      - key: DAILY_CALL_COACHING_TIME_ZONE
+        value: America/Toronto
+      - key: DAILY_CALL_COACHING_SCHEDULE_HOUR
+        value: "7"
+      - key: DAILY_CALL_COACHING_SCHEDULE_MINUTE
+        value: "0"
+      - key: DAILY_CALL_COACHING_LOOKBACK_DAYS
+        value: "1"
       - key: MASTER_SHEET_ID
         value: 1Gc0Hy7I2wt0BcrjU2iYU6R4dNaxYJj2nUVnBFcL7cSM
       - key: ESTIMATE_LIBRARY_DRIVE_FOLDER_ID

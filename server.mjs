@@ -25,6 +25,23 @@ function readBoundedInteger(value, fallback, min, max) {
   return Math.min(max, Math.max(min, parsed));
 }
 
+function readFeatureEnabled(value, fallback) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+}
+
 function readLocalDateParts(date, timeZone) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -169,10 +186,10 @@ server.listen(port, hostname, () => {
   }, WATCHDOG_INTERVAL_MS);
   console.log(`[watchdog] started; checking every ${WATCHDOG_INTERVAL_MS / 1000}s`);
 
-  const dailyCallCoachingEnabled =
-    process.env.DAILY_CALL_COACHING_ENABLED !== undefined
-      ? String(process.env.DAILY_CALL_COACHING_ENABLED).trim().toLowerCase() === "true"
-      : process.env.NODE_ENV === "production";
+  const dailyCallCoachingEnabled = readFeatureEnabled(
+    process.env.DAILY_CALL_COACHING_ENABLED,
+    process.env.NODE_ENV === "production",
+  );
   const dailyCallCoachingTimeZone = String(
     process.env.DAILY_CALL_COACHING_TIME_ZONE || "America/Toronto",
   ).trim();
@@ -304,7 +321,9 @@ server.listen(port, hostname, () => {
       `[daily-call-coaching] started; daily schedule ${String(dailyCallCoachingScheduleHour).padStart(2, "0")}:${String(dailyCallCoachingScheduleMinute).padStart(2, "0")} ${dailyCallCoachingTimeZone}; lookback ${dailyCallCoachingLookbackDays} day(s)`,
     );
   } else {
-    console.log("[daily-call-coaching] disabled");
+    console.log("[daily-call-coaching] disabled", {
+      raw: process.env.DAILY_CALL_COACHING_ENABLED ?? null,
+    });
   }
 
   const callActivitySyncEnabled =
