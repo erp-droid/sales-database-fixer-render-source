@@ -78,18 +78,100 @@ function parseUpstreamErrorMessage(rawText: string): string {
   return rawText;
 }
 
-function normalizeUpstreamError(status: number, message: string): NextResponse {
+type LoginResponseMode = "json" | "form";
+
+type ParsedLoginRequest = {
+  mode: LoginResponseMode;
+  nextPath: string;
+  password: string;
+  username: string;
+};
+
+type NormalizedUpstreamError = {
+  message: string;
+  status: number;
+};
+
+function normalizeNextPath(value: unknown): string {
+  if (typeof value !== "string") {
+    return "/accounts";
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/") || trimmed.startsWith("//")) {
+    return "/accounts";
+  }
+
+  return trimmed;
+}
+
+async function parseLoginRequest(request: NextRequest): Promise<ParsedLoginRequest> {
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+  if (
+    contentType.includes("application/x-www-form-urlencoded") ||
+    contentType.includes("multipart/form-data")
+  ) {
+    const body = await request.formData().catch(() => null);
+    const username = typeof body?.get("username") === "string" ? String(body?.get("username")).trim() : "";
+    const password = typeof body?.get("password") === "string" ? String(body?.get("password")) : "";
+    const nextPath = normalizeNextPath(body?.get("next"));
+
+    return {
+      mode: "form",
+      nextPath,
+      password,
+      username,
+    };
+  }
+
+  const body = await request.json().catch(() => null);
+  const username = typeof body?.username === "string" ? body.username.trim() : "";
+  const password = typeof body?.password === "string" ? body.password : "";
+  const nextPath = normalizeNextPath(body?.next);
+
+  return {
+    mode: "json",
+    nextPath,
+    password,
+    username,
+  };
+}
+
+function buildSignInRedirect(request: NextRequest, nextPath: string, error?: string): URL {
+  const redirectUrl = new URL("/signin", request.url);
+  redirectUrl.searchParams.set("next", nextPath);
+  if (error) {
+    redirectUrl.searchParams.set("error", error);
+  }
+  return redirectUrl;
+}
+
+function buildLoginErrorResponse(
+  request: NextRequest,
+  mode: LoginResponseMode,
+  nextPath: string,
+  status: number,
+  message: string,
+): NextResponse {
+  if (mode === "form") {
+    return NextResponse.redirect(buildSignInRedirect(request, nextPath, message), {
+      status: 303,
+    });
+  }
+
+  return NextResponse.json({ error: message }, { status });
+}
+
+function normalizeUpstreamError(status: number, message: string): NormalizedUpstreamError {
   const normalizedMessage = message || "Authentication service is unavailable";
   const lower = normalizedMessage.toLowerCase();
 
   if (status === 429 || isConcurrentLoginLimitMessage(lower)) {
-    return NextResponse.json(
-      {
-        error:
-          "Acumatica API login limit reached for this user. Close old API sessions in Users (SM201010) or increase concurrent API logins, then sign in again.",
-      },
-      { status: 429 },
-    );
+    return {
+      message:
+        "Acumatica API login limit reached for this user. Close old API sessions in Users (SM201010) or increase concurrent API logins, then sign in again.",
+      status: 429,
+    };
   }
 
   if (
@@ -98,23 +180,24 @@ function normalizeUpstreamError(status: number, message: string): NextResponse {
     lower.includes("invalid credentials") ||
     lower.includes("invalid login")
   ) {
-    return NextResponse.json({ error: normalizedMessage || "Invalid credentials" }, { status: 401 });
+    return {
+      message: normalizedMessage || "Invalid credentials",
+      status: 401,
+    };
   }
 
   if (lower.includes("proper company id cannot be determined")) {
-    return NextResponse.json(
-      {
-        error:
-          'Acumatica company is required. Set ACUMATICA_COMPANY in .env.local to "MeadowBrook Live".',
-      },
-      { status: 401 },
-    );
+    return {
+      message:
+        'Acumatica company is required. Set ACUMATICA_COMPANY in .env.local to "MeadowBrook Live".',
+      status: 401,
+    };
   }
 
-  return NextResponse.json(
-    { error: normalizedMessage },
-    { status: 502 },
-  );
+  return {
+    message: normalizedMessage,
+    status: 502,
+  };
 }
 
 function resolveLogoutUrl(env: AppEnv): string | null {
@@ -159,15 +242,15 @@ async function logoutExistingSession(request: NextRequest, env: AppEnv): Promise
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const env = getEnv();
-
-  const body = await request.json().catch(() => null);
-  const username = typeof body?.username === "string" ? body.username.trim() : "";
-  const password = typeof body?.password === "string" ? body.password : "";
+  const { mode, nextPath, password, username } = await parseLoginRequest(request);
 
   if (!username || !password) {
-    return NextResponse.json(
-      { error: "Username and password are required." },
-      { status: 400 },
+    return buildLoginErrorResponse(
+      request,
+      mode,
+      nextPath,
+      400,
+      "Username and password are required.",
     );
   }
 
@@ -177,9 +260,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     : env.AUTH_LOGIN_URL ?? `${env.ACUMATICA_BASE_URL}/entity/auth/login`;
 
   if (!loginUrl) {
-    return NextResponse.json(
-      { error: "AUTH_LOGIN_URL is required when AUTH_PROVIDER=custom." },
-      { status: 500 },
+    return buildLoginErrorResponse(
+      request,
+      mode,
+      nextPath,
+      500,
+      "AUTH_LOGIN_URL is required when AUTH_PROVIDER=custom.",
     );
   }
 
@@ -214,12 +300,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   } catch (error) {
     if (isAbortError(error)) {
-      return NextResponse.json(
-        {
-          error:
-            "Sign-in timed out while waiting for Acumatica. Please retry in a few seconds.",
-        },
-        { status: 504 },
+      return buildLoginErrorResponse(
+        request,
+        mode,
+        nextPath,
+        504,
+        "Sign-in timed out while waiting for Acumatica. Please retry in a few seconds.",
       );
     }
     throw error;
@@ -227,9 +313,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   if (!upstreamResponse.ok) {
     const rawText = await upstreamResponse.text();
-    return normalizeUpstreamError(
+    const normalizedError = normalizeUpstreamError(
       upstreamResponse.status,
       parseUpstreamErrorMessage(rawText),
+    );
+    return buildLoginErrorResponse(
+      request,
+      mode,
+      nextPath,
+      normalizedError.status,
+      normalizedError.message,
     );
   }
 
@@ -237,15 +330,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const cookieValue = buildStoredAuthCookieValueFromSetCookies(setCookies);
 
   if (!cookieValue) {
-    return NextResponse.json(
-      {
-        error: `Auth cookie '${env.AUTH_COOKIE_NAME}' was not returned by login endpoint.`,
-      },
-      { status: 502 },
+    return buildLoginErrorResponse(
+      request,
+      mode,
+      nextPath,
+      502,
+      `Auth cookie '${env.AUTH_COOKIE_NAME}' was not returned by login endpoint.`,
     );
   }
 
-  const response = NextResponse.json({ ok: true });
+  const response =
+    mode === "form"
+      ? NextResponse.redirect(new URL(nextPath, request.url), { status: 303 })
+      : NextResponse.json({ ok: true });
   setAuthCookie(response, cookieValue);
   if (username) {
     setStoredLoginName(response, username);

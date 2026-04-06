@@ -395,6 +395,48 @@ describe("auth route timeouts", () => {
     await expect(response.json()).resolves.toEqual({ ok: true });
   });
 
+  it("supports plain browser form posts for sign-in fallback", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/entity/auth/login")) {
+        return Promise.resolve(
+          jsonResponse({
+            status: 200,
+            body: { ok: true },
+            headers: {
+              "set-cookie": ".ASPXAUTH=fresh-cookie; Path=/; HttpOnly",
+            },
+          }),
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { POST } = await import("@/app/api/auth/login/route");
+
+    const request = new NextRequest("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        username: "jserrano",
+        password: "secret",
+        next: "/accounts",
+      }).toString(),
+    });
+
+    const response = await POST(request);
+    const setCookie = response.headers.get("set-cookie") ?? "";
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("http://localhost/accounts");
+    expect(setCookie).toContain(".ASPXAUTH=");
+  });
+
   it("translates generic 429 login failures into the API login limit message", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);

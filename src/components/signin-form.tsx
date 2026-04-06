@@ -44,7 +44,13 @@ async function fetchWithTimeout(
   }
 }
 
-export function SignInForm({ nextPath }: { nextPath: string }) {
+export function SignInForm({
+  initialError = null,
+  nextPath,
+}: {
+  initialError?: string | null;
+  nextPath: string;
+}) {
   const router = useRouter();
 
   const [username, setUsername] = useState("");
@@ -52,7 +58,7 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
   const [rememberPassword, setRememberPassword] = useState(false);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [retryAfterSeconds, setRetryAfterSeconds] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -207,7 +213,8 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
   }
 
   return (
-    <form className={styles.form} onSubmit={onSubmit}>
+    <form action="/api/auth/login" className={styles.form} method="post" onSubmit={onSubmit}>
+      <input name="next" type="hidden" value={nextPath} />
       <label className={styles.label}>
         Username
         <input
