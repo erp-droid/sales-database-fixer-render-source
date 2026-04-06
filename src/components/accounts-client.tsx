@@ -2781,7 +2781,9 @@ export function AccountsClient({
 
   const canExportAccountsCsv =
     session?.authenticated === true &&
-    session.user?.id?.trim().toLowerCase() === "jserrano";
+    [session.user?.id, session.user?.name].some(
+      (value) => value?.trim().toLowerCase() === "jserrano",
+    );
   const accountsCsvExportHref = useMemo(
     () =>
       buildAccountsCsvExportHref({
