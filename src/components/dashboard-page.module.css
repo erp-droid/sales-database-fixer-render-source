@@ -958,6 +958,40 @@
   color: var(--ink-muted);
 }
 
+.basicList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.basicListItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.basicListItem:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.basicMeta {
+  margin: 4px 0 0;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.basicEmpty {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
 .drawerBackdrop {
   position: fixed;
   inset: 0;
