@@ -3,7 +3,10 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { AppChrome } from "@/components/app-chrome";
-import { parseDashboardFilters } from "@/lib/call-analytics/filter-params";
+import {
+  formatDashboardDateInputValue,
+  parseDashboardFilters,
+} from "@/lib/call-analytics/filter-params";
 import { getDashboardSnapshot } from "@/lib/call-analytics/dashboard-snapshot";
 import { getAuthCookieNameForMiddleware } from "@/lib/env";
 
@@ -84,6 +87,10 @@ export async function DashboardBasicView({ searchParams }: DashboardBasicViewPro
   const snapshot = await getDashboardSnapshot(filters);
   const interactiveHref = query ? `/dashboard?${query}` : "/dashboard";
   const explorerHref = query ? `/dashboard/explorer?${query}` : "/dashboard/explorer";
+  const resetHref = "/dashboard?basic=1";
+  const preservedParams = [...params.entries()].filter(
+    ([key]) => key !== "start" && key !== "end" && key !== "basic",
+  );
 
   return (
     <AppChrome
@@ -106,6 +113,47 @@ export async function DashboardBasicView({ searchParams }: DashboardBasicViewPro
         <span className={styles.stateTag}>Basic view</span>
         <span>Generated: {formatDateTime(snapshot.generatedAt)}</span>
         <span>Range: {formatDateTime(snapshot.filters.start)} to {formatDateTime(snapshot.filters.end)}</span>
+      </section>
+
+      <section className={styles.controlBar}>
+        <div className={styles.controlRow}>
+          <div>
+            <h2 className={styles.sectionTitle}>Date filters</h2>
+            <p className={styles.sectionSubtle}>
+              Change the call window without relying on the interactive dashboard.
+            </p>
+          </div>
+        </div>
+        <form action="/dashboard" className={styles.controlInputs} method="get">
+          <input name="basic" type="hidden" value="1" />
+          {preservedParams.map(([key, value], index) => (
+            <input key={`${key}:${value}:${index}`} name={key} type="hidden" value={value} />
+          ))}
+          <label className={styles.compactField}>
+            Start date
+            <input
+              className={styles.filterInput}
+              defaultValue={formatDashboardDateInputValue(snapshot.filters.start)}
+              name="start"
+              type="date"
+            />
+          </label>
+          <label className={styles.compactField}>
+            End date
+            <input
+              className={styles.filterInput}
+              defaultValue={formatDashboardDateInputValue(snapshot.filters.end)}
+              name="end"
+              type="date"
+            />
+          </label>
+          <button className={styles.primaryButton} type="submit">
+            Apply dates
+          </button>
+          <Link className={styles.ghostButton} href={resetHref}>
+            Reset
+          </Link>
+        </form>
       </section>
 
       <section className={styles.card}>
