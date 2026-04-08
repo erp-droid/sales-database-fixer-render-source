@@ -519,8 +519,11 @@ server.listen(port, hostname, () => {
       let syncedCount = 0;
       let failedCount = 0;
       let skippedCount = 0;
+      let remainingCount = 0;
       let batchCount = 0;
       let executedBatches = 0;
+      let sawResult = false;
+      let batchFailed = false;
 
       for (; batchCount < callActivitySyncMaxBatchesPerWindow; batchCount += 1) {
         executedBatches += 1;
@@ -529,23 +532,32 @@ server.listen(port, hostname, () => {
           timeZone: callActivitySyncTimeZone,
         });
         if (!result) {
+          batchFailed = true;
           break;
         }
 
+        sawResult = true;
         processedCount += result.processedCount;
         syncedCount += result.syncedCount;
         failedCount += result.failedCount;
         skippedCount += result.skippedCount;
+        remainingCount = result.remainingCount ?? 0;
 
-        if (result.processedCount < CALL_ACTIVITY_SYNC_BATCH_SIZE) {
+        if (result.completed || result.processedCount < CALL_ACTIVITY_SYNC_BATCH_SIZE) {
           break;
         }
       }
 
-      console.log(
-        `[call-activity-sync] scheduled ${trigger}; date ${currentDateKey}; processed ${processedCount} across ${executedBatches} batch(es) (synced ${syncedCount}, failed ${failedCount}, skipped ${skippedCount})`,
-      );
-      lastCallActivitySyncWindow = currentDateKey;
+      if (sawResult && !batchFailed && remainingCount === 0) {
+        console.log(
+          `[call-activity-sync] scheduled ${trigger}; date ${currentDateKey}; complete after ${executedBatches} batch(es) (processed ${processedCount}, synced ${syncedCount}, failed ${failedCount}, skipped ${skippedCount})`,
+        );
+        lastCallActivitySyncWindow = currentDateKey;
+      } else {
+        console.log(
+          `[call-activity-sync] scheduled ${trigger}; date ${currentDateKey}; remaining ${remainingCount} after ${executedBatches} batch(es) (processed ${processedCount}, synced ${syncedCount}, failed ${failedCount}, skipped ${skippedCount}); will retry next minute`,
+        );
+      }
     } finally {
       callActivitySyncInFlight = false;
     }
@@ -574,7 +586,7 @@ server.listen(port, hostname, () => {
         }, CALL_ACTIVITY_SYNC_SCHEDULE_CHECK_INTERVAL_MS);
       }, minuteAlignedDelayMs);
       console.log(
-        `[call-activity-sync] worker started; daily schedule ${String(callActivitySyncScheduleHour).padStart(2, "0")}:${String(callActivitySyncScheduleMinute).padStart(2, "0")} ${callActivitySyncTimeZone}; batch ${CALL_ACTIVITY_SYNC_BATCH_SIZE}; max batches ${callActivitySyncMaxBatchesPerWindow}`,
+        `[call-activity-sync] worker started; daily schedule ${String(callActivitySyncScheduleHour).padStart(2, "0")}:${String(callActivitySyncScheduleMinute).padStart(2, "0")} ${callActivitySyncTimeZone}; batch ${CALL_ACTIVITY_SYNC_BATCH_SIZE}; max batches ${callActivitySyncMaxBatchesPerWindow}; retries every ${Math.round(CALL_ACTIVITY_SYNC_SCHEDULE_CHECK_INTERVAL_MS / 1000)}s until complete`,
       );
     } else {
       const initialDelayMs = 10_000;

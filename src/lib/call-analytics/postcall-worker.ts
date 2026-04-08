@@ -80,6 +80,10 @@ function cleanText(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
+function isTerminalCallActivitySyncStatus(status: string | null | undefined): boolean {
+  return status === "synced" || status === "skipped";
+}
+
 function formatLocalDateKey(
   value: string | null | undefined,
   timeZone: string,
@@ -1054,6 +1058,56 @@ function queueEligibleCallActivitySyncJobs(
   return queuedSessionIds;
 }
 
+function countRemainingCallActivitySyncJobs(options?: {
+  localDateKey?: string | null;
+  timeZone?: string;
+  lookbackMs?: number;
+}): number {
+  const lookbackMs = options?.lookbackMs ?? RECENT_CALL_ACTIVITY_SYNC_LOOKBACK_MS;
+  const localDateKey = cleanText(options?.localDateKey) || null;
+  const timeZone = cleanText(options?.timeZone) || "America/Toronto";
+  const earliestStartedAtMs =
+    localDateKey === null ? Date.now() - Math.max(0, Math.trunc(lookbackMs)) : null;
+  let count = 0;
+
+  for (const session of readCallSessions()) {
+    if (
+      session.source !== "app_bridge" ||
+      !session.answered ||
+      !session.endedAt ||
+      session.outcome === "in_progress"
+    ) {
+      continue;
+    }
+
+    const sessionStartedAtMs = Date.parse(session.startedAt ?? session.endedAt ?? session.updatedAt);
+    if (
+      earliestStartedAtMs !== null &&
+      Number.isFinite(sessionStartedAtMs) &&
+      sessionStartedAtMs < earliestStartedAtMs
+    ) {
+      continue;
+    }
+
+    if (localDateKey !== null) {
+      const sessionDateKey = formatLocalDateKey(
+        session.startedAt ?? session.endedAt ?? session.updatedAt,
+        timeZone,
+      );
+      if (sessionDateKey !== localDateKey) {
+        continue;
+      }
+    }
+
+    const existing = readCallActivitySyncBySessionId(session.sessionId);
+    if (!existing || !isTerminalCallActivitySyncStatus(existing.status)) {
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
 export async function processCallActivitySyncJob(
   sessionId: string,
 ): Promise<CallActivitySyncRecord | null> {
@@ -1190,6 +1244,8 @@ export async function runDueCallActivitySyncJobs(
   syncedCount: number;
   failedCount: number;
   skippedCount: number;
+  remainingCount: number;
+  completed: boolean;
 }> {
   let sessionIds: string[] = [];
   if (options?.localDateKey) {
@@ -1223,11 +1279,18 @@ export async function runDueCallActivitySyncJobs(
     }
   }
 
+  const remainingCount = countRemainingCallActivitySyncJobs({
+    localDateKey: options?.localDateKey,
+    timeZone: options?.timeZone,
+  });
+
   return {
     processedCount,
     syncedCount,
     failedCount,
     skippedCount,
+    remainingCount,
+    completed: remainingCount === 0,
   };
 }
 
