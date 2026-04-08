@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -300,6 +301,17 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
     label?: string;
     context?: StartCallContext;
   } | null>(null);
+  const statusPollFailureCountRef = useRef(0);
+
+  function clearActiveCallState(): void {
+    setCallSid(null);
+    setSessionId(null);
+    setActiveLabel(null);
+    setStatusText(null);
+    setActiveUserPhone(null);
+    setActiveTargetPhone(null);
+    statusPollFailureCountRef.current = 0;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -356,6 +368,7 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
     setError(null);
     setCallerVerification(null);
     setIsInitializing(true);
+    statusPollFailureCountRef.current = 0;
     setActiveLabel(label ?? phone);
     setStatusText("Calling your phone...");
     setActiveUserPhone(cachedCallerPhone);
@@ -381,12 +394,7 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
       );
     } catch (callError) {
       setError(callError instanceof Error ? callError.message : "Calling failed.");
-      setCallSid(null);
-      setSessionId(null);
-      setActiveLabel(null);
-      setStatusText(null);
-      setActiveUserPhone(null);
-      setActiveTargetPhone(null);
+      clearActiveCallState();
     } finally {
       setIsInitializing(false);
     }
@@ -509,12 +517,7 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
 
   async function endCall(): Promise<void> {
     const activeCallSid = callSid;
-    setCallSid(null);
-    setSessionId(null);
-    setActiveLabel(null);
-    setStatusText(null);
-    setActiveUserPhone(null);
-    setActiveTargetPhone(null);
+    clearActiveCallState();
 
     if (!activeCallSid) {
       return;
@@ -544,9 +547,24 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
           },
         );
         const payload = (await response.json().catch(() => null)) as CallStatusResponse | null;
-        if (!response.ok || !payload || cancelled) {
+        if (cancelled) {
           return;
         }
+
+        if (!response.ok || !payload) {
+          statusPollFailureCountRef.current += 1;
+          if (
+            response.status === 401 ||
+            response.status === 404 ||
+            statusPollFailureCountRef.current >= 3
+          ) {
+            clearActiveCallState();
+            setError("The previous call session could not be verified. You can start a new call.");
+          }
+          return;
+        }
+
+        statusPollFailureCountRef.current = 0;
 
         if (payload.active) {
           setStatusText(
@@ -557,14 +575,13 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        setCallSid(null);
-        setSessionId(null);
-        setActiveLabel(null);
-        setStatusText(null);
-        setActiveUserPhone(null);
-        setActiveTargetPhone(null);
+        clearActiveCallState();
       } catch {
-        // Ignore transient polling failures and keep the current dock state.
+        statusPollFailureCountRef.current += 1;
+        if (statusPollFailureCountRef.current >= 3) {
+          clearActiveCallState();
+          setError("The previous call session timed out. You can start a new call.");
+        }
       }
     }
 
