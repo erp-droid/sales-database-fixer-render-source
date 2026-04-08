@@ -330,12 +330,39 @@ server.listen(port, hostname, () => {
     process.env.CALL_ACTIVITY_SYNC_ENABLED !== undefined
       ? String(process.env.CALL_ACTIVITY_SYNC_ENABLED).trim().toLowerCase() === "true"
       : process.env.NODE_ENV === "production";
+  const callActivitySyncTimeZone = String(
+    process.env.CALL_ACTIVITY_SYNC_TIME_ZONE || "America/Toronto",
+  ).trim();
+  const callActivitySyncScheduleHour = readBoundedInteger(
+    process.env.CALL_ACTIVITY_SYNC_SCHEDULE_HOUR,
+    17,
+    0,
+    23,
+  );
+  const callActivitySyncScheduleMinute = readBoundedInteger(
+    process.env.CALL_ACTIVITY_SYNC_SCHEDULE_MINUTE,
+    0,
+    0,
+    59,
+  );
+  const callActivitySyncMaxBatchesPerWindow = readBoundedInteger(
+    process.env.CALL_ACTIVITY_SYNC_MAX_BATCHES_PER_WINDOW,
+    60,
+    1,
+    500,
+  );
+  const callActivitySyncUsesScheduledWindow =
+    process.env.CALL_ACTIVITY_SYNC_SCHEDULE_HOUR !== undefined ||
+    process.env.CALL_ACTIVITY_SYNC_SCHEDULE_MINUTE !== undefined ||
+    process.env.CALL_ACTIVITY_SYNC_TIME_ZONE !== undefined ||
+    process.env.CALL_ACTIVITY_SYNC_MAX_BATCHES_PER_WINDOW !== undefined;
   const CALL_ACTIVITY_SYNC_INTERVAL_MS = readBoundedInteger(
     process.env.CALL_ACTIVITY_SYNC_INTERVAL_MS,
     30_000,
     5_000,
     5 * 60_000,
   );
+  const CALL_ACTIVITY_SYNC_SCHEDULE_CHECK_INTERVAL_MS = 60_000;
   const CALL_ACTIVITY_SYNC_BATCH_SIZE = readBoundedInteger(
     process.env.CALL_ACTIVITY_SYNC_BATCH_SIZE,
     2,
@@ -349,13 +376,9 @@ server.listen(port, hostname, () => {
     5 * 60_000,
   );
   let callActivitySyncInFlight = false;
+  let lastCallActivitySyncWindow = null;
 
-  async function runCallActivitySyncCycle(trigger) {
-    if (!callActivitySyncEnabled || callActivitySyncInFlight) {
-      return;
-    }
-
-    callActivitySyncInFlight = true;
+  async function runCallActivitySyncBatch(trigger) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CALL_ACTIVITY_SYNC_TIMEOUT_MS);
 
@@ -381,7 +404,7 @@ server.listen(port, hostname, () => {
           status: response.status,
           body: payload,
         });
-        return;
+        return null;
       }
 
       const processed = payload?.processedCount ?? 0;
@@ -391,28 +414,122 @@ server.listen(port, hostname, () => {
       console.log(
         `[call-activity-sync] worker ${trigger}; processed ${processed} (synced ${synced}, failed ${failed}, skipped ${skipped})`,
       );
+      return {
+        processedCount: processed,
+        syncedCount: synced,
+        failedCount: failed,
+        skippedCount: skipped,
+      };
     } catch (error) {
       console.error("[call-activity-sync] worker failed", {
         trigger,
         error,
       });
+      return null;
     } finally {
       clearTimeout(timeoutId);
+    }
+  }
+
+  async function runScheduledCallActivitySyncCycle(trigger) {
+    if (!callActivitySyncEnabled || callActivitySyncInFlight) {
+      return;
+    }
+
+    const now = new Date();
+    const localParts = readLocalDateParts(now, callActivitySyncTimeZone);
+    const currentDateKey = formatLocalDateKey(now, callActivitySyncTimeZone);
+    const localHour = Number.parseInt(localParts.hour, 10);
+    const localMinute = Number.parseInt(localParts.minute, 10);
+
+    if (!currentDateKey || !Number.isFinite(localHour) || !Number.isFinite(localMinute)) {
+      console.error("[call-activity-sync] unable to resolve local schedule window", {
+        timeZone: callActivitySyncTimeZone,
+      });
+      return;
+    }
+
+    const beforeSchedule =
+      localHour < callActivitySyncScheduleHour ||
+      (localHour === callActivitySyncScheduleHour &&
+        localMinute < callActivitySyncScheduleMinute);
+    if (beforeSchedule || lastCallActivitySyncWindow === currentDateKey) {
+      return;
+    }
+
+    callActivitySyncInFlight = true;
+
+    try {
+      let processedCount = 0;
+      let syncedCount = 0;
+      let failedCount = 0;
+      let skippedCount = 0;
+      let batchCount = 0;
+      let executedBatches = 0;
+
+      for (; batchCount < callActivitySyncMaxBatchesPerWindow; batchCount += 1) {
+        executedBatches += 1;
+        const result = await runCallActivitySyncBatch(`${trigger}:batch-${batchCount + 1}`);
+        if (!result) {
+          break;
+        }
+
+        processedCount += result.processedCount;
+        syncedCount += result.syncedCount;
+        failedCount += result.failedCount;
+        skippedCount += result.skippedCount;
+
+        if (result.processedCount < CALL_ACTIVITY_SYNC_BATCH_SIZE) {
+          break;
+        }
+      }
+
+      console.log(
+        `[call-activity-sync] scheduled ${trigger}; processed ${processedCount} across ${executedBatches} batch(es) (synced ${syncedCount}, failed ${failedCount}, skipped ${skippedCount})`,
+      );
+      lastCallActivitySyncWindow = currentDateKey;
+    } finally {
+      callActivitySyncInFlight = false;
+    }
+  }
+
+  async function runIntervalCallActivitySyncCycle(trigger) {
+    if (!callActivitySyncEnabled || callActivitySyncInFlight) {
+      return;
+    }
+
+    callActivitySyncInFlight = true;
+    try {
+      await runCallActivitySyncBatch(trigger);
+    } finally {
       callActivitySyncInFlight = false;
     }
   }
 
   if (callActivitySyncEnabled) {
-    const initialDelayMs = 10_000;
-    setTimeout(() => {
-      void runCallActivitySyncCycle("startup");
-      setInterval(() => {
-        void runCallActivitySyncCycle("interval");
-      }, CALL_ACTIVITY_SYNC_INTERVAL_MS);
-    }, initialDelayMs);
-    console.log(
-      `[call-activity-sync] worker started; every ${Math.round(CALL_ACTIVITY_SYNC_INTERVAL_MS / 1000)}s, batch ${CALL_ACTIVITY_SYNC_BATCH_SIZE}`,
-    );
+    if (callActivitySyncUsesScheduledWindow) {
+      const minuteAlignedDelayMs = 60_000 - (Date.now() % 60_000);
+      setTimeout(() => {
+        void runScheduledCallActivitySyncCycle("startup");
+        setInterval(() => {
+          void runScheduledCallActivitySyncCycle("interval");
+        }, CALL_ACTIVITY_SYNC_SCHEDULE_CHECK_INTERVAL_MS);
+      }, minuteAlignedDelayMs);
+      console.log(
+        `[call-activity-sync] worker started; daily schedule ${String(callActivitySyncScheduleHour).padStart(2, "0")}:${String(callActivitySyncScheduleMinute).padStart(2, "0")} ${callActivitySyncTimeZone}; batch ${CALL_ACTIVITY_SYNC_BATCH_SIZE}; max batches ${callActivitySyncMaxBatchesPerWindow}`,
+      );
+    } else {
+      const initialDelayMs = 10_000;
+      setTimeout(() => {
+        void runIntervalCallActivitySyncCycle("startup");
+        setInterval(() => {
+          void runIntervalCallActivitySyncCycle("interval");
+        }, CALL_ACTIVITY_SYNC_INTERVAL_MS);
+      }, initialDelayMs);
+      console.log(
+        `[call-activity-sync] worker started; every ${Math.round(CALL_ACTIVITY_SYNC_INTERVAL_MS / 1000)}s, batch ${CALL_ACTIVITY_SYNC_BATCH_SIZE}`,
+      );
+    }
   } else {
     console.log("[call-activity-sync] worker disabled");
   }

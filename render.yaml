@@ -148,6 +148,18 @@ services:
         value: "300000"
       - key: CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS
         value: "86400000"
+      - key: CALL_ACTIVITY_SYNC_ENABLED
+        value: "true"
+      - key: CALL_ACTIVITY_SYNC_BATCH_SIZE
+        value: "2"
+      - key: CALL_ACTIVITY_SYNC_SCHEDULE_HOUR
+        value: "17"
+      - key: CALL_ACTIVITY_SYNC_SCHEDULE_MINUTE
+        value: "0"
+      - key: CALL_ACTIVITY_SYNC_TIME_ZONE
+        value: America/Toronto
+      - key: CALL_ACTIVITY_SYNC_MAX_BATCHES_PER_WINDOW
+        value: "60"
       - key: DAILY_CALL_COACHING_ENABLED
         value: "true"
       - key: DAILY_CALL_COACHING_SENDER_LOGIN
