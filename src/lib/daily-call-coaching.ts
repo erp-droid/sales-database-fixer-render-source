@@ -515,11 +515,9 @@ function pickSubjectLogins(reportDate: string, timeZone: string, specificLoginNa
   return [...logins].sort();
 }
 
-async function refreshDailyCallCoachingSnapshot(
-  senderLoginName: string,
-): Promise<void> {
+async function refreshDailyCallCoachingSnapshot(): Promise<void> {
   await withServiceAcumaticaSession(
-    senderLoginName,
+    null,
     async (cookieValue, authCookieRefresh) => {
       await refreshCallAnalytics(cookieValue, authCookieRefresh, {
         forceEmployeeDirectoryRefresh: true,
@@ -677,7 +675,7 @@ async function resolveInternalMailboxProfile(input: {
   if (!contactId && email) {
     try {
       const contacts = await serviceFindContactsByEmailSubstring(
-        env.DAILY_CALL_COACHING_SENDER_LOGIN,
+        null,
         email,
       );
       const exactMatch =
@@ -1669,7 +1667,7 @@ export async function runDailyCallCoaching(options?: {
   const sender = await resolveInternalMailboxProfile({
     loginName: env.DAILY_CALL_COACHING_SENDER_LOGIN,
   });
-  await refreshDailyCallCoachingSnapshot(sender.loginName);
+  await refreshDailyCallCoachingSnapshot();
   const previewLoginName = cleanText(options?.previewRecipientLoginName) || null;
   const previewEmail = cleanText(options?.previewRecipientEmail) || null;
   const previewMode = Boolean(previewLoginName || previewEmail);
