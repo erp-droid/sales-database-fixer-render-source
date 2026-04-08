@@ -80,6 +80,37 @@ function cleanText(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
+function formatLocalDateKey(
+  value: string | null | undefined,
+  timeZone: string,
+): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === "year")?.value ?? "";
+  const month = parts.find((part) => part.type === "month")?.value ?? "";
+  const day = parts.find((part) => part.type === "day")?.value ?? "";
+
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  return `${year}-${month}-${day}`;
+}
+
 function logCallActivitySyncResult(
   sessionId: string,
   result: CallActivitySyncRecord | null,
@@ -948,13 +979,22 @@ async function createPhoneCallActivity(
   return readActivityId(activity);
 }
 
-function queueRecentEligibleCallActivitySyncJobs(
+function queueEligibleCallActivitySyncJobs(
   limit = 25,
-  lookbackMs = RECENT_CALL_ACTIVITY_SYNC_LOOKBACK_MS,
-): void {
+  options?: {
+    lookbackMs?: number;
+    localDateKey?: string | null;
+    timeZone?: string;
+  },
+): string[] {
   const maxCandidates = Math.max(1, Math.trunc(limit));
-  const earliestStartedAtMs = Date.now() - Math.max(0, Math.trunc(lookbackMs));
+  const lookbackMs = options?.lookbackMs ?? RECENT_CALL_ACTIVITY_SYNC_LOOKBACK_MS;
+  const localDateKey = cleanText(options?.localDateKey) || null;
+  const timeZone = cleanText(options?.timeZone) || "America/Toronto";
+  const earliestStartedAtMs =
+    localDateKey === null ? Date.now() - Math.max(0, Math.trunc(lookbackMs)) : null;
   let consideredCount = 0;
+  const queuedSessionIds: string[] = [];
 
   for (const session of readCallSessions()) {
     if (
@@ -967,8 +1007,22 @@ function queueRecentEligibleCallActivitySyncJobs(
     }
 
     const sessionStartedAtMs = Date.parse(session.startedAt ?? session.endedAt ?? session.updatedAt);
-    if (Number.isFinite(sessionStartedAtMs) && sessionStartedAtMs < earliestStartedAtMs) {
+    if (
+      earliestStartedAtMs !== null &&
+      Number.isFinite(sessionStartedAtMs) &&
+      sessionStartedAtMs < earliestStartedAtMs
+    ) {
       continue;
+    }
+
+    if (localDateKey !== null) {
+      const sessionDateKey = formatLocalDateKey(
+        session.startedAt ?? session.endedAt ?? session.updatedAt,
+        timeZone,
+      );
+      if (sessionDateKey !== localDateKey) {
+        continue;
+      }
     }
 
     const existing = readCallActivitySyncBySessionId(session.sessionId);
@@ -990,11 +1044,14 @@ function queueRecentEligibleCallActivitySyncJobs(
         recordingDurationSeconds: null,
       });
     }
+    queuedSessionIds.push(session.sessionId);
 
     if (consideredCount >= maxCandidates) {
       break;
     }
   }
+
+  return queuedSessionIds;
 }
 
 export async function processCallActivitySyncJob(
@@ -1122,21 +1179,36 @@ export async function processCallActivitySyncJob(
   }
 }
 
-export async function runDueCallActivitySyncJobs(limit = 25): Promise<{
+export async function runDueCallActivitySyncJobs(
+  limit = 25,
+  options?: {
+    localDateKey?: string | null;
+    timeZone?: string;
+  },
+): Promise<{
   processedCount: number;
   syncedCount: number;
   failedCount: number;
   skippedCount: number;
 }> {
-  queueRecentEligibleCallActivitySyncJobs(limit);
-  const jobs = listPendingCallActivitySyncJobs(limit);
+  let sessionIds: string[] = [];
+  if (options?.localDateKey) {
+    sessionIds = queueEligibleCallActivitySyncJobs(limit, {
+      localDateKey: options.localDateKey,
+      timeZone: options.timeZone,
+    });
+  } else {
+    queueEligibleCallActivitySyncJobs(limit);
+    sessionIds = listPendingCallActivitySyncJobs(limit).map((job) => job.sessionId);
+  }
+
   let processedCount = 0;
   let syncedCount = 0;
   let failedCount = 0;
   let skippedCount = 0;
 
-  for (const job of jobs) {
-    const result = await processCallActivitySyncJob(job.sessionId);
+  for (const sessionId of sessionIds) {
+    const result = await processCallActivitySyncJob(sessionId);
     if (!result) {
       continue;
     }

@@ -326,10 +326,10 @@ server.listen(port, hostname, () => {
     });
   }
 
-  const callActivitySyncEnabled =
-    process.env.CALL_ACTIVITY_SYNC_ENABLED !== undefined
-      ? String(process.env.CALL_ACTIVITY_SYNC_ENABLED).trim().toLowerCase() === "true"
-      : process.env.NODE_ENV === "production";
+  const callActivitySyncEnabled = readFeatureEnabled(
+    process.env.CALL_ACTIVITY_SYNC_ENABLED,
+    process.env.NODE_ENV === "production",
+  );
   const callActivitySyncTimeZone = String(
     process.env.CALL_ACTIVITY_SYNC_TIME_ZONE || "America/Toronto",
   ).trim();
@@ -378,13 +378,66 @@ server.listen(port, hostname, () => {
   let callActivitySyncInFlight = false;
   let lastCallActivitySyncWindow = null;
 
-  async function runCallActivitySyncBatch(trigger) {
+  async function runCallAnalyticsRefresh(trigger) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CALL_ACTIVITY_SYNC_TIMEOUT_MS);
 
     try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/dashboard/calls/refresh`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          ...(process.env.CALL_ACTIVITY_SYNC_SECRET
+            ? { "x-call-activity-sync-secret": process.env.CALL_ACTIVITY_SYNC_SECRET }
+            : {}),
+        },
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        console.error("[call-activity-sync] refresh request failed", {
+          trigger,
+          status: response.status,
+          body: payload,
+        });
+        return false;
+      }
+
+      console.log("[call-activity-sync] refresh completed", {
+        trigger,
+        status: payload?.importState?.status ?? null,
+        latestSeenStartTime: payload?.importState?.latestSeenStartTime ?? null,
+        lastRecentSyncAt: payload?.importState?.lastRecentSyncAt ?? null,
+      });
+      return true;
+    } catch (error) {
+      console.error("[call-activity-sync] refresh failed", {
+        trigger,
+        error,
+      });
+      return false;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async function runCallActivitySyncBatch(trigger, options = {}) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CALL_ACTIVITY_SYNC_TIMEOUT_MS);
+
+    try {
+      const params = new URLSearchParams({
+        limit: String(CALL_ACTIVITY_SYNC_BATCH_SIZE),
+      });
+      if (options.dateKey) {
+        params.set("dateKey", options.dateKey);
+      }
+      if (options.timeZone) {
+        params.set("timeZone", options.timeZone);
+      }
       const response = await fetch(
-        `http://127.0.0.1:${port}/api/dashboard/calls/postcall/run-due?limit=${CALL_ACTIVITY_SYNC_BATCH_SIZE}`,
+        `http://127.0.0.1:${port}/api/dashboard/calls/postcall/run-due?${params.toString()}`,
         {
           method: "POST",
           headers: {
@@ -460,6 +513,8 @@ server.listen(port, hostname, () => {
     callActivitySyncInFlight = true;
 
     try {
+      await runCallAnalyticsRefresh(`${trigger}:refresh`);
+
       let processedCount = 0;
       let syncedCount = 0;
       let failedCount = 0;
@@ -469,7 +524,10 @@ server.listen(port, hostname, () => {
 
       for (; batchCount < callActivitySyncMaxBatchesPerWindow; batchCount += 1) {
         executedBatches += 1;
-        const result = await runCallActivitySyncBatch(`${trigger}:batch-${batchCount + 1}`);
+        const result = await runCallActivitySyncBatch(`${trigger}:batch-${batchCount + 1}`, {
+          dateKey: currentDateKey,
+          timeZone: callActivitySyncTimeZone,
+        });
         if (!result) {
           break;
         }
@@ -485,7 +543,7 @@ server.listen(port, hostname, () => {
       }
 
       console.log(
-        `[call-activity-sync] scheduled ${trigger}; processed ${processedCount} across ${executedBatches} batch(es) (synced ${syncedCount}, failed ${failedCount}, skipped ${skippedCount})`,
+        `[call-activity-sync] scheduled ${trigger}; date ${currentDateKey}; processed ${processedCount} across ${executedBatches} batch(es) (synced ${syncedCount}, failed ${failedCount}, skipped ${skippedCount})`,
       );
       lastCallActivitySyncWindow = currentDateKey;
     } finally {

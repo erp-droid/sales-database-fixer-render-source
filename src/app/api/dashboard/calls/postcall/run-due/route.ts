@@ -72,11 +72,28 @@ function readLimitParam(request: NextRequest, fallback = 25): number {
   return Math.min(25, parsed);
 }
 
+function readOptionalDateKey(request: NextRequest): string | null {
+  const raw = request.nextUrl.searchParams.get("dateKey")?.trim() ?? "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return null;
+  }
+
+  return raw;
+}
+
+function readOptionalTimeZone(request: NextRequest): string | null {
+  const raw = request.nextUrl.searchParams.get("timeZone")?.trim() ?? "";
+  return raw || null;
+}
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const auth = await authenticateCallActivityRequest(request);
     const limit = readLimitParam(request);
-    const result = await runDueCallActivitySyncJobs(limit);
+    const result = await runDueCallActivitySyncJobs(limit, {
+      localDateKey: readOptionalDateKey(request),
+      timeZone: readOptionalTimeZone(request) ?? undefined,
+    });
     return finalizeCallActivityResponse(NextResponse.json({ ok: true, ...result }), auth);
   } catch (error) {
     if (error instanceof HttpError) {

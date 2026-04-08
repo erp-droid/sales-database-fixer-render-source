@@ -88,7 +88,7 @@ const CALL_SESSION_REBUILD_DEBOUNCE_MS = 250;
 const CALL_SESSION_REBUILD_SLOW_MS = 2000;
 let scheduledSessionRebuild: ReturnType<typeof setTimeout> | null = null;
 let sessionRebuildInFlight = false;
-let pendingBridgeNumbers = new Set<string>();
+const pendingBridgeNumbers = new Set<string>();
 let pendingSessionRebuildPromise: Promise<void> | null = null;
 let pendingSessionRebuildResolve: (() => void) | null = null;
 let pendingSessionRebuildReject: ((error: unknown) => void) | null = null;
@@ -1061,6 +1061,9 @@ export async function refreshCallAnalytics(
   authCookieRefresh?: AuthCookieRefreshState,
   options?: {
     forceEmployeeDirectoryRefresh?: boolean;
+    runPostcallSync?: boolean;
+    postcallLocalDateKey?: string | null;
+    postcallTimeZone?: string;
   },
 ): Promise<CallIngestState> {
   if (refreshInFlight) {
@@ -1096,11 +1099,23 @@ export async function refreshCallAnalytics(
       nextState = await runHistoricalBackfill(inventory.voiceNumbers);
     }
 
-    void import("@/lib/call-analytics/postcall-worker")
-      .then(({ runDueCallActivitySyncJobs }) => runDueCallActivitySyncJobs(5))
-      .then(() => import("@/lib/watchdog"))
-      .then(({ runWatchdog }) => runWatchdog())
-      .catch(() => undefined);
+    if (options?.runPostcallSync !== false) {
+      void import("@/lib/call-analytics/postcall-worker")
+        .then(({ runDueCallActivitySyncJobs }) =>
+          runDueCallActivitySyncJobs(
+            5,
+            options?.postcallLocalDateKey
+              ? {
+                  localDateKey: options.postcallLocalDateKey,
+                  timeZone: options.postcallTimeZone,
+                }
+              : undefined,
+          ),
+        )
+        .then(() => import("@/lib/watchdog"))
+        .then(({ runWatchdog }) => runWatchdog())
+        .catch(() => undefined);
+    }
 
     return nextState;
   })()
