@@ -2,12 +2,14 @@ import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import {
   serviceFindContactsByEmailSubstring,
+  withServiceAcumaticaSession,
 } from "@/lib/acumatica-service-auth";
 import {
   readWrappedNumber,
   readWrappedString,
 } from "@/lib/acumatica";
 import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
+import { refreshCallAnalytics } from "@/lib/call-analytics/ingest";
 import { readCallActivitySyncBySessionId } from "@/lib/call-analytics/postcall-store";
 import { readCallSessions } from "@/lib/call-analytics/sessionize";
 import { buildMailServiceAssertion, ensureMailServiceConfigured } from "@/lib/mail-auth";
@@ -511,6 +513,19 @@ function pickSubjectLogins(reportDate: string, timeZone: string, specificLoginNa
   }
 
   return [...logins].sort();
+}
+
+async function refreshDailyCallCoachingSnapshot(
+  senderLoginName: string,
+): Promise<void> {
+  await withServiceAcumaticaSession(
+    senderLoginName,
+    async (cookieValue, authCookieRefresh) => {
+      await refreshCallAnalytics(cookieValue, authCookieRefresh, {
+        forceEmployeeDirectoryRefresh: true,
+      });
+    },
+  );
 }
 
 function readDailyCallCoachingRow(
@@ -1654,6 +1669,7 @@ export async function runDailyCallCoaching(options?: {
   const sender = await resolveInternalMailboxProfile({
     loginName: env.DAILY_CALL_COACHING_SENDER_LOGIN,
   });
+  await refreshDailyCallCoachingSnapshot(sender.loginName);
   const previewLoginName = cleanText(options?.previewRecipientLoginName) || null;
   const previewEmail = cleanText(options?.previewRecipientEmail) || null;
   const previewMode = Boolean(previewLoginName || previewEmail);
@@ -1705,6 +1721,21 @@ export async function runDailyCallCoaching(options?: {
       });
 
       if (!report) {
+        writeDailyCallCoachingRow({
+          reportDate,
+          subjectLoginName,
+          recipientEmail: targetRecipient.email,
+          senderLoginName: sender.loginName,
+          previewMode,
+          status: "skipped",
+          sessionCount: 0,
+          analyzedCallCount: 0,
+          transcriptCallCount: 0,
+          subjectLine: null,
+          reportJson: null,
+          errorMessage: null,
+          sentAt: null,
+        });
         items.push({
           subjectLoginName,
           subjectDisplayName: subjectLoginName,
