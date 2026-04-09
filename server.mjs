@@ -395,6 +395,7 @@ server.listen(port, hostname, () => {
   );
   let callActivitySyncInFlight = false;
   let lastCallActivitySyncWindow = null;
+  let activeCallActivitySyncDateKey = null;
 
   async function runCallAnalyticsRefresh(trigger) {
     const controller = new AbortController();
@@ -524,14 +525,23 @@ server.listen(port, hostname, () => {
       localHour < callActivitySyncScheduleHour ||
       (localHour === callActivitySyncScheduleHour &&
         localMinute < callActivitySyncScheduleMinute);
-    if (beforeSchedule || lastCallActivitySyncWindow === currentDateKey) {
+    const previousDateKey = shiftDateKey(currentDateKey, -1, callActivitySyncTimeZone);
+    const targetDateKey =
+      activeCallActivitySyncDateKey ||
+      (!beforeSchedule && lastCallActivitySyncWindow !== currentDateKey
+        ? currentDateKey
+        : beforeSchedule && previousDateKey && lastCallActivitySyncWindow !== previousDateKey
+          ? previousDateKey
+          : null);
+
+    if (!targetDateKey) {
       return;
     }
 
     callActivitySyncInFlight = true;
 
     try {
-      await runCallAnalyticsRefresh(`${trigger}:refresh`);
+      await runCallAnalyticsRefresh(`${trigger}:refresh:${targetDateKey}`);
 
       let processedCount = 0;
       let syncedCount = 0;
@@ -546,7 +556,7 @@ server.listen(port, hostname, () => {
       for (; batchCount < callActivitySyncMaxBatchesPerWindow; batchCount += 1) {
         executedBatches += 1;
         const result = await runCallActivitySyncBatch(`${trigger}:batch-${batchCount + 1}`, {
-          dateKey: currentDateKey,
+          dateKey: targetDateKey,
           timeZone: callActivitySyncTimeZone,
         });
         if (!result) {
@@ -568,13 +578,15 @@ server.listen(port, hostname, () => {
 
       if (sawResult && !batchFailed && remainingCount === 0) {
         console.log(
-          `[call-activity-sync] scheduled ${trigger}; date ${currentDateKey}; complete after ${executedBatches} batch(es) (processed ${processedCount}, synced ${syncedCount}, failed ${failedCount}, skipped ${skippedCount})`,
+          `[call-activity-sync] scheduled ${trigger}; date ${targetDateKey}; complete after ${executedBatches} batch(es) (processed ${processedCount}, synced ${syncedCount}, failed ${failedCount}, skipped ${skippedCount})`,
         );
-        lastCallActivitySyncWindow = currentDateKey;
+        lastCallActivitySyncWindow = targetDateKey;
+        activeCallActivitySyncDateKey = null;
       } else {
         console.log(
-          `[call-activity-sync] scheduled ${trigger}; date ${currentDateKey}; remaining ${remainingCount} after ${executedBatches} batch(es) (processed ${processedCount}, synced ${syncedCount}, failed ${failedCount}, skipped ${skippedCount}); will retry next minute`,
+          `[call-activity-sync] scheduled ${trigger}; date ${targetDateKey}; remaining ${remainingCount} after ${executedBatches} batch(es) (processed ${processedCount}, synced ${syncedCount}, failed ${failedCount}, skipped ${skippedCount}); will retry next minute`,
         );
+        activeCallActivitySyncDateKey = targetDateKey;
       }
     } finally {
       callActivitySyncInFlight = false;
