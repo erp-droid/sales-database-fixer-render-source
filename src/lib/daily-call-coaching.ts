@@ -575,20 +575,12 @@ export function buildDailyCallCoachingCoverage(
     };
   }
 
-  if (remainingCallSyncCount > 0) {
-    return {
-      complete: false,
-      detail: `${remainingCallSyncCount} call activity job(s) for ${reportDate} are still pending processing.`,
-      snapshotLastRecentSyncAt,
-      snapshotLatestSeenStartTime,
-      snapshotLastError,
-      remainingCallSyncCount,
-    };
-  }
-
   return {
     complete: true,
-    detail: `Call import and post-call processing are complete for ${reportDate}.`,
+    detail:
+      remainingCallSyncCount > 0
+        ? `Call import is complete for ${reportDate}. ${remainingCallSyncCount} transcript/activity job(s) are still pending, so coaching will use the available transcripts/summaries plus metadata fallback for the rest.`
+        : `Call import and post-call processing are complete for ${reportDate}.`,
     snapshotLastRecentSyncAt,
     snapshotLatestSeenStartTime,
     snapshotLastError,

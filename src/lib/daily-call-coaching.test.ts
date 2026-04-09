@@ -129,7 +129,7 @@ describe("daily-call-coaching", () => {
     expect(coverage.detail).toContain("The service is unavailable.");
   });
 
-  it("refuses coverage while same-day call processing jobs are still pending", () => {
+  it("allows coverage while same-day call processing jobs are still pending", () => {
     countRemainingCallActivitySyncJobsMock.mockReturnValue(3);
 
     const state: CallIngestState = {
@@ -148,9 +148,9 @@ describe("daily-call-coaching", () => {
 
     const coverage = buildDailyCallCoachingCoverage("2026-04-08", "America/Toronto", state);
 
-    expect(coverage.complete).toBe(false);
+    expect(coverage.complete).toBe(true);
     expect(coverage.remainingCallSyncCount).toBe(3);
-    expect(coverage.detail).toContain("3 call activity job(s)");
+    expect(coverage.detail).toContain("metadata fallback");
   });
 
   it("builds daily coaching stats from call rows", () => {
