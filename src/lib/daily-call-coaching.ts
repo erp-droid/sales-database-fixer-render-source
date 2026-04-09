@@ -1051,9 +1051,9 @@ export function buildFallbackDailyCallCoachingContent(input: {
   }
 
   return {
-    headline: `${input.subjectDisplayName}'s day had strong activity, but the next improvement is turning more short connects into structured conversations.`,
+    headline: `${input.subjectDisplayName}'s day produced activity, but the bigger issue is that too many connects still failed to turn into useful conversations.`,
     executiveSummary:
-      "This coaching summary is grounded in today's call patterns. The rep generated activity, but the biggest upside is a tighter opener, cleaner targeting, and a firmer next-step close.",
+      "This coaching summary is grounded in today's call patterns. The volume is there, but the day still left too much on the table because the opener, targeting, and close were not sharp enough.",
     scorecard: {
       effort: clampScore(3 + input.stats.totalCalls / 4),
       conversationQuality: clampScore(3 + input.stats.longCalls * 1.5 + input.stats.mediumCalls * 0.3 - input.stats.shortCalls * 0.15),
@@ -1100,6 +1100,8 @@ function buildOpenAiPrompt(input: {
     `- Calls with transcripts: ${input.transcriptCallCount}`,
     "",
     "Instructions:",
+    "- Be direct and unsentimental. Do not soften weak performance with generic encouragement.",
+    "- Give credit only where the evidence clearly supports it.",
     "- Identify the calls that went well, name the person/company, and explain why using only the evidence provided.",
     "- Identify the calls that did not go well, name the person/company when available, and explain why.",
     "- Pull out concrete follow-up actions tied to the relevant conversation whenever the evidence supports it.",
@@ -1136,7 +1138,7 @@ async function generateDailyCallCoachingContent(input: {
         {
           role: "system",
           content:
-            "You are a sales call coach for MeadowBrook. Be direct, practical, and creative, but stay grounded in the evidence. Never pretend you heard words that are not in a transcript. When transcript coverage is sparse, coach from call patterns only.",
+            "You are a sales call coach for MeadowBrook. Be direct, practical, and unsentimental. Do not be agreeable for the sake of tone, do not hand out praise unless the evidence supports it, and do not soften misses with generic encouragement. Never pretend you heard words that are not in a transcript. When transcript coverage is sparse, coach from call patterns only.",
         },
         {
           role: "user",
