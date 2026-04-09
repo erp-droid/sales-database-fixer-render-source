@@ -284,15 +284,33 @@ server.listen(port, hostname, () => {
       const sent = items.filter((item) => item.status === "sent").length;
       const skipped = items.filter((item) => item.status === "skipped").length;
       const failed = items.filter((item) => item.status === "failed").length;
+      const coverageComplete = report?.dataCoverage?.complete === true;
+      const coverageDetail =
+        report?.dataCoverage && typeof report.dataCoverage.detail === "string"
+          ? report.dataCoverage.detail
+          : "Call import coverage was not confirmed.";
 
       console.log(
-        `[daily-call-coaching] ${trigger}; report ${reportDate}; ${sent} sent, ${skipped} skipped, ${failed} failed`,
+        `[daily-call-coaching] ${trigger}; report ${reportDate}; ${sent} sent, ${skipped} skipped, ${failed} failed; coverage ${coverageComplete ? "complete" : "pending"}`,
       );
 
       for (const item of items) {
         console.log(
           `[daily-call-coaching]   ${item.subjectLoginName}: ${item.status} - ${item.detail}`,
         );
+      }
+
+      if (!coverageComplete) {
+        console.warn("[daily-call-coaching] waiting for full call import coverage", {
+          trigger,
+          reportDate,
+          detail: coverageDetail,
+          snapshotLastRecentSyncAt: report?.dataCoverage?.snapshotLastRecentSyncAt ?? null,
+          snapshotLatestSeenStartTime: report?.dataCoverage?.snapshotLatestSeenStartTime ?? null,
+          snapshotLastError: report?.dataCoverage?.snapshotLastError ?? null,
+          remainingCallSyncCount: report?.dataCoverage?.remainingCallSyncCount ?? null,
+        });
+        return;
       }
 
       if (failed === 0) {

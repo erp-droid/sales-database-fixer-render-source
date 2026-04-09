@@ -1058,7 +1058,7 @@ function queueEligibleCallActivitySyncJobs(
   return queuedSessionIds;
 }
 
-function countRemainingCallActivitySyncJobs(options?: {
+export function countRemainingCallActivitySyncJobs(options?: {
   localDateKey?: string | null;
   timeZone?: string;
   lookbackMs?: number;

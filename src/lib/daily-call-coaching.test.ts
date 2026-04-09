@@ -1,12 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { countRemainingCallActivitySyncJobsMock } = vi.hoisted(() => ({
+  countRemainingCallActivitySyncJobsMock: vi.fn(() => 0),
+}));
+
+vi.mock("@/lib/call-analytics/postcall-worker", () => ({
+  countRemainingCallActivitySyncJobs: countRemainingCallActivitySyncJobsMock,
+}));
 
 import {
+  buildDailyCallCoachingCoverage,
   buildDailyCallCoachingMailPayload,
   buildDailyCallCoachingStats,
   buildFallbackDailyCallCoachingContent,
   type DailyCallCoachingCall,
   type DailyCallCoachingReport,
 } from "@/lib/daily-call-coaching";
+import type { CallIngestState } from "@/lib/call-analytics/types";
 
 const SAMPLE_CALLS: DailyCallCoachingCall[] = [
   {
@@ -51,6 +61,98 @@ const SAMPLE_CALLS: DailyCallCoachingCall[] = [
 ];
 
 describe("daily-call-coaching", () => {
+  beforeEach(() => {
+    countRemainingCallActivitySyncJobsMock.mockReset();
+    countRemainingCallActivitySyncJobsMock.mockReturnValue(0);
+  });
+
+  it("treats a completed same-day import as complete coverage for the report date", () => {
+    const state: CallIngestState = {
+      scope: "voice",
+      status: "complete",
+      lastRecentSyncAt: "2026-04-08T22:05:00.000Z",
+      lastFullBackfillAt: null,
+      latestSeenStartTime: "2026-04-08T18:14:25.000Z",
+      oldestSeenStartTime: null,
+      fullHistoryComplete: true,
+      lastWebhookAt: null,
+      lastError: null,
+      progress: null,
+      updatedAt: "2026-04-08T22:05:00.000Z",
+    };
+
+    const coverage = buildDailyCallCoachingCoverage("2026-04-08", "America/Toronto", state);
+
+    expect(coverage.complete).toBe(true);
+    expect(coverage.snapshotLastRecentSyncAt).toBe("2026-04-08T22:05:00.000Z");
+  });
+
+  it("refuses to treat an earlier-day import as complete coverage for the report date", () => {
+    const state: CallIngestState = {
+      scope: "voice",
+      status: "complete",
+      lastRecentSyncAt: "2026-04-07T18:21:59.532Z",
+      lastFullBackfillAt: null,
+      latestSeenStartTime: "2026-04-07T18:14:25.000Z",
+      oldestSeenStartTime: null,
+      fullHistoryComplete: true,
+      lastWebhookAt: null,
+      lastError: null,
+      progress: null,
+      updatedAt: "2026-04-07T18:21:59.532Z",
+    };
+
+    const coverage = buildDailyCallCoachingCoverage("2026-04-08", "America/Toronto", state);
+
+    expect(coverage.complete).toBe(false);
+    expect(coverage.detail).toContain("only confirmed through 2026-04-07");
+  });
+
+  it("refuses coverage when the latest import reported an error", () => {
+    const state: CallIngestState = {
+      scope: "voice",
+      status: "error",
+      lastRecentSyncAt: "2026-04-09T11:05:00.000Z",
+      lastFullBackfillAt: null,
+      latestSeenStartTime: "2026-04-08T18:14:25.000Z",
+      oldestSeenStartTime: null,
+      fullHistoryComplete: true,
+      lastWebhookAt: null,
+      lastError: "The service is unavailable.",
+      progress: null,
+      updatedAt: "2026-04-09T11:05:00.000Z",
+    };
+
+    const coverage = buildDailyCallCoachingCoverage("2026-04-08", "America/Toronto", state);
+
+    expect(coverage.complete).toBe(false);
+    expect(coverage.detail).toContain("The service is unavailable.");
+  });
+
+  it("refuses coverage while same-day call processing jobs are still pending", () => {
+    countRemainingCallActivitySyncJobsMock.mockReturnValue(3);
+
+    const state: CallIngestState = {
+      scope: "voice",
+      status: "complete",
+      lastRecentSyncAt: "2026-04-08T22:05:00.000Z",
+      lastFullBackfillAt: null,
+      latestSeenStartTime: "2026-04-08T18:14:25.000Z",
+      oldestSeenStartTime: null,
+      fullHistoryComplete: true,
+      lastWebhookAt: null,
+      lastError: null,
+      progress: null,
+      updatedAt: "2026-04-08T22:05:00.000Z",
+    };
+
+    const coverage = buildDailyCallCoachingCoverage("2026-04-08", "America/Toronto", state);
+
+    expect(coverage.complete).toBe(false);
+    expect(coverage.remainingCallSyncCount).toBe(3);
+    expect(coverage.detail).toContain("3 call activity job(s)");
+  });
+
   it("builds daily coaching stats from call rows", () => {
     const stats = buildDailyCallCoachingStats(SAMPLE_CALLS);
 

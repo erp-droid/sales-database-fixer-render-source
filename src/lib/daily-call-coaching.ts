@@ -2,16 +2,17 @@ import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import {
   serviceFindContactsByEmailSubstring,
-  withServiceAcumaticaSession,
 } from "@/lib/acumatica-service-auth";
 import {
   readWrappedNumber,
   readWrappedString,
 } from "@/lib/acumatica";
 import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
-import { refreshCallAnalytics } from "@/lib/call-analytics/ingest";
+import { readCallIngestState } from "@/lib/call-analytics/ingest";
+import { countRemainingCallActivitySyncJobs } from "@/lib/call-analytics/postcall-worker";
 import { readCallActivitySyncBySessionId } from "@/lib/call-analytics/postcall-store";
 import { readCallSessions } from "@/lib/call-analytics/sessionize";
+import type { CallIngestState } from "@/lib/call-analytics/types";
 import { buildMailServiceAssertion, ensureMailServiceConfigured } from "@/lib/mail-auth";
 import { getReadModelDb } from "@/lib/read-model/db";
 import type { MailComposePayload, MailRecipient } from "@/types/mail-compose";
@@ -117,11 +118,21 @@ export type DailyCallCoachingRunItem = {
   subjectLine: string | null;
 };
 
+export type DailyCallCoachingCoverage = {
+  complete: boolean;
+  detail: string;
+  snapshotLastRecentSyncAt: string | null;
+  snapshotLatestSeenStartTime: string | null;
+  snapshotLastError: string | null;
+  remainingCallSyncCount: number;
+};
+
 export type DailyCallCoachingRunResult = {
   reportDate: string;
   senderLoginName: string;
   ranAt: string;
   items: DailyCallCoachingRunItem[];
+  dataCoverage: DailyCallCoachingCoverage;
 };
 
 type InternalMailboxProfile = {
@@ -515,15 +526,74 @@ function pickSubjectLogins(reportDate: string, timeZone: string, specificLoginNa
   return [...logins].sort();
 }
 
-async function refreshDailyCallCoachingSnapshot(): Promise<void> {
-  await withServiceAcumaticaSession(
-    null,
-    async (cookieValue, authCookieRefresh) => {
-      await refreshCallAnalytics(cookieValue, authCookieRefresh, {
-        forceEmployeeDirectoryRefresh: true,
-      });
-    },
-  );
+export function buildDailyCallCoachingCoverage(
+  reportDate: string,
+  timeZone: string,
+  state: CallIngestState,
+): DailyCallCoachingCoverage {
+  const snapshotLastRecentSyncAt = state.lastRecentSyncAt ?? null;
+  const snapshotLatestSeenStartTime = state.latestSeenStartTime ?? null;
+  const snapshotLastError = cleanText(state.lastError) || null;
+  const snapshotDateKey = formatLocalDateKey(snapshotLastRecentSyncAt, timeZone);
+  const remainingCallSyncCount = countRemainingCallActivitySyncJobs({
+    localDateKey: reportDate,
+    timeZone,
+  });
+
+  if (snapshotLastError) {
+    return {
+      complete: false,
+      detail: `Call import reported an error: ${snapshotLastError}`,
+      snapshotLastRecentSyncAt,
+      snapshotLatestSeenStartTime,
+      snapshotLastError,
+      remainingCallSyncCount,
+    };
+  }
+
+  if (!snapshotLastRecentSyncAt || !snapshotDateKey) {
+    return {
+      complete: false,
+      detail: "Call import has not completed a recent sync yet.",
+      snapshotLastRecentSyncAt,
+      snapshotLatestSeenStartTime,
+      snapshotLastError,
+      remainingCallSyncCount,
+    };
+  }
+
+  // The 7 AM coaching run is read-only. It only trusts data that the 5 PM sync
+  // pipeline has already imported and fully processed for the report date.
+  if (snapshotDateKey < reportDate) {
+    return {
+      complete: false,
+      detail: `Call import is only confirmed through ${snapshotDateKey}.`,
+      snapshotLastRecentSyncAt,
+      snapshotLatestSeenStartTime,
+      snapshotLastError,
+      remainingCallSyncCount,
+    };
+  }
+
+  if (remainingCallSyncCount > 0) {
+    return {
+      complete: false,
+      detail: `${remainingCallSyncCount} call activity job(s) for ${reportDate} are still pending processing.`,
+      snapshotLastRecentSyncAt,
+      snapshotLatestSeenStartTime,
+      snapshotLastError,
+      remainingCallSyncCount,
+    };
+  }
+
+  return {
+    complete: true,
+    detail: `Call import and post-call processing are complete for ${reportDate}.`,
+    snapshotLastRecentSyncAt,
+    snapshotLatestSeenStartTime,
+    snapshotLastError,
+    remainingCallSyncCount,
+  };
 }
 
 function readDailyCallCoachingRow(
@@ -1667,7 +1737,21 @@ export async function runDailyCallCoaching(options?: {
   const sender = await resolveInternalMailboxProfile({
     loginName: env.DAILY_CALL_COACHING_SENDER_LOGIN,
   });
-  await refreshDailyCallCoachingSnapshot();
+  const snapshotState = readCallIngestState();
+  const dataCoverage = buildDailyCallCoachingCoverage(
+    reportDate,
+    env.DAILY_CALL_COACHING_TIME_ZONE,
+    snapshotState,
+  );
+  if (!dataCoverage.complete) {
+    return {
+      reportDate,
+      senderLoginName: sender.loginName,
+      ranAt: new Date().toISOString(),
+      items: [],
+      dataCoverage,
+    };
+  }
   const previewLoginName = cleanText(options?.previewRecipientLoginName) || null;
   const previewEmail = cleanText(options?.previewRecipientEmail) || null;
   const previewMode = Boolean(previewLoginName || previewEmail);
@@ -1811,5 +1895,6 @@ export async function runDailyCallCoaching(options?: {
     senderLoginName: sender.loginName,
     ranAt: new Date().toISOString(),
     items,
+    dataCoverage,
   };
 }
