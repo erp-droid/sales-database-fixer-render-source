@@ -66,6 +66,8 @@ type StoredCallLegRaw = {
   raw_json: string;
 };
 
+type CallIngestStateUpdate = Partial<CallIngestState> & { status: CallIngestState["status"] };
+
 type TwilioCallRecordLike = {
   sid: string;
   parentCallSid?: string | null;
@@ -282,12 +284,11 @@ export function shouldRefreshCallEmployeeDirectory(
   return ageMs >= staleAfterMs;
 }
 
-function writeCallIngestState(
-  next: Partial<CallIngestState> & { status: CallIngestState["status"] },
+export function mergeCallIngestState(
+  current: CallIngestState,
+  next: CallIngestStateUpdate,
 ): CallIngestState {
-  const db = getReadModelDb();
-  const current = readCallIngestState();
-  const updated: CallIngestState = {
+  return {
     scope: "voice",
     status: next.status,
     lastRecentSyncAt: next.lastRecentSyncAt ?? current.lastRecentSyncAt,
@@ -296,10 +297,18 @@ function writeCallIngestState(
     oldestSeenStartTime: next.oldestSeenStartTime ?? current.oldestSeenStartTime,
     fullHistoryComplete: next.fullHistoryComplete ?? current.fullHistoryComplete,
     lastWebhookAt: next.lastWebhookAt ?? current.lastWebhookAt,
-    lastError: next.lastError ?? current.lastError,
+    lastError: Object.prototype.hasOwnProperty.call(next, "lastError")
+      ? next.lastError ?? null
+      : current.lastError,
     progress: next.progress ?? current.progress,
     updatedAt: new Date().toISOString(),
   };
+}
+
+function writeCallIngestState(next: CallIngestStateUpdate): CallIngestState {
+  const db = getReadModelDb();
+  const current = readCallIngestState();
+  const updated = mergeCallIngestState(current, next);
 
   db.prepare(
     `

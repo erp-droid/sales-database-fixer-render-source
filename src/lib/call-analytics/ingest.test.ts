@@ -131,6 +131,37 @@ describe("call analytics refresh gating", () => {
     ).toBe(true);
   });
 
+  it("clears a stale import error when a successful refresh explicitly sets lastError to null", async () => {
+    const { mergeCallIngestState } = await import("@/lib/call-analytics/ingest");
+
+    const merged = mergeCallIngestState(
+      {
+        scope: "voice",
+        status: "error",
+        lastRecentSyncAt: "2026-04-08T18:21:59.532Z",
+        lastFullBackfillAt: null,
+        latestSeenStartTime: "2026-04-08T18:14:25.000Z",
+        oldestSeenStartTime: "2026-03-09T16:53:18.000Z",
+        fullHistoryComplete: true,
+        lastWebhookAt: null,
+        lastError: "The service is unavailable.",
+        progress: null,
+        updatedAt: "2026-04-09T10:00:00.000Z",
+      },
+      {
+        status: "complete",
+        lastRecentSyncAt: "2026-04-09T12:22:27.826Z",
+        latestSeenStartTime: "2026-04-09T12:20:22.000Z",
+        lastError: null,
+      },
+    );
+
+    expect(merged.status).toBe("complete");
+    expect(merged.lastError).toBeNull();
+    expect(merged.lastRecentSyncAt).toBe("2026-04-09T12:22:27.826Z");
+    expect(merged.latestSeenStartTime).toBe("2026-04-09T12:20:22.000Z");
+  });
+
   it("merges verified Twilio caller IDs into the call employee directory without duplicating known phones", async () => {
     const { mergeVerifiedCallerDirectoryEntries } = await import("@/lib/call-analytics/ingest");
 
