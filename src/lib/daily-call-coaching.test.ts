@@ -4,12 +4,66 @@ const { countRemainingCallActivitySyncJobsMock } = vi.hoisted(() => ({
   countRemainingCallActivitySyncJobsMock: vi.fn(() => 0),
 }));
 
+const {
+  buildPhoneMatchIndexMock,
+  getEnvMock,
+  matchPhoneToAccountWithIndexMock,
+  readCallActivitySyncBySessionIdMock,
+  readCallEmployeeDirectoryMock,
+  readCallSessionsMock,
+  serviceFindContactsByEmailSubstringMock,
+} = vi.hoisted(() => ({
+  buildPhoneMatchIndexMock: vi.fn(() => ({})),
+  getEnvMock: vi.fn(() => ({
+    MAIL_INTERNAL_DOMAIN: "meadowb.com",
+    OPENAI_API_KEY: "",
+  })),
+  matchPhoneToAccountWithIndexMock: vi.fn(() => ({
+    matchedContactId: null,
+    matchedContactName: null,
+    matchedBusinessAccountId: null,
+    matchedCompanyName: null,
+    phoneMatchType: "none",
+    phoneMatchAmbiguityCount: 0,
+  })),
+  readCallActivitySyncBySessionIdMock: vi.fn(() => null),
+  readCallEmployeeDirectoryMock: vi.fn(() => []),
+  readCallSessionsMock: vi.fn(() => []),
+  serviceFindContactsByEmailSubstringMock: vi.fn(async () => []),
+}));
+
 vi.mock("@/lib/call-analytics/postcall-worker", () => ({
   countRemainingCallActivitySyncJobs: countRemainingCallActivitySyncJobsMock,
 }));
 
+vi.mock("@/lib/call-analytics/phone-match", () => ({
+  buildPhoneMatchIndex: buildPhoneMatchIndexMock,
+  matchPhoneToAccountWithIndex: matchPhoneToAccountWithIndexMock,
+}));
+
+vi.mock("@/lib/call-analytics/postcall-store", () => ({
+  readCallActivitySyncBySessionId: readCallActivitySyncBySessionIdMock,
+}));
+
+vi.mock("@/lib/call-analytics/sessionize", () => ({
+  readCallSessions: readCallSessionsMock,
+}));
+
+vi.mock("@/lib/call-analytics/employee-directory", () => ({
+  readCallEmployeeDirectory: readCallEmployeeDirectoryMock,
+}));
+
+vi.mock("@/lib/acumatica-service-auth", () => ({
+  serviceFindContactsByEmailSubstring: serviceFindContactsByEmailSubstringMock,
+}));
+
+vi.mock("@/lib/env", () => ({
+  getEnv: getEnvMock,
+}));
+
 import {
   buildDailyCallCoachingCoverage,
+  buildDailyCallCoachingReport,
   getDailyCallCoachingExistingSkipDetail,
   buildDailyCallCoachingMailPayload,
   buildDailyCallCoachingStats,
@@ -68,6 +122,30 @@ describe("daily-call-coaching", () => {
   beforeEach(() => {
     countRemainingCallActivitySyncJobsMock.mockReset();
     countRemainingCallActivitySyncJobsMock.mockReturnValue(0);
+    buildPhoneMatchIndexMock.mockReset();
+    buildPhoneMatchIndexMock.mockReturnValue({});
+    getEnvMock.mockReset();
+    getEnvMock.mockReturnValue({
+      MAIL_INTERNAL_DOMAIN: "meadowb.com",
+      OPENAI_API_KEY: "",
+    });
+    matchPhoneToAccountWithIndexMock.mockReset();
+    matchPhoneToAccountWithIndexMock.mockReturnValue({
+      matchedContactId: null,
+      matchedContactName: null,
+      matchedBusinessAccountId: null,
+      matchedCompanyName: null,
+      phoneMatchType: "none",
+      phoneMatchAmbiguityCount: 0,
+    });
+    readCallActivitySyncBySessionIdMock.mockReset();
+    readCallActivitySyncBySessionIdMock.mockReturnValue(null);
+    readCallEmployeeDirectoryMock.mockReset();
+    readCallEmployeeDirectoryMock.mockReturnValue([]);
+    readCallSessionsMock.mockReset();
+    readCallSessionsMock.mockReturnValue([]);
+    serviceFindContactsByEmailSubstringMock.mockReset();
+    serviceFindContactsByEmailSubstringMock.mockResolvedValue([]);
   });
 
   it("treats a completed same-day import as complete coverage for the report date", () => {
@@ -288,5 +366,91 @@ describe("daily-call-coaching", () => {
     expect(payload.to[0]?.contactId).toBe(157497);
     expect(payload.matchedContacts[0]?.contactId).toBe(157497);
     expect(payload.matchedContacts[0]?.email).toBe("stita@meadowb.com");
+  });
+
+  it("aggregates aliased rep login names into one daily report", async () => {
+    readCallEmployeeDirectoryMock.mockReturnValue([
+      {
+        loginName: "kpareek",
+        contactId: null,
+        displayName: "Krishna Pareek",
+        email: "kpareek@meadowb.com",
+        normalizedPhone: null,
+        callerIdPhone: null,
+        isActive: true,
+        updatedAt: "2026-04-09T00:00:00.000Z",
+      },
+    ]);
+    readCallSessionsMock.mockReturnValue([
+      {
+        sessionId: "call-1",
+        startedAt: "2026-04-08T14:00:00.000Z",
+        updatedAt: "2026-04-08T14:05:00.000Z",
+        direction: "outbound",
+        employeeLoginName: "kpareek",
+        employeeDisplayName: "Krishna Pareek",
+        employeeContactId: null,
+        matchedContactName: "Mandeep Sunner",
+        matchedCompanyName: "Brenntag",
+        counterpartyPhone: "+19055550111",
+        targetPhone: "+19055550111",
+        answered: true,
+        outcome: "answered",
+        talkDurationSeconds: 153,
+        metadataJson: "{}",
+      },
+      {
+        sessionId: "call-2",
+        startedAt: "2026-04-08T15:00:00.000Z",
+        updatedAt: "2026-04-08T15:04:00.000Z",
+        direction: "outbound",
+        employeeLoginName: "Krishna Pareek",
+        employeeDisplayName: "Krishna Pareek",
+        employeeContactId: null,
+        matchedContactName: "Jeremy Benns",
+        matchedCompanyName: "Lake City Foods",
+        counterpartyPhone: "+19055550145",
+        targetPhone: "+19055550145",
+        answered: true,
+        outcome: "answered",
+        talkDurationSeconds: 86,
+        metadataJson: JSON.stringify({
+          appContext: {
+            displayName: "Krishna Pareek",
+          },
+        }),
+      },
+    ]);
+    readCallActivitySyncBySessionIdMock.mockImplementation((sessionId: string) => {
+      if (sessionId === "call-1") {
+        return {
+          transcriptText: null,
+          summaryText: "Discussed concrete availability and next follow-up timing.",
+        };
+      }
+
+      return {
+        transcriptText: "We talked about timing, specs, and the next touchpoint.",
+        summaryText: null,
+      };
+    });
+
+    const report = await buildDailyCallCoachingReport({
+      reportDate: "2026-04-08",
+      subjectLoginName: "kpareek",
+      recipientEmail: "kpareek@meadowb.com",
+      previewMode: false,
+      senderLoginName: "jserrano",
+      timeZone: "America/Toronto",
+    });
+
+    expect(report).not.toBeNull();
+    expect(report?.subjectDisplayName).toBe("Krishna Pareek");
+    expect(report?.calls).toHaveLength(2);
+    expect(report?.stats.totalCalls).toBe(2);
+    expect(report?.calls.map((call) => call.contactName)).toEqual([
+      "Mandeep Sunner",
+      "Jeremy Benns",
+    ]);
   });
 });

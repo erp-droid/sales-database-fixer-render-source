@@ -168,6 +168,8 @@ type StoredDailyCallCoachingRow = {
   updated_at: string;
 };
 
+type DailyCallSessionRecord = ReturnType<typeof readCallSessions>[number];
+
 export function getDailyCallCoachingExistingSkipDetail(input: {
   status: string | null | undefined;
   force?: boolean;
@@ -205,6 +207,8 @@ type OpenAiResponsePayload = {
 
 type ParsedCallSessionMetadata = {
   appContext?: {
+    displayName?: string | null;
+    email?: string | null;
     linkedContactName?: string | null;
     linkedCompanyName?: string | null;
   } | null;
@@ -324,6 +328,21 @@ function buildCallEvidenceLabel(call: DailyCallCoachingCall): string {
 
 function readCallContext(call: DailyCallCoachingCall): string {
   return cleanText([call.summaryText, call.transcriptText].filter(Boolean).join(" "));
+}
+
+function extractLoginNameFromEmail(value: string | null | undefined): string | null {
+  const normalized = normalizeComparable(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const atIndex = normalized.indexOf("@");
+  if (atIndex <= 0) {
+    return null;
+  }
+
+  const localPart = normalized.slice(0, atIndex).trim();
+  return localPart || null;
 }
 
 function buildSpecificityReason(call: DailyCallCoachingCall): string | null {
@@ -588,14 +607,18 @@ async function fetchWithTimeout(
 }
 
 function pickSubjectLogins(reportDate: string, timeZone: string, specificLoginName?: string | null): string[] {
-  if (specificLoginName) {
-    return [normalizeComparable(specificLoginName)];
-  }
+  const specificNormalized = normalizeComparable(specificLoginName);
+  const specificDirectoryProfile =
+    findDirectoryMailbox(specificNormalized) ||
+    findDirectoryMailboxByEmail(specificLoginName) ||
+    findDirectoryMailboxByDisplayName(specificLoginName);
+  const specificCanonicalLogin =
+    normalizeComparable(specificDirectoryProfile?.loginName) || specificNormalized || null;
 
   const logins = new Set<string>();
   for (const session of readCallSessions()) {
-    const loginName = normalizeComparable(session.employeeLoginName);
-    if (!loginName || session.direction !== "outbound") {
+    const canonicalLogin = resolveDailyCallSessionCanonicalLogin(session);
+    if (!canonicalLogin || session.direction !== "outbound") {
       continue;
     }
 
@@ -604,7 +627,14 @@ function pickSubjectLogins(reportDate: string, timeZone: string, specificLoginNa
       continue;
     }
 
-    logins.add(loginName);
+    if (specificCanonicalLogin) {
+      const rawLogin = normalizeComparable(session.employeeLoginName);
+      if (canonicalLogin !== specificCanonicalLogin && rawLogin !== specificNormalized) {
+        continue;
+      }
+    }
+
+    logins.add(canonicalLogin);
   }
 
   return [...logins].sort();
@@ -710,6 +740,54 @@ function readDailyCallCoachingRow(
   return row ?? null;
 }
 
+function readDailyCallCoachingRowByRecipient(
+  reportDate: string,
+  recipientEmail: string,
+  previewMode: boolean,
+): StoredDailyCallCoachingRow | null {
+  const db = getReadModelDb();
+  const row = db
+    .prepare(
+      `
+      SELECT
+        report_date,
+        subject_login_name,
+        recipient_email,
+        sender_login_name,
+        status,
+        preview_mode,
+        session_count,
+        analyzed_call_count,
+        transcript_call_count,
+        subject_line,
+        report_json,
+        error_message,
+        sent_at,
+        created_at,
+        updated_at
+      FROM daily_call_coaching_reports
+      WHERE report_date = ?
+        AND recipient_email = ?
+        AND preview_mode = ?
+      ORDER BY
+        CASE status
+          WHEN 'sent' THEN 0
+          WHEN 'sending' THEN 1
+          WHEN 'skipped' THEN 2
+          WHEN 'failed' THEN 3
+          ELSE 4
+        END,
+        COALESCE(sent_at, updated_at, created_at) DESC
+      LIMIT 1
+      `,
+    )
+    .get(reportDate, normalizeComparable(recipientEmail), previewMode ? 1 : 0) as
+    | StoredDailyCallCoachingRow
+    | undefined;
+
+  return row ?? null;
+}
+
 function writeDailyCallCoachingRow(input: {
   reportDate: string;
   subjectLoginName: string;
@@ -796,6 +874,105 @@ function findDirectoryMailbox(loginName: string): InternalMailboxProfile | null 
   };
 }
 
+function buildInternalMailboxProfileFromDirectoryItem(
+  employee: ReturnType<typeof readCallEmployeeDirectory>[number],
+): InternalMailboxProfile | null {
+  if (!employee?.email) {
+    return null;
+  }
+
+  return {
+    loginName: employee.loginName,
+    displayName: cleanText(employee.displayName) || employee.loginName,
+    email: employee.email,
+    contactId: employee.contactId ?? null,
+  };
+}
+
+function findDirectoryMailboxByEmail(email: string | null | undefined): InternalMailboxProfile | null {
+  const normalizedEmail = normalizeComparable(email);
+  if (!normalizedEmail) {
+    return null;
+  }
+
+  const employee =
+    readCallEmployeeDirectory().find((item) => normalizeComparable(item.email) === normalizedEmail) ??
+    null;
+  return employee ? buildInternalMailboxProfileFromDirectoryItem(employee) : null;
+}
+
+function findDirectoryMailboxByContactId(contactId: number | null | undefined): InternalMailboxProfile | null {
+  if (!Number.isFinite(contactId ?? NaN)) {
+    return null;
+  }
+
+  const matches = readCallEmployeeDirectory().filter((item) => item.contactId === contactId);
+  if (matches.length !== 1) {
+    return null;
+  }
+
+  return buildInternalMailboxProfileFromDirectoryItem(matches[0]);
+}
+
+function findDirectoryMailboxByDisplayName(
+  displayName: string | null | undefined,
+): InternalMailboxProfile | null {
+  const normalizedDisplayName = normalizeComparable(displayName);
+  if (!normalizedDisplayName) {
+    return null;
+  }
+
+  const matches = readCallEmployeeDirectory().filter(
+    (item) => normalizeComparable(item.displayName) === normalizedDisplayName,
+  );
+  if (matches.length !== 1) {
+    return null;
+  }
+
+  return buildInternalMailboxProfileFromDirectoryItem(matches[0]);
+}
+
+function resolveDailyCallSessionCanonicalLogin(
+  session: DailyCallSessionRecord,
+): string | null {
+  const metadata = parseCallSessionMetadata(session.metadataJson);
+  const normalizedLogin = normalizeComparable(session.employeeLoginName);
+  const metadataEmail = cleanText(metadata.appContext?.email) || null;
+  const displayName =
+    cleanText(session.employeeDisplayName) ||
+    cleanText(metadata.appContext?.displayName) ||
+    null;
+
+  const exactLoginMatch = normalizedLogin ? findDirectoryMailbox(normalizedLogin) : null;
+  if (exactLoginMatch) {
+    return normalizeComparable(exactLoginMatch.loginName);
+  }
+
+  const exactEmailMatch =
+    findDirectoryMailboxByEmail(metadataEmail) ||
+    findDirectoryMailboxByEmail(session.employeeLoginName);
+  if (exactEmailMatch) {
+    return normalizeComparable(exactEmailMatch.loginName);
+  }
+
+  const contactMatch = findDirectoryMailboxByContactId(session.employeeContactId);
+  if (contactMatch) {
+    return normalizeComparable(contactMatch.loginName);
+  }
+
+  const displayMatch = findDirectoryMailboxByDisplayName(displayName);
+  if (displayMatch) {
+    return normalizeComparable(displayMatch.loginName);
+  }
+
+  return (
+    extractLoginNameFromEmail(metadataEmail) ||
+    extractLoginNameFromEmail(session.employeeLoginName) ||
+    normalizedLogin ||
+    null
+  );
+}
+
 async function resolveInternalMailboxProfile(input: {
   loginName: string;
   email?: string | null;
@@ -858,7 +1035,7 @@ function buildDailyCallList(
   return readCallSessions()
     .filter((session) => {
       return (
-        normalizeComparable(session.employeeLoginName) === normalizeComparable(subjectLoginName) &&
+        resolveDailyCallSessionCanonicalLogin(session) === normalizeComparable(subjectLoginName) &&
         session.direction === "outbound" &&
         formatLocalDateKey(session.startedAt ?? session.updatedAt, timeZone) === reportDate
       );
@@ -1879,8 +2056,13 @@ export async function runDailyCallCoaching(options?: {
       subjectLoginName,
       targetRecipient.email,
     );
+    const existingForRecipient =
+      existing ??
+      (!previewMode
+        ? readDailyCallCoachingRowByRecipient(reportDate, targetRecipient.email, previewMode)
+        : null);
     const existingSkipDetail = getDailyCallCoachingExistingSkipDetail({
-      status: existing?.status,
+      status: existingForRecipient?.status,
       force: options?.force,
     });
     if (existingSkipDetail) {
@@ -1890,10 +2072,10 @@ export async function runDailyCallCoaching(options?: {
         recipientEmail: targetRecipient.email,
         status: "skipped",
         detail: existingSkipDetail,
-        sessionCount: existing.session_count,
-        analyzedCallCount: existing.analyzed_call_count,
-        transcriptCallCount: existing.transcript_call_count,
-        subjectLine: existing.subject_line,
+        sessionCount: existingForRecipient?.session_count ?? 0,
+        analyzedCallCount: existingForRecipient?.analyzed_call_count ?? 0,
+        transcriptCallCount: existingForRecipient?.transcript_call_count ?? 0,
+        subjectLine: existingForRecipient?.subject_line ?? null,
       });
       continue;
     }
