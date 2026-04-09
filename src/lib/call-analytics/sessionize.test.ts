@@ -197,8 +197,8 @@ describe("rebuildCallSessions", () => {
       getReadModelDb: () => db,
     }));
 
-    const module = await import("@/lib/call-analytics/sessionize");
-    const sessions = module.rebuildCallSessions({
+    const sessionizeModule = await import("@/lib/call-analytics/sessionize");
+    const sessions = sessionizeModule.rebuildCallSessions({
       bridgeNumbers: ["+16474929859"],
     });
 
@@ -371,8 +371,8 @@ describe("rebuildCallSessions", () => {
       getReadModelDb: () => db,
     }));
 
-    const module = await import("@/lib/call-analytics/sessionize");
-    const sessions = module.rebuildCallSessions({
+    const sessionizeModule = await import("@/lib/call-analytics/sessionize");
+    const sessions = sessionizeModule.rebuildCallSessions({
       bridgeNumbers: ["+16474929859"],
     });
 
@@ -448,6 +448,10 @@ describe("rebuildCallSessions", () => {
           callerId: "+14162304681",
           bridgeNumber: "+16474929859",
           sourcePage: "accounts",
+          linkedBusinessAccountId: "BA-42",
+          linkedCompanyName: "Ontario Soccer Association",
+          linkedContactId: 158602,
+          linkedContactName: "Mike Giona",
         },
         provisional: true,
         targetPhone: "+14163153228",
@@ -478,8 +482,8 @@ describe("rebuildCallSessions", () => {
       getReadModelDb: () => db,
     }));
 
-    const module = await import("@/lib/call-analytics/sessionize");
-    const sessions = module.rebuildCallSessions({
+    const sessionizeModule = await import("@/lib/call-analytics/sessionize");
+    const sessions = sessionizeModule.rebuildCallSessions({
       bridgeNumbers: ["+16474929859"],
     });
 
@@ -491,6 +495,10 @@ describe("rebuildCallSessions", () => {
         targetPhone: "+14163153228",
         answered: false,
         outcome: "unknown",
+        matchedContactName: "Mike Giona",
+        matchedCompanyName: "Ontario Soccer Association",
+        linkedBusinessAccountId: "BA-42",
+        linkedContactId: 158602,
       }),
     );
   });

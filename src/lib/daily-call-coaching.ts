@@ -4,6 +4,11 @@ import {
   serviceFindContactsByEmailSubstring,
 } from "@/lib/acumatica-service-auth";
 import {
+  buildPhoneMatchIndex,
+  matchPhoneToAccountWithIndex,
+  type PhoneMatchIndex,
+} from "@/lib/call-analytics/phone-match";
+import {
   readWrappedNumber,
   readWrappedString,
 } from "@/lib/acumatica";
@@ -21,7 +26,7 @@ const DAILY_COACHING_MODEL_FALLBACK = "gpt-4o-mini";
 const MAX_MODEL_CALLS = 40;
 const MAX_TRANSCRIPT_CHARS_PER_CALL = 1_200;
 const OPENAI_COACHING_TIMEOUT_MS = 25_000;
-const MAIL_SEND_TIMEOUT_MS = 20_000;
+const MAIL_SEND_TIMEOUT_MS = 60_000;
 
 export type DailyCallCoachingCall = {
   sessionId: string;
@@ -29,6 +34,7 @@ export type DailyCallCoachingCall = {
   localTimeLabel: string;
   contactName: string | null;
   companyName: string | null;
+  phoneNumber: string | null;
   answered: boolean;
   outcome: string;
   talkDurationSeconds: number;
@@ -173,6 +179,13 @@ type OpenAiResponsePayload = {
   error?: unknown;
 };
 
+type ParsedCallSessionMetadata = {
+  appContext?: {
+    linkedContactName?: string | null;
+    linkedCompanyName?: string | null;
+  } | null;
+};
+
 function cleanText(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
@@ -274,7 +287,11 @@ function formatDurationLabel(seconds: number): string {
 }
 
 function buildCallLabel(call: DailyCallCoachingCall): string {
-  return [call.contactName, call.companyName].filter(Boolean).join(" / ") || "Unresolved target";
+  return (
+    [call.contactName, call.companyName].filter(Boolean).join(" / ") ||
+    cleanText(call.phoneNumber) ||
+    "Unresolved target"
+  );
 }
 
 function buildCallEvidenceLabel(call: DailyCallCoachingCall): string {
@@ -478,6 +495,49 @@ function parseOpenAiError(payload: unknown, fallback: string): string {
           : null)
       : "";
   return nestedError || fallback;
+}
+
+function parseCallSessionMetadata(rawJson: string | null | undefined): ParsedCallSessionMetadata {
+  if (!rawJson) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(rawJson) as ParsedCallSessionMetadata;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function resolveDailyCallTarget(
+  session: ReturnType<typeof readCallSessions>[number],
+  phoneIndex: PhoneMatchIndex,
+): {
+  contactName: string | null;
+  companyName: string | null;
+  phoneNumber: string | null;
+} {
+  const metadata = parseCallSessionMetadata(session.metadataJson);
+  const phoneNumber =
+    cleanText(session.counterpartyPhone) || cleanText(session.targetPhone) || null;
+  const phoneMatch = phoneNumber
+    ? matchPhoneToAccountWithIndex(phoneIndex, phoneNumber)
+    : null;
+
+  return {
+    contactName:
+      cleanText(session.matchedContactName) ||
+      cleanText(metadata.appContext?.linkedContactName) ||
+      cleanText(phoneMatch?.matchedContactName) ||
+      null,
+    companyName:
+      cleanText(session.matchedCompanyName) ||
+      cleanText(metadata.appContext?.linkedCompanyName) ||
+      cleanText(phoneMatch?.matchedCompanyName) ||
+      null,
+    phoneNumber,
+  };
 }
 
 function readComparableTimestamp(value: string | null | undefined): number {
@@ -732,9 +792,11 @@ async function resolveInternalMailboxProfile(input: {
     cleanText(input.displayName) ||
     cleanText(fromDirectory?.displayName) ||
     normalizedLogin;
+  const normalizedInternalSuffix = `@${env.MAIL_INTERNAL_DOMAIN.trim().toLowerCase()}`;
+  const isInternalMailbox = email.trim().toLowerCase().endsWith(normalizedInternalSuffix);
 
   let contactId = fromDirectory?.contactId ?? null;
-  if (!contactId && email) {
+  if (!contactId && email && !isInternalMailbox) {
     try {
       const contacts = await serviceFindContactsByEmailSubstring(
         null,
@@ -767,6 +829,8 @@ function buildDailyCallList(
   reportDate: string,
   timeZone: string,
 ): DailyCallCoachingCall[] {
+  const phoneIndex = buildPhoneMatchIndex();
+
   return readCallSessions()
     .filter((session) => {
       return (
@@ -786,13 +850,15 @@ function buildDailyCallList(
       const transcriptText = cleanText(sync?.transcriptText) || null;
       const summaryText = cleanText(sync?.summaryText) || null;
       const talkDurationSeconds = Math.max(0, session.talkDurationSeconds ?? 0);
+      const target = resolveDailyCallTarget(session, phoneIndex);
 
       return {
         sessionId: session.sessionId,
         startedAt: session.startedAt,
         localTimeLabel: formatLocalTimeLabel(session.startedAt ?? session.updatedAt, timeZone),
-        contactName: cleanText(session.matchedContactName) || null,
-        companyName: cleanText(session.matchedCompanyName) || null,
+        contactName: target.contactName,
+        companyName: target.companyName,
+        phoneNumber: target.phoneNumber,
         answered: session.answered,
         outcome: cleanText(session.outcome) || "unknown",
         talkDurationSeconds,
@@ -862,8 +928,7 @@ function buildCallRosterForModel(calls: DailyCallCoachingCall[]): string {
   return calls
     .slice(0, MAX_MODEL_CALLS)
     .map((call, index) => {
-      const label =
-        [call.contactName, call.companyName].filter(Boolean).join(" / ") || "Unresolved target";
+      const label = buildCallLabel(call);
       const lines = [
         `${index + 1}. ${call.localTimeLabel} | ${label} | ${call.answered ? "answered" : call.outcome} | ${formatDurationLabel(call.talkDurationSeconds)} | ${call.analysisSource}`,
       ];
@@ -1375,11 +1440,15 @@ function buildSubjectLine(report: DailyCallCoachingReport): string {
   return report.previewMode ? `[Preview] ${base}` : base;
 }
 
-function buildMailRecipient(profile: InternalMailboxProfile): MailRecipient {
+function buildMailRecipient(
+  profile: InternalMailboxProfile,
+  fallbackContactId: number | null = null,
+): MailRecipient {
+  const contactId = profile.contactId ?? fallbackContactId ?? null;
   return {
     email: profile.email,
     name: profile.displayName,
-    contactId: profile.contactId,
+    contactId,
     businessAccountRecordId: null,
     businessAccountId: null,
   };
@@ -1469,12 +1538,10 @@ function renderCallTable(calls: DailyCallCoachingCall[]): string {
     .sort((left, right) => right.talkDurationSeconds - left.talkDurationSeconds)
     .slice(0, 10)
     .map((call) => {
-      const target =
-        [call.contactName, call.companyName].filter(Boolean).join(" / ") || "Unresolved target";
       return `
         <tr>
           <td style="padding:10px 12px; border-top:1px solid #eef2f6; color:#111827;">${escapeHtml(call.localTimeLabel)}</td>
-          <td style="padding:10px 12px; border-top:1px solid #eef2f6; color:#111827;">${escapeHtml(target)}</td>
+          <td style="padding:10px 12px; border-top:1px solid #eef2f6; color:#111827;">${escapeHtml(buildCallLabel(call))}</td>
           <td style="padding:10px 12px; border-top:1px solid #eef2f6; color:#111827;">${escapeHtml(formatDurationLabel(call.talkDurationSeconds))}</td>
           <td style="padding:10px 12px; border-top:1px solid #eef2f6; color:#667085; text-transform:capitalize;">${escapeHtml(call.analysisSource)}</td>
         </tr>
@@ -1486,7 +1553,9 @@ function renderCallTable(calls: DailyCallCoachingCall[]): string {
 export function buildDailyCallCoachingMailPayload(
   report: DailyCallCoachingReport,
   recipient: InternalMailboxProfile,
+  fallbackRecipientContactId: number | null = null,
 ): MailComposePayload {
+  const resolvedRecipientContactId = recipient.contactId ?? fallbackRecipientContactId ?? null;
   const previewBanner = report.previewMode
     ? `
       <div style="margin-bottom:20px; padding:14px 16px; border-radius:14px; background:#fff4e5; color:#9a3412; font-weight:600;">
@@ -1613,7 +1682,7 @@ export function buildDailyCallCoachingMailPayload(
     subject: report.subjectLine,
     htmlBody,
     textBody,
-    to: [buildMailRecipient(recipient)],
+    to: [buildMailRecipient(recipient, fallbackRecipientContactId)],
     cc: [],
     bcc: [],
     linkedContact: {
@@ -1623,7 +1692,18 @@ export function buildDailyCallCoachingMailPayload(
       contactName: null,
       companyName: null,
     },
-    matchedContacts: [],
+    matchedContacts: resolvedRecipientContactId
+      ? [
+          {
+            contactId: resolvedRecipientContactId,
+            businessAccountRecordId: null,
+            businessAccountId: null,
+            contactName: recipient.displayName,
+            companyName: null,
+            email: recipient.email,
+          },
+        ]
+      : [],
     attachments: [],
     sourceSurface: "mail",
   };
@@ -1635,7 +1715,11 @@ async function sendDailyCallCoachingEmail(
   recipient: InternalMailboxProfile,
 ): Promise<void> {
   const { serviceUrl } = ensureMailServiceConfigured();
-  const payload = buildDailyCallCoachingMailPayload(report, recipient);
+  const payload = buildDailyCallCoachingMailPayload(
+    report,
+    recipient,
+    sender.contactId ?? null,
+  );
   const assertion = buildMailServiceAssertion({
     loginName: sender.loginName,
     senderEmail: sender.email,
@@ -1660,7 +1744,7 @@ async function sendDailyCallCoachingEmail(
   }
 }
 
-async function buildDailyCallCoachingReport(input: {
+export async function buildDailyCallCoachingReport(input: {
   reportDate: string;
   subjectLoginName: string;
   recipientEmail: string;

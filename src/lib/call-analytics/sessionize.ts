@@ -676,7 +676,8 @@ function buildSessionRecord(
         : formatPhoneForTwilioDial(conversationLeg?.fromNumber),
     counterpartyPhone,
     matchedContactId: match.matchedContactId,
-    matchedContactName: match.matchedContactName,
+    matchedContactName:
+      match.matchedContactName ?? appContext?.linkedContactName ?? null,
     matchedBusinessAccountId: match.matchedBusinessAccountId,
     matchedCompanyName:
       match.matchedCompanyName ?? appContext?.linkedCompanyName ?? null,

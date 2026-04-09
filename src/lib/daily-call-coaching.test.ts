@@ -25,6 +25,7 @@ const SAMPLE_CALLS: DailyCallCoachingCall[] = [
     localTimeLabel: "10:00 AM",
     contactName: "Mandeep Sunner",
     companyName: "Brenntag",
+    phoneNumber: "+19055550111",
     answered: true,
     outcome: "answered",
     talkDurationSeconds: 153,
@@ -38,6 +39,7 @@ const SAMPLE_CALLS: DailyCallCoachingCall[] = [
     localTimeLabel: "10:15 AM",
     contactName: null,
     companyName: null,
+    phoneNumber: "+19055550123",
     answered: false,
     outcome: "no_answer",
     talkDurationSeconds: 0,
@@ -51,6 +53,7 @@ const SAMPLE_CALLS: DailyCallCoachingCall[] = [
     localTimeLabel: "11:00 AM",
     contactName: "Jeremy Benns",
     companyName: "Lake City Foods",
+    phoneNumber: "+19055550145",
     answered: true,
     outcome: "answered",
     talkDurationSeconds: 86,
@@ -223,5 +226,43 @@ describe("daily-call-coaching", () => {
     expect(payload.htmlBody).toContain("Jeremy Benns");
     expect(payload.htmlBody).toContain("Preview copy");
     expect(payload.to[0]?.email).toBe("jserrano@meadowb.com");
+    expect(payload.htmlBody).toContain("+19055550123");
+    expect(payload.htmlBody).not.toContain("Unresolved target");
+  });
+
+  it("uses a fallback contact id for internal coaching recipients", () => {
+    const report: DailyCallCoachingReport = {
+      reportDate: "2026-03-26",
+      subjectLoginName: "stita",
+      subjectDisplayName: "Samuel Tita",
+      recipientEmail: "stita@meadowb.com",
+      previewMode: false,
+      senderLoginName: "jserrano",
+      stats: buildDailyCallCoachingStats(SAMPLE_CALLS),
+      calls: SAMPLE_CALLS,
+      content: buildFallbackDailyCallCoachingContent({
+        subjectDisplayName: "Samuel Tita",
+        stats: buildDailyCallCoachingStats(SAMPLE_CALLS),
+        transcriptCallCount: 1,
+        calls: SAMPLE_CALLS,
+      }),
+      subjectLine: "Daily Call Coaching for Samuel Tita · Mar 26, 2026",
+    };
+
+    const payload = buildDailyCallCoachingMailPayload(
+      report,
+      {
+        loginName: "stita",
+        displayName: "Samuel Tita",
+        email: "stita@meadowb.com",
+        contactId: null,
+      },
+      157497,
+    );
+
+    expect(payload.to[0]?.email).toBe("stita@meadowb.com");
+    expect(payload.to[0]?.contactId).toBe(157497);
+    expect(payload.matchedContacts[0]?.contactId).toBe(157497);
+    expect(payload.matchedContacts[0]?.email).toBe("stita@meadowb.com");
   });
 });
