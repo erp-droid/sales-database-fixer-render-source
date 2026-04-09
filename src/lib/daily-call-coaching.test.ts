@@ -10,6 +10,7 @@ vi.mock("@/lib/call-analytics/postcall-worker", () => ({
 
 import {
   buildDailyCallCoachingCoverage,
+  getDailyCallCoachingExistingSkipDetail,
   buildDailyCallCoachingMailPayload,
   buildDailyCallCoachingStats,
   buildFallbackDailyCallCoachingContent,
@@ -228,6 +229,29 @@ describe("daily-call-coaching", () => {
     expect(payload.to[0]?.email).toBe("jserrano@meadowb.com");
     expect(payload.htmlBody).toContain("+19055550123");
     expect(payload.htmlBody).not.toContain("Unresolved target");
+  });
+
+  it("treats sent rows as terminal for automatic retries", () => {
+    expect(getDailyCallCoachingExistingSkipDetail({ status: "sent" })).toBe(
+      "Already sent for this date and recipient.",
+    );
+  });
+
+  it("suppresses automatic retries after a failed send attempt", () => {
+    expect(getDailyCallCoachingExistingSkipDetail({ status: "failed" })).toBe(
+      "Previous send attempt failed. Automatic retry is suppressed to avoid duplicate coach emails.",
+    );
+  });
+
+  it("suppresses automatic retries while a send attempt is still pending", () => {
+    expect(getDailyCallCoachingExistingSkipDetail({ status: "sending" })).toBe(
+      "Previous send attempt is still pending verification. Automatic retry is suppressed to avoid duplicate coach emails.",
+    );
+  });
+
+  it("allows a forced rerun to bypass stored row suppression", () => {
+    expect(getDailyCallCoachingExistingSkipDetail({ status: "failed", force: true })).toBeNull();
+    expect(getDailyCallCoachingExistingSkipDetail({ status: "sending", force: true })).toBeNull();
   });
 
   it("uses a fallback contact id for internal coaching recipients", () => {

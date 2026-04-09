@@ -28,6 +28,8 @@ const MAX_TRANSCRIPT_CHARS_PER_CALL = 1_200;
 const OPENAI_COACHING_TIMEOUT_MS = 25_000;
 const MAIL_SEND_TIMEOUT_MS = 60_000;
 
+type DailyCallCoachingStoredStatus = "sending" | "sent" | "skipped" | "failed";
+
 export type DailyCallCoachingCall = {
   sessionId: string;
   startedAt: string | null;
@@ -165,6 +167,28 @@ type StoredDailyCallCoachingRow = {
   created_at: string;
   updated_at: string;
 };
+
+export function getDailyCallCoachingExistingSkipDetail(input: {
+  status: string | null | undefined;
+  force?: boolean;
+}): string | null {
+  if (input.force) {
+    return null;
+  }
+
+  switch (input.status) {
+    case "sent":
+      return "Already sent for this date and recipient.";
+    case "skipped":
+      return "Already processed for this date and recipient.";
+    case "failed":
+      return "Previous send attempt failed. Automatic retry is suppressed to avoid duplicate coach emails.";
+    case "sending":
+      return "Previous send attempt is still pending verification. Automatic retry is suppressed to avoid duplicate coach emails.";
+    default:
+      return null;
+  }
+}
 
 type OpenAiTextContent = {
   text?: unknown;
@@ -692,7 +716,7 @@ function writeDailyCallCoachingRow(input: {
   recipientEmail: string;
   senderLoginName: string;
   previewMode: boolean;
-  status: "sent" | "skipped" | "failed";
+  status: DailyCallCoachingStoredStatus;
   sessionCount: number;
   analyzedCallCount: number;
   transcriptCallCount: number;
@@ -1855,13 +1879,17 @@ export async function runDailyCallCoaching(options?: {
       subjectLoginName,
       targetRecipient.email,
     );
-    if (!options?.force && existing?.status === "sent") {
+    const existingSkipDetail = getDailyCallCoachingExistingSkipDetail({
+      status: existing?.status,
+      force: options?.force,
+    });
+    if (existingSkipDetail) {
       items.push({
         subjectLoginName,
         subjectDisplayName: cleanText(subjectLoginName),
         recipientEmail: targetRecipient.email,
         status: "skipped",
-        detail: "Already sent for this date and recipient.",
+        detail: existingSkipDetail,
         sessionCount: existing.session_count,
         analyzedCallCount: existing.analyzed_call_count,
         transcriptCallCount: existing.transcript_call_count,
@@ -1870,8 +1898,9 @@ export async function runDailyCallCoaching(options?: {
       continue;
     }
 
+    let report: DailyCallCoachingReport | null = null;
     try {
-      const report = await buildDailyCallCoachingReport({
+      report = await buildDailyCallCoachingReport({
         reportDate,
         subjectLoginName,
         recipientEmail: targetRecipient.email,
@@ -1910,6 +1939,22 @@ export async function runDailyCallCoaching(options?: {
         continue;
       }
 
+      writeDailyCallCoachingRow({
+        reportDate,
+        subjectLoginName,
+        recipientEmail: targetRecipient.email,
+        senderLoginName: sender.loginName,
+        previewMode,
+        status: "sending",
+        sessionCount: report.calls.length,
+        analyzedCallCount: report.calls.length,
+        transcriptCallCount: report.calls.filter((call) => call.analysisSource === "transcript").length,
+        subjectLine: report.subjectLine,
+        reportJson: JSON.stringify(report),
+        errorMessage: null,
+        sentAt: null,
+      });
+
       await sendDailyCallCoachingEmail(report, sender, targetRecipient);
       writeDailyCallCoachingRow({
         reportDate,
@@ -1946,24 +1991,26 @@ export async function runDailyCallCoaching(options?: {
         senderLoginName: sender.loginName,
         previewMode,
         status: "failed",
-        sessionCount: 0,
-        analyzedCallCount: 0,
-        transcriptCallCount: 0,
-        subjectLine: null,
-        reportJson: null,
+        sessionCount: report?.calls.length ?? 0,
+        analyzedCallCount: report?.calls.length ?? 0,
+        transcriptCallCount:
+          report?.calls.filter((call) => call.analysisSource === "transcript").length ?? 0,
+        subjectLine: report?.subjectLine ?? null,
+        reportJson: report ? JSON.stringify(report) : null,
         errorMessage: message,
         sentAt: null,
       });
       items.push({
         subjectLoginName,
-        subjectDisplayName: subjectLoginName,
+        subjectDisplayName: report?.subjectDisplayName ?? subjectLoginName,
         recipientEmail: targetRecipient.email,
         status: "failed",
         detail: message,
-        sessionCount: 0,
-        analyzedCallCount: 0,
-        transcriptCallCount: 0,
-        subjectLine: null,
+        sessionCount: report?.calls.length ?? 0,
+        analyzedCallCount: report?.calls.length ?? 0,
+        transcriptCallCount:
+          report?.calls.filter((call) => call.analysisSource === "transcript").length ?? 0,
+        subjectLine: report?.subjectLine ?? null,
       });
     }
   }
