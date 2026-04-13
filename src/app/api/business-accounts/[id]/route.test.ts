@@ -148,7 +148,7 @@ describe("GET /api/business-accounts/[id]", () => {
     });
   });
 
-  it("returns cached rows when Travis is only the sales rep", async () => {
+  it("returns 404 when Travis is only the sales rep", async () => {
     readBusinessAccountDetailFromReadModel.mockReturnValue({
       row: buildRow({
         salesRepName: "Travis Justin Rumney",
@@ -171,6 +171,9 @@ describe("GET /api/business-accounts/[id]", () => {
       },
     );
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Business account not found.",
+    });
   });
 });

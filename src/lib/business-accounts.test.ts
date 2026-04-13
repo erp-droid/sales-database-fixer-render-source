@@ -1089,7 +1089,7 @@ describe("queryBusinessAccounts", () => {
     expect(result.items[0]?.companyName).toBe("Beta Ltd");
   });
 
-  it("suppresses rows where Travis Rumney is the contact", () => {
+  it("suppresses rows where Travis Rumney is the contact or sales rep", () => {
     const result = queryBusinessAccounts(
       [
         {
@@ -1120,14 +1120,11 @@ describe("queryBusinessAccounts", () => {
       },
     );
 
-    expect(result.total).toBe(2);
-    expect(result.items.map((row) => row.companyName)).toEqual([
-      "Beta Ltd",
-      "Customer Owned By Travis",
-    ]);
+    expect(result.total).toBe(1);
+    expect(result.items.map((row) => row.companyName)).toEqual(["Beta Ltd"]);
   });
 
-  it("keeps Travis contact rows hidden even when internal rows are requested", () => {
+  it("keeps Travis contact and sales rep rows hidden even when internal rows are requested", () => {
     const result = queryBusinessAccounts(
       [
         {
@@ -1159,11 +1156,8 @@ describe("queryBusinessAccounts", () => {
       },
     );
 
-    expect(result.total).toBe(2);
-    expect(result.items.map((row) => row.companyName)).toEqual([
-      "Beta Ltd",
-      "Customer Owned By Travis",
-    ]);
+    expect(result.total).toBe(1);
+    expect(result.items.map((row) => row.companyName)).toEqual(["Beta Ltd"]);
   });
 
   it("can include internal MeadowBrook contact emails when requested", () => {
