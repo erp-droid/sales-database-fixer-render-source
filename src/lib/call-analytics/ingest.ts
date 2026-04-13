@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import type { AuthCookieRefreshState } from "@/lib/acumatica";
 import { getEnv } from "@/lib/env";
 import { HttpError } from "@/lib/errors";
+import { refreshStoredReadModelAccountSupplementalFields } from "@/lib/read-model/accounts";
 import { getReadModelDb } from "@/lib/read-model/db";
 import { validateTwilioWebhookRequest } from "@/lib/twilio-webhook-validation";
 import {
@@ -1126,6 +1127,8 @@ export async function refreshCallAnalytics(
     if (!nextState.fullHistoryComplete) {
       nextState = await runHistoricalBackfill(inventory.voiceNumbers);
     }
+
+    refreshStoredReadModelAccountSupplementalFields();
 
     if (options?.runPostcallSync !== false) {
       void import("@/lib/call-analytics/postcall-worker")

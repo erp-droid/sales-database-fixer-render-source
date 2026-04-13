@@ -102,6 +102,24 @@ function inheritSupplementalAccountMetadata(
   });
 }
 
+function normalizeStoredSupplementalFields(row: BusinessAccountRow): BusinessAccountRow {
+  return {
+    ...row,
+    accountType: row.accountType ?? null,
+    opportunityCount: row.opportunityCount ?? null,
+    lastCalledAt: row.lastCalledAt ?? null,
+  };
+}
+
+function prepareRowsForStorage(
+  nextRows: BusinessAccountRow[],
+  existingRows: BusinessAccountRow[] = [],
+): BusinessAccountRow[] {
+  return applyLastCalledAtToBusinessAccountRows(
+    inheritSupplementalAccountMetadata(nextRows, existingRows),
+  ).map(normalizeStoredSupplementalFields);
+}
+
 function parseStoredRow(payload: string): BusinessAccountRow | null {
   try {
     return JSON.parse(payload) as BusinessAccountRow;
@@ -179,7 +197,7 @@ export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
 export function replaceAllAccountRows(rows: BusinessAccountRow[]): void {
   const db = getReadModelDb();
   const now = new Date().toISOString();
-  const nextRows = rows;
+  const nextRows = prepareRowsForStorage(rows);
 
   const replace = db.transaction((nextRows: BusinessAccountRow[]) => {
     db.prepare("DELETE FROM account_rows").run();
@@ -321,7 +339,7 @@ export function replaceReadModelAccountRows(
     .all(accountKey, accountKey) as StoredAccountRow[])
     .map((row) => parseStoredRow(row.payload_json))
     .filter((row): row is BusinessAccountRow => row !== null);
-  const nextRows = inheritSupplementalAccountMetadata(rows, existingRows);
+  const nextRows = prepareRowsForStorage(rows, existingRows);
   const now = new Date().toISOString();
 
   const replace = db.transaction(() => {
@@ -446,6 +464,27 @@ export function replaceReadModelAccountRows(
   replace();
   rebuildSalesRepDirectoryFromStoredRows();
   invalidateReadModelCaches();
+}
+
+export function refreshStoredReadModelAccountSupplementalFields(): void {
+  const db = getReadModelDb();
+  const currentRows = (db
+    .prepare(
+      `
+      SELECT payload_json
+      FROM account_rows
+      ORDER BY company_name COLLATE NOCASE ASC, row_key ASC
+      `,
+    )
+    .all() as StoredAccountRow[])
+    .map((row) => parseStoredRow(row.payload_json))
+    .filter((row): row is BusinessAccountRow => row !== null);
+
+  if (currentRows.length === 0) {
+    return;
+  }
+
+  replaceAllAccountRows(currentRows);
 }
 
 export function readBusinessAccountRowsFromReadModel(
