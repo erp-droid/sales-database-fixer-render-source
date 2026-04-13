@@ -87,7 +87,7 @@ type TwilioCallRecordLike = {
 };
 
 let refreshInFlight: Promise<CallIngestState> | null = null;
-const CALL_SESSION_REBUILD_DEBOUNCE_MS = 250;
+const CALL_SESSION_REBUILD_DEBOUNCE_MS = 1500;
 const CALL_SESSION_REBUILD_SLOW_MS = 2000;
 const RECENT_RECONCILE_WINDOW_MS = 48 * 60 * 60 * 1000;
 let scheduledSessionRebuild: ReturnType<typeof setTimeout> | null = null;
@@ -173,6 +173,28 @@ function runScheduledSessionRebuild(): void {
       scheduledSessionRebuild = setTimeout(runScheduledSessionRebuild, CALL_SESSION_REBUILD_DEBOUNCE_MS);
     }
   }
+}
+
+function queueCallSessionRebuildInBackground(bridgeNumbers: string[] = []): void {
+  void scheduleCallSessionRebuild(bridgeNumbers).catch((error) => {
+    console.error("[call-sessions] scheduled rebuild failed", {
+      error: error instanceof Error ? error.message : String(error),
+      bridgeNumbers: bridgeNumbers.length,
+    });
+  });
+}
+
+function queueCallSessionRebuildAfterInventoryLookup(): void {
+  void readTwilioPhoneInventory()
+    .then((inventory) => {
+      queueCallSessionRebuildInBackground(inventory.voiceNumbers);
+    })
+    .catch((error) => {
+      console.warn("[twilio] phone inventory refresh failed during session reconcile", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      queueCallSessionRebuildInBackground();
+    });
 }
 
 function parseProgressJson(value: string | null): CallIngestState["progress"] {
@@ -804,15 +826,8 @@ export async function reconcileTwilioSession(sessionId: string): Promise<CallSes
     normalizeTwilioCallRecord(call, "app_bridge", normalizedSessionId);
   }
 
-  let bridgeNumbers: string[] = [];
-  try {
-    bridgeNumbers = (await readTwilioPhoneInventory()).voiceNumbers;
-  } catch {
-    bridgeNumbers = [];
-  }
-
-  rebuildCallSessions({ bridgeNumbers });
-  return readCallSessionById(normalizedSessionId);
+  queueCallSessionRebuildAfterInventoryLookup();
+  return readCallSessionById(normalizedSessionId) ?? existingSession;
 }
 
 function readCallbackUrlBase(requestOrUrl?: string | URL | NextRequest): string {

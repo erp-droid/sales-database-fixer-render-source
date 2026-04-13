@@ -268,4 +268,56 @@ describe("GET /api/business-accounts", () => {
     expect(payload.total).toBe(1);
     expect(payload.items[0]?.primaryContactName).toBe("Jacky Lee");
   });
+
+  it("bypasses the read model for full internal requests when live=1 is requested", async () => {
+    getEnv.mockReturnValue({
+      READ_MODEL_ENABLED: true,
+    });
+    fetchAllSyncRows.mockResolvedValue([
+      buildRow({
+        id: "acct-live-1",
+        businessAccountId: "BA1001",
+        companyName: "Universal Matter",
+        contactId: 501,
+        primaryContactName: "Tiho Sudetic",
+        primaryContactEmail: "tiho@universalmatter.ca",
+      }),
+      buildRow({
+        id: "acct-live-2",
+        businessAccountId: "BA1002",
+        companyName: "Vermeer Canada",
+        contactId: 601,
+        primaryContactName: "Alice Wong",
+        primaryContactEmail: "alice@vermeer.ca",
+      }),
+    ]);
+
+    const { GET } = await import("@/app/api/business-accounts/route");
+
+    const response = await GET(
+      new NextRequest(
+        "http://localhost/api/business-accounts?sortBy=companyName&sortDir=asc&page=1&pageSize=25&full=1&includeInternal=1&live=1",
+      ),
+    );
+    const payload = (await response.json()) as {
+      items: BusinessAccountRow[];
+      total: number;
+      page: number;
+      pageSize: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(fetchAllSyncRows).toHaveBeenCalledWith(
+      "cookie",
+      expect.any(Object),
+      { includeInternal: true },
+    );
+    expect(queryReadModelBusinessAccounts).not.toHaveBeenCalled();
+    expect(maybeTriggerReadModelSync).not.toHaveBeenCalled();
+    expect(payload.total).toBe(2);
+    expect(payload.items.map((item) => item.companyName)).toEqual([
+      "Universal Matter",
+      "Vermeer Canada",
+    ]);
+  });
 });

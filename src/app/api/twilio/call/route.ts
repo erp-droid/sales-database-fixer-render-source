@@ -37,7 +37,7 @@ type StartPayload = {
 };
 
 const ACTIVE_BRIDGE_CALL_LOOKBACK_MS = 45_000;
-const ACTIVE_SESSION_RECONCILE_INTERVAL_MS = 5_000;
+const ACTIVE_SESSION_RECONCILE_INTERVAL_MS = 15_000;
 const pendingBridgeCallStarts = new Map<string, Promise<BridgeCallStartResult>>();
 const pendingSessionReconciles = new Map<string, Promise<unknown>>();
 const lastSessionReconcileAt = new Map<string, number>();

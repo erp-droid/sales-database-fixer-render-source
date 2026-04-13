@@ -2504,6 +2504,41 @@ export function AccountsClient({
     signal?: AbortSignal,
   ) {
     let statusPayload: SyncStatusResponse | null = null;
+    const hasCachedRows =
+      Boolean(cachedDataset) &&
+      isBusinessAccountRows(cachedDataset?.rows) &&
+      cachedDataset.rows.length > 0;
+
+    async function fetchRows(forceLive = false): Promise<BusinessAccountsResponse> {
+      const params = new URLSearchParams({
+        sortBy: "companyName",
+        sortDir: "asc",
+        page: "1",
+        pageSize: String(PAGE_SIZE),
+        full: "1",
+        includeInternal: "1",
+      });
+      if (forceLive) {
+        params.set("live", "1");
+      }
+
+      const rowsResponse = await fetch(`/api/business-accounts?${params.toString()}`, {
+        cache: "no-store",
+        signal,
+      });
+      const rowsPayload = await readJsonResponse<BusinessAccountsResponse | { error?: string }>(
+        rowsResponse,
+      );
+
+      if (!rowsResponse.ok) {
+        throw new Error(parseError(rowsPayload));
+      }
+      if (!isBusinessAccountsResponse(rowsPayload)) {
+        throw new Error("Unexpected response while loading account snapshot.");
+      }
+
+      return rowsPayload;
+    }
 
     try {
       const statusResponse = await fetch("/api/sync/status", {
@@ -2521,11 +2556,6 @@ export function AccountsClient({
         if (canUseCachedSnapshot(cachedDataset, nextStatusPayload)) {
           return cachedDataset.rows;
         }
-
-        if (!nextStatusPayload.lastSuccessfulSyncAt && nextStatusPayload.rowsCount === 0) {
-          setError("No local snapshot yet. Click Sync records to build the first snapshot.");
-          return [];
-        }
       }
     } catch {
       if (cachedDataset && isBusinessAccountRows(cachedDataset.rows) && cachedDataset.rows.length > 0) {
@@ -2534,28 +2564,17 @@ export function AccountsClient({
       }
     }
 
-    const params = new URLSearchParams({
-      sortBy: "companyName",
-      sortDir: "asc",
-      page: "1",
-      pageSize: String(PAGE_SIZE),
-      full: "1",
-      includeInternal: "1",
-    });
+    const rowsPayload = await fetchRows();
+    const shouldTryLiveFallback =
+      rowsPayload.items.length === 0 &&
+      !hasCachedRows &&
+      (!statusPayload || (!statusPayload.lastSuccessfulSyncAt && statusPayload.rowsCount === 0));
 
-    const rowsResponse = await fetch(`/api/business-accounts?${params.toString()}`, {
-      cache: "no-store",
-      signal,
-    });
-    const rowsPayload = await readJsonResponse<BusinessAccountsResponse | { error?: string }>(
-      rowsResponse,
-    );
-
-    if (!rowsResponse.ok) {
-      throw new Error(parseError(rowsPayload));
-    }
-    if (!isBusinessAccountsResponse(rowsPayload)) {
-      throw new Error("Unexpected response while loading account snapshot.");
+    if (shouldTryLiveFallback) {
+      const liveRowsPayload = await fetchRows(true);
+      if (liveRowsPayload.items.length > 0) {
+        return liveRowsPayload.items;
+      }
     }
 
     if (statusPayload && !statusPayload.lastSuccessfulSyncAt && rowsPayload.items.length === 0) {

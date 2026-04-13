@@ -187,6 +187,53 @@ describe("auth route timeouts", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("reuses a short-lived cached session response for repeated probes", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          status: 200,
+          body: {
+            ok: true,
+          },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { GET } = await import("@/app/api/auth/session/route");
+
+    const firstResponse = await GET(
+      new NextRequest("http://localhost/api/auth/session", {
+        headers: {
+          cookie: ".ASPXAUTH=existing-cookie; mb_login_name=jserrano",
+        },
+      }),
+    );
+    const secondResponse = await GET(
+      new NextRequest("http://localhost/api/auth/session", {
+        headers: {
+          cookie: ".ASPXAUTH=existing-cookie; mb_login_name=jserrano",
+        },
+      }),
+    );
+
+    await expect(firstResponse.json()).resolves.toEqual({
+      authenticated: true,
+      user: {
+        id: "jserrano",
+        name: "jserrano",
+      },
+    });
+    await expect(secondResponse.json()).resolves.toEqual({
+      authenticated: true,
+      user: {
+        id: "jserrano",
+        name: "jserrano",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the session active when caller identity cannot be resolved", async () => {
     const { HttpError } = await import("@/lib/errors");
     resolveSignedInCallerIdentity.mockRejectedValueOnce(new HttpError(403, "blocked"));

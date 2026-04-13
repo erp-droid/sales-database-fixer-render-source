@@ -18,6 +18,22 @@ import { runDueDeferredActions } from "@/lib/deferred-actions-executor";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 
 const SESSION_CHECK_TIMEOUT_MS = 3000;
+const AUTHENTICATED_SESSION_CACHE_TTL_MS = 15_000;
+const DEGRADED_SESSION_CACHE_TTL_MS = 5_000;
+
+type SessionResponsePayload = {
+  authenticated: boolean;
+  user: { id: string; name: string } | null;
+  degraded?: boolean;
+};
+
+type CachedSessionResponse = {
+  expiresAt: number;
+  payload: SessionResponsePayload;
+  authCookieValue: string | null;
+};
+
+const cachedSessionResponses = new Map<string, CachedSessionResponse>();
 
 function isAbortError(error: unknown): boolean {
   return (
@@ -68,6 +84,51 @@ function buildInvalidSessionResponse(): NextResponse {
   return response;
 }
 
+function buildSessionCacheKey(
+  cookieValue: string,
+  storedUser: { id: string; name: string } | null,
+): string {
+  return `${cookieValue}::${storedUser?.id ?? ""}`;
+}
+
+function readCachedSessionResponse(cacheKey: string): CachedSessionResponse | null {
+  const cached = cachedSessionResponses.get(cacheKey);
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    cachedSessionResponses.delete(cacheKey);
+    return null;
+  }
+
+  return cached;
+}
+
+function storeCachedSessionResponse(
+  cacheKey: string,
+  payload: SessionResponsePayload,
+  authCookieValue: string | null,
+  ttlMs: number,
+): void {
+  cachedSessionResponses.set(cacheKey, {
+    expiresAt: Date.now() + ttlMs,
+    payload,
+    authCookieValue,
+  });
+}
+
+function buildSessionResponse(
+  payload: SessionResponsePayload,
+  authCookieValue: string | null,
+): NextResponse {
+  const response = NextResponse.json(payload);
+  if (authCookieValue) {
+    setAuthCookie(response, authCookieValue);
+  }
+  return response;
+}
+
 function runInBackground(task: () => Promise<void>): void {
   try {
     after(task);
@@ -81,6 +142,7 @@ function runInBackground(task: () => Promise<void>): void {
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const cookieValue = getAuthCookieValue(request);
+  const storedUser = buildStoredUser(request);
   const authCookieRefresh: AuthCookieRefreshState = {
     value: null,
   };
@@ -91,10 +153,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return response;
   }
 
+  const cacheKey = buildSessionCacheKey(cookieValue, storedUser);
+  const cachedResponse = readCachedSessionResponse(cacheKey);
+  if (cachedResponse) {
+    return buildSessionResponse(
+      cachedResponse.payload,
+      cachedResponse.authCookieValue,
+    );
+  }
+
   try {
     const payload = await validateSessionWithTimeout(cookieValue, authCookieRefresh);
-    const storedUser = buildStoredUser(request);
     if (!storedUser?.id) {
+      cachedSessionResponses.delete(cacheKey);
       return buildInvalidSessionResponse();
     }
 
@@ -128,16 +199,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       });
     }
 
-    const response = NextResponse.json({
+    const responsePayload: SessionResponsePayload = {
       authenticated: true,
       user: normalizedUser,
-    });
-    if (authCookieRefresh.value) {
-      setAuthCookie(response, authCookieRefresh.value);
-    }
-    return response;
+    };
+    storeCachedSessionResponse(
+      cacheKey,
+      responsePayload,
+      authCookieRefresh.value,
+      AUTHENTICATED_SESSION_CACHE_TTL_MS,
+    );
+    return buildSessionResponse(responsePayload, authCookieRefresh.value);
   } catch (error) {
     if (error instanceof HttpError && error.status === 401) {
+      cachedSessionResponses.delete(cacheKey);
       return buildInvalidSessionResponse();
     }
 
@@ -145,17 +220,21 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       error instanceof HttpError &&
       [429, 500, 502, 503, 504].includes(error.status)
     ) {
-      const response = NextResponse.json({
+      const responsePayload: SessionResponsePayload = {
         authenticated: true,
-        user: buildStoredUser(request),
+        user: storedUser,
         degraded: true,
-      });
-      if (authCookieRefresh.value) {
-        setAuthCookie(response, authCookieRefresh.value);
-      }
-      return response;
+      };
+      storeCachedSessionResponse(
+        cacheKey,
+        responsePayload,
+        authCookieRefresh.value,
+        DEGRADED_SESSION_CACHE_TTL_MS,
+      );
+      return buildSessionResponse(responsePayload, authCookieRefresh.value);
     }
 
+    cachedSessionResponses.delete(cacheKey);
     return NextResponse.json(
       { error: getErrorMessage(error) },
       { status: 502 },

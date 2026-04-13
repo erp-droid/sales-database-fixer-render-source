@@ -62,6 +62,12 @@ type AuthCookieRefresh = {
   value: string | null;
 };
 
+type QueryAccountsOptions = {
+  full?: boolean;
+  includeInternal?: boolean;
+  forceLive?: boolean;
+};
+
 type RawRecord = Record<string, unknown>;
 
 function readArrayField(record: unknown, key: string): unknown[] {
@@ -823,13 +829,10 @@ async function queryAccountsWithCookie(
   cookieValue: string,
   params: ReturnType<typeof parseListQuery>,
   authCookieRefresh: AuthCookieRefresh,
-  options?: {
-    full?: boolean;
-    includeInternal?: boolean;
-  },
+  options?: QueryAccountsOptions,
 ) {
   const { READ_MODEL_ENABLED } = getEnv();
-  if (READ_MODEL_ENABLED) {
+  if (READ_MODEL_ENABLED && !options?.forceLive) {
     maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
     const total = options?.full
       ? queryReadModelBusinessAccounts({
@@ -907,13 +910,10 @@ async function querySyncBatchWithCookie(
   cookieValue: string,
   params: ReturnType<typeof parseListQuery>,
   authCookieRefresh: AuthCookieRefresh,
-  options?: {
-    full?: boolean;
-    includeInternal?: boolean;
-  },
+  options?: QueryAccountsOptions,
 ) {
   const { READ_MODEL_ENABLED } = getEnv();
-  if (READ_MODEL_ENABLED) {
+  if (READ_MODEL_ENABLED && !options?.forceLive) {
     maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
     if (options?.full) {
       const total = queryReadModelBusinessAccounts({
@@ -1229,6 +1229,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const includeInternal =
     request.nextUrl.searchParams.get("includeInternal") === "1" ||
     request.nextUrl.searchParams.get("includeInternal") === "true";
+  const forceLive =
+    request.nextUrl.searchParams.get("live") === "1" ||
+    request.nextUrl.searchParams.get("live") === "true";
   const shouldUseSyncDataset = syncBatch || (fullDataset && includeInternal);
 
   try {
@@ -1238,6 +1241,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       ? await querySyncBatchWithCookie(cookieValue, params, authCookieRefresh, {
           full: fullDataset,
           includeInternal,
+          forceLive,
         })
       : await queryAccountsWithCookie(
           cookieValue,
@@ -1246,6 +1250,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           {
             full: fullDataset,
             includeInternal,
+            forceLive,
           },
         );
 
@@ -1278,6 +1283,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
               {
                 full: fullDataset,
                 includeInternal,
+                forceLive,
               },
             )
           : await queryAccountsWithCookie(
@@ -1287,6 +1293,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
               {
                 full: fullDataset,
                 includeInternal,
+                forceLive,
               },
             );
 

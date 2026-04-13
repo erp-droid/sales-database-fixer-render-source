@@ -78,6 +78,8 @@ type TwilioCallContextValue = {
   error: string | null;
 };
 
+const CALL_STATUS_POLL_INTERVAL_MS = 5_000;
+
 const TwilioCallContext = createContext<TwilioCallContextValue | null>(null);
 
 function buildCallNumberLines(
@@ -588,7 +590,7 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
     void pollStatus();
     const intervalId = window.setInterval(() => {
       void pollStatus();
-    }, 2000);
+    }, CALL_STATUS_POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;
