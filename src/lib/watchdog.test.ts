@@ -1,5 +1,45 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const {
+  buildDailyCallCoachingCoverageMock,
+  getEnvMock,
+  pickSubjectLoginsMock,
+  readCallIngestStateMock,
+} = vi.hoisted(() => ({
+  buildDailyCallCoachingCoverageMock: vi.fn(() => ({
+    complete: true,
+    status: "complete",
+    detail: "Coverage complete.",
+    snapshotLastRecentSyncAt: "2026-04-08T22:05:00.000Z",
+    snapshotLatestSeenStartTime: "2026-04-08T18:14:25.000Z",
+    snapshotLastError: null,
+    remainingCallSyncCount: 0,
+    confirmedThroughDate: "2026-04-08",
+    staleDays: null,
+  })),
+  getEnvMock: vi.fn(() => ({
+    DAILY_CALL_COACHING_ENABLED: false,
+    DAILY_CALL_COACHING_LOOKBACK_DAYS: 1,
+    DAILY_CALL_COACHING_SCHEDULE_HOUR: 7,
+    DAILY_CALL_COACHING_SCHEDULE_MINUTE: 0,
+    DAILY_CALL_COACHING_TIME_ZONE: "America/Toronto",
+  })),
+  pickSubjectLoginsMock: vi.fn(() => []),
+  readCallIngestStateMock: vi.fn(() => ({
+    scope: "voice",
+    status: "complete",
+    lastRecentSyncAt: "2026-04-08T22:05:00.000Z",
+    lastFullBackfillAt: null,
+    latestSeenStartTime: "2026-04-08T18:14:25.000Z",
+    oldestSeenStartTime: null,
+    fullHistoryComplete: true,
+    lastWebhookAt: null,
+    lastError: null,
+    progress: null,
+    updatedAt: "2026-04-08T22:05:00.000Z",
+  })),
+}));
+
 // ── Mocks (vi.mock is hoisted — use vi.fn() inline) ───────────────────
 
 vi.mock("@/lib/watchdog-notify", () => ({
@@ -41,18 +81,29 @@ vi.mock("@/lib/call-analytics/sessionize", () => ({
 
 vi.mock("@/lib/call-analytics/ingest", () => ({
   reconcileTwilioSession: vi.fn().mockResolvedValue(null),
+  readCallIngestState: readCallIngestStateMock,
 }));
 
 vi.mock("@/lib/acumatica-service-auth", () => ({
   clearCachedServiceAcumaticaSession: vi.fn(),
 }));
 
+vi.mock("@/lib/daily-call-coaching", () => ({
+  buildDailyCallCoachingCoverage: buildDailyCallCoachingCoverageMock,
+  pickSubjectLogins: pickSubjectLoginsMock,
+}));
+
+vi.mock("@/lib/env", () => ({
+  getEnv: getEnvMock,
+}));
+
 const mockDbAll = vi.fn().mockReturnValue([]);
+const mockDbGet = vi.fn().mockReturnValue(undefined);
 vi.mock("@/lib/read-model/db", () => ({
   getReadModelDb: () => ({
-    prepare: () => ({
-      all: (...args: unknown[]) => mockDbAll(...args),
-      get: vi.fn().mockReturnValue(undefined),
+    prepare: (sql: string) => ({
+      all: (...args: unknown[]) => mockDbAll(sql, ...args),
+      get: (...args: unknown[]) => mockDbGet(sql, ...args),
     }),
   }),
 }));
@@ -93,6 +144,40 @@ describe("watchdog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDbAll.mockReturnValue([]);
+    mockDbGet.mockReturnValue(undefined);
+    getEnvMock.mockReturnValue({
+      DAILY_CALL_COACHING_ENABLED: false,
+      DAILY_CALL_COACHING_LOOKBACK_DAYS: 1,
+      DAILY_CALL_COACHING_SCHEDULE_HOUR: 7,
+      DAILY_CALL_COACHING_SCHEDULE_MINUTE: 0,
+      DAILY_CALL_COACHING_TIME_ZONE: "America/Toronto",
+    });
+    buildDailyCallCoachingCoverageMock.mockReturnValue({
+      complete: true,
+      status: "complete",
+      detail: "Coverage complete.",
+      snapshotLastRecentSyncAt: "2026-04-08T22:05:00.000Z",
+      snapshotLatestSeenStartTime: "2026-04-08T18:14:25.000Z",
+      snapshotLastError: null,
+      remainingCallSyncCount: 0,
+      confirmedThroughDate: "2026-04-08",
+      staleDays: null,
+    });
+    pickSubjectLoginsMock.mockReturnValue([]);
+    readCallIngestStateMock.mockReturnValue({
+      scope: "voice",
+      status: "complete",
+      lastRecentSyncAt: "2026-04-08T22:05:00.000Z",
+      lastFullBackfillAt: null,
+      latestSeenStartTime: "2026-04-08T18:14:25.000Z",
+      oldestSeenStartTime: null,
+      fullHistoryComplete: true,
+      lastWebhookAt: null,
+      lastError: null,
+      progress: null,
+      updatedAt: "2026-04-08T22:05:00.000Z",
+    });
+    vi.useRealTimers();
   });
 
   it("returns a healthy report when there are no trouble jobs", async () => {
@@ -306,5 +391,79 @@ describe("watchdog", () => {
     expect(report.actions[0].issue).toBe("watchdog_error");
     expect(report.actions[0].result).toBe("failed");
     expect(report.actions[0].detail).toContain("Watchdog itself errored");
+  });
+
+  it("alerts when daily coaching is blocked by stale call import coverage", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-09T12:30:00.000Z"));
+    getEnvMock.mockReturnValue({
+      DAILY_CALL_COACHING_ENABLED: true,
+      DAILY_CALL_COACHING_LOOKBACK_DAYS: 1,
+      DAILY_CALL_COACHING_SCHEDULE_HOUR: 7,
+      DAILY_CALL_COACHING_SCHEDULE_MINUTE: 0,
+      DAILY_CALL_COACHING_TIME_ZONE: "America/Toronto",
+    });
+    buildDailyCallCoachingCoverageMock.mockReturnValue({
+      complete: false,
+      status: "call_import_stale",
+      detail: "Call import is only confirmed through 2026-04-07.",
+      snapshotLastRecentSyncAt: "2026-04-07T22:05:00.000Z",
+      snapshotLatestSeenStartTime: "2026-04-07T18:14:25.000Z",
+      snapshotLastError: null,
+      remainingCallSyncCount: 0,
+      confirmedThroughDate: "2026-04-07",
+      staleDays: 1,
+    });
+
+    const report = await runWatchdog();
+
+    expect(report.checked).toBe(1);
+    expect(report.actions).toHaveLength(1);
+    expect(report.actions[0]).toEqual(
+      expect.objectContaining({
+        sessionId: "daily-call-coaching:2026-04-08",
+        issue: "call_import_stale",
+        action: "alert",
+        result: "failed",
+      }),
+    );
+    expect(report.actions[0].detail).toContain("Confirmed through: 2026-04-07.");
+  });
+
+  it("alerts when the live coaching run is missing after the schedule window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-09T13:30:00.000Z"));
+    getEnvMock.mockReturnValue({
+      DAILY_CALL_COACHING_ENABLED: true,
+      DAILY_CALL_COACHING_LOOKBACK_DAYS: 1,
+      DAILY_CALL_COACHING_SCHEDULE_HOUR: 7,
+      DAILY_CALL_COACHING_SCHEDULE_MINUTE: 0,
+      DAILY_CALL_COACHING_TIME_ZONE: "America/Toronto",
+    });
+    pickSubjectLoginsMock.mockReturnValue(["kpareek", "stita"]);
+    mockDbGet.mockImplementation((sql: string) => {
+      if (sql.includes("COUNT(*) AS total_rows")) {
+        return {
+          total_rows: 0,
+          sent_rows: 0,
+        };
+      }
+
+      return undefined;
+    });
+
+    const report = await runWatchdog();
+
+    expect(report.checked).toBe(1);
+    expect(report.actions).toHaveLength(1);
+    expect(report.actions[0]).toEqual(
+      expect.objectContaining({
+        sessionId: "daily-call-coaching:2026-04-08",
+        issue: "missing_live_send",
+        action: "alert",
+        result: "failed",
+      }),
+    );
+    expect(report.actions[0].detail).toContain("Expected 2 live coaching email(s)");
   });
 });

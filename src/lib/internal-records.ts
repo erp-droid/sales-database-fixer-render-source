@@ -61,12 +61,9 @@ function isAlwaysExcludedAssociatedName(value: string | null | undefined): boole
 }
 
 export function isAlwaysExcludedBusinessAccountRow(
-  row: Pick<BusinessAccountRow, "salesRepName" | "primaryContactName">,
+  row: Pick<BusinessAccountRow, "primaryContactName">,
 ): boolean {
-  return (
-    isAlwaysExcludedAssociatedName(row.salesRepName) ||
-    isAlwaysExcludedAssociatedName(row.primaryContactName)
-  );
+  return isAlwaysExcludedAssociatedName(row.primaryContactName);
 }
 
 export function isExcludedInternalBusinessAccountRow(

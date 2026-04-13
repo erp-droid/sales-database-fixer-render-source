@@ -1,3 +1,5 @@
+import type { BusinessAccountType } from "@/types/business-account";
+
 export const DEFERRED_ACTION_STATUSES = [
   "pending_review",
   "approved",
@@ -24,6 +26,9 @@ export type DeferredActionSummary = {
   businessAccountRecordId: string | null;
   businessAccountId: string | null;
   companyName: string | null;
+  accountType: BusinessAccountType | null;
+  opportunityCount: number | null;
+  acumaticaBusinessAccountUrl: string | null;
   contactId: number | null;
   contactName: string | null;
   keptContactId: number | null;

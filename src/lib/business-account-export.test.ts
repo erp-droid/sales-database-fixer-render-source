@@ -19,6 +19,8 @@ function buildRow(overrides: Partial<BusinessAccountRow> = {}): BusinessAccountR
     phoneNumber: overrides.phoneNumber ?? "905-555-0100",
     salesRepId: overrides.salesRepId ?? "109343",
     salesRepName: overrides.salesRepName ?? "Jorge Serrano",
+    accountType: overrides.accountType ?? "Customer",
+    opportunityCount: overrides.opportunityCount ?? 4,
     industryType: overrides.industryType ?? "Distribution",
     subCategory: overrides.subCategory ?? "Packaging",
     companyRegion: overrides.companyRegion ?? "Region 5",
@@ -42,6 +44,7 @@ function buildRow(overrides: Partial<BusinessAccountRow> = {}): BusinessAccountR
     primaryContactId: overrides.primaryContactId ?? 101,
     category: overrides.category ?? "A",
     notes: overrides.notes ?? "Confirmed,\nneeds quote",
+    lastCalledAt: overrides.lastCalledAt ?? "2026-04-05T13:15:00.000Z",
     lastEmailedAt: overrides.lastEmailedAt ?? "2026-04-06T09:00:00.000Z",
     lastModifiedIso: overrides.lastModifiedIso ?? "2026-04-06T09:30:00.000Z",
   };
@@ -53,7 +56,13 @@ describe("business account export", () => {
 
     expect(csv.charCodeAt(0)).toBe(0xfeff);
     expect(csv).toContain("Company Name");
+    expect(csv).toContain("Account Type");
+    expect(csv).toContain("Opportunity Count");
     expect(csv).toContain("Footage Tools");
+    expect(csv).toContain("Customer");
+    expect(csv).toContain(",4,");
+    expect(csv).toContain("Last Called At");
+    expect(csv).toContain("2026-04-05T13:15:00.000Z");
     expect(csv).toContain('"Yash ""M"" Marathe"');
     expect(csv).toContain('"Confirmed,\r\nneeds quote"');
   });

@@ -11,6 +11,10 @@
     "test:watch": "vitest",
     "backfill:business-account-class-region": "node scripts/backfill-business-account-class-region.cjs",
     "backfill:call-activities": "tsx scripts/backfill-call-activities.ts",
+    "backfill:call-summaries": "tsx scripts/backfill-call-summaries.ts",
+    "recover:daily-call-coaching": "tsx scripts/recover-daily-call-coaching.ts",
+    "schedule:call-activity-sync": "node scripts/trigger-call-activity-sync.cjs",
+    "schedule:daily-call-coaching": "node scripts/trigger-daily-call-coaching.cjs",
     "login:local": "node scripts/mail-activity-smoke.cjs --login-only",
     "verify:mail-activity": "node scripts/mail-activity-smoke.cjs"
   },

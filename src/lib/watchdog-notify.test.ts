@@ -203,4 +203,28 @@ describe("watchdog-notify", () => {
 
     await expect(sendWatchdogNotification(report)).resolves.toBeUndefined();
   });
+
+  it("suppresses duplicate notifications for the same persistent alert key", async () => {
+    const report: WatchdogReport = {
+      ranAt: new Date().toISOString(),
+      durationMs: 90,
+      checked: 1,
+      actions: [
+        {
+          sessionId: "daily-call-coaching:2026-04-08",
+          issue: "call_import_stale",
+          action: "alert",
+          result: "failed",
+          detail: "Call import is only confirmed through 2026-04-07.",
+          notificationKey: "daily-call-coaching:block:call_import_stale:2026-04-08",
+        },
+      ],
+      healthy: false,
+    };
+
+    await sendWatchdogNotification(report);
+    await sendWatchdogNotification(report);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
 });

@@ -1,5 +1,6 @@
 import {
   CATEGORY_VALUES,
+  type BusinessAccountType,
   type BusinessAccountRow,
   type BusinessAccountUpdateRequest,
   type Category,
@@ -21,6 +22,10 @@ import {
   resolvePrimaryContactPhoneFields,
 } from "@/lib/phone";
 import { canonicalBusinessAccountRegionValue } from "@/lib/business-account-region-values";
+import {
+  normalizeBusinessAccountType,
+  resolveBusinessAccountClassDecision,
+} from "@/lib/business-account-region-resolution";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -29,6 +34,8 @@ type QueryOptions = {
   category?: Category;
   filterCompanyInitial?: string;
   filterCompanyName?: string;
+  filterAccountType?: string;
+  filterOpportunityCount?: string;
   filterSalesRep?: string;
   filterIndustryType?: string;
   filterSubCategory?: string;
@@ -43,6 +50,7 @@ type QueryOptions = {
   filterPrimaryContactEmail?: string;
   filterNotes?: string;
   filterCategory?: Category;
+  filterLastCalled?: string;
   filterLastEmailed?: string;
   filterLastModified?: string;
   sortBy?: SortBy;
@@ -359,6 +367,9 @@ function mergeBusinessAccountRows(
     phoneNumber: pickPreferredText(existing.phoneNumber, incoming.phoneNumber),
     salesRepId: pickPreferredText(existing.salesRepId, incoming.salesRepId),
     salesRepName: pickPreferredText(existing.salesRepName, incoming.salesRepName),
+    accountType: incoming.accountType ?? existing.accountType ?? null,
+    opportunityCount:
+      incoming.opportunityCount ?? existing.opportunityCount ?? null,
     industryType: pickPreferredText(existing.industryType, incoming.industryType),
     subCategory: pickPreferredText(existing.subCategory, incoming.subCategory),
     companyRegion: pickPreferredText(existing.companyRegion, incoming.companyRegion),
@@ -400,6 +411,7 @@ function mergeBusinessAccountRows(
     primaryContactId: incoming.primaryContactId ?? existing.primaryContactId,
     category: incoming.category ?? existing.category,
     notes: pickPreferredText(existing.notes, incoming.notes),
+    lastCalledAt: pickPreferredText(existing.lastCalledAt, incoming.lastCalledAt),
     lastEmailedAt: pickPreferredText(existing.lastEmailedAt, incoming.lastEmailedAt),
     lastModifiedIso: pickPreferredText(existing.lastModifiedIso, incoming.lastModifiedIso),
   };
@@ -1266,30 +1278,39 @@ function extractAttributeValue(account: unknown, attributeId: string): string | 
   return null;
 }
 
-export function resolveCompanyPhone(row: BusinessAccountRow): string | null {
-  if (hasText(row.companyPhone)) {
-    return row.companyPhone.trim();
+function resolveBusinessAccountTypeLabel(account: unknown): BusinessAccountType | null {
+  const normalizedType =
+    normalizeBusinessAccountType(readNullableString(account, "Type")) ||
+    normalizeBusinessAccountType(readNullableString(account, "TypeDescription"));
+
+  if (normalizedType === "customer") {
+    return "Customer";
   }
 
-  if (!hasText(row.phoneNumber)) {
+  if (normalizedType === "businessaccount" || normalizedType === "prospect") {
+    return "Lead";
+  }
+
+  const decision = resolveBusinessAccountClassDecision({
+    type: readNullableString(account, "Type"),
+    typeDescription: readNullableString(account, "TypeDescription"),
+    classId: readFirstString(account, ["ClassID", "BusinessAccountClass"]),
+    status: readNullableString(account, "Status"),
+  });
+
+  if (decision.skip) {
     return null;
   }
 
-  const fallback = row.phoneNumber.trim();
-  const primaryPhone = row.primaryContactPhone?.trim() ?? "";
-  if (!primaryPhone) {
-    return fallback;
+  return decision.targetClassId === "CUSTOMER" ? "Customer" : "Lead";
+}
+
+export function resolveCompanyPhone(row: BusinessAccountRow): string | null {
+  if (!hasText(row.companyPhone)) {
+    return null;
   }
 
-  if (normalizeComparable(fallback) !== normalizeComparable(primaryPhone)) {
-    return fallback;
-  }
-
-  if (!hasText(row.primaryContactEmail)) {
-    return fallback;
-  }
-
-  return null;
+  return row.companyPhone.trim();
 }
 
 function sortValue(row: BusinessAccountRow, sortBy: SortBy): string {
@@ -1311,6 +1332,18 @@ function includesFilter(value: string | null, filter: string | undefined): boole
   }
 
   return (value ?? "").toLowerCase().includes(filter.toLowerCase());
+}
+
+function includesNumericFilter(value: number | null | undefined, filter: string | undefined): boolean {
+  if (!filter) {
+    return true;
+  }
+
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return false;
+  }
+
+  return String(value).includes(filter.trim());
 }
 
 function readCompanyNameInitial(value: string | null | undefined): string | null {
@@ -1405,6 +1438,7 @@ export function normalizeBusinessAccount(account: unknown): BusinessAccountRow {
       : null;
   const salesRepId = readSalesRepId(account);
   const salesRepName = readSalesRepName(account);
+  const accountType = resolveBusinessAccountTypeLabel(account);
   const industryType = extractAttributeValue(account, "INDUSTRY");
   const subCategory = extractAttributeValue(account, "INDSUBCATE");
   const companyRegion = extractAttributeValue(account, "REGION");
@@ -1421,6 +1455,7 @@ export function normalizeBusinessAccount(account: unknown): BusinessAccountRow {
     phoneNumber: contact.phone,
     salesRepId,
     salesRepName,
+    accountType,
     industryType,
     subCategory,
     companyRegion,
@@ -1574,6 +1609,14 @@ export function queryBusinessAccounts(
       return false;
     }
 
+    if (!includesFilter(row.accountType ?? null, options.filterAccountType)) {
+      return false;
+    }
+
+    if (!includesNumericFilter(row.opportunityCount, options.filterOpportunityCount)) {
+      return false;
+    }
+
     if (!includesFilter(row.salesRepName, options.filterSalesRep)) {
       return false;
     }
@@ -1626,6 +1669,10 @@ export function queryBusinessAccounts(
       return false;
     }
 
+    if (!includesLastModifiedFilter(row.lastCalledAt ?? null, options.filterLastCalled)) {
+      return false;
+    }
+
     if (!includesLastModifiedFilter(row.lastEmailedAt ?? null, options.filterLastEmailed)) {
       return false;
     }
@@ -1640,6 +1687,10 @@ export function queryBusinessAccounts(
 
     const haystack = [
       row.companyName,
+      row.accountType,
+      row.opportunityCount !== null && row.opportunityCount !== undefined
+        ? String(row.opportunityCount)
+        : null,
       row.salesRepName,
       row.industryType,
       row.subCategory,
@@ -1653,6 +1704,7 @@ export function queryBusinessAccounts(
       row.primaryContactExtension,
       row.primaryContactEmail,
       row.notes,
+      row.lastCalledAt,
       row.lastEmailedAt,
       row.businessAccountId,
       row.companyDescription,

@@ -88,6 +88,13 @@ type DailyCallCoachingFollowUp = {
   priority: "high" | "medium" | "low";
 };
 
+export type DailyCallCoachingCoverageStatus =
+  | "complete"
+  | "postcall_pending"
+  | "call_import_missing"
+  | "call_import_error"
+  | "call_import_stale";
+
 export type DailyCallCoachingContent = {
   headline: string;
   executiveSummary: string;
@@ -128,11 +135,14 @@ export type DailyCallCoachingRunItem = {
 
 export type DailyCallCoachingCoverage = {
   complete: boolean;
+  status: DailyCallCoachingCoverageStatus;
   detail: string;
   snapshotLastRecentSyncAt: string | null;
   snapshotLatestSeenStartTime: string | null;
   snapshotLastError: string | null;
   remainingCallSyncCount: number;
+  confirmedThroughDate: string | null;
+  staleDays: number | null;
 };
 
 export type DailyCallCoachingRunResult = {
@@ -279,6 +289,53 @@ function formatDisplayDate(reportDate: string, timeZone: string): string {
     day: "numeric",
     year: "numeric",
   }).format(date);
+}
+
+function parseDateKey(dateKey: string): { year: number; month: number; day: number } | null {
+  const [year, month, day] = String(dateKey)
+    .split("-")
+    .map((value) => Number.parseInt(value, 10));
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  return { year, month, day };
+}
+
+function shiftDateKey(dateKey: string, offsetDays: number, timeZone: string): string | null {
+  const parsed = parseDateKey(dateKey);
+  if (!parsed) {
+    return null;
+  }
+
+  const shifted = new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day + offsetDays, 12, 0, 0));
+  return formatLocalDateKey(shifted.toISOString(), timeZone);
+}
+
+function countDateKeyGapDays(
+  earlierDateKey: string | null,
+  laterDateKey: string,
+  timeZone: string,
+): number | null {
+  if (!earlierDateKey) {
+    return null;
+  }
+
+  let cursor: string | null = earlierDateKey;
+  let gap = 0;
+  while (cursor && cursor < laterDateKey) {
+    cursor = shiftDateKey(cursor, 1, timeZone);
+    gap += 1;
+    if (gap > 3660) {
+      return null;
+    }
+  }
+
+  if (!cursor) {
+    return null;
+  }
+
+  return cursor === laterDateKey ? gap : 0;
 }
 
 function readDailyCallCoachingTimeZone(): string {
@@ -606,7 +663,11 @@ async function fetchWithTimeout(
   }
 }
 
-function pickSubjectLogins(reportDate: string, timeZone: string, specificLoginName?: string | null): string[] {
+export function pickSubjectLogins(
+  reportDate: string,
+  timeZone: string,
+  specificLoginName?: string | null,
+): string[] {
   const specificNormalized = normalizeComparable(specificLoginName);
   const specificDirectoryProfile =
     findDirectoryMailbox(specificNormalized) ||
@@ -657,22 +718,28 @@ export function buildDailyCallCoachingCoverage(
   if (snapshotLastError) {
     return {
       complete: false,
+      status: "call_import_error",
       detail: `Call import reported an error: ${snapshotLastError}`,
       snapshotLastRecentSyncAt,
       snapshotLatestSeenStartTime,
       snapshotLastError,
       remainingCallSyncCount,
+      confirmedThroughDate: snapshotDateKey,
+      staleDays: countDateKeyGapDays(snapshotDateKey, reportDate, timeZone),
     };
   }
 
   if (!snapshotLastRecentSyncAt || !snapshotDateKey) {
     return {
       complete: false,
+      status: "call_import_missing",
       detail: "Call import has not completed a recent sync yet.",
       snapshotLastRecentSyncAt,
       snapshotLatestSeenStartTime,
       snapshotLastError,
       remainingCallSyncCount,
+      confirmedThroughDate: null,
+      staleDays: null,
     };
   }
 
@@ -681,16 +748,20 @@ export function buildDailyCallCoachingCoverage(
   if (snapshotDateKey < reportDate) {
     return {
       complete: false,
+      status: "call_import_stale",
       detail: `Call import is only confirmed through ${snapshotDateKey}.`,
       snapshotLastRecentSyncAt,
       snapshotLatestSeenStartTime,
       snapshotLastError,
       remainingCallSyncCount,
+      confirmedThroughDate: snapshotDateKey,
+      staleDays: countDateKeyGapDays(snapshotDateKey, reportDate, timeZone),
     };
   }
 
   return {
     complete: true,
+    status: remainingCallSyncCount > 0 ? "postcall_pending" : "complete",
     detail:
       remainingCallSyncCount > 0
         ? `Call import is complete for ${reportDate}. ${remainingCallSyncCount} transcript/activity job(s) are still pending, so coaching will use the available transcripts/summaries plus metadata fallback for the rest.`
@@ -699,6 +770,8 @@ export function buildDailyCallCoachingCoverage(
     snapshotLatestSeenStartTime,
     snapshotLastError,
     remainingCallSyncCount,
+    confirmedThroughDate: snapshotDateKey,
+    staleDays: null,
   };
 }
 

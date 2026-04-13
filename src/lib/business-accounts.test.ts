@@ -11,6 +11,7 @@ import {
   normalizeBusinessAccountRows,
   queryBusinessAccounts,
   readRawBusinessAccountPrimaryContactId,
+  resolveCompanyPhone,
   selectPrimaryContactIndex,
 } from "@/lib/business-accounts";
 import type { BusinessAccountRow } from "@/types/business-account";
@@ -23,6 +24,8 @@ function makePayload(overrides?: Record<string, unknown>): Record<string, unknow
     Business1: { value: "905-555-0100" },
     note: { value: "Important account" },
     LastModifiedDateTime: { value: "2026-03-04T16:39:08.13+00:00" },
+    Type: { value: "Customer" },
+    Status: { value: "Active" },
     Owner: { value: "109343" },
     OwnerEmployeeName: { value: "Jorge Serrano" },
     MainAddress: {
@@ -125,6 +128,7 @@ describe("normalizeBusinessAccount", () => {
       id: "a1",
       businessAccountId: "AC-100",
       companyName: "Alpha Inc",
+      accountType: "Customer",
       salesRepId: "109343",
       salesRepName: "Jorge Serrano",
       industryType: "Distribution",
@@ -142,6 +146,24 @@ describe("normalizeBusinessAccount", () => {
     });
     expect(row.address).toContain("5579 McAdam Road");
     expect(row.address).toContain("Mississauga");
+  });
+
+  it("classifies business accounts and prospects as leads", () => {
+    const businessAccountRow = normalizeBusinessAccount(
+      makePayload({
+        Type: { value: "Business Account" },
+        Status: { value: "Active" },
+      }),
+    );
+    const prospectRow = normalizeBusinessAccount(
+      makePayload({
+        Type: { value: "Prospect" },
+        Status: { value: "Prospect" },
+      }),
+    );
+
+    expect(businessAccountRow.accountType).toBe("Lead");
+    expect(prospectRow.accountType).toBe("Lead");
   });
 
   it("does not infer primary contact from active contacts when primary contact is missing", () => {
@@ -225,6 +247,26 @@ describe("normalizeBusinessAccount", () => {
     );
 
     expect(row.companyPhone).toBe("905-555-2222");
+  });
+
+  it("does not treat a visible contact phone as the company phone", () => {
+    const row = normalizeBusinessAccountRows(
+      makePayload({
+        Business1: {},
+        Contacts: [
+          {
+            ContactID: { value: 157497 },
+            DisplayName: { value: "Jorge Serrano" },
+            Email: {},
+            Phone1: { value: "4162304681" },
+          },
+        ],
+      }),
+    )[0];
+
+    expect(row?.companyPhone).toBeNull();
+    expect(resolveCompanyPhone(row as BusinessAccountRow)).toBeNull();
+    expect(row?.primaryContactPhone).toBe("416-230-4681");
   });
 
   it("resolves a visible primary contact from a semicolon-delimited primary email payload", () => {
@@ -701,12 +743,21 @@ describe("queryBusinessAccounts", () => {
       [
         {
           ...rows[0],
+          accountType: "Customer",
+          opportunityCount: 3,
+          lastCalledAt: "2026-03-09T08:30:00.000Z",
           lastEmailedAt: "2026-03-10T14:15:00.000Z",
         },
-        rows[1],
+        {
+          ...rows[1],
+          accountType: "Lead",
+          opportunityCount: 1,
+        },
       ],
       {
         filterCompanyName: "alpha",
+        filterAccountType: "customer",
+        filterOpportunityCount: "3",
         filterSalesRep: "jorge",
         filterIndustryType: "distribution",
         filterSubCategory: "pharmaceuticals",
@@ -718,6 +769,7 @@ describe("queryBusinessAccounts", () => {
         filterPrimaryContactPhone: "416230",
         filterPrimaryContactEmail: "example.com",
         filterCategory: "A",
+        filterLastCalled: "2026-03-09",
         filterLastEmailed: "2026-03-10",
         filterLastModified: "2026-03-04",
         page: 1,
@@ -729,6 +781,34 @@ describe("queryBusinessAccounts", () => {
 
     expect(result.total).toBe(1);
     expect(result.items[0]?.businessAccountId).toBe("AC-100");
+  });
+
+  it("sorts by opportunity count", () => {
+    const result = queryBusinessAccounts(
+      [
+        {
+          ...rows[0],
+          businessAccountId: "AC-100",
+          opportunityCount: 12,
+        },
+        {
+          ...rows[1],
+          businessAccountId: "AC-200",
+          opportunityCount: 2,
+        },
+      ],
+      {
+        page: 1,
+        pageSize: 25,
+        sortBy: "opportunityCount",
+        sortDir: "desc",
+      },
+    );
+
+    expect(result.items.map((item) => item.businessAccountId)).toEqual([
+      "AC-100",
+      "AC-200",
+    ]);
   });
 
   it("supports last emailed filtering and sorting", () => {
@@ -750,6 +830,33 @@ describe("queryBusinessAccounts", () => {
         page: 1,
         pageSize: 25,
         sortBy: "lastEmailedAt",
+        sortDir: "desc",
+      },
+    );
+
+    expect(result.total).toBe(1);
+    expect(result.items[0]?.businessAccountId).toBe("AC-100");
+  });
+
+  it("supports last called filtering and sorting", () => {
+    const result = queryBusinessAccounts(
+      [
+        {
+          ...rows[0],
+          businessAccountId: "AC-100",
+          lastCalledAt: "2026-03-09T14:15:00.000Z",
+        },
+        {
+          ...rows[1],
+          businessAccountId: "AC-200",
+          lastCalledAt: "2026-03-08T09:00:00.000Z",
+        },
+      ],
+      {
+        filterLastCalled: "2026-03-09",
+        page: 1,
+        pageSize: 25,
+        sortBy: "lastCalledAt",
         sortDir: "desc",
       },
     );
@@ -982,7 +1089,7 @@ describe("queryBusinessAccounts", () => {
     expect(result.items[0]?.companyName).toBe("Beta Ltd");
   });
 
-  it("suppresses rows associated with Travis Rumney", () => {
+  it("suppresses rows where Travis Rumney is the contact", () => {
     const result = queryBusinessAccounts(
       [
         {
@@ -1013,18 +1120,30 @@ describe("queryBusinessAccounts", () => {
       },
     );
 
-    expect(result.total).toBe(1);
-    expect(result.items[0]?.companyName).toBe("Beta Ltd");
+    expect(result.total).toBe(2);
+    expect(result.items.map((row) => row.companyName)).toEqual([
+      "Beta Ltd",
+      "Customer Owned By Travis",
+    ]);
   });
 
-  it("keeps Travis-linked rows hidden even when internal rows are requested", () => {
+  it("keeps Travis contact rows hidden even when internal rows are requested", () => {
     const result = queryBusinessAccounts(
       [
         {
           ...rows[0],
+          accountRecordId: "travis-contact",
+          id: "travis-contact",
+          rowKey: "travis-contact:contact:1",
+          businessAccountId: "TR-101",
+          companyName: "Customer With Travis Contact",
+          primaryContactName: "Travis Rumney",
+        },
+        {
+          ...rows[0],
           accountRecordId: "travis-sales-rep",
           id: "travis-sales-rep",
-          rowKey: "travis-sales-rep:contact:1",
+          rowKey: "travis-sales-rep:contact:2",
           businessAccountId: "TR-100",
           companyName: "Customer Owned By Travis",
           salesRepName: "Travis Justin Rumney",
@@ -1040,8 +1159,11 @@ describe("queryBusinessAccounts", () => {
       },
     );
 
-    expect(result.total).toBe(1);
-    expect(result.items[0]?.companyName).toBe("Beta Ltd");
+    expect(result.total).toBe(2);
+    expect(result.items.map((row) => row.companyName)).toEqual([
+      "Beta Ltd",
+      "Customer Owned By Travis",
+    ]);
   });
 
   it("can include internal MeadowBrook contact emails when requested", () => {

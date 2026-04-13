@@ -314,6 +314,22 @@ CREATE INDEX IF NOT EXISTS idx_daily_call_coaching_reports_sent_at
 CREATE INDEX IF NOT EXISTS idx_daily_call_coaching_reports_status
   ON daily_call_coaching_reports(status);
 
+CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+  job_name TEXT NOT NULL,
+  window_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  detail TEXT,
+  started_at TEXT,
+  completed_at TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (job_name, window_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_updated_at
+  ON scheduled_job_runs(updated_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_status
+  ON scheduled_job_runs(status);
+
 CREATE TABLE IF NOT EXISTS meeting_bookings (
   id TEXT PRIMARY KEY,
   event_id TEXT NOT NULL,

@@ -9,12 +9,19 @@ const {
   getEnvMock,
   matchPhoneToAccountWithIndexMock,
   readCallActivitySyncBySessionIdMock,
+  readCallIngestStateMock,
   readCallEmployeeDirectoryMock,
   readCallSessionsMock,
   serviceFindContactsByEmailSubstringMock,
 } = vi.hoisted(() => ({
   buildPhoneMatchIndexMock: vi.fn(() => ({})),
   getEnvMock: vi.fn(() => ({
+    DAILY_CALL_COACHING_ENABLED: true,
+    DAILY_CALL_COACHING_LOOKBACK_DAYS: 1,
+    DAILY_CALL_COACHING_SCHEDULE_HOUR: 7,
+    DAILY_CALL_COACHING_SCHEDULE_MINUTE: 0,
+    DAILY_CALL_COACHING_SENDER_LOGIN: "jserrano",
+    DAILY_CALL_COACHING_TIME_ZONE: "America/Toronto",
     MAIL_INTERNAL_DOMAIN: "meadowb.com",
     OPENAI_API_KEY: "",
   })),
@@ -27,9 +34,27 @@ const {
     phoneMatchAmbiguityCount: 0,
   })),
   readCallActivitySyncBySessionIdMock: vi.fn(() => null),
+  readCallIngestStateMock: vi.fn(() => ({
+    scope: "voice",
+    status: "complete",
+    lastRecentSyncAt: "2026-04-08T22:05:00.000Z",
+    lastFullBackfillAt: null,
+    latestSeenStartTime: "2026-04-08T18:14:25.000Z",
+    oldestSeenStartTime: null,
+    fullHistoryComplete: true,
+    lastWebhookAt: null,
+    lastError: null,
+    progress: null,
+    updatedAt: "2026-04-08T22:05:00.000Z",
+  })),
   readCallEmployeeDirectoryMock: vi.fn(() => []),
   readCallSessionsMock: vi.fn(() => []),
   serviceFindContactsByEmailSubstringMock: vi.fn(async () => []),
+}));
+
+const { mockDbGet, mockDbRun } = vi.hoisted(() => ({
+  mockDbGet: vi.fn(() => undefined),
+  mockDbRun: vi.fn(() => undefined),
 }));
 
 vi.mock("@/lib/call-analytics/postcall-worker", () => ({
@@ -43,6 +68,10 @@ vi.mock("@/lib/call-analytics/phone-match", () => ({
 
 vi.mock("@/lib/call-analytics/postcall-store", () => ({
   readCallActivitySyncBySessionId: readCallActivitySyncBySessionIdMock,
+}));
+
+vi.mock("@/lib/call-analytics/ingest", () => ({
+  readCallIngestState: readCallIngestStateMock,
 }));
 
 vi.mock("@/lib/call-analytics/sessionize", () => ({
@@ -61,6 +90,15 @@ vi.mock("@/lib/env", () => ({
   getEnv: getEnvMock,
 }));
 
+vi.mock("@/lib/read-model/db", () => ({
+  getReadModelDb: () => ({
+    prepare: (sql: string) => ({
+      get: (...args: unknown[]) => mockDbGet(sql, ...args),
+      run: (...args: unknown[]) => mockDbRun(sql, ...args),
+    }),
+  }),
+}));
+
 import {
   buildDailyCallCoachingCoverage,
   buildDailyCallCoachingReport,
@@ -68,6 +106,7 @@ import {
   buildDailyCallCoachingMailPayload,
   buildDailyCallCoachingStats,
   buildFallbackDailyCallCoachingContent,
+  runDailyCallCoaching,
   type DailyCallCoachingCall,
   type DailyCallCoachingReport,
 } from "@/lib/daily-call-coaching";
@@ -126,6 +165,12 @@ describe("daily-call-coaching", () => {
     buildPhoneMatchIndexMock.mockReturnValue({});
     getEnvMock.mockReset();
     getEnvMock.mockReturnValue({
+      DAILY_CALL_COACHING_ENABLED: true,
+      DAILY_CALL_COACHING_LOOKBACK_DAYS: 1,
+      DAILY_CALL_COACHING_SCHEDULE_HOUR: 7,
+      DAILY_CALL_COACHING_SCHEDULE_MINUTE: 0,
+      DAILY_CALL_COACHING_SENDER_LOGIN: "jserrano",
+      DAILY_CALL_COACHING_TIME_ZONE: "America/Toronto",
       MAIL_INTERNAL_DOMAIN: "meadowb.com",
       OPENAI_API_KEY: "",
     });
@@ -140,12 +185,30 @@ describe("daily-call-coaching", () => {
     });
     readCallActivitySyncBySessionIdMock.mockReset();
     readCallActivitySyncBySessionIdMock.mockReturnValue(null);
+    readCallIngestStateMock.mockReset();
+    readCallIngestStateMock.mockReturnValue({
+      scope: "voice",
+      status: "complete",
+      lastRecentSyncAt: "2026-04-08T22:05:00.000Z",
+      lastFullBackfillAt: null,
+      latestSeenStartTime: "2026-04-08T18:14:25.000Z",
+      oldestSeenStartTime: null,
+      fullHistoryComplete: true,
+      lastWebhookAt: null,
+      lastError: null,
+      progress: null,
+      updatedAt: "2026-04-08T22:05:00.000Z",
+    });
     readCallEmployeeDirectoryMock.mockReset();
     readCallEmployeeDirectoryMock.mockReturnValue([]);
     readCallSessionsMock.mockReset();
     readCallSessionsMock.mockReturnValue([]);
     serviceFindContactsByEmailSubstringMock.mockReset();
     serviceFindContactsByEmailSubstringMock.mockResolvedValue([]);
+    mockDbGet.mockReset();
+    mockDbGet.mockReturnValue(undefined);
+    mockDbRun.mockReset();
+    mockDbRun.mockReturnValue(undefined);
   });
 
   it("treats a completed same-day import as complete coverage for the report date", () => {
@@ -166,6 +229,8 @@ describe("daily-call-coaching", () => {
     const coverage = buildDailyCallCoachingCoverage("2026-04-08", "America/Toronto", state);
 
     expect(coverage.complete).toBe(true);
+    expect(coverage.status).toBe("complete");
+    expect(coverage.confirmedThroughDate).toBe("2026-04-08");
     expect(coverage.snapshotLastRecentSyncAt).toBe("2026-04-08T22:05:00.000Z");
   });
 
@@ -187,6 +252,9 @@ describe("daily-call-coaching", () => {
     const coverage = buildDailyCallCoachingCoverage("2026-04-08", "America/Toronto", state);
 
     expect(coverage.complete).toBe(false);
+    expect(coverage.status).toBe("call_import_stale");
+    expect(coverage.confirmedThroughDate).toBe("2026-04-07");
+    expect(coverage.staleDays).toBe(1);
     expect(coverage.detail).toContain("only confirmed through 2026-04-07");
   });
 
@@ -208,6 +276,8 @@ describe("daily-call-coaching", () => {
     const coverage = buildDailyCallCoachingCoverage("2026-04-08", "America/Toronto", state);
 
     expect(coverage.complete).toBe(false);
+    expect(coverage.status).toBe("call_import_error");
+    expect(coverage.confirmedThroughDate).toBe("2026-04-09");
     expect(coverage.detail).toContain("The service is unavailable.");
   });
 
@@ -231,6 +301,8 @@ describe("daily-call-coaching", () => {
     const coverage = buildDailyCallCoachingCoverage("2026-04-08", "America/Toronto", state);
 
     expect(coverage.complete).toBe(true);
+    expect(coverage.status).toBe("postcall_pending");
+    expect(coverage.confirmedThroughDate).toBe("2026-04-08");
     expect(coverage.remainingCallSyncCount).toBe(3);
     expect(coverage.detail).toContain("metadata fallback");
   });
@@ -452,5 +524,109 @@ describe("daily-call-coaching", () => {
       "Mandeep Sunner",
       "Jeremy Benns",
     ]);
+  });
+
+  it("skips duplicate live sends when a row already exists for the same rep and date", async () => {
+    readCallEmployeeDirectoryMock.mockReturnValue([
+      {
+        loginName: "jserrano",
+        contactId: 157497,
+        displayName: "Jorge Serrano",
+        email: "jserrano@meadowb.com",
+        normalizedPhone: null,
+        callerIdPhone: null,
+        isActive: true,
+        updatedAt: "2026-04-08T00:00:00.000Z",
+      },
+      {
+        loginName: "kpareek",
+        contactId: null,
+        displayName: "Krishna Pareek",
+        email: "kpareek@meadowb.com",
+        normalizedPhone: null,
+        callerIdPhone: null,
+        isActive: true,
+        updatedAt: "2026-04-08T00:00:00.000Z",
+      },
+    ]);
+    readCallSessionsMock.mockReturnValue([
+      {
+        sessionId: "call-1",
+        startedAt: "2026-04-08T14:00:00.000Z",
+        updatedAt: "2026-04-08T14:05:00.000Z",
+        direction: "outbound",
+        employeeLoginName: "kpareek",
+        employeeDisplayName: "Krishna Pareek",
+        employeeContactId: null,
+        matchedContactName: "Mandeep Sunner",
+        matchedCompanyName: "Brenntag",
+        counterpartyPhone: "+19055550111",
+        targetPhone: "+19055550111",
+        answered: true,
+        outcome: "answered",
+        talkDurationSeconds: 153,
+        metadataJson: "{}",
+      },
+      {
+        sessionId: "call-2",
+        startedAt: "2026-04-08T15:00:00.000Z",
+        updatedAt: "2026-04-08T15:04:00.000Z",
+        direction: "outbound",
+        employeeLoginName: "Krishna Pareek",
+        employeeDisplayName: "Krishna Pareek",
+        employeeContactId: null,
+        matchedContactName: "Jeremy Benns",
+        matchedCompanyName: "Lake City Foods",
+        counterpartyPhone: "+19055550145",
+        targetPhone: "+19055550145",
+        answered: true,
+        outcome: "answered",
+        talkDurationSeconds: 86,
+        metadataJson: JSON.stringify({
+          appContext: {
+            displayName: "Krishna Pareek",
+          },
+        }),
+      },
+    ]);
+    mockDbGet.mockImplementation((sql: string) => {
+      if (sql.includes("FROM daily_call_coaching_reports") && sql.includes("subject_login_name = ?")) {
+        return {
+          report_date: "2026-04-08",
+          subject_login_name: "kpareek",
+          recipient_email: "kpareek@meadowb.com",
+          sender_login_name: "jserrano",
+          status: "sent",
+          preview_mode: 0,
+          session_count: 2,
+          analyzed_call_count: 2,
+          transcript_call_count: 1,
+          subject_line: "Daily Call Coaching for Krishna Pareek · Apr 8, 2026",
+          report_json: null,
+          error_message: null,
+          sent_at: "2026-04-09T11:01:00.000Z",
+          created_at: "2026-04-09T11:00:00.000Z",
+          updated_at: "2026-04-09T11:01:00.000Z",
+        };
+      }
+
+      return undefined;
+    });
+
+    const result = await runDailyCallCoaching({
+      reportDate: "2026-04-08",
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toEqual(
+      expect.objectContaining({
+        subjectLoginName: "kpareek",
+        recipientEmail: "kpareek@meadowb.com",
+        status: "skipped",
+        detail: "Already sent for this date and recipient.",
+        sessionCount: 2,
+      }),
+    );
+    expect(mockDbRun).not.toHaveBeenCalled();
   });
 });

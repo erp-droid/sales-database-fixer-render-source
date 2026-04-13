@@ -88,6 +88,7 @@ type TwilioCallRecordLike = {
 let refreshInFlight: Promise<CallIngestState> | null = null;
 const CALL_SESSION_REBUILD_DEBOUNCE_MS = 250;
 const CALL_SESSION_REBUILD_SLOW_MS = 2000;
+const RECENT_RECONCILE_WINDOW_MS = 48 * 60 * 60 * 1000;
 let scheduledSessionRebuild: ReturnType<typeof setTimeout> | null = null;
 let sessionRebuildInFlight = false;
 const pendingBridgeNumbers = new Set<string>();
@@ -240,6 +241,23 @@ export function readCallIngestState(): CallIngestState {
 
 function readLatestSnapshotTimestamp(state: CallAnalyticsRefreshEligibility): string | null {
   return state.lastRecentSyncAt ?? state.lastFullBackfillAt ?? null;
+}
+
+export function shouldRunWarmRecentImport(
+  state: Pick<CallIngestState, "lastRecentSyncAt">,
+  nowMs = Date.now(),
+  recoveryWindowMs = RECENT_RECONCILE_WINDOW_MS,
+): boolean {
+  if (!state.lastRecentSyncAt) {
+    return true;
+  }
+
+  const ageMs = nowMs - Date.parse(state.lastRecentSyncAt);
+  if (!Number.isFinite(ageMs)) {
+    return true;
+  }
+
+  return ageMs >= recoveryWindowMs;
 }
 
 export function shouldTriggerCallAnalyticsAutoRefresh(
@@ -942,6 +960,7 @@ async function listTwilioCalls(params: {
 }
 
 async function runWarmRecentImport(bridgeNumbers: string[]): Promise<CallIngestState> {
+  const current = readCallIngestState();
   const now = new Date();
   const windowStart = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
   writeCallIngestState({
@@ -964,10 +983,10 @@ async function runWarmRecentImport(bridgeNumbers: string[]): Promise<CallIngestS
   const bounds = readWindowBounds(calls);
 
   return writeCallIngestState({
-    status: "idle",
+    status: current.fullHistoryComplete ? "complete" : "idle",
     lastRecentSyncAt: new Date().toISOString(),
-    latestSeenStartTime: bounds.latestSeenStartTime,
-    oldestSeenStartTime: bounds.oldestSeenStartTime,
+    latestSeenStartTime: pickLaterIso(current.latestSeenStartTime, bounds.latestSeenStartTime),
+    oldestSeenStartTime: pickEarlierIso(current.oldestSeenStartTime, bounds.oldestSeenStartTime),
     lastError: null,
     progress: {
       phase: "warm_recent",
@@ -1098,7 +1117,7 @@ export async function refreshCallAnalytics(
 
     const current = readCallIngestState();
     let nextState = current;
-    if (!current.lastRecentSyncAt) {
+    if (shouldRunWarmRecentImport(current)) {
       nextState = await runWarmRecentImport(inventory.voiceNumbers);
     } else {
       nextState = await runRecentReconcile(inventory.voiceNumbers);

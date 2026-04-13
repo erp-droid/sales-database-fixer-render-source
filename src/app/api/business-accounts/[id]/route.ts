@@ -24,6 +24,7 @@ import {
   sanitizeNullableInput,
   withPrimaryContact,
 } from "@/lib/business-accounts";
+import { applyLastCalledAtToBusinessAccountRows } from "@/lib/business-account-call-history";
 import {
   readContactBusinessAccountCode,
   readContactCompanyName,
@@ -723,7 +724,8 @@ export async function GET(
     }
 
     const normalizedRows = normalizeBusinessAccountRows(rawAccount);
-    const detailRow = selectDetailRow(normalizedRows, requestedContactId, normalized);
+    const rowsWithCallHistory = applyLastCalledAtToBusinessAccountRows(normalizedRows);
+    const detailRow = selectDetailRow(rowsWithCallHistory, requestedContactId, normalized);
 
     if (getEnv().READ_MODEL_ENABLED) {
       replaceReadModelAccountRows(id, normalizedRows);
@@ -731,7 +733,7 @@ export async function GET(
 
     const response = NextResponse.json({
       row: applyLocalAccountMetadataToRow(detailRow) ?? detailRow,
-      rows: applyLocalAccountMetadataToRows(normalizedRows),
+      rows: applyLocalAccountMetadataToRows(rowsWithCallHistory),
       accountLocation: readAccountLocation(rawAccount),
     });
     if (authCookieRefresh.value) {
@@ -768,11 +770,12 @@ export async function GET(
         }
 
         const normalizedRows = normalizeBusinessAccountRows(rawAccount);
-        const detailRow = selectDetailRow(normalizedRows, requestedContactId, normalized);
+        const rowsWithCallHistory = applyLastCalledAtToBusinessAccountRows(normalizedRows);
+        const detailRow = selectDetailRow(rowsWithCallHistory, requestedContactId, normalized);
 
         const response = NextResponse.json({
           row: applyLocalAccountMetadataToRow(detailRow) ?? detailRow,
-          rows: applyLocalAccountMetadataToRows(normalizedRows),
+          rows: applyLocalAccountMetadataToRows(rowsWithCallHistory),
           accountLocation: readAccountLocation(rawAccount),
         });
         if (retryAuthCookieRefresh.value) {

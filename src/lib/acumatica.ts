@@ -749,6 +749,14 @@ type FetchActivitiesOptions = {
   filter?: string;
 };
 
+type FetchOpportunitiesOptions = {
+  maxRecords?: number;
+  batchSize?: number;
+  initialSkip?: number;
+  filter?: string;
+  select?: string[];
+};
+
 export function readWrappedString(record: unknown, key: string): string {
   if (!record || typeof record !== "object") {
     return "";
@@ -1184,6 +1192,29 @@ function buildActivityCollectionPath(options: {
   }
 
   return `/Activity?${query.toString()}`;
+}
+
+function buildOpportunityCollectionPath(
+  resourcePath: string,
+  options: {
+    top: number;
+    skip: number;
+    filter?: string;
+    select?: string[];
+  },
+): string {
+  const query = new URLSearchParams({
+    $top: String(options.top),
+    $skip: String(options.skip),
+  });
+  if (options.filter?.trim()) {
+    query.set("$filter", options.filter);
+  }
+  if (options.select && options.select.length > 0) {
+    query.set("$select", options.select.join(","));
+  }
+
+  return `${resourcePath}?${query.toString()}`;
 }
 
 function readBusinessAccountIdentity(record: RawBusinessAccount): string {
@@ -1981,6 +2012,104 @@ export async function fetchActivities(
     );
 
     const rows = unwrapCollection<RawActivity>(payload);
+    if (rows.length === 0) {
+      break;
+    }
+
+    allRows.push(...rows);
+    if (rows.length < top) {
+      break;
+    }
+  }
+
+  return allRows;
+}
+
+export async function fetchOpportunities(
+  cookieValue: string,
+  options?: FetchOpportunitiesOptions,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawOpportunity[]> {
+  const hasMaxRecords =
+    typeof options?.maxRecords === "number" &&
+    Number.isFinite(options.maxRecords);
+  const maxRecords = hasMaxRecords
+    ? Math.max(1, Math.trunc(options?.maxRecords as number))
+    : null;
+  const initialSkip = Math.max(0, Math.trunc(options?.initialSkip ?? 0));
+  const batchSize = Math.max(1, Math.min(options?.batchSize ?? 100, 500));
+  const filter = options?.filter;
+  const select = options?.select?.filter((value) => value.trim().length > 0);
+  const resourcePaths = [...new Set([
+    `/${encodeURIComponent(getEnv().ACUMATICA_OPPORTUNITY_ENTITY.trim())}`,
+    "/Opportunity",
+    "/Opportunities",
+    "/CROpportunity",
+  ])];
+  const allRows: RawOpportunity[] = [];
+  let activeResourcePath = resourcePaths[0] ?? "/Opportunity";
+  let lastRecoverableError: unknown = null;
+
+  for (let skip = initialSkip; ; skip += batchSize) {
+    if (maxRecords !== null && allRows.length >= maxRecords) {
+      break;
+    }
+
+    const top =
+      maxRecords === null
+        ? batchSize
+        : Math.min(batchSize, maxRecords - allRows.length);
+    if (top <= 0) {
+      break;
+    }
+
+    let payload: unknown = null;
+    let resolvedResourcePath: string | null = null;
+
+    for (const resourcePath of resourcePaths) {
+      try {
+        payload = await requestAcumatica<unknown>(
+          getActiveCookieValue(cookieValue, authCookieRefresh),
+          buildOpportunityCollectionPath(resourcePath, {
+            top,
+            skip,
+            filter,
+            select,
+          }),
+          {
+            authCookieRefresh,
+          },
+        );
+        resolvedResourcePath = resourcePath;
+        lastRecoverableError = null;
+        break;
+      } catch (error) {
+        if (
+          error instanceof HttpError &&
+          ![400, 404, 405, 500].includes(error.status)
+        ) {
+          throw error;
+        }
+
+        lastRecoverableError = error;
+      }
+    }
+
+    if (!resolvedResourcePath) {
+      if (lastRecoverableError instanceof Error) {
+        throw lastRecoverableError;
+      }
+      throw new HttpError(500, "Failed to fetch opportunities from Acumatica.");
+    }
+
+    activeResourcePath = resolvedResourcePath;
+    const activeResourceIndex = resourcePaths.indexOf(activeResourcePath);
+    if (activeResourceIndex > 0) {
+      resourcePaths.splice(activeResourceIndex, 1);
+      resourcePaths.unshift(activeResourcePath);
+    }
+
+    const rows = unwrapCollection<RawOpportunity>(payload);
     if (rows.length === 0) {
       break;
     }
@@ -2966,6 +3095,32 @@ function isDuplicateContactSelectionError(error: unknown): error is HttpError {
   );
 }
 
+function isInvalidUriStructureError(error: unknown): error is HttpError {
+  return (
+    error instanceof HttpError &&
+    error.message.trim().toLowerCase().includes("invalid uri")
+  );
+}
+
+function buildPlainStringNoteRecoveryPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const noteValue = payload.note;
+  if (!noteValue || typeof noteValue !== "object") {
+    return null;
+  }
+
+  const wrappedValue = (noteValue as Record<string, unknown>).value;
+  if (wrappedValue !== null && wrappedValue !== undefined && typeof wrappedValue !== "string") {
+    return null;
+  }
+
+  return {
+    ...payload,
+    note: wrappedValue ?? "",
+  };
+}
+
 function buildContactEntityRecoveryPayloads(
   payload: Record<string, unknown>,
 ): Record<string, unknown>[] {
@@ -3178,11 +3333,26 @@ async function writeContactEntity<T>(
       authCookieRefresh,
     });
   } catch (error) {
+    let resolvedError: unknown = error;
+    const plainStringNotePayload = buildPlainStringNoteRecoveryPayload(payload);
+
+    if (plainStringNotePayload && isInvalidUriStructureError(error)) {
+      try {
+        return await requestAcumatica<T>(activeCookieValue, "/Contact", {
+          method: "PUT",
+          body: JSON.stringify(plainStringNotePayload),
+          authCookieRefresh,
+        });
+      } catch (noteRetryError) {
+        resolvedError = noteRetryError;
+      }
+    }
+
     const defaultEntityPath = deriveDefaultAcumaticaEntityPath(
       getEnv().ACUMATICA_ENTITY_PATH,
     );
-    if (!isDuplicateContactSelectionError(error)) {
-      throw error;
+    if (!isDuplicateContactSelectionError(resolvedError)) {
+      throw resolvedError;
     }
 
     if (defaultEntityPath) {

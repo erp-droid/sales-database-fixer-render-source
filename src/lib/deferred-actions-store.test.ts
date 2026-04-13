@@ -64,6 +64,48 @@ describe("deferred actions store", () => {
     const { enqueueDeferredContactDeleteAction, listDeferredActionSummaries } = await import(
       "@/lib/deferred-actions-store"
     );
+    const { replaceAllAccountRows } = await import("@/lib/read-model/accounts");
+
+    replaceAllAccountRows([
+      {
+        id: "record-1",
+        accountRecordId: "record-1",
+        rowKey: "record-1:contact:157497",
+        contactId: 157497,
+        isPrimaryContact: true,
+        companyPhone: "905-555-0100",
+        companyPhoneSource: "account",
+        phoneNumber: "416-230-4681",
+        salesRepId: "109343",
+        salesRepName: "Jorge Serrano",
+        accountType: "Customer",
+        opportunityCount: 3,
+        industryType: null,
+        subCategory: null,
+        companyRegion: null,
+        week: null,
+        businessAccountId: "BA0001",
+        companyName: "Alpha Foods",
+        companyDescription: null,
+        address: "1 Main St, Toronto, ON, CA",
+        addressLine1: "1 Main St",
+        addressLine2: "",
+        city: "Toronto",
+        state: "ON",
+        postalCode: "M1M 1M1",
+        country: "CA",
+        primaryContactName: "Jorge Serrano",
+        primaryContactJobTitle: null,
+        primaryContactPhone: "416-230-4681",
+        primaryContactExtension: null,
+        primaryContactRawPhone: "416-230-4681",
+        primaryContactEmail: "jorge@example.com",
+        primaryContactId: 157497,
+        category: "A",
+        notes: null,
+        lastModifiedIso: "2026-04-01T10:00:00.000Z",
+      },
+    ]);
 
     const queued = enqueueDeferredContactDeleteAction({
       sourceSurface: "accounts",
@@ -84,6 +126,10 @@ describe("deferred actions store", () => {
     expect(queued.id).toBeTruthy();
     expect(items[0]).toMatchObject({
       actionType: "deleteContact",
+      accountType: "Customer",
+      opportunityCount: 3,
+      acumaticaBusinessAccountUrl:
+        "https://example.acumatica.com/Main?ScreenId=CR303000&CompanyID=MeadowBrook+Live&AcctCD=BA0001",
       contactId: 157497,
       reason: "Duplicate contact",
     });

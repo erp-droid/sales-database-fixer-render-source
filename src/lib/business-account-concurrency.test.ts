@@ -18,6 +18,9 @@ function buildRow(
     companyName: string;
   },
 ): BusinessAccountRow {
+  const hasOverride = <K extends keyof BusinessAccountRow>(key: K): boolean =>
+    Object.prototype.hasOwnProperty.call(overrides, key);
+
   return {
     id: overrides.id,
     accountRecordId: overrides.accountRecordId ?? overrides.id,
@@ -26,9 +29,11 @@ function buildRow(
       `${overrides.accountRecordId ?? overrides.id}:contact:${overrides.contactId ?? "row"}`,
     contactId: overrides.contactId ?? 100,
     isPrimaryContact: overrides.isPrimaryContact ?? true,
-    companyPhone: overrides.companyPhone ?? "905-555-0100",
+    companyPhone: hasOverride("companyPhone") ? overrides.companyPhone ?? null : "905-555-0100",
     companyPhoneSource: overrides.companyPhoneSource ?? "account",
-    phoneNumber: overrides.phoneNumber ?? overrides.companyPhone ?? "905-555-0100",
+    phoneNumber: hasOverride("phoneNumber")
+      ? overrides.phoneNumber ?? null
+      : overrides.companyPhone ?? "905-555-0100",
     salesRepId: overrides.salesRepId ?? "1001",
     salesRepName: overrides.salesRepName ?? "Samuel Tita",
     industryType: overrides.industryType ?? "Manufactur",
@@ -121,6 +126,25 @@ describe("business account concurrency", () => {
     expect(snapshot.primaryContactPhone).toBeNull();
     expect(snapshot.primaryContactExtension).toBeNull();
     expect(snapshot.primaryContactEmail).toBeNull();
+  });
+
+  it("does not snapshot a visible contact phone into the company phone field", () => {
+    const row = buildRow({
+      id: "acct-contact-phone",
+      businessAccountId: "BA-201",
+      companyName: "Jones DesLauriers",
+      companyPhone: null,
+      companyPhoneSource: null,
+      phoneNumber: "416-555-0100",
+      primaryContactPhone: "416-555-0100",
+      primaryContactRawPhone: "416-555-0100",
+      primaryContactEmail: null,
+    });
+
+    const snapshot = buildBusinessAccountConcurrencySnapshot(row);
+
+    expect(snapshot.companyPhone).toBeNull();
+    expect(snapshot.primaryContactPhone).toBe("416-555-0100");
   });
 
   it("rebases a stale save when only untouched fields changed on the server", () => {

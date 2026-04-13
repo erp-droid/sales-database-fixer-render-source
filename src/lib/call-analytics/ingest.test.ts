@@ -94,6 +94,32 @@ describe("call analytics refresh gating", () => {
     ).toBe(true);
   });
 
+  it("falls back to the warm recent import when the last sync is older than the reconcile window", async () => {
+    const { shouldRunWarmRecentImport } = await import("@/lib/call-analytics/ingest");
+
+    expect(
+      shouldRunWarmRecentImport(
+        {
+          lastRecentSyncAt: "2026-03-09T00:00:00.000Z",
+        },
+        Date.parse("2026-03-11T00:00:00.000Z"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps using recent reconcile while the last sync is still within the reconcile window", async () => {
+    const { shouldRunWarmRecentImport } = await import("@/lib/call-analytics/ingest");
+
+    expect(
+      shouldRunWarmRecentImport(
+        {
+          lastRecentSyncAt: "2026-03-09T12:00:00.000Z",
+        },
+        Date.parse("2026-03-10T12:00:00.000Z"),
+      ),
+    ).toBe(false);
+  });
+
   it("skips employee directory refresh while the directory is still fresh", async () => {
     const { shouldRefreshCallEmployeeDirectory } = await import("@/lib/call-analytics/ingest");
 

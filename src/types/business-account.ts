@@ -1,9 +1,12 @@
 export const CATEGORY_VALUES = ["A", "B", "C", "D"] as const;
 
 export type Category = (typeof CATEGORY_VALUES)[number];
+export type BusinessAccountType = "Customer" | "Lead";
 
 export type SortBy =
   | "companyName"
+  | "accountType"
+  | "opportunityCount"
   | "salesRepName"
   | "industryType"
   | "subCategory"
@@ -18,6 +21,7 @@ export type SortBy =
   | "primaryContactEmail"
   | "notes"
   | "category"
+  | "lastCalledAt"
   | "lastEmailedAt"
   | "lastModifiedIso";
 
@@ -36,6 +40,8 @@ export type BusinessAccountRow = {
   phoneNumber?: string | null;
   salesRepId: string | null;
   salesRepName: string | null;
+  accountType?: BusinessAccountType | null;
+  opportunityCount?: number | null;
   industryType: string | null;
   subCategory: string | null;
   companyRegion: string | null;
@@ -59,6 +65,7 @@ export type BusinessAccountRow = {
   primaryContactId: number | null;
   category: Category | null;
   notes: string | null;
+  lastCalledAt?: string | null;
   lastEmailedAt?: string | null;
   lastModifiedIso: string | null;
 };

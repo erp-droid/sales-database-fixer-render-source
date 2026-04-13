@@ -9,6 +9,8 @@ const CSV_COLUMNS: Array<{
   { header: "Row Key", read: (row) => row.rowKey ?? null },
   { header: "Business Account ID", read: (row) => row.businessAccountId },
   { header: "Company Name", read: (row) => row.companyName },
+  { header: "Account Type", read: (row) => row.accountType ?? null },
+  { header: "Opportunity Count", read: (row) => row.opportunityCount ?? null },
   { header: "Company Description", read: (row) => row.companyDescription ?? null },
   { header: "Address", read: (row) => row.address },
   { header: "Address Line 1", read: (row) => row.addressLine1 },
@@ -48,6 +50,7 @@ const CSV_COLUMNS: Array<{
   },
   { header: "Category", read: (row) => row.category ?? null },
   { header: "Notes", read: (row) => row.notes ?? null },
+  { header: "Last Called At", read: (row) => row.lastCalledAt ?? null },
   { header: "Last Emailed At", read: (row) => row.lastEmailedAt ?? null },
   { header: "Last Modified ISO", read: (row) => row.lastModifiedIso ?? null },
 ];

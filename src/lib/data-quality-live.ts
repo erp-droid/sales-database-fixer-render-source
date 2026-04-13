@@ -3,6 +3,7 @@ import {
   fetchBusinessAccounts,
   fetchBusinessAccountsByBusinessAccountIds,
   fetchContacts,
+  fetchOpportunities,
 } from "@/lib/acumatica";
 import { getEnv } from "@/lib/env";
 import {
@@ -28,6 +29,7 @@ import {
   enforceSinglePrimaryPerAccountRows,
   selectPrimaryContactIndex,
 } from "@/lib/business-accounts";
+import { applyLastCalledAtToBusinessAccountRows } from "@/lib/business-account-call-history";
 import {
   readContactBusinessAccountCode,
   readContactCompanyName,
@@ -235,6 +237,42 @@ function normalizeBusinessAccountCode(value: string | null | undefined): string 
     return "";
   }
   return value.trim().toUpperCase();
+}
+
+function readOpportunityBusinessAccountCode(record: unknown): string | null {
+  return pickFirstText([
+    readWrappedString(record, "BusinessAccountID"),
+    readWrappedString(record, "BAccountID"),
+    readWrappedString(record, "BusinessAccount"),
+    readWrappedString(record, "AccountCD"),
+  ]);
+}
+
+async function readOpportunityCountByBusinessAccountId(
+  cookieValue: string,
+  authCookieRefresh: AuthCookieRefreshState,
+): Promise<Map<string, number>> {
+  const opportunities = await fetchOpportunities(
+    cookieValue,
+    {
+      batchSize: 250,
+    },
+    authCookieRefresh,
+  );
+  const counts = new Map<string, number>();
+
+  for (const opportunity of opportunities) {
+    const businessAccountCode = normalizeBusinessAccountCode(
+      readOpportunityBusinessAccountCode(opportunity),
+    );
+    if (!businessAccountCode) {
+      continue;
+    }
+
+    counts.set(businessAccountCode, (counts.get(businessAccountCode) ?? 0) + 1);
+  }
+
+  return counts;
 }
 
 function readBusinessAccountCode(record: unknown): string | null {
@@ -633,6 +671,19 @@ export async function fetchAllSyncRows(
       .map((account) => normalizeBusinessAccountCode(readBusinessAccountCode(account)))
       .filter((value) => Boolean(value)),
   );
+  let opportunityCountByBusinessId: Map<string, number> | null = null;
+
+  try {
+    opportunityCountByBusinessId = await readOpportunityCountByBusinessAccountId(
+      cookieValue,
+      authCookieRefresh,
+    );
+  } catch (error) {
+    console.warn("[accounts-sync]", {
+      event: "opportunity-counts-unavailable",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   const normalizedContactRows = buildSyncRowsFromContacts(
     filteredContacts,
@@ -657,11 +708,32 @@ export async function fetchAllSyncRows(
       ),
     );
 
-  return filterSuppressedBusinessAccountRows(
-    dedupeRows([...normalizedAccountRows, ...normalizedContactRows]),
-    {
-      includeInternalRows: includeInternal,
-    },
+  const rowsWithOpportunityCounts = dedupeRows([
+    ...normalizedAccountRows,
+    ...normalizedContactRows,
+  ]).map((row) => {
+    if (!opportunityCountByBusinessId) {
+      return row;
+    }
+
+    const normalizedBusinessId = normalizeBusinessAccountCode(row.businessAccountId);
+    if (!normalizedBusinessId) {
+      return row;
+    }
+
+    return {
+      ...row,
+      opportunityCount: opportunityCountByBusinessId.get(normalizedBusinessId) ?? 0,
+    };
+  });
+
+  return applyLastCalledAtToBusinessAccountRows(
+    filterSuppressedBusinessAccountRows(
+      rowsWithOpportunityCounts,
+      {
+        includeInternalRows: includeInternal,
+      },
+    ),
   );
 }
 

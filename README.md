@@ -116,6 +116,62 @@ DATA_QUALITY_HISTORY_PATH=/app/data/data-quality-history.json
 AUTH_COOKIE_SECURE=true
 ```
 
+### Scheduled Call Import And Coaching
+
+Production now expects the daily call import and next-day coaching jobs to be triggered by external schedulers, not by the web process.
+
+Required web-service env vars:
+
+```bash
+APP_BASE_URL=https://sales-meadowb.onrender.com
+CALL_ACTIVITY_SYNC_ENABLED=true
+CALL_ACTIVITY_SYNC_EXTERNAL_SCHEDULER_ENABLED=true
+CALL_ACTIVITY_SYNC_SECRET=...
+CALL_ACTIVITY_SYNC_SCHEDULE_HOUR=17
+CALL_ACTIVITY_SYNC_SCHEDULE_MINUTE=0
+CALL_ACTIVITY_SYNC_TIME_ZONE=America/Toronto
+CALL_ACTIVITY_SYNC_MAX_BATCHES_PER_WINDOW=200
+
+DAILY_CALL_COACHING_ENABLED=true
+DAILY_CALL_COACHING_EXTERNAL_SCHEDULER_ENABLED=true
+DAILY_CALL_COACHING_SECRET=...
+DAILY_CALL_COACHING_SCHEDULE_HOUR=7
+DAILY_CALL_COACHING_SCHEDULE_MINUTE=0
+DAILY_CALL_COACHING_TIME_ZONE=America/Toronto
+DAILY_CALL_COACHING_LOOKBACK_DAYS=1
+```
+
+Internal operational interfaces:
+
+- SQLite table: `scheduled_job_runs`
+- Scheduled call-import route: `POST /api/scheduled/call-activity-sync/run`
+- Scheduled coaching route: `POST /api/scheduled/daily-call-coaching/run`
+- Cron trigger scripts:
+  - `node scripts/trigger-call-activity-sync.cjs`
+  - `node scripts/trigger-daily-call-coaching.cjs`
+
+Render should run the two cron services every 15 minutes. The routes decide whether the Toronto schedule window is due and use `scheduled_job_runs` for per-date idempotency.
+
+Manual verification examples:
+
+```bash
+curl -X POST \
+  -H "x-call-activity-sync-secret: $CALL_ACTIVITY_SYNC_SECRET" \
+  "$APP_BASE_URL/api/scheduled/call-activity-sync/run"
+
+curl -X POST \
+  -H "x-daily-call-coaching-secret: $DAILY_CALL_COACHING_SECRET" \
+  "$APP_BASE_URL/api/scheduled/daily-call-coaching/run"
+```
+
+Expected outcomes:
+
+- call import advances `call_ingest_state.last_recent_sync_at` through the current Toronto business date
+- post-call sync drains to `remainingCount = 0`
+- daily coaching runs only after coverage is complete
+- each rep gets at most one live coaching email per report date
+- stale import or missed live-send windows are surfaced by the watchdog
+
 If you deploy this Docker image on Railway with a mounted volume, also set:
 
 ```bash

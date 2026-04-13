@@ -2,6 +2,7 @@ import {
   queryBusinessAccounts,
   resolveCompanyPhone,
 } from "@/lib/business-accounts";
+import { applyLastCalledAtToBusinessAccountRows } from "@/lib/business-account-call-history";
 import { applyDeferredActionsToRows } from "@/lib/deferred-actions-store";
 import { invalidateReadModelCaches, registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import { applyLocalAccountMetadataToRows } from "@/lib/read-model/account-local-metadata";
@@ -48,6 +49,10 @@ function buildSearchText(row: BusinessAccountRow): string {
   return [
     row.companyName,
     row.businessAccountId,
+    row.accountType,
+    row.opportunityCount !== null && row.opportunityCount !== undefined
+      ? String(row.opportunityCount)
+      : null,
     row.address,
     resolveCompanyPhone(row),
     row.primaryContactName,
@@ -61,10 +66,40 @@ function buildSearchText(row: BusinessAccountRow): string {
     row.companyDescription,
     row.notes,
     row.category,
+    row.lastCalledAt,
   ]
     .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
     .join(" ")
     .toLowerCase();
+}
+
+function inheritSupplementalAccountMetadata(
+  nextRows: BusinessAccountRow[],
+  existingRows: BusinessAccountRow[],
+): BusinessAccountRow[] {
+  const existingAccountType =
+    existingRows.find((row) => typeof row.accountType === "string")?.accountType;
+  const existingOpportunityCount = existingRows.find(
+    (row) => row.opportunityCount !== undefined,
+  )?.opportunityCount;
+
+  if (existingAccountType === undefined && existingOpportunityCount === undefined) {
+    return nextRows;
+  }
+
+  return nextRows.map((row) => {
+    const nextRow = { ...row };
+
+    if (nextRow.accountType === undefined && existingAccountType !== undefined) {
+      nextRow.accountType = existingAccountType;
+    }
+
+    if (nextRow.opportunityCount === undefined && existingOpportunityCount !== undefined) {
+      nextRow.opportunityCount = existingOpportunityCount;
+    }
+
+    return nextRow;
+  });
 }
 
 function parseStoredRow(payload: string): BusinessAccountRow | null {
@@ -77,7 +112,7 @@ function parseStoredRow(payload: string): BusinessAccountRow | null {
 
 function readAccountRowsVersion(): string {
   const db = getReadModelDb();
-  const row = db
+  const accountRow = db
     .prepare(
       `
       SELECT
@@ -91,7 +126,26 @@ function readAccountRowsVersion(): string {
     latest_updated_at?: string;
   };
 
-  return `${Number(row?.row_count ?? 0)}|${row?.latest_updated_at ?? ""}`;
+  const callSessionRow = db
+    .prepare(
+      `
+      SELECT
+        COUNT(*) AS row_count,
+        COALESCE(MAX(updated_at), '') AS latest_updated_at
+      FROM call_sessions
+      `,
+    )
+    .get() as {
+    row_count?: number;
+    latest_updated_at?: string;
+  };
+
+  return [
+    Number(accountRow?.row_count ?? 0),
+    accountRow?.latest_updated_at ?? "",
+    Number(callSessionRow?.row_count ?? 0),
+    callSessionRow?.latest_updated_at ?? "",
+  ].join("|");
 }
 
 export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
@@ -116,6 +170,7 @@ export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
     .filter((row): row is BusinessAccountRow => row !== null);
   allRowsCache = applyDeferredActionsToRows(allRowsCache);
   allRowsCache = applyLocalAccountMetadataToRows(allRowsCache);
+  allRowsCache = applyLastCalledAtToBusinessAccountRows(allRowsCache);
   allRowsCacheVersion = nextVersion;
 
   return allRowsCache;
@@ -250,11 +305,23 @@ export function replaceReadModelAccountRows(
 ): void {
   const db = getReadModelDb();
   const normalizedAccountRecordId = accountRecordId.trim();
-  const nextRows = rows;
   const accountKey =
     rows[0]?.accountRecordId?.trim() ||
     rows[0]?.id.trim() ||
     normalizedAccountRecordId;
+  const existingRows = (db
+    .prepare(
+      `
+      SELECT payload_json
+      FROM account_rows
+      WHERE account_record_id = ?
+         OR id = ?
+      `,
+    )
+    .all(accountKey, accountKey) as StoredAccountRow[])
+    .map((row) => parseStoredRow(row.payload_json))
+    .filter((row): row is BusinessAccountRow => row !== null);
+  const nextRows = inheritSupplementalAccountMetadata(rows, existingRows);
   const now = new Date().toISOString();
 
   const replace = db.transaction(() => {

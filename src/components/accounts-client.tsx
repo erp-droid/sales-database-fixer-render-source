@@ -26,6 +26,10 @@ import type {
   SortDir,
 } from "@/types/business-account";
 import type {
+  BusinessAccountCallHistoryItem,
+  BusinessAccountCallHistoryResponse,
+} from "@/types/business-account-call-history";
+import type {
   BusinessAccountCreateResponse,
   BusinessAccountContactCreatePartialResponse,
   BusinessAccountContactCreateResponse,
@@ -319,22 +323,32 @@ function FilterIcon() {
   );
 }
 
-function SortIcon() {
+function HeaderSortIcon({
+  active,
+  direction,
+}: {
+  active: boolean;
+  direction: SortDir;
+}) {
+  const stroke = active ? "currentColor" : "#98a2b3";
+
   return (
-    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
+    <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
       <path
-        d="M6 4.25v11.5M6 4.25 3.75 6.5M6 4.25 8.25 6.5"
-        stroke="currentColor"
+        d="M5 12V4M5 4 3.5 5.5M5 4l1.5 1.5"
+        opacity={active && direction === "desc" ? 0.35 : 1}
+        stroke={stroke}
         strokeLinecap="round"
         strokeLinejoin="round"
-        strokeWidth="1.5"
+        strokeWidth="1.4"
       />
       <path
-        d="M14 15.75V4.25M14 15.75l-2.25-2.25M14 15.75l2.25-2.25"
-        stroke="currentColor"
+        d="M11 4v8M11 12 9.5 10.5M11 12l1.5-1.5"
+        opacity={active && direction === "asc" ? 0.35 : 1}
+        stroke={stroke}
         strokeLinecap="round"
         strokeLinejoin="round"
-        strokeWidth="1.5"
+        strokeWidth="1.4"
       />
     </svg>
   );
@@ -348,16 +362,6 @@ function MoreIcon() {
       <circle cx="16" cy="10" r="1.5" />
     </svg>
   );
-}
-
-function readCompanyNameInitial(value: string | null | undefined): string | null {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const initial = trimmed.charAt(0).toUpperCase();
-  return /^[A-Z]$/.test(initial) ? initial : null;
 }
 
 function isSyncStatusResponse(value: unknown): value is SyncStatusResponse {
@@ -378,6 +382,8 @@ function isSyncStatusResponse(value: unknown): value is SyncStatusResponse {
 
 type HeaderFilters = {
   companyName: string;
+  accountType: string;
+  opportunityCount: string;
   salesRepName: string;
   industryType: string;
   subCategory: string;
@@ -392,12 +398,15 @@ type HeaderFilters = {
   primaryContactEmail: string;
   notes: string;
   category: Category | "";
+  lastCalled: string;
   lastEmailed: string;
   lastModified: string;
 };
 
 const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   companyName: "",
+  accountType: "",
+  opportunityCount: "",
   salesRepName: "",
   industryType: "",
   subCategory: "",
@@ -412,13 +421,13 @@ const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   primaryContactEmail: "",
   notes: "",
   category: "",
+  lastCalled: "",
   lastEmailed: "",
   lastModified: "",
 };
 
 function buildAccountsCsvExportHref(input: {
   q: string;
-  companyNameInitialFilter: string | null;
   headerFilters: HeaderFilters;
   sortBy: SortBy;
   sortDir: SortDir;
@@ -433,8 +442,9 @@ function buildAccountsCsvExportHref(input: {
   };
 
   append("q", input.q);
-  append("filterCompanyInitial", input.companyNameInitialFilter);
   append("filterCompanyName", input.headerFilters.companyName);
+  append("filterAccountType", input.headerFilters.accountType);
+  append("filterOpportunityCount", input.headerFilters.opportunityCount);
   append("filterSalesRep", input.headerFilters.salesRepName);
   append("filterIndustryType", input.headerFilters.industryType);
   append("filterSubCategory", input.headerFilters.subCategory);
@@ -451,6 +461,7 @@ function buildAccountsCsvExportHref(input: {
   if (input.headerFilters.category) {
     params.set("filterCategory", input.headerFilters.category);
   }
+  append("filterLastCalled", input.headerFilters.lastCalled);
   append("filterLastEmailed", input.headerFilters.lastEmailed);
   append("filterLastModified", input.headerFilters.lastModified);
   params.set("sortBy", input.sortBy);
@@ -488,6 +499,18 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
     label: "Company Name",
     filterKey: "companyName",
     filterPlaceholder: "Filter company",
+  },
+  {
+    id: "accountType",
+    label: "Account Type",
+    filterKey: "accountType",
+    filterPlaceholder: "Filter customer or lead",
+  },
+  {
+    id: "opportunityCount",
+    label: "Opportunities",
+    filterKey: "opportunityCount",
+    filterPlaceholder: "Filter opportunity count",
   },
   {
     id: "salesRepName",
@@ -562,6 +585,12 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
     filterPlaceholder: "Filter email",
   },
   {
+    id: "lastCalledAt",
+    label: "Last Called",
+    filterKey: "lastCalled",
+    filterPlaceholder: "Filter last called",
+  },
+  {
     id: "lastEmailedAt",
     label: "Last Emailed",
     filterKey: "lastEmailed",
@@ -583,6 +612,8 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
 
 const DEFAULT_VISIBLE_COLUMNS: SortBy[] = [
   "companyName",
+  "accountType",
+  "opportunityCount",
   "address",
   "companyPhone",
   "primaryContactName",
@@ -590,6 +621,7 @@ const DEFAULT_VISIBLE_COLUMNS: SortBy[] = [
   "primaryContactPhone",
   "primaryContactExtension",
   "primaryContactEmail",
+  "lastCalledAt",
   "lastEmailedAt",
   "category",
 ];
@@ -822,6 +854,63 @@ function formatLastEmailed(value: string | null | undefined): string {
   }
 
   return date.toLocaleDateString();
+}
+
+function formatLastCalled(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString();
+}
+
+function formatCallDuration(seconds: number | null | undefined): string | null {
+  if (!Number.isFinite(seconds) || (seconds ?? 0) <= 0) {
+    return null;
+  }
+
+  const totalSeconds = Math.max(0, Math.trunc(seconds ?? 0));
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+function truncateLongText(value: string | null | undefined, maxChars: number): string | null {
+  const text = value?.trim() ?? "";
+  if (!text) {
+    return null;
+  }
+
+  if (text.length <= maxChars) {
+    return text;
+  }
+
+  return `${text.slice(0, maxChars).trimEnd()}...`;
+}
+
+function buildCallHistoryMeta(item: BusinessAccountCallHistoryItem): string {
+  const parts = [formatLastCalled(item.startedAt)];
+
+  if (item.employeeDisplayName) {
+    parts.push(item.employeeDisplayName);
+  }
+
+  const phoneNumber = item.phoneNumber?.trim();
+  if (phoneNumber) {
+    parts.push(phoneNumber);
+  }
+
+  const callDuration = formatCallDuration(item.talkDurationSeconds);
+  if (callDuration) {
+    parts.push(callDuration);
+  }
+
+  return parts.filter(Boolean).join(" • ");
 }
 
 function formatRelativeTime(value: string | null): string | null {
@@ -1068,6 +1157,8 @@ function mergeSyncedRows(
     isPrimaryContact: mergedIsPrimary,
     salesRepId: pickPreferredText(existing.salesRepId, incoming.salesRepId),
     salesRepName: pickPreferredText(existing.salesRepName, incoming.salesRepName),
+    accountType: incoming.accountType ?? existing.accountType ?? null,
+    opportunityCount: incoming.opportunityCount ?? existing.opportunityCount ?? null,
     industryType: pickPreferredText(existing.industryType, incoming.industryType),
     subCategory: pickPreferredText(existing.subCategory, incoming.subCategory),
     companyRegion: pickPreferredText(existing.companyRegion, incoming.companyRegion),
@@ -1102,6 +1193,7 @@ function mergeSyncedRows(
     phoneNumber: pickPreferredText(existing.phoneNumber, incoming.phoneNumber),
     notes: pickPreferredText(existing.notes, incoming.notes),
     category: incoming.category ?? existing.category,
+    lastCalledAt: pickPreferredText(existing.lastCalledAt, incoming.lastCalledAt),
     lastModifiedIso: pickPreferredText(existing.lastModifiedIso, incoming.lastModifiedIso),
   };
 }
@@ -1879,6 +1971,27 @@ function isBusinessAccountDetailResponse(
   return true;
 }
 
+function isBusinessAccountCallHistoryResponse(
+  payload: unknown,
+): payload is BusinessAccountCallHistoryResponse {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const record = payload as Record<string, unknown>;
+  if (!Array.isArray(record.items)) {
+    return false;
+  }
+
+  return record.items.every((item) => {
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+
+    return typeof (item as Record<string, unknown>).sessionId === "string";
+  });
+}
+
 function readDetailResponseRows(payload: unknown): BusinessAccountRow[] | null {
   if (!isBusinessAccountDetailResponse(payload)) {
     return null;
@@ -2076,6 +2189,22 @@ function buildBusinessAccountDetailUrl(
   return `${basePath}?${params.toString()}`;
 }
 
+function buildBusinessAccountCallHistoryUrl(
+  accountRecordId: string,
+  contactId?: number | null,
+): string {
+  const basePath = `/api/business-accounts/${encodeURIComponent(accountRecordId.trim())}/call-history`;
+  const params = new URLSearchParams({
+    limit: "10",
+  });
+
+  if (contactId !== null && contactId !== undefined) {
+    params.set("contactId", String(contactId));
+  }
+
+  return `${basePath}?${params.toString()}`;
+}
+
 function buildMeetingSourceFromRow(row: BusinessAccountRow): MeetingSourceContext {
   const accountRecordId = resolveRowBusinessAccountRecordId(row);
 
@@ -2188,6 +2317,9 @@ export function AccountsClient({
   const router = useRouter();
 
   const [session, setSession] = useState<SessionResponse | null>(null);
+  const [callHistory, setCallHistory] = useState<BusinessAccountCallHistoryItem[]>([]);
+  const [callHistoryLoading, setCallHistoryLoading] = useState(false);
+  const [callHistoryError, setCallHistoryError] = useState<string | null>(null);
   const [auditHistory, setAuditHistory] = useState<AuditLogRow[]>([]);
   const [auditHistoryLoading, setAuditHistoryLoading] = useState(false);
   const [auditHistoryError, setAuditHistoryError] = useState<string | null>(null);
@@ -2195,7 +2327,6 @@ export function AccountsClient({
   const allRowsRef = useRef<BusinessAccountRow[]>([]);
   const [cacheHydrated, setCacheHydrated] = useState(false);
   const [q, setQ] = useState("");
-  const [companyNameInitialFilter, setCompanyNameInitialFilter] = useState<string | null>(null);
   const [headerFilters, setHeaderFilters] = useState<HeaderFilters>(
     DEFAULT_HEADER_FILTERS,
   );
@@ -2250,7 +2381,6 @@ export function AccountsClient({
   const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
   const [createMenuPosition, setCreateMenuPosition] = useState<RowMenuPosition | null>(null);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
-  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const [rowMenuRowKey, setRowMenuRowKey] = useState<string | null>(null);
   const [rowMenuPosition, setRowMenuPosition] = useState<RowMenuPosition | null>(null);
   const [draggedColumnId, setDraggedColumnId] = useState<SortBy | null>(null);
@@ -2704,49 +2834,15 @@ export function AccountsClient({
   }, [allRows]);
 
   const deferredDisplayRows = useDeferredValue(displayRows);
-  const availableCompanyInitials = useMemo(() => {
-    const filteredRows = queryBusinessAccounts(deferredDisplayRows, {
-      includeInternalRows: true,
-      q: debouncedQ,
-      filterCompanyName: debouncedHeaderFilters.companyName,
-      filterSalesRep: debouncedHeaderFilters.salesRepName,
-      filterIndustryType: debouncedHeaderFilters.industryType,
-      filterSubCategory: debouncedHeaderFilters.subCategory,
-      filterCompanyRegion: debouncedHeaderFilters.companyRegion,
-      filterWeek: debouncedHeaderFilters.week,
-      filterAddress: debouncedHeaderFilters.address,
-      filterCompanyPhone: debouncedHeaderFilters.companyPhone,
-      filterPrimaryContactName: debouncedHeaderFilters.primaryContactName,
-      filterPrimaryContactJobTitle: debouncedHeaderFilters.primaryContactJobTitle,
-      filterPrimaryContactPhone: debouncedHeaderFilters.primaryContactPhone,
-      filterPrimaryContactExtension: debouncedHeaderFilters.primaryContactExtension,
-      filterPrimaryContactEmail: debouncedHeaderFilters.primaryContactEmail,
-      filterNotes: debouncedHeaderFilters.notes,
-      filterCategory: debouncedHeaderFilters.category || undefined,
-      filterLastEmailed: debouncedHeaderFilters.lastEmailed,
-      filterLastModified: debouncedHeaderFilters.lastModified,
-      page: 1,
-      pageSize: Math.max(deferredDisplayRows.length, 1),
-    }).items;
-    const next = new Set<string>();
-
-    filteredRows.forEach((row) => {
-      const initial = readCompanyNameInitial(row.companyName);
-      if (initial) {
-        next.add(initial);
-      }
-    });
-
-    return next;
-  }, [debouncedHeaderFilters, debouncedQ, deferredDisplayRows]);
 
   const queryResult = useMemo(
     () =>
       queryBusinessAccounts(deferredDisplayRows, {
         includeInternalRows: true,
         q: debouncedQ,
-        filterCompanyInitial: companyNameInitialFilter ?? undefined,
         filterCompanyName: debouncedHeaderFilters.companyName,
+        filterAccountType: debouncedHeaderFilters.accountType,
+        filterOpportunityCount: debouncedHeaderFilters.opportunityCount,
         filterSalesRep: debouncedHeaderFilters.salesRepName,
         filterIndustryType: debouncedHeaderFilters.industryType,
         filterSubCategory: debouncedHeaderFilters.subCategory,
@@ -2761,6 +2857,7 @@ export function AccountsClient({
         filterPrimaryContactEmail: debouncedHeaderFilters.primaryContactEmail,
         filterNotes: debouncedHeaderFilters.notes,
         filterCategory: debouncedHeaderFilters.category || undefined,
+        filterLastCalled: debouncedHeaderFilters.lastCalled,
         filterLastEmailed: debouncedHeaderFilters.lastEmailed,
         filterLastModified: debouncedHeaderFilters.lastModified,
         sortBy,
@@ -2769,7 +2866,6 @@ export function AccountsClient({
         pageSize: PAGE_SIZE,
       }),
     [
-      companyNameInitialFilter,
       debouncedHeaderFilters,
       debouncedQ,
       deferredDisplayRows,
@@ -2788,12 +2884,11 @@ export function AccountsClient({
     () =>
       buildAccountsCsvExportHref({
         q: debouncedQ,
-        companyNameInitialFilter,
         headerFilters: debouncedHeaderFilters,
         sortBy,
         sortDir,
       }),
-    [companyNameInitialFilter, debouncedHeaderFilters, debouncedQ, sortBy, sortDir],
+    [debouncedHeaderFilters, debouncedQ, sortBy, sortDir],
   );
   const rows = queryResult.items;
   const total = queryResult.total;
@@ -2822,17 +2917,7 @@ export function AccountsClient({
       ).length,
     [headerFilters],
   );
-  const hasActiveWorkbenchFilters =
-    q.trim().length > 0 || companyNameInitialFilter !== null || activeFilterCount > 0;
-  const availableJumpLetters = useMemo(() => {
-    const next = new Set(availableCompanyInitials);
-    if (companyNameInitialFilter) {
-      next.add(companyNameInitialFilter);
-    }
-
-    return [...next].sort((left, right) => left.localeCompare(right));
-  }, [availableCompanyInitials, companyNameInitialFilter]);
-  const currentSortLabel = useMemo(() => getColumnConfig(sortBy).label, [sortBy]);
+  const hasActiveWorkbenchFilters = q.trim().length > 0 || activeFilterCount > 0;
   const syncUpdatedLabel = useMemo(() => formatRelativeTime(lastSyncedAt), [lastSyncedAt]);
   const hasSnapshot = Boolean(lastSyncedAt) || allRows.length > 0;
   const companyRegionOptions = useMemo(() => {
@@ -3301,6 +3386,76 @@ export function AccountsClient({
 
   useEffect(() => {
     if (!session?.authenticated || !selected) {
+      setCallHistory([]);
+      setCallHistoryLoading(false);
+      setCallHistoryError(null);
+      return;
+    }
+
+    const businessAccountRecordId =
+      selected.accountRecordId?.trim() || selected.id.trim();
+    if (businessAccountRecordId.length === 0) {
+      setCallHistory([]);
+      setCallHistoryLoading(false);
+      setCallHistoryError(null);
+      return;
+    }
+    const selectedContactId = selected.contactId ?? null;
+
+    const controller = new AbortController();
+    setCallHistoryLoading(true);
+    setCallHistoryError(null);
+
+    async function loadCallHistory() {
+      try {
+        const response = await fetch(
+          buildBusinessAccountCallHistoryUrl(
+            businessAccountRecordId,
+            selectedContactId,
+          ),
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
+        const payload = await readJsonResponse<
+          BusinessAccountCallHistoryResponse | { error?: string }
+        >(response);
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+        if (!isBusinessAccountCallHistoryResponse(payload)) {
+          throw new Error("Unexpected call history response.");
+        }
+
+        setCallHistory(payload.items);
+      } catch (callHistoryError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setCallHistory([]);
+        setCallHistoryError(
+          callHistoryError instanceof Error
+            ? callHistoryError.message
+            : "Unable to load call history.",
+        );
+      } finally {
+        if (!controller.signal.aborted) {
+          setCallHistoryLoading(false);
+        }
+      }
+    }
+
+    void loadCallHistory();
+
+    return () => {
+      controller.abort();
+    };
+  }, [selected, session?.authenticated]);
+
+  useEffect(() => {
+    if (!session?.authenticated || !selected) {
       setAuditHistory([]);
       setAuditHistoryLoading(false);
       setAuditHistoryError(null);
@@ -3475,7 +3630,7 @@ export function AccountsClient({
   }, [draft, sortedEmployeeOptions]);
 
   useEffect(() => {
-    if (!isCreateMenuOpen && !isFiltersOpen && !isSortMenuOpen && !rowMenuRowKey) {
+    if (!isCreateMenuOpen && !isFiltersOpen && !rowMenuRowKey) {
       return;
     }
 
@@ -3513,7 +3668,7 @@ export function AccountsClient({
         window.removeEventListener("scroll", closeTransientMenus, true);
       }
     };
-  }, [isCreateMenuOpen, isFiltersOpen, isSortMenuOpen, rowMenuRowKey]);
+  }, [isCreateMenuOpen, isFiltersOpen, rowMenuRowKey]);
 
   useEffect(() => {
     if (!selected || drawerFocusTarget !== "notes" || !notesFieldRef.current) {
@@ -4121,7 +4276,6 @@ export function AccountsClient({
     setIsCreateMenuOpen(false);
     setCreateMenuPosition(null);
     setIsFiltersOpen(false);
-    setIsSortMenuOpen(false);
     setRowMenuRowKey(null);
     setRowMenuPosition(null);
     setDraggedColumnId(null);
@@ -4171,13 +4325,12 @@ export function AccountsClient({
 
   function handleSort(column: SortBy) {
     setPage(1);
-    setSortBy(column);
-    closeTransientMenus();
-  }
-
-  function handleSortDirectionChange(direction: SortDir) {
-    setPage(1);
-    setSortDir(direction);
+    if (sortBy === column) {
+      setSortDir((currentSortDir) => (currentSortDir === "asc" ? "desc" : "asc"));
+    } else {
+      setSortDir("asc");
+      setSortBy(column);
+    }
     closeTransientMenus();
   }
 
@@ -4192,15 +4345,9 @@ export function AccountsClient({
     }));
   }
 
-  function handleCompanyInitialFilterChange(letter: string) {
-    setPage(1);
-    setCompanyNameInitialFilter(letter.trim() ? letter : null);
-  }
-
   function clearAllFilters() {
     setPage(1);
     setQ("");
-    setCompanyNameInitialFilter(null);
     setHeaderFilters(DEFAULT_HEADER_FILTERS);
   }
 
@@ -5978,6 +6125,22 @@ export function AccountsClient({
       );
     }
 
+    if (columnId === "accountType") {
+      return renderTextCell(row.accountType ?? null, "Unknown type", "secondary");
+    }
+
+    if (columnId === "opportunityCount") {
+      if (typeof row.opportunityCount === "number" && Number.isFinite(row.opportunityCount)) {
+        return (
+          <span className={row.opportunityCount === 0 ? styles.secondaryCellText : undefined}>
+            {row.opportunityCount}
+          </span>
+        );
+      }
+
+      return renderBlankCell("Unknown opportunity count");
+    }
+
     if (columnId === "primaryContactName") {
       const nameValue = readTextValue(row.primaryContactName);
       const contactUrl = buildAcumaticaContactUrl(
@@ -6058,6 +6221,10 @@ export function AccountsClient({
       return <span className={pillClassName}>{categoryLabel}</span>;
     }
 
+    if (columnId === "lastCalledAt") {
+      return renderTextCell(formatLastCalled(row.lastCalledAt), "Never called", "secondary");
+    }
+
     if (columnId === "lastEmailedAt") {
       return renderTextCell(formatLastEmailed(row.lastEmailedAt), "Never emailed", "secondary");
     }
@@ -6104,7 +6271,10 @@ export function AccountsClient({
   function renderHeaderFilterControl(columnId: SortBy): ReactNode {
     const column = getColumnConfig(columnId);
     const filterValue = headerFilters[column.filterKey];
-    const isDateFilter = columnId === "lastEmailedAt" || columnId === "lastModifiedIso";
+    const isDateFilter =
+      columnId === "lastCalledAt" ||
+      columnId === "lastEmailedAt" ||
+      columnId === "lastModifiedIso";
 
     if (column.filterKey === "category") {
       return (
@@ -6356,91 +6526,6 @@ export function AccountsClient({
               </div>
             ) : null}
           </div>
-          <div className={styles.sortMenu} data-transient-menu="true">
-            <button
-              aria-expanded={isSortMenuOpen}
-              aria-haspopup="menu"
-              className={styles.toolbarButton}
-              onClick={(event) => {
-                event.stopPropagation();
-                const next = !isSortMenuOpen;
-                closeTransientMenus();
-                setIsSortMenuOpen(next);
-              }}
-              type="button"
-            >
-              <SortIcon />
-              <span>Sort</span>
-              <span className={styles.toolbarMeta}>
-                {currentSortLabel} {sortDir === "asc" ? "A-Z" : "Z-A"}
-              </span>
-            </button>
-            {isSortMenuOpen ? (
-              <div className={styles.dropdownMenu} role="menu">
-                <div className={styles.dropdownMenuSection}>
-                  <span className={styles.dropdownMenuLabel}>Field</span>
-                  <div className={styles.sortFieldList}>
-                    {COLUMN_CONFIGS.map((column) => (
-                      <button
-                        className={
-                          column.id === sortBy
-                            ? `${styles.sortFieldButton} ${styles.sortFieldButtonActive}`
-                            : styles.sortFieldButton
-                        }
-                        key={column.id}
-                        onClick={() => handleSort(column.id)}
-                        type="button"
-                      >
-                        {column.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className={styles.dropdownMenuSection}>
-                  <span className={styles.dropdownMenuLabel}>Direction</span>
-                  <div className={styles.sortDirectionGroup}>
-                    <button
-                      className={
-                        sortDir === "asc"
-                          ? `${styles.sortDirectionButton} ${styles.sortDirectionButtonActive}`
-                          : styles.sortDirectionButton
-                      }
-                      onClick={() => handleSortDirectionChange("asc")}
-                      type="button"
-                    >
-                      A-Z
-                    </button>
-                    <button
-                      className={
-                        sortDir === "desc"
-                          ? `${styles.sortDirectionButton} ${styles.sortDirectionButtonActive}`
-                          : styles.sortDirectionButton
-                      }
-                      onClick={() => handleSortDirectionChange("desc")}
-                      type="button"
-                    >
-                      Z-A
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-          <label className={styles.jumpControl}>
-            <span>Jump to</span>
-            <select
-              className={styles.jumpSelect}
-              onChange={(event) => handleCompanyInitialFilterChange(event.target.value)}
-              value={companyNameInitialFilter ?? ""}
-            >
-              <option value="">All</option>
-              {availableJumpLetters.map((letter) => (
-                <option key={letter} value={letter}>
-                  {letter}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
       </section>
 
@@ -6570,25 +6655,55 @@ export function AccountsClient({
                   const isHeaderDragging = draggedColumnId === columnId;
                   const isHeaderDropTarget =
                     columnDropTargetId === columnId && draggedColumnId !== columnId;
+                  const isSortedColumn = sortBy === columnId;
+                  const ariaSort =
+                    isSortedColumn && sortDir === "asc"
+                      ? "ascending"
+                      : isSortedColumn && sortDir === "desc"
+                        ? "descending"
+                        : "none";
 
                   return (
                     <th
+                      aria-sort={ariaSort}
                       className={`${isHeaderDragging ? styles.tableHeaderCellDragging : ""} ${
                         isHeaderDropTarget ? styles.tableHeaderCellDropTarget : ""
                       }`.trim()}
-                      draggable
                       key={`header-${columnId}`}
-                      onDragEnd={handleColumnDragEnd}
                       onDragOver={(event) => handleColumnDragOver(event, columnId)}
                       onDrop={(event) => handleColumnDrop(event, columnId)}
-                      onDragStart={(event) => handleColumnDragStart(event, columnId)}
-                      title={`Drag to reorder ${column.label}`}
+                      title={`${column.label}. Click to sort; drag handle to reorder.`}
                     >
                       <div className={styles.tableHeaderCell}>
-                        <span aria-hidden="true" className={styles.tableHeaderDragHandle}>
+                        <button
+                          aria-label={`Drag to reorder ${column.label}`}
+                          className={styles.tableHeaderDragHandle}
+                          draggable
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }}
+                          onDragEnd={handleColumnDragEnd}
+                          onDragStart={(event) => handleColumnDragStart(event, columnId)}
+                          type="button"
+                        >
                           <DragHandleIcon />
-                        </span>
-                        <span className={styles.tableHeaderLabel}>{column.label}</span>
+                        </button>
+                        <button
+                          aria-label={`${column.label}: sort ${
+                            isSortedColumn && sortDir === "asc" ? "descending" : "ascending"
+                          }`}
+                          className={`${styles.tableHeaderSortButton} ${
+                            isSortedColumn ? styles.tableHeaderSortButtonActive : ""
+                          }`.trim()}
+                          onClick={() => handleSort(columnId)}
+                          type="button"
+                        >
+                          <span className={styles.tableHeaderLabel}>{column.label}</span>
+                          <span className={styles.tableHeaderSortIcon}>
+                            <HeaderSortIcon active={isSortedColumn} direction={sortDir} />
+                          </span>
+                        </button>
                       </div>
                     </th>
                   );
@@ -7659,6 +7774,83 @@ export function AccountsClient({
             </label>
 
             <p className={styles.lastModified}>Last modified: {formatLastModified(selected.lastModifiedIso)}</p>
+
+            <section className={styles.callHistorySection}>
+              <div className={styles.callHistoryHeader}>
+                <h3>Prior Calls</h3>
+                <span className={styles.callHistorySummary}>
+                  {selected.lastCalledAt ?? callHistory[0]?.startedAt
+                    ? `Last called ${formatLastCalled(
+                        selected.lastCalledAt ?? callHistory[0]?.startedAt ?? null,
+                      )}`
+                    : "No Twilio call history yet."}
+                </span>
+              </div>
+              {callHistoryLoading ? (
+                <p className={styles.auditHistoryEmpty}>Loading prior calls...</p>
+              ) : callHistoryError ? (
+                <p className={styles.lookupError}>{callHistoryError}</p>
+              ) : callHistory.length === 0 ? (
+                <p className={styles.auditHistoryEmpty}>
+                  No prior calls are linked to this contact yet.
+                </p>
+              ) : (
+                <div className={styles.callHistoryList}>
+                  {callHistory.map((item) => {
+                    const callLabel =
+                      item.direction === "inbound" ? "Inbound call" : "Outbound call";
+                    const outcomeLabel = item.outcome.replace(/_/g, " ");
+                    const summaryText =
+                      truncateLongText(item.summaryText, 480) ?? item.summaryText;
+                    const transcriptText =
+                      truncateLongText(item.transcriptText, 1800) ?? item.transcriptText;
+                    const recordingLabel = item.recordingSid
+                      ? `Recording ${item.recordingStatus ?? "captured"}`
+                      : null;
+                    const syncLabel = item.activitySyncStatus
+                      ? `Post-call ${item.activitySyncStatus.replace(/_/g, " ")}`
+                      : null;
+
+                    return (
+                      <article className={styles.callHistoryItem} key={item.sessionId}>
+                        <div className={styles.callHistoryItemHeader}>
+                          <strong>{callLabel}</strong>
+                          <span className={styles.callHistoryMeta}>
+                            {buildCallHistoryMeta(item)}
+                          </span>
+                        </div>
+                        <div className={styles.callHistoryBadges}>
+                          <span className={styles.callHistoryBadge}>{outcomeLabel}</span>
+                          {recordingLabel ? (
+                            <span className={styles.callHistoryBadge}>{recordingLabel}</span>
+                          ) : null}
+                          {syncLabel ? (
+                            <span className={styles.callHistoryBadge}>{syncLabel}</span>
+                          ) : null}
+                        </div>
+                        {summaryText ? (
+                          <div className={styles.callHistoryTextBlock}>
+                            <strong>AI summary</strong>
+                            <p>{summaryText}</p>
+                          </div>
+                        ) : null}
+                        {transcriptText ? (
+                          <details className={styles.callHistoryTranscript}>
+                            <summary>Transcript excerpt</summary>
+                            <p>{transcriptText}</p>
+                          </details>
+                        ) : null}
+                        {!summaryText && !transcriptText ? (
+                          <p className={styles.auditHistoryEmpty}>
+                            No ChatGPT summary or transcript has been stored for this call yet.
+                          </p>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
 
             <section className={styles.auditHistorySection}>
               <div className={styles.auditHistoryHeader}>

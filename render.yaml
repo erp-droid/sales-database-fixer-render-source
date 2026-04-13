@@ -150,6 +150,10 @@ services:
         value: "86400000"
       - key: CALL_ACTIVITY_SYNC_ENABLED
         value: "true"
+      - key: CALL_ACTIVITY_SYNC_SECRET
+        sync: false
+      - key: CALL_ACTIVITY_SYNC_EXTERNAL_SCHEDULER_ENABLED
+        value: "true"
       - key: CALL_ACTIVITY_SYNC_BATCH_SIZE
         value: "2"
       - key: CALL_ACTIVITY_SYNC_SCHEDULE_HOUR
@@ -161,6 +165,10 @@ services:
       - key: CALL_ACTIVITY_SYNC_MAX_BATCHES_PER_WINDOW
         value: "200"
       - key: DAILY_CALL_COACHING_ENABLED
+        value: "true"
+      - key: DAILY_CALL_COACHING_SECRET
+        sync: false
+      - key: DAILY_CALL_COACHING_EXTERNAL_SCHEDULER_ENABLED
         value: "true"
       - key: DAILY_CALL_COACHING_SENDER_LOGIN
         value: jserrano
@@ -195,4 +203,46 @@ services:
       - key: PRICING_BOOK_SERVICE_URL
         value: https://pricing-book-service-720902901526.us-central1.run.app
       - key: PRICING_BOOK_SERVICE_TOKEN
+        sync: false
+
+  - type: cron
+    name: sales-meadowb-call-activity-sync
+    runtime: docker
+    repo: https://github.com/erp-droid/sales-database-fixer-render-source
+    branch: main
+    plan: starter
+    region: ohio
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    schedule: "*/15 * * * *"
+    dockerCommand: node scripts/trigger-call-activity-sync.cjs
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_BASE_URL
+        value: https://sales-meadowb.onrender.com
+      - key: CALL_ACTIVITY_SYNC_EXTERNAL_SCHEDULER_ENABLED
+        value: "true"
+      - key: CALL_ACTIVITY_SYNC_SECRET
+        sync: false
+
+  - type: cron
+    name: sales-meadowb-daily-call-coaching
+    runtime: docker
+    repo: https://github.com/erp-droid/sales-database-fixer-render-source
+    branch: main
+    plan: starter
+    region: ohio
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    schedule: "*/15 * * * *"
+    dockerCommand: node scripts/trigger-daily-call-coaching.cjs
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_BASE_URL
+        value: https://sales-meadowb.onrender.com
+      - key: DAILY_CALL_COACHING_EXTERNAL_SCHEDULER_ENABLED
+        value: "true"
+      - key: DAILY_CALL_COACHING_SECRET
         sync: false

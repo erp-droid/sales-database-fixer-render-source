@@ -815,17 +815,62 @@
 }
 
 .tableHeaderCell {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  cursor: grab;
-  user-select: none;
 }
 
 .tableHeaderLabel {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.tableHeaderSortButton {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.tableHeaderSortButton:hover {
+  color: var(--accounts-text);
+}
+
+.tableHeaderSortButton:focus-visible {
+  outline: 2px solid rgba(47, 143, 99, 0.2);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.tableHeaderSortButtonActive {
+  color: var(--accounts-text);
+}
+
+.tableHeaderSortIcon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.tableHeaderSortIcon svg {
+  width: 14px;
+  height: 14px;
 }
 
 .tableHeaderDragHandle {
@@ -843,13 +888,9 @@
   flex: 0 0 auto;
 }
 
-.tableHeaderCell:hover .tableHeaderDragHandle {
+.tableHeaderDragHandle:hover {
   background: #eef3f8;
   color: var(--accounts-text-secondary);
-}
-
-.tableHeaderCell:active {
-  cursor: grabbing;
 }
 
 .tableHeaderDragHandle svg {
@@ -1454,6 +1495,98 @@
   display: grid;
   gap: 12px;
   margin-top: 8px;
+}
+
+.callHistorySection {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.callHistoryHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.callHistoryHeader h3 {
+  margin: 0;
+}
+
+.callHistorySummary,
+.callHistoryMeta {
+  color: var(--accounts-text-secondary);
+  font-size: 13px;
+}
+
+.callHistoryList {
+  display: grid;
+  gap: 10px;
+}
+
+.callHistoryItem {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 14px;
+  background: #fbfcfe;
+}
+
+.callHistoryItemHeader {
+  display: grid;
+  gap: 4px;
+}
+
+.callHistoryBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.callHistoryBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eef3f8;
+  color: var(--accounts-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.callHistoryTextBlock {
+  display: grid;
+  gap: 6px;
+}
+
+.callHistoryTextBlock strong {
+  font-size: 13px;
+}
+
+.callHistoryTextBlock p,
+.callHistoryTranscript p {
+  margin: 0;
+  color: var(--accounts-text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.callHistoryTranscript {
+  display: grid;
+  gap: 8px;
+}
+
+.callHistoryTranscript summary {
+  cursor: pointer;
+  color: var(--accounts-text);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .auditHistoryHeader {

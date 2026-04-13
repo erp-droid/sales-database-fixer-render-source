@@ -21,6 +21,8 @@ type WatchdogMailbox = {
   contactId: number;
 };
 
+const activeNotificationKeys = new Set<string>();
+
 function normalizeComparable(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? "";
 }
@@ -148,8 +150,23 @@ function buildNotificationPayload(
 }
 
 export async function sendWatchdogNotification(report: WatchdogReport): Promise<void> {
+  const currentKeys = new Set(
+    report.actions
+      .map((action) => normalizeComparable(action.notificationKey))
+      .filter(Boolean),
+  );
+  for (const key of [...activeNotificationKeys]) {
+    if (!currentKeys.has(key)) {
+      activeNotificationKeys.delete(key);
+    }
+  }
+
   const meaningful = report.actions.filter((action) => action.result !== "skipped");
-  if (meaningful.length === 0) {
+  const pending = meaningful.filter((action) => {
+    const key = normalizeComparable(action.notificationKey);
+    return !key || !activeNotificationKeys.has(key);
+  });
+  if (pending.length === 0) {
     return;
   }
 
@@ -174,7 +191,13 @@ export async function sendWatchdogNotification(report: WatchdogReport): Promise<
     displayName: mailbox.displayName,
   });
   const normalizedBase = serviceUrl.replace(/\/$/, "");
-  const payload = buildNotificationPayload(report, mailbox);
+  const payload = buildNotificationPayload(
+    {
+      ...report,
+      actions: pending,
+    },
+    mailbox,
+  );
 
   try {
     const response = await fetch(`${normalizedBase}/api/mail/messages/send`, {
@@ -194,6 +217,14 @@ export async function sendWatchdogNotification(report: WatchdogReport): Promise<
         status: response.status,
         body: text.slice(0, 500),
       });
+      return;
+    }
+
+    for (const action of pending) {
+      const key = normalizeComparable(action.notificationKey);
+      if (key) {
+        activeNotificationKeys.add(key);
+      }
     }
   } catch (error) {
     console.warn("[watchdog] notification email error", {

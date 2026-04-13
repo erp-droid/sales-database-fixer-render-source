@@ -1280,6 +1280,34 @@ describe("Acumatica entity creation", () => {
     expect(finalBody.note).toEqual({ value: "Confirmed decision maker" });
   });
 
+  it("retries contact note updates with a plain-string note when Acumatica reports an invalid URI", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Invalid uri structure" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: { ContactID: { value: 157252 } },
+        }),
+      );
+
+    const { updateContact } = await import("@/lib/acumatica");
+    await updateContact("cookie", 157252, {
+      note: { value: "Confirmed decision maker" },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const initialBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(initialBody.note).toEqual({ value: "Confirmed decision maker" });
+    const retriedBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(retriedBody.ContactID).toEqual({ value: 157252 });
+    expect(retriedBody.note).toBe("Confirmed decision maker");
+  });
+
   it("prefers collection updates for business-account saves when requested", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ status: 200, body: { id: "account" } }));
 
@@ -1393,5 +1421,54 @@ describe("readOpportunityId", () => {
   it("extracts wrapped ID", async () => {
     const { readOpportunityId } = await import("@/lib/acumatica");
     expect(readOpportunityId({ ID: { value: "000780" } })).toBe("000780");
+  });
+});
+
+describe("fetchOpportunities", () => {
+  const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    setAcumaticaEnv();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, originalEnv);
+  });
+
+  it("queries the configured opportunity entity with the requested filter and select", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        status: 200,
+        body: [{ OpportunityID: { value: "000777" } }],
+      }),
+    );
+
+    const { fetchOpportunities } = await import("@/lib/acumatica");
+    const opportunities = await fetchOpportunities("cookie", {
+      filter: "OpportunityID eq '000777'",
+      maxRecords: 1,
+      select: ["OpportunityID", "Stage", "Status"],
+    });
+    const requestUrl = String(fetchMock.mock.calls[0]?.[0]);
+
+    expect(opportunities).toHaveLength(1);
+    expect(requestUrl).toContain("/entity/lightspeed/24.200.001/Opportunity?");
+    expect(requestUrl).toContain("%24top=1");
+    expect(requestUrl).toContain("%24skip=0");
+    expect(requestUrl).toContain("%24filter=OpportunityID+eq+%27000777%27");
+    expect(requestUrl).toContain("%24select=OpportunityID%2CStage%2CStatus");
   });
 });

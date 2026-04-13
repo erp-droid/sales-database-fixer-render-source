@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallSessionRecord, DashboardFilters } from "@/lib/call-analytics/types";
 
 const readCallSessionsMock = vi.fn<() => CallSessionRecord[]>();
+const readCallActivitySyncBySessionIdMock = vi.fn();
 const readCallEmployeeDirectoryMock = vi.fn<
   () => Array<{
     loginName: string;
@@ -19,6 +20,10 @@ const listMeetingBookingsMock = vi.fn();
 
 vi.mock("@/lib/call-analytics/sessionize", () => ({
   readCallSessions: readCallSessionsMock,
+}));
+
+vi.mock("@/lib/call-analytics/postcall-store", () => ({
+  readCallActivitySyncBySessionId: readCallActivitySyncBySessionIdMock,
 }));
 
 vi.mock("@/lib/call-analytics/employee-directory", () => ({
@@ -97,6 +102,11 @@ describe("dashboard snapshot builder and cache", () => {
   beforeEach(() => {
     vi.resetModules();
     readCallSessionsMock.mockReset();
+    readCallActivitySyncBySessionIdMock.mockReset();
+    readCallActivitySyncBySessionIdMock.mockReturnValue({
+      transcriptText: "Transcript ready.",
+      summaryText: "Summary ready.",
+    });
     readCallEmployeeDirectoryMock.mockReset();
     listMeetingBookingsMock.mockReset();
     listMeetingBookingsMock.mockReturnValue([]);

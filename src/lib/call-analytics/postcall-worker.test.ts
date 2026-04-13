@@ -509,6 +509,94 @@ describe("post-call activity sync worker", () => {
     );
   });
 
+  it("retries answered skipped rows when summary content is still missing", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Recordings/")) {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "audio/mpeg" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/audio/transcriptions") {
+        return new Response(JSON.stringify({ text: "Discussed updated pricing and next steps." }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/chat/completions") {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "Reviewed pricing and agreed on follow-up." } }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("Unexpected fetch", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    readCallSessionByIdMock.mockReturnValue(buildSession());
+    serviceFetchContactByIdMock.mockResolvedValue({
+      id: "contact-note-id",
+      NoteID: { value: "contact-note-id" },
+    });
+    serviceCreateActivityMock.mockResolvedValue({
+      id: "activity-retry-skipped",
+      NoteID: { value: "activity-retry-skipped" },
+    });
+
+    const {
+      markCallActivitySyncSkipped,
+      readCallActivitySyncBySessionId,
+      upsertQueuedCallActivitySync,
+    } = await import("@/lib/call-analytics/postcall-store");
+    const { ensureCallActivitySyncQueuedForSession } = await import("@/lib/call-analytics/postcall-worker");
+
+    upsertQueuedCallActivitySync({
+      sessionId: "call-1",
+      recordingSid: "RE123",
+      recordingStatus: "completed",
+      recordingDurationSeconds: 42,
+    });
+    markCallActivitySyncSkipped(
+      "call-1",
+      "No related contact or business account could be resolved for this call.",
+    );
+
+    const result = await ensureCallActivitySyncQueuedForSession("call-1");
+    const stored = readCallActivitySyncBySessionId("call-1");
+
+    expect(result?.status).toBe("synced");
+    expect(stored?.status).toBe("synced");
+    expect(stored?.summaryText).toContain("Reviewed pricing and agreed on follow-up.");
+  });
+
+  it("counts answered synced rows without summary content as remaining work", async () => {
+    readCallSessionsMock.mockReturnValue([buildSession()]);
+
+    const { markCallActivitySyncSynced, upsertQueuedCallActivitySync } = await import(
+      "@/lib/call-analytics/postcall-store"
+    );
+    const { countRemainingCallActivitySyncJobs } = await import("@/lib/call-analytics/postcall-worker");
+
+    upsertQueuedCallActivitySync({
+      sessionId: "call-1",
+      recordingSid: "RE123",
+      recordingStatus: "completed",
+      recordingDurationSeconds: 42,
+    });
+    markCallActivitySyncSynced("call-1", { activityId: "activity-1" });
+
+    expect(countRemainingCallActivitySyncJobs({ lookbackMs: 365 * 24 * 60 * 60 * 1000 })).toBe(1);
+  });
+
   it("prefers the exact business-account contact match over a conflicting linked primary contact", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -629,8 +717,37 @@ describe("post-call activity sync worker", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("marks calls without a resolved contact or company as skipped", async () => {
-    const fetchMock = vi.fn();
+  it("stores the summary before skipping app-bridge calls that still have no resolved target", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Recordings/")) {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "audio/mpeg" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/audio/transcriptions") {
+        return new Response(JSON.stringify({ text: "Reached the customer and confirmed next steps." }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/chat/completions") {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "Confirmed next steps with the customer." } }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("Unexpected fetch", { status: 500 });
+    });
     vi.stubGlobal("fetch", fetchMock);
     readCallSessionByIdMock.mockReturnValue(
       buildSession({
@@ -641,7 +758,9 @@ describe("post-call activity sync worker", () => {
       }),
     );
 
-    const { upsertQueuedCallActivitySync } = await import("@/lib/call-analytics/postcall-store");
+    const { readCallActivitySyncBySessionId, upsertQueuedCallActivitySync } = await import(
+      "@/lib/call-analytics/postcall-store"
+    );
     const { processCallActivitySyncJob } = await import("@/lib/call-analytics/postcall-worker");
 
     upsertQueuedCallActivitySync({
@@ -652,9 +771,113 @@ describe("post-call activity sync worker", () => {
     });
 
     const result = await processCallActivitySyncJob("call-1");
+    const stored = readCallActivitySyncBySessionId("call-1");
 
     expect(result?.status).toBe("skipped");
+    expect(stored?.transcriptText).toContain("Reached the customer");
+    expect(stored?.summaryText).toContain("Confirmed next steps");
     expect(serviceCreateActivityMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("stores transcript and summary for answered non-app calls without creating an Acumatica activity", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Recordings/")) {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "audio/mpeg" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/audio/transcriptions") {
+        return new Response(JSON.stringify({ text: "Discussed pricing and next follow-up." }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
+      if (url === "https://api.openai.com/v1/chat/completions") {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "Reviewed pricing and agreed on the next follow-up." } }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response("Unexpected fetch", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    readCallSessionByIdMock.mockReturnValue(
+      buildSession({
+        source: "twilio_direct",
+        matchedContactId: null,
+        linkedContactId: null,
+        matchedBusinessAccountId: null,
+        linkedBusinessAccountId: null,
+      }),
+    );
+
+    const { readCallActivitySyncBySessionId, upsertQueuedCallActivitySync } = await import(
+      "@/lib/call-analytics/postcall-store"
+    );
+    const { processCallActivitySyncJob } = await import("@/lib/call-analytics/postcall-worker");
+
+    upsertQueuedCallActivitySync({
+      sessionId: "call-1",
+      recordingSid: "RE123",
+      recordingStatus: "completed",
+      recordingDurationSeconds: 42,
+    });
+
+    const result = await processCallActivitySyncJob("call-1");
+    const stored = readCallActivitySyncBySessionId("call-1");
+
+    expect(result?.status).toBe("synced");
+    expect(stored?.activityId).toBeNull();
+    expect(stored?.summaryText).toContain("Reviewed pricing");
+    expect(serviceCreateActivityMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a recording-unavailable summary once the recording wait window has expired", async () => {
+    recordingsListMock.mockResolvedValue([]);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    readCallSessionByIdMock.mockReturnValue(
+      buildSession({
+        source: "twilio_direct",
+        matchedContactId: null,
+        linkedContactId: null,
+        matchedBusinessAccountId: null,
+        linkedBusinessAccountId: null,
+        endedAt: "2026-03-11T12:00:00.000Z",
+        updatedAt: "2026-03-11T12:00:00.000Z",
+      }),
+    );
+
+    const { readCallActivitySyncBySessionId, upsertQueuedCallActivitySync } = await import(
+      "@/lib/call-analytics/postcall-store"
+    );
+    const { processCallActivitySyncJob } = await import("@/lib/call-analytics/postcall-worker");
+
+    upsertQueuedCallActivitySync({
+      sessionId: "call-1",
+      recordingSid: null,
+      recordingStatus: null,
+      recordingDurationSeconds: null,
+    });
+
+    const result = await processCallActivitySyncJob("call-1");
+    const stored = readCallActivitySyncBySessionId("call-1");
+
+    expect(result?.status).toBe("synced");
+    expect(stored?.transcriptText).toContain("recording wait window expired");
+    expect(stored?.summaryText).toContain("Call recording unavailable");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -781,7 +1004,7 @@ describe("post-call activity sync worker", () => {
     expect(bodyHtml).toContain("Transcript");
   });
 
-  it("falls back to local transcription when the OpenAI project lacks audio models", async () => {
+  it("stores a fallback transcript immediately when the OpenAI project lacks audio models", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/Recordings/")) {
@@ -821,11 +1044,6 @@ describe("post-call activity sync worker", () => {
       return new Response("Unexpected fetch", { status: 500 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    execFileMock.mockImplementation((file, args, options, callback) => {
-      callback?.(null, JSON.stringify({ text: "Transcript from local fallback." }), "");
-      return {} as never;
-    });
-
     readCallSessionByIdMock.mockReturnValue(buildSession());
     serviceFetchContactByIdMock.mockResolvedValue({
       id: "contact-note-id",
@@ -849,7 +1067,7 @@ describe("post-call activity sync worker", () => {
     const result = await processCallActivitySyncJob("call-1");
 
     expect(result?.status).toBe("synced");
-    expect(execFileMock).toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
     expect(serviceCreateActivityMock).toHaveBeenCalledWith(
       null,
       expect.objectContaining({
@@ -858,8 +1076,8 @@ describe("post-call activity sync worker", () => {
     );
 
     const bodyHtml = serviceCreateActivityMock.mock.calls[0]?.[1]?.bodyHtml as string;
-    expect(bodyHtml).toContain("Local transcript summary.");
-    expect(bodyHtml).toContain("Transcript from local fallback.");
+    expect(bodyHtml).toContain("Automatic transcription unavailable.");
+    expect(bodyHtml).toContain("Automatic transcription was unavailable for this call recording.");
   });
 
   it("still syncs the activity when both OpenAI and local transcription are unavailable", async () => {
@@ -919,7 +1137,7 @@ describe("post-call activity sync worker", () => {
     const result = await processCallActivitySyncJob("call-1");
 
     expect(result?.status).toBe("synced");
-    expect(execFileMock).toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
     expect(serviceCreateActivityMock).toHaveBeenCalled();
     const bodyHtml = serviceCreateActivityMock.mock.calls[0]?.[1]?.bodyHtml as string;
     expect(bodyHtml).toContain("Automatic transcription unavailable.");
@@ -1106,6 +1324,8 @@ describe("post-call activity sync worker", () => {
       syncedCount: 1,
       failedCount: 0,
       skippedCount: 0,
+      remainingCount: 0,
+      completed: true,
     });
     expect(stored?.status).toBe("synced");
     expect(stored?.activityId).toBe("activity-backfill");

@@ -20,7 +20,6 @@ import {
 import { buildTwilioRecordingCallbackUrl, reconcileTwilioSession } from "@/lib/call-analytics/ingest";
 import {
   claimCallActivitySyncJob,
-  listPendingCallActivitySyncJobs,
   markCallActivitySyncFailed,
   markCallActivitySyncRecordingDeleted,
   markCallActivitySyncRecordingResolved,
@@ -69,6 +68,7 @@ type TwilioRecordingLike = {
 };
 
 const RECENT_CALL_ACTIVITY_SYNC_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+const RECORDING_AVAILABILITY_GRACE_MS = 30 * 60 * 1000;
 const OPENAI_TRANSCRIPTION_FALLBACK_MODELS = [
   "gpt-4o-transcribe",
   "gpt-4o-mini-transcribe",
@@ -82,6 +82,32 @@ function cleanText(value: string | null | undefined): string {
 
 function isTerminalCallActivitySyncStatus(status: string | null | undefined): boolean {
   return status === "synced" || status === "skipped";
+}
+
+function hasCallActivitySyncSummaryContent(
+  record:
+    | Pick<CallActivitySyncRecord, "transcriptText" | "summaryText">
+    | null
+    | undefined,
+): boolean {
+  return Boolean(cleanText(record?.transcriptText) && cleanText(record?.summaryText));
+}
+
+function shouldProcessCallActivitySyncSession(session: CallSessionRecord): boolean {
+  return Boolean(session.answered && session.endedAt && session.outcome !== "in_progress");
+}
+
+function shouldCreatePhoneCallActivity(session: CallSessionRecord): boolean {
+  return session.source === "app_bridge";
+}
+
+function shouldKeepWaitingForRecording(session: CallSessionRecord): boolean {
+  const endedAtMs = Date.parse(session.endedAt ?? session.updatedAt);
+  if (!Number.isFinite(endedAtMs)) {
+    return true;
+  }
+
+  return Date.now() - endedAtMs < RECORDING_AVAILABILITY_GRACE_MS;
 }
 
 function formatLocalDateKey(
@@ -287,6 +313,14 @@ function buildTranscriptionUnavailableSummaryText(): string {
 
 function buildTranscriptionUnavailableTranscriptText(): string {
   return "Automatic transcription was unavailable for this call recording.";
+}
+
+function buildRecordingUnavailableSummaryText(): string {
+  return "Call recording unavailable. No transcript could be generated for this answered call.";
+}
+
+function buildRecordingUnavailableTranscriptText(): string {
+  return "Call recording was not available after the recording wait window expired.";
 }
 
 function formatDateTime(value: string | null | undefined): string {
@@ -541,6 +575,17 @@ function shouldUseLocalTranscriptionFallback(error: unknown): boolean {
   );
 }
 
+function shouldSkipLocalTranscriptionFallback(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    message.includes("model_not_found") ||
+    message.includes("does not have access to model") ||
+    message.includes("openai transcription failed (403)") ||
+    message.includes("openai transcription failed (404)") ||
+    message.includes("openai_api_key is required")
+  );
+}
+
 function shouldSyncWithoutTranscript(error: unknown): boolean {
   const message = getErrorMessage(error).toLowerCase();
   return (
@@ -649,6 +694,9 @@ async function transcribeRecording(recordingSid: string): Promise<string> {
   } catch (error) {
     const normalizedError = error instanceof Error ? error : new Error(getErrorMessage(error));
     if (!shouldUseLocalTranscriptionFallback(normalizedError)) {
+      throw normalizedError;
+    }
+    if (shouldSkipLocalTranscriptionFallback(normalizedError)) {
       throw normalizedError;
     }
     openAiError = normalizedError;
@@ -1001,12 +1049,7 @@ function queueEligibleCallActivitySyncJobs(
   const queuedSessionIds: string[] = [];
 
   for (const session of readCallSessions()) {
-    if (
-      session.source !== "app_bridge" ||
-      !session.answered ||
-      !session.endedAt ||
-      session.outcome === "in_progress"
-    ) {
+    if (!shouldProcessCallActivitySyncSession(session)) {
       continue;
     }
 
@@ -1032,11 +1075,17 @@ function queueEligibleCallActivitySyncJobs(
     const existing = readCallActivitySyncBySessionId(session.sessionId);
     if (
       existing &&
-      (existing.status === "synced" ||
-        existing.status === "skipped" ||
+      (hasCallActivitySyncSummaryContent(existing) ||
         existing.status === "processing")
     ) {
       continue;
+    }
+
+    if (existing && (existing.status === "synced" || existing.status === "skipped")) {
+      requeueCallActivitySyncJob(
+        session.sessionId,
+        "Retrying legacy call activity row because transcript or summary content is missing.",
+      );
     }
 
     consideredCount += 1;
@@ -1071,12 +1120,7 @@ export function countRemainingCallActivitySyncJobs(options?: {
   let count = 0;
 
   for (const session of readCallSessions()) {
-    if (
-      session.source !== "app_bridge" ||
-      !session.answered ||
-      !session.endedAt ||
-      session.outcome === "in_progress"
-    ) {
+    if (!shouldProcessCallActivitySyncSession(session)) {
       continue;
     }
 
@@ -1100,7 +1144,7 @@ export function countRemainingCallActivitySyncJobs(options?: {
     }
 
     const existing = readCallActivitySyncBySessionId(session.sessionId);
-    if (!existing || !isTerminalCallActivitySyncStatus(existing.status)) {
+    if (!existing || !hasCallActivitySyncSummaryContent(existing)) {
       count += 1;
     }
   }
@@ -1140,17 +1184,6 @@ export async function processCallActivitySyncJob(
       return finish(markCallActivitySyncSkipped(sessionId, "Call was not answered."), "unanswered");
     }
 
-    const target = await resolveActivityTarget(session);
-    if (!target) {
-      return finish(
-        markCallActivitySyncSkipped(
-          sessionId,
-          "No related contact or business account could be resolved for this call.",
-        ),
-        "no_target",
-      );
-    }
-
     let transcriptText = cleanText(claimed.transcriptText);
     let summaryText = cleanText(claimed.summaryText);
     let recordingSid = cleanText(claimed.recordingSid);
@@ -1159,38 +1192,47 @@ export async function processCallActivitySyncJob(
       if (!recordingSid) {
         const resolvedRecording = await resolveRecordingForSession(sessionId);
         if (!resolvedRecording?.recordingSid) {
-          return finish(
-            requeueCallActivitySyncJob(
-              sessionId,
-              "Waiting for the call recording to be available.",
-            ),
-            "waiting_for_recording",
-          );
-        }
+          if (shouldKeepWaitingForRecording(session)) {
+            return finish(
+              requeueCallActivitySyncJob(
+                sessionId,
+                "Waiting for the call recording to be available.",
+              ),
+              "waiting_for_recording",
+            );
+          }
 
-        const updated = markCallActivitySyncRecordingResolved(sessionId, resolvedRecording);
-        recordingSid = cleanText(updated.recordingSid);
+          transcriptText = buildRecordingUnavailableTranscriptText();
+          if (!summaryText) {
+            summaryText = buildRecordingUnavailableSummaryText();
+          }
+        } else {
+          const updated = markCallActivitySyncRecordingResolved(sessionId, resolvedRecording);
+          recordingSid = cleanText(updated.recordingSid);
+        }
       }
 
-      try {
-        transcriptText = await transcribeRecording(recordingSid);
-      } catch (error) {
-        if (!shouldSyncWithoutTranscript(error)) {
-          throw error;
-        }
+      if (!transcriptText) {
+        try {
+          transcriptText = await transcribeRecording(recordingSid);
+        } catch (error) {
+          if (!shouldSyncWithoutTranscript(error)) {
+            throw error;
+          }
 
-        transcriptText = buildTranscriptionUnavailableTranscriptText();
-        if (!summaryText) {
-          summaryText = buildTranscriptionUnavailableSummaryText();
+          transcriptText = buildTranscriptionUnavailableTranscriptText();
+          if (!summaryText) {
+            summaryText = buildTranscriptionUnavailableSummaryText();
+          }
+          console.warn(
+            "[call-activity-sync] Transcription unavailable; syncing activity with fallback note.",
+            {
+              sessionId,
+              recordingSid,
+              error: getErrorMessage(error),
+            },
+          );
         }
-        console.warn(
-          "[call-activity-sync] Transcription unavailable; syncing activity with fallback note.",
-          {
-            sessionId,
-            recordingSid,
-            error: getErrorMessage(error),
-          },
-        );
       }
     }
 
@@ -1213,10 +1255,25 @@ export async function processCallActivitySyncJob(
       });
     }
 
+    if (!shouldCreatePhoneCallActivity(session)) {
+      return finish(markCallActivitySyncSynced(sessionId, { activityId: null }), "summary_only");
+    }
+
+    const target = await resolveActivityTarget(session);
+    if (!target) {
+      return finish(
+        markCallActivitySyncSkipped(
+          sessionId,
+          "No related contact or business account could be resolved for this call.",
+        ),
+        "no_target_after_summary",
+      );
+    }
+
     const activityId = await createPhoneCallActivity(session, target, transcriptText, summaryText);
     let synced = markCallActivitySyncSynced(sessionId, { activityId });
 
-    if (recordingSid) {
+    if (recordingSid && activityId) {
       try {
         await deleteTwilioRecording(recordingSid);
         synced = markCallActivitySyncRecordingDeleted(sessionId);
@@ -1247,16 +1304,10 @@ export async function runDueCallActivitySyncJobs(
   remainingCount: number;
   completed: boolean;
 }> {
-  let sessionIds: string[] = [];
-  if (options?.localDateKey) {
-    sessionIds = queueEligibleCallActivitySyncJobs(limit, {
-      localDateKey: options.localDateKey,
-      timeZone: options.timeZone,
-    });
-  } else {
-    queueEligibleCallActivitySyncJobs(limit);
-    sessionIds = listPendingCallActivitySyncJobs(limit).map((job) => job.sessionId);
-  }
+  const sessionIds = queueEligibleCallActivitySyncJobs(limit, {
+    localDateKey: options?.localDateKey,
+    timeZone: options?.timeZone,
+  });
 
   let processedCount = 0;
   let syncedCount = 0;
@@ -1367,8 +1418,19 @@ export async function ensureCallActivitySyncQueuedForSession(
     });
   }
 
-  if (!session.answered || job.status === "synced" || job.status === "skipped" || job.status === "processing") {
+  if (
+    !session.answered ||
+    hasCallActivitySyncSummaryContent(job) ||
+    job.status === "processing"
+  ) {
     return job;
+  }
+
+  if (job.status === "synced" || job.status === "skipped") {
+    job = requeueCallActivitySyncJob(
+      normalizedSessionId,
+      "Retrying legacy call activity row because transcript or summary content is missing.",
+    );
   }
 
   let latestResult: CallActivitySyncRecord | null = job;

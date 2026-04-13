@@ -1,6 +1,7 @@
 import { getReadModelDb } from "@/lib/read-model/db";
 import { invalidateReadModelCaches } from "@/lib/read-model/cache";
 import { upsertDeferredActionAuditEvents } from "@/lib/audit-log-store";
+import { buildAcumaticaBusinessAccountUrl } from "@/lib/acumatica-links";
 import {
   applyDeferredContactOperationToRows,
   getDeferredActionAccountKey,
@@ -8,8 +9,10 @@ import {
   type DeferredContactOperationPreview,
 } from "@/lib/deferred-contact-operations";
 import { publishDeferredActionsChanged } from "@/lib/deferred-actions-live";
+import { getEnv } from "@/lib/env";
+import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import { CONTACT_MERGE_FIELD_KEYS } from "@/types/contact-merge";
-import type { BusinessAccountRow } from "@/types/business-account";
+import type { BusinessAccountRow, BusinessAccountType } from "@/types/business-account";
 import type {
   DeferredActionCounts,
   DeferredActionListResponse,
@@ -306,15 +309,114 @@ function toStoredRecord(row: StoredDeferredAction): StoredDeferredActionRecord |
   };
 }
 
-function toSummary(record: StoredDeferredActionRecord): DeferredActionSummary {
+type DeferredActionAccountMetadata = {
+  businessAccountRecordId: string | null;
+  businessAccountId: string | null;
+  companyName: string | null;
+  accountType: BusinessAccountType | null;
+  opportunityCount: number | null;
+  acumaticaBusinessAccountUrl: string | null;
+};
+
+function normalizeAccountKey(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed || null;
+}
+
+function choosePreferredAccountRow(
+  current: BusinessAccountRow | null,
+  candidate: BusinessAccountRow,
+): BusinessAccountRow {
+  if (!current) {
+    return candidate;
+  }
+
+  if (candidate.isPrimaryContact && !current.isPrimaryContact) {
+    return candidate;
+  }
+
+  if ((candidate.opportunityCount ?? 0) > (current.opportunityCount ?? 0)) {
+    return candidate;
+  }
+
+  if (candidate.accountType && !current.accountType) {
+    return candidate;
+  }
+
+  return current;
+}
+
+function buildDeferredActionAccountMetadataMap(): Map<string, DeferredActionAccountMetadata> {
+  const env = getEnv();
+  const rows = readAllAccountRowsFromReadModel();
+  const rowsByKey = new Map<string, BusinessAccountRow>();
+
+  for (const row of rows) {
+    const keys = [
+      normalizeAccountKey(row.accountRecordId ?? row.id),
+      normalizeAccountKey(row.businessAccountId),
+    ].filter((value): value is string => Boolean(value));
+
+    for (const key of keys) {
+      rowsByKey.set(key, choosePreferredAccountRow(rowsByKey.get(key) ?? null, row));
+    }
+  }
+
+  const metadataByKey = new Map<string, DeferredActionAccountMetadata>();
+  for (const [key, row] of rowsByKey.entries()) {
+    metadataByKey.set(key, {
+      businessAccountRecordId: normalizeAccountKey(row.accountRecordId ?? row.id),
+      businessAccountId: normalizeAccountKey(row.businessAccountId),
+      companyName: row.companyName?.trim() || null,
+      accountType: row.accountType ?? null,
+      opportunityCount: Number.isFinite(row.opportunityCount ?? null) ? row.opportunityCount ?? null : null,
+      acumaticaBusinessAccountUrl: buildAcumaticaBusinessAccountUrl(
+        env.ACUMATICA_BASE_URL,
+        row.businessAccountId,
+        env.ACUMATICA_COMPANY ?? "MeadowBrook Live",
+      ),
+    });
+  }
+
+  return metadataByKey;
+}
+
+function resolveDeferredActionAccountMetadata(
+  record: StoredDeferredActionRecord,
+  metadataByKey: Map<string, DeferredActionAccountMetadata>,
+): DeferredActionAccountMetadata | null {
+  const keys = [
+    normalizeAccountKey(record.businessAccountRecordId),
+    normalizeAccountKey(record.businessAccountId),
+  ].filter((value): value is string => Boolean(value));
+
+  for (const key of keys) {
+    const metadata = metadataByKey.get(key);
+    if (metadata) {
+      return metadata;
+    }
+  }
+
+  return null;
+}
+
+function toSummary(
+  record: StoredDeferredActionRecord,
+  metadataByKey: Map<string, DeferredActionAccountMetadata>,
+): DeferredActionSummary {
+  const accountMetadata = resolveDeferredActionAccountMetadata(record, metadataByKey);
+
   return {
     id: record.id,
     actionType: record.actionType,
     status: record.status,
     sourceSurface: record.sourceSurface,
-    businessAccountRecordId: record.businessAccountRecordId,
-    businessAccountId: record.businessAccountId,
-    companyName: record.companyName,
+    businessAccountRecordId: record.businessAccountRecordId ?? accountMetadata?.businessAccountRecordId ?? null,
+    businessAccountId: record.businessAccountId ?? accountMetadata?.businessAccountId ?? null,
+    companyName: record.companyName ?? accountMetadata?.companyName ?? null,
+    accountType: accountMetadata?.accountType ?? null,
+    opportunityCount: accountMetadata?.opportunityCount ?? null,
+    acumaticaBusinessAccountUrl: accountMetadata?.acumaticaBusinessAccountUrl ?? null,
     contactId: record.contactId,
     contactName: record.contactName,
     keptContactId: record.keptContactId,
@@ -540,7 +642,8 @@ function buildActionId(): string {
 }
 
 export function listDeferredActionSummaries(): DeferredActionSummary[] {
-  return readStoredActions().map((record) => toSummary(record));
+  const metadataByKey = buildDeferredActionAccountMetadataMap();
+  return readStoredActions().map((record) => toSummary(record, metadataByKey));
 }
 
 export function buildDeferredActionListResponse(

@@ -254,6 +254,10 @@ export function DeletionQueueClient() {
 
         const haystack = [
           item.companyName,
+          item.accountType,
+          item.opportunityCount === null || item.opportunityCount === undefined
+            ? null
+            : String(item.opportunityCount),
           item.contactName,
           item.keptContactName,
           item.loserContactNames.join(" "),
@@ -522,6 +526,9 @@ export function DeletionQueueClient() {
               </th>
               <th>Action</th>
               <th>Company</th>
+              <th>Account Type</th>
+              <th>Opportunities</th>
+              <th>Acumatica</th>
               <th>Affected Fields</th>
               <th>Reason</th>
               <th>Requested</th>
@@ -533,13 +540,13 @@ export function DeletionQueueClient() {
           <tbody>
             {loading ? (
               <tr>
-                <td className={styles.loadingCell} colSpan={9}>
+                <td className={styles.loadingCell} colSpan={12}>
                   Loading queued actions...
                 </td>
               </tr>
             ) : filteredItems.length === 0 ? (
               <tr>
-                <td className={styles.loadingCell} colSpan={9}>
+                <td className={styles.loadingCell} colSpan={12}>
                   No queued actions match the current filter.
                 </td>
               </tr>
@@ -571,7 +578,30 @@ export function DeletionQueueClient() {
                         </span>
                       </div>
                     </td>
-                    <td>{item.companyName?.trim() || "-"}</td>
+                    <td>
+                      <div className={styles.companyCell}>
+                        <strong>{item.companyName?.trim() || "-"}</strong>
+                        {item.businessAccountId?.trim() ? (
+                          <span className={styles.metaText}>{item.businessAccountId.trim()}</span>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td>{item.accountType ?? "-"}</td>
+                    <td>{item.opportunityCount ?? 0}</td>
+                    <td>
+                      {item.acumaticaBusinessAccountUrl ? (
+                        <a
+                          className={styles.accountLink}
+                          href={item.acumaticaBusinessAccountUrl}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          Open account
+                        </a>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
                     <td>{item.affectedFields.length ? item.affectedFields.join(", ") : "-"}</td>
                     <td className={styles.reasonCell}>{item.reason?.trim() || "-"}</td>
                     <td>{formatDateTime(item.requestedAt)}</td>

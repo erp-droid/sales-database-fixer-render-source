@@ -190,6 +190,10 @@ server.listen(port, hostname, () => {
     process.env.DAILY_CALL_COACHING_ENABLED,
     process.env.NODE_ENV === "production",
   );
+  const dailyCallCoachingExternalSchedulerEnabled = readFeatureEnabled(
+    process.env.DAILY_CALL_COACHING_EXTERNAL_SCHEDULER_ENABLED,
+    false,
+  );
   const dailyCallCoachingTimeZone = String(
     process.env.DAILY_CALL_COACHING_TIME_ZONE || "America/Toronto",
   ).trim();
@@ -285,13 +289,17 @@ server.listen(port, hostname, () => {
       const skipped = items.filter((item) => item.status === "skipped").length;
       const failed = items.filter((item) => item.status === "failed").length;
       const coverageComplete = report?.dataCoverage?.complete === true;
+      const coverageStatus =
+        report?.dataCoverage && typeof report.dataCoverage.status === "string"
+          ? report.dataCoverage.status
+          : "unknown";
       const coverageDetail =
         report?.dataCoverage && typeof report.dataCoverage.detail === "string"
           ? report.dataCoverage.detail
           : "Call import coverage was not confirmed.";
 
       console.log(
-        `[daily-call-coaching] ${trigger}; report ${reportDate}; ${sent} sent, ${skipped} skipped, ${failed} failed; coverage ${coverageComplete ? "complete" : "pending"}`,
+        `[daily-call-coaching] ${trigger}; report ${reportDate}; ${sent} sent, ${skipped} skipped, ${failed} failed; coverage ${coverageComplete ? coverageStatus : `blocked:${coverageStatus}`}`,
       );
 
       for (const item of items) {
@@ -304,10 +312,13 @@ server.listen(port, hostname, () => {
         console.warn("[daily-call-coaching] waiting for full call import coverage", {
           trigger,
           reportDate,
+          status: coverageStatus,
           detail: coverageDetail,
           snapshotLastRecentSyncAt: report?.dataCoverage?.snapshotLastRecentSyncAt ?? null,
           snapshotLatestSeenStartTime: report?.dataCoverage?.snapshotLatestSeenStartTime ?? null,
           snapshotLastError: report?.dataCoverage?.snapshotLastError ?? null,
+          confirmedThroughDate: report?.dataCoverage?.confirmedThroughDate ?? null,
+          staleDays: report?.dataCoverage?.staleDays ?? null,
           remainingCallSyncCount: report?.dataCoverage?.remainingCallSyncCount ?? null,
         });
         return;
@@ -327,7 +338,7 @@ server.listen(port, hostname, () => {
     }
   }
 
-  if (dailyCallCoachingEnabled) {
+  if (dailyCallCoachingEnabled && !dailyCallCoachingExternalSchedulerEnabled) {
     const minuteAlignedDelayMs = 60_000 - (Date.now() % 60_000);
     setTimeout(() => {
       void runDailyCallCoachingCycle("startup");
@@ -338,6 +349,10 @@ server.listen(port, hostname, () => {
     console.log(
       `[daily-call-coaching] started; daily schedule ${String(dailyCallCoachingScheduleHour).padStart(2, "0")}:${String(dailyCallCoachingScheduleMinute).padStart(2, "0")} ${dailyCallCoachingTimeZone}; lookback ${dailyCallCoachingLookbackDays} day(s)`,
     );
+  } else if (dailyCallCoachingEnabled) {
+    console.log("[daily-call-coaching] external scheduler enabled; in-process scheduler disabled", {
+      raw: process.env.DAILY_CALL_COACHING_EXTERNAL_SCHEDULER_ENABLED ?? null,
+    });
   } else {
     console.log("[daily-call-coaching] disabled", {
       raw: process.env.DAILY_CALL_COACHING_ENABLED ?? null,
@@ -374,6 +389,10 @@ server.listen(port, hostname, () => {
     process.env.CALL_ACTIVITY_SYNC_SCHEDULE_MINUTE !== undefined ||
     process.env.CALL_ACTIVITY_SYNC_TIME_ZONE !== undefined ||
     process.env.CALL_ACTIVITY_SYNC_MAX_BATCHES_PER_WINDOW !== undefined;
+  const callActivitySyncExternalSchedulerEnabled = readFeatureEnabled(
+    process.env.CALL_ACTIVITY_SYNC_EXTERNAL_SCHEDULER_ENABLED,
+    false,
+  );
   const CALL_ACTIVITY_SYNC_INTERVAL_MS = readBoundedInteger(
     process.env.CALL_ACTIVITY_SYNC_INTERVAL_MS,
     30_000,
@@ -606,7 +625,7 @@ server.listen(port, hostname, () => {
     }
   }
 
-  if (callActivitySyncEnabled) {
+  if (callActivitySyncEnabled && !callActivitySyncExternalSchedulerEnabled) {
     if (callActivitySyncUsesScheduledWindow) {
       const minuteAlignedDelayMs = 60_000 - (Date.now() % 60_000);
       setTimeout(() => {
@@ -630,6 +649,10 @@ server.listen(port, hostname, () => {
         `[call-activity-sync] worker started; every ${Math.round(CALL_ACTIVITY_SYNC_INTERVAL_MS / 1000)}s, batch ${CALL_ACTIVITY_SYNC_BATCH_SIZE}`,
       );
     }
+  } else if (callActivitySyncEnabled) {
+    console.log("[call-activity-sync] external scheduler enabled; in-process worker disabled", {
+      raw: process.env.CALL_ACTIVITY_SYNC_EXTERNAL_SCHEDULER_ENABLED ?? null,
+    });
   } else {
     console.log("[call-activity-sync] worker disabled");
   }

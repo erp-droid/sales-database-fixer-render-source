@@ -39,6 +39,8 @@ import { normalizeExtensionForSave, normalizePhoneForSave } from "@/lib/phone";
 
 const sortByValues = [
   "companyName",
+  "accountType",
+  "opportunityCount",
   "salesRepName",
   "industryType",
   "subCategory",
@@ -53,6 +55,7 @@ const sortByValues = [
   "primaryContactEmail",
   "notes",
   "category",
+  "lastCalledAt",
   "lastEmailedAt",
   "lastModifiedIso",
 ] as const;
@@ -64,6 +67,8 @@ export const listQuerySchema = z.object({
   category: z.enum(CATEGORY_VALUES).optional(),
   filterCompanyInitial: z.string().optional(),
   filterCompanyName: z.string().optional(),
+  filterAccountType: z.string().optional(),
+  filterOpportunityCount: z.string().optional(),
   filterSalesRep: z.string().optional(),
   filterIndustryType: z.string().optional(),
   filterSubCategory: z.string().optional(),
@@ -78,6 +83,7 @@ export const listQuerySchema = z.object({
   filterPrimaryContactEmail: z.string().optional(),
   filterNotes: z.string().optional(),
   filterCategory: z.enum(CATEGORY_VALUES).optional(),
+  filterLastCalled: z.string().optional(),
   filterLastEmailed: z.string().optional(),
   filterLastModified: z.string().optional(),
   sortBy: z.enum(sortByValues).optional(),
@@ -716,6 +722,8 @@ export type ParsedListQuery = {
   category?: Category;
   filterCompanyInitial?: string;
   filterCompanyName?: string;
+  filterAccountType?: string;
+  filterOpportunityCount?: string;
   filterSalesRep?: string;
   filterIndustryType?: string;
   filterSubCategory?: string;
@@ -777,6 +785,8 @@ export function parseListQuery(queryParams: URLSearchParams): ParsedListQuery {
     category: queryParams.get("category") ?? undefined,
     filterCompanyInitial: queryParams.get("filterCompanyInitial") ?? undefined,
     filterCompanyName: queryParams.get("filterCompanyName") ?? undefined,
+    filterAccountType: queryParams.get("filterAccountType") ?? undefined,
+    filterOpportunityCount: queryParams.get("filterOpportunityCount") ?? undefined,
     filterSalesRep: queryParams.get("filterSalesRep") ?? undefined,
     filterIndustryType: queryParams.get("filterIndustryType") ?? undefined,
     filterSubCategory: queryParams.get("filterSubCategory") ?? undefined,
@@ -806,6 +816,8 @@ export function parseListQuery(queryParams: URLSearchParams): ParsedListQuery {
     q: normalizeOptionalFilter(parsed.q),
     filterCompanyInitial: normalizeOptionalFilter(parsed.filterCompanyInitial),
     filterCompanyName: normalizeOptionalFilter(parsed.filterCompanyName),
+    filterAccountType: normalizeOptionalFilter(parsed.filterAccountType),
+    filterOpportunityCount: normalizeOptionalFilter(parsed.filterOpportunityCount),
     filterSalesRep: normalizeOptionalFilter(parsed.filterSalesRep),
     filterIndustryType: normalizeOptionalFilter(parsed.filterIndustryType),
     filterSubCategory: normalizeOptionalFilter(parsed.filterSubCategory),

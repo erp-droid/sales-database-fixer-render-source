@@ -182,4 +182,140 @@ describe("readBusinessAccountDetailFromReadModel", () => {
     expect(refreshedRows[0]?.primaryContactRawPhone).toBe("905-829-9927");
     expect(refreshedRows[0]?.primaryContactPhone).toBe("905-829-9927");
   });
+
+  it("refreshes cached rows when call sessions change and updates last-called metadata", async () => {
+    const readModelAccounts = await import("@/lib/read-model/accounts");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    closeDb = () => getReadModelDb().close();
+
+    readModelAccounts.replaceAllAccountRows([
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+        rowKey: "account-1:contact:202",
+        contactId: 202,
+        primaryContactId: 202,
+        primaryContactName: "Andy McMullen",
+        primaryContactPhone: "905-829-9927",
+      }),
+    ]);
+
+    const initialRows = readModelAccounts.readAllAccountRowsFromReadModel();
+    expect(initialRows[0]?.lastCalledAt ?? null).toBeNull();
+
+    const db = getReadModelDb();
+    db.prepare(
+      `
+      INSERT INTO call_sessions (
+        session_id,
+        root_call_sid,
+        primary_leg_sid,
+        source,
+        direction,
+        outcome,
+        answered,
+        started_at,
+        answered_at,
+        ended_at,
+        talk_duration_seconds,
+        ring_duration_seconds,
+        employee_login_name,
+        employee_display_name,
+        employee_contact_id,
+        employee_phone,
+        recipient_employee_login_name,
+        recipient_employee_display_name,
+        presented_caller_id,
+        bridge_number,
+        target_phone,
+        counterparty_phone,
+        matched_contact_id,
+        matched_contact_name,
+        matched_business_account_id,
+        matched_company_name,
+        phone_match_type,
+        phone_match_ambiguity_count,
+        initiated_from_surface,
+        linked_account_row_key,
+        linked_business_account_id,
+        linked_contact_id,
+        metadata_json,
+        updated_at
+      ) VALUES (
+        @session_id,
+        @root_call_sid,
+        @primary_leg_sid,
+        @source,
+        @direction,
+        @outcome,
+        @answered,
+        @started_at,
+        @answered_at,
+        @ended_at,
+        @talk_duration_seconds,
+        @ring_duration_seconds,
+        @employee_login_name,
+        @employee_display_name,
+        @employee_contact_id,
+        @employee_phone,
+        @recipient_employee_login_name,
+        @recipient_employee_display_name,
+        @presented_caller_id,
+        @bridge_number,
+        @target_phone,
+        @counterparty_phone,
+        @matched_contact_id,
+        @matched_contact_name,
+        @matched_business_account_id,
+        @matched_company_name,
+        @phone_match_type,
+        @phone_match_ambiguity_count,
+        @initiated_from_surface,
+        @linked_account_row_key,
+        @linked_business_account_id,
+        @linked_contact_id,
+        @metadata_json,
+        @updated_at
+      )
+      `,
+    ).run({
+      session_id: "call-1",
+      root_call_sid: "CA-root",
+      primary_leg_sid: "CA-leg",
+      source: "app_bridge",
+      direction: "outbound",
+      outcome: "answered",
+      answered: 1,
+      started_at: "2026-04-12T16:30:00.000Z",
+      answered_at: "2026-04-12T16:30:03.000Z",
+      ended_at: "2026-04-12T16:36:00.000Z",
+      talk_duration_seconds: 357,
+      ring_duration_seconds: 3,
+      employee_login_name: "jserrano",
+      employee_display_name: "Jorge Serrano",
+      employee_contact_id: 157497,
+      employee_phone: "+14162304681",
+      recipient_employee_login_name: null,
+      recipient_employee_display_name: null,
+      presented_caller_id: "+14162304681",
+      bridge_number: "+16474929859",
+      target_phone: "+19058299927",
+      counterparty_phone: "+19058299927",
+      matched_contact_id: 202,
+      matched_contact_name: "Andy McMullen",
+      matched_business_account_id: "BA-1",
+      matched_company_name: "Example Company",
+      phone_match_type: "contact_phone",
+      phone_match_ambiguity_count: 1,
+      initiated_from_surface: "accounts",
+      linked_account_row_key: "account-1:contact:202",
+      linked_business_account_id: "BA-1",
+      linked_contact_id: 202,
+      metadata_json: "{}",
+      updated_at: "2026-04-12T16:36:00.000Z",
+    });
+
+    const refreshedRows = readModelAccounts.readAllAccountRowsFromReadModel();
+    expect(refreshedRows[0]?.lastCalledAt).toBe("2026-04-12T16:30:00.000Z");
+  });
 });

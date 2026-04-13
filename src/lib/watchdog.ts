@@ -12,10 +12,15 @@ import {
   resolveActivityTarget,
 } from "@/lib/call-analytics/postcall-worker";
 import { readCallSessionById } from "@/lib/call-analytics/sessionize";
-import { reconcileTwilioSession } from "@/lib/call-analytics/ingest";
+import { readCallIngestState, reconcileTwilioSession } from "@/lib/call-analytics/ingest";
 import { getErrorMessage } from "@/lib/errors";
 import { getReadModelDb } from "@/lib/read-model/db";
 import { clearCachedServiceAcumaticaSession } from "@/lib/acumatica-service-auth";
+import {
+  buildDailyCallCoachingCoverage,
+  pickSubjectLogins,
+} from "@/lib/daily-call-coaching";
+import { getEnv } from "@/lib/env";
 import { sendWatchdogNotification } from "@/lib/watchdog-notify";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -26,6 +31,7 @@ export type WatchdogAction = {
   action: string;
   result: "fixed" | "skipped" | "requeued" | "failed";
   detail: string;
+  notificationKey?: string | null;
 };
 
 export type WatchdogReport = {
@@ -58,6 +64,216 @@ function ageMs(isoTimestamp: string | null | undefined): number {
   return Date.now() - parsed;
 }
 
+function readLocalDateParts(date: Date, timeZone: string): {
+  year: string;
+  month: string;
+  day: string;
+  hour: string;
+  minute: string;
+} | null {
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const readPart = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  const year = readPart("year");
+  const month = readPart("month");
+  const day = readPart("day");
+  const hour = readPart("hour");
+  const minute = readPart("minute");
+  if (!year || !month || !day || !hour || !minute) {
+    return null;
+  }
+
+  return { year, month, day, hour, minute };
+}
+
+function formatLocalDateKey(date: Date, timeZone: string): string | null {
+  const parts = readLocalDateParts(date, timeZone);
+  if (!parts) {
+    return null;
+  }
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function shiftDateKey(dateKey: string, offsetDays: number, timeZone: string): string | null {
+  const [year, month, day] = String(dateKey)
+    .split("-")
+    .map((value) => Number.parseInt(value, 10));
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  const shifted = new Date(Date.UTC(year, month - 1, day + offsetDays, 12, 0, 0));
+  return formatLocalDateKey(shifted, timeZone);
+}
+
+function readDailyCallCoachingDeliveryStats(reportDate: string): {
+  totalRows: number;
+  sentRows: number;
+  latestStatus: string | null;
+  latestSentAt: string | null;
+  latestUpdatedAt: string | null;
+} {
+  const db = getReadModelDb();
+  const aggregate = db
+    .prepare(
+      `
+      SELECT
+        COUNT(*) AS total_rows,
+        SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent_rows
+      FROM daily_call_coaching_reports
+      WHERE report_date = ?
+        AND preview_mode = 0
+      `,
+    )
+    .get(reportDate) as
+    | {
+        total_rows: number | null;
+        sent_rows: number | null;
+      }
+    | undefined;
+
+  const latest = db
+    .prepare(
+      `
+      SELECT
+        status,
+        sent_at,
+        updated_at
+      FROM daily_call_coaching_reports
+      WHERE report_date = ?
+        AND preview_mode = 0
+      ORDER BY COALESCE(sent_at, updated_at, created_at) DESC
+      LIMIT 1
+      `,
+    )
+    .get(reportDate) as
+    | {
+        status: string | null;
+        sent_at: string | null;
+        updated_at: string | null;
+      }
+    | undefined;
+
+  return {
+    totalRows: aggregate?.total_rows ?? 0,
+    sentRows: aggregate?.sent_rows ?? 0,
+    latestStatus: latest?.status ?? null,
+    latestSentAt: latest?.sent_at ?? null,
+    latestUpdatedAt: latest?.updated_at ?? null,
+  };
+}
+
+function buildDailyCallCoachingHealthAction(now: Date): WatchdogAction | null {
+  const env = getEnv();
+  if (!env.DAILY_CALL_COACHING_ENABLED) {
+    return null;
+  }
+
+  const timeZone = env.DAILY_CALL_COACHING_TIME_ZONE;
+  const currentDateKey = formatLocalDateKey(now, timeZone);
+  const localParts = readLocalDateParts(now, timeZone);
+  if (!currentDateKey || !localParts) {
+    return {
+      sessionId: "daily-call-coaching",
+      issue: "coaching_schedule_unresolved",
+      action: "alert",
+      result: "failed",
+      detail: "Watchdog could not resolve the local coaching schedule window.",
+      notificationKey: "daily-call-coaching:schedule-unresolved",
+    };
+  }
+
+  const localHour = Number.parseInt(localParts.hour, 10);
+  const localMinute = Number.parseInt(localParts.minute, 10);
+  const scheduleReady =
+    Number.isFinite(localHour) &&
+    Number.isFinite(localMinute) &&
+    (localHour > env.DAILY_CALL_COACHING_SCHEDULE_HOUR ||
+      (localHour === env.DAILY_CALL_COACHING_SCHEDULE_HOUR &&
+        localMinute >= env.DAILY_CALL_COACHING_SCHEDULE_MINUTE));
+
+  const reportDate = shiftDateKey(
+    currentDateKey,
+    -env.DAILY_CALL_COACHING_LOOKBACK_DAYS,
+    timeZone,
+  );
+  if (!reportDate) {
+    return {
+      sessionId: "daily-call-coaching",
+      issue: "coaching_report_date_unresolved",
+      action: "alert",
+      result: "failed",
+      detail: "Watchdog could not resolve the expected coaching report date.",
+      notificationKey: "daily-call-coaching:report-date-unresolved",
+    };
+  }
+
+  const coverage = buildDailyCallCoachingCoverage(reportDate, timeZone, readCallIngestState());
+  if (!coverage.complete) {
+    return {
+      sessionId: `daily-call-coaching:${reportDate}`,
+      issue: coverage.status,
+      action: "alert",
+      result: "failed",
+      detail: [
+        `Daily coaching is blocked for ${reportDate}.`,
+        coverage.detail,
+        `Confirmed through: ${coverage.confirmedThroughDate ?? "unknown"}.`,
+        `Latest seen call: ${coverage.snapshotLatestSeenStartTime ?? "unknown"}.`,
+        `Remaining post-call jobs: ${coverage.remainingCallSyncCount}.`,
+        `Stale day gap: ${coverage.staleDays ?? 0}.`,
+      ].join(" "),
+      notificationKey: `daily-call-coaching:block:${coverage.status}:${reportDate}`,
+    };
+  }
+
+  if (!scheduleReady) {
+    return null;
+  }
+
+  const expectedRecipients = pickSubjectLogins(reportDate, timeZone);
+  if (expectedRecipients.length === 0) {
+    return null;
+  }
+
+  const delivery = readDailyCallCoachingDeliveryStats(reportDate);
+  if (
+    delivery.totalRows >= expectedRecipients.length &&
+    delivery.sentRows >= expectedRecipients.length
+  ) {
+    return null;
+  }
+
+  return {
+    sessionId: `daily-call-coaching:${reportDate}`,
+    issue: "missing_live_send",
+    action: "alert",
+    result: "failed",
+    detail: [
+      `Expected ${expectedRecipients.length} live coaching email(s) for ${reportDate}.`,
+      `Found ${delivery.sentRows} sent row(s) across ${delivery.totalRows} live report row(s).`,
+      `Last row status: ${delivery.latestStatus ?? "none"}.`,
+      `Last row sent at: ${delivery.latestSentAt ?? "never"}.`,
+      `Last row updated at: ${delivery.latestUpdatedAt ?? "never"}.`,
+    ].join(" "),
+    notificationKey: `daily-call-coaching:missing-live-send:${reportDate}:${delivery.latestStatus ?? "none"}`,
+  };
+}
+
 function listAllTroubleSyncJobs(): Array<{
   sessionId: string;
   status: string;
@@ -79,6 +295,7 @@ function listAllTroubleSyncJobs(): Array<{
         recording_sid
       FROM call_activity_sync
       WHERE status IN ('queued', 'failed', 'transcribed')
+        AND (COALESCE(transcript_text, '') = '' OR COALESCE(summary_text, '') = '')
       ORDER BY updated_at ASC
       LIMIT 100
       `,
@@ -337,6 +554,10 @@ async function runWatchdogCycle(): Promise<WatchdogReport> {
   const actions: WatchdogAction[] = [];
 
   const jobs = listAllTroubleSyncJobs();
+  const coachingHealthEnabled = getEnv().DAILY_CALL_COACHING_ENABLED;
+  const coachingHealthAction = coachingHealthEnabled
+    ? buildDailyCallCoachingHealthAction(new Date())
+    : null;
 
   for (const job of jobs) {
     try {
@@ -355,6 +576,10 @@ async function runWatchdogCycle(): Promise<WatchdogReport> {
     }
   }
 
+  if (coachingHealthAction) {
+    actions.push(coachingHealthAction);
+  }
+
   const durationMs = Date.now() - startMs;
   const fixed = actions.filter((a) => a.result === "fixed").length;
   const failed = actions.filter((a) => a.result === "failed").length;
@@ -362,7 +587,7 @@ async function runWatchdogCycle(): Promise<WatchdogReport> {
   const report: WatchdogReport = {
     ranAt: new Date().toISOString(),
     durationMs,
-    checked: jobs.length,
+    checked: jobs.length + (coachingHealthEnabled ? 1 : 0),
     actions,
     healthy: failed === 0,
   };

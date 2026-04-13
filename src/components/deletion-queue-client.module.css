@@ -302,6 +302,11 @@
   gap: 4px;
 }
 
+.companyCell {
+  display: grid;
+  gap: 4px;
+}
+
 .actionCell strong {
   color: var(--ink-strong);
 }
@@ -314,6 +319,16 @@
 .reasonCell {
   white-space: normal;
   min-width: 220px;
+}
+
+.accountLink {
+  color: #1f5f9f;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.accountLink:hover {
+  text-decoration: underline;
 }
 
 .statusBadge {

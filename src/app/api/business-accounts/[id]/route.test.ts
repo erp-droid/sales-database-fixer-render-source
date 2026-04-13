@@ -119,7 +119,36 @@ describe("GET /api/business-accounts/[id]", () => {
     waitForReadModelSync.mockReset();
   });
 
-  it("returns 404 for rows associated with Travis Rumney even when cached", async () => {
+  it("returns 404 for rows where Travis Rumney is the contact even when cached", async () => {
+    readBusinessAccountDetailFromReadModel.mockReturnValue({
+      row: buildRow({
+        primaryContactName: "Travis Justin Rumney",
+      }),
+      rows: [
+        buildRow({
+          primaryContactName: "Travis Justin Rumney",
+        }),
+      ],
+      accountLocation: null,
+    });
+
+    const { GET } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/business-accounts/record-1"),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Business account not found.",
+    });
+  });
+
+  it("returns cached rows when Travis is only the sales rep", async () => {
     readBusinessAccountDetailFromReadModel.mockReturnValue({
       row: buildRow({
         salesRepName: "Travis Justin Rumney",
@@ -142,9 +171,6 @@ describe("GET /api/business-accounts/[id]", () => {
       },
     );
 
-    expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toMatchObject({
-      error: "Business account not found.",
-    });
+    expect(response.status).toBe(200);
   });
 });
