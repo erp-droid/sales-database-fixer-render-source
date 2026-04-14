@@ -727,6 +727,179 @@ function readAllCallLegs(): CallLegRecord[] {
   return rows.map(normalizeStoredCallLeg);
 }
 
+function readCallLegRowBySid(sid: string): StoredCallLegRow | null {
+  const db = getReadModelDb();
+  const row = db
+    .prepare(
+      `
+      SELECT
+        sid,
+        parent_sid,
+        session_id,
+        direction,
+        from_number,
+        to_number,
+        status,
+        answered,
+        answered_at,
+        started_at,
+        ended_at,
+        duration_seconds,
+        ring_duration_seconds,
+        price,
+        price_unit,
+        source,
+        leg_type,
+        raw_json,
+        updated_at
+      FROM call_legs
+      WHERE sid = ?
+      `,
+    )
+    .get(sid.trim()) as StoredCallLegRow | undefined;
+
+  return row ?? null;
+}
+
+function resolveRootSidForLegSid(sid: string): string | null {
+  let currentSid = sid.trim();
+  if (!currentSid) {
+    return null;
+  }
+
+  const visited = new Set<string>();
+  while (currentSid && !visited.has(currentSid)) {
+    visited.add(currentSid);
+    const row = readCallLegRowBySid(currentSid);
+    if (!row) {
+      return currentSid;
+    }
+
+    const parentSid = row.parent_sid?.trim() ?? "";
+    if (!parentSid) {
+      return row.sid;
+    }
+
+    currentSid = parentSid;
+  }
+
+  return currentSid || null;
+}
+
+function resolveRootSidForSessionId(sessionId: string): string | null {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  const db = getReadModelDb();
+  const row = db
+    .prepare(
+      `
+      SELECT sid
+      FROM call_legs
+      WHERE session_id = ?
+      ORDER BY COALESCE(started_at, updated_at) ASC, sid ASC
+      LIMIT 1
+      `,
+    )
+    .get(normalizedSessionId) as { sid: string } | undefined;
+
+  if (!row?.sid) {
+    return null;
+  }
+
+  return resolveRootSidForLegSid(row.sid);
+}
+
+function readCallLegGroupByRootSid(rootSid: string): CallLegRecord[] {
+  const normalizedRootSid = rootSid.trim();
+  if (!normalizedRootSid) {
+    return [];
+  }
+
+  const db = getReadModelDb();
+  const rows = db
+    .prepare(
+      `
+      WITH RECURSIVE call_tree AS (
+        SELECT
+          sid,
+          parent_sid,
+          session_id,
+          direction,
+          from_number,
+          to_number,
+          status,
+          answered,
+          answered_at,
+          started_at,
+          ended_at,
+          duration_seconds,
+          ring_duration_seconds,
+          price,
+          price_unit,
+          source,
+          leg_type,
+          raw_json,
+          updated_at
+        FROM call_legs
+        WHERE sid = ?
+
+        UNION ALL
+
+        SELECT
+          child.sid,
+          child.parent_sid,
+          child.session_id,
+          child.direction,
+          child.from_number,
+          child.to_number,
+          child.status,
+          child.answered,
+          child.answered_at,
+          child.started_at,
+          child.ended_at,
+          child.duration_seconds,
+          child.ring_duration_seconds,
+          child.price,
+          child.price_unit,
+          child.source,
+          child.leg_type,
+          child.raw_json,
+          child.updated_at
+        FROM call_legs child
+        INNER JOIN call_tree parent ON child.parent_sid = parent.sid
+      )
+      SELECT
+        sid,
+        parent_sid,
+        session_id,
+        direction,
+        from_number,
+        to_number,
+        status,
+        answered,
+        answered_at,
+        started_at,
+        ended_at,
+        duration_seconds,
+        ring_duration_seconds,
+        price,
+        price_unit,
+        source,
+        leg_type,
+        raw_json,
+        updated_at
+      FROM call_tree
+      ORDER BY COALESCE(started_at, updated_at) ASC, sid ASC
+      `,
+    )
+    .all(normalizedRootSid) as StoredCallLegRow[];
+
+  return rows.map(normalizeStoredCallLeg);
+}
+
 function readRootSidMap(legs: CallLegRecord[]): Map<string, string> {
   const bySid = new Map(legs.map((leg) => [leg.sid, leg]));
   const memo = new Map<string, string>();
@@ -753,6 +926,203 @@ function readRootSidMap(legs: CallLegRecord[]): Map<string, string> {
   }
 
   return memo;
+}
+
+function createCallSessionInsertStatement(db: ReturnType<typeof getReadModelDb>) {
+  return db.prepare(
+    `
+    INSERT INTO call_sessions (
+      session_id,
+      root_call_sid,
+      primary_leg_sid,
+      source,
+      direction,
+      outcome,
+      answered,
+      started_at,
+      answered_at,
+      ended_at,
+      talk_duration_seconds,
+      ring_duration_seconds,
+      employee_login_name,
+      employee_display_name,
+      employee_contact_id,
+      employee_phone,
+      recipient_employee_login_name,
+      recipient_employee_display_name,
+      presented_caller_id,
+      bridge_number,
+      target_phone,
+      counterparty_phone,
+      matched_contact_id,
+      matched_contact_name,
+      matched_business_account_id,
+      matched_company_name,
+      phone_match_type,
+      phone_match_ambiguity_count,
+      initiated_from_surface,
+      linked_account_row_key,
+      linked_business_account_id,
+      linked_contact_id,
+      metadata_json,
+      updated_at
+    ) VALUES (
+      @session_id,
+      @root_call_sid,
+      @primary_leg_sid,
+      @source,
+      @direction,
+      @outcome,
+      @answered,
+      @started_at,
+      @answered_at,
+      @ended_at,
+      @talk_duration_seconds,
+      @ring_duration_seconds,
+      @employee_login_name,
+      @employee_display_name,
+      @employee_contact_id,
+      @employee_phone,
+      @recipient_employee_login_name,
+      @recipient_employee_display_name,
+      @presented_caller_id,
+      @bridge_number,
+      @target_phone,
+      @counterparty_phone,
+      @matched_contact_id,
+      @matched_contact_name,
+      @matched_business_account_id,
+      @matched_company_name,
+      @phone_match_type,
+      @phone_match_ambiguity_count,
+      @initiated_from_surface,
+      @linked_account_row_key,
+      @linked_business_account_id,
+      @linked_contact_id,
+      @metadata_json,
+      @updated_at
+    )
+    `,
+  );
+}
+
+function toCallSessionInsertParams(session: CallSessionRecord) {
+  return {
+    session_id: session.sessionId,
+    root_call_sid: session.rootCallSid,
+    primary_leg_sid: session.primaryLegSid,
+    source: session.source,
+    direction: session.direction,
+    outcome: session.outcome,
+    answered: session.answered ? 1 : 0,
+    started_at: session.startedAt,
+    answered_at: session.answeredAt,
+    ended_at: session.endedAt,
+    talk_duration_seconds: session.talkDurationSeconds,
+    ring_duration_seconds: session.ringDurationSeconds,
+    employee_login_name: session.employeeLoginName,
+    employee_display_name: session.employeeDisplayName,
+    employee_contact_id: session.employeeContactId,
+    employee_phone: session.employeePhone,
+    recipient_employee_login_name: session.recipientEmployeeLoginName,
+    recipient_employee_display_name: session.recipientEmployeeDisplayName,
+    presented_caller_id: session.presentedCallerId,
+    bridge_number: session.bridgeNumber,
+    target_phone: session.targetPhone,
+    counterparty_phone: session.counterpartyPhone,
+    matched_contact_id: session.matchedContactId,
+    matched_contact_name: session.matchedContactName,
+    matched_business_account_id: session.matchedBusinessAccountId,
+    matched_company_name: session.matchedCompanyName,
+    phone_match_type: session.phoneMatchType,
+    phone_match_ambiguity_count: session.phoneMatchAmbiguityCount,
+    initiated_from_surface: session.initiatedFromSurface,
+    linked_account_row_key: session.linkedAccountRowKey,
+    linked_business_account_id: session.linkedBusinessAccountId,
+    linked_contact_id: session.linkedContactId,
+    metadata_json: session.metadataJson,
+    updated_at: session.updatedAt,
+  };
+}
+
+function finalizeCallSessionWrites(reason: string, sessions: CallSessionRecord[]): void {
+  for (const session of sessions) {
+    upsertCallAuditEvent(session);
+  }
+  invalidateDashboardSnapshotCache();
+  publishAuditLogChanged(reason);
+}
+
+export function rebuildCallSession(options: {
+  rootCallSid?: string | null;
+  sessionId?: string | null;
+  bridgeNumbers?: string[];
+} = {}): CallSessionRecord | null {
+  const normalizedRootCallSid = options.rootCallSid?.trim() ?? "";
+  const normalizedSessionId = options.sessionId?.trim() ?? "";
+  const rootCallSid =
+    normalizedRootCallSid ||
+    (normalizedSessionId ? resolveRootSidForSessionId(normalizedSessionId) : null);
+  if (!rootCallSid) {
+    return null;
+  }
+
+  const group = readCallLegGroupByRootSid(rootCallSid);
+  if (group.length === 0) {
+    return null;
+  }
+
+  const employeeIndex = buildEmployeeIndex(readCallEmployeeDirectory());
+  const phoneIndex = buildPhoneMatchIndex();
+  const session = buildSessionRecord(rootCallSid, group, employeeIndex, phoneIndex, {
+    bridgeNumbers: options.bridgeNumbers,
+  });
+  const db = getReadModelDb();
+  const replace = db.transaction((nextSession: CallSessionRecord) => {
+    const updateLegSession = db.prepare(
+      `
+      UPDATE call_legs
+      SET session_id = ?,
+          updated_at = ?
+      WHERE sid = ?
+      `,
+    );
+    const deleteByRootCallSid = db.prepare(
+      `
+      DELETE FROM call_sessions
+      WHERE root_call_sid = ?
+      `,
+    );
+    const deleteBySessionId = db.prepare(
+      `
+      DELETE FROM call_sessions
+      WHERE session_id = ?
+      `,
+    );
+    const insert = createCallSessionInsertStatement(db);
+    const writeTimestamp = new Date().toISOString();
+    const staleSessionIds = new Set<string>();
+
+    for (const leg of group) {
+      const currentSessionId = leg.sessionId.trim();
+      if (currentSessionId) {
+        staleSessionIds.add(currentSessionId);
+      }
+      updateLegSession.run(nextSession.sessionId, writeTimestamp, leg.sid);
+    }
+
+    deleteByRootCallSid.run(rootCallSid);
+    staleSessionIds.add(nextSession.sessionId);
+    for (const staleSessionId of staleSessionIds) {
+      deleteBySessionId.run(staleSessionId);
+    }
+
+    insert.run(toCallSessionInsertParams(nextSession));
+  });
+
+  replace(session);
+  finalizeCallSessionWrites("call-session-rebuilt", [session]);
+  return session;
 }
 
 export function rebuildCallSessions(options: SessionizeOptions = {}): CallSessionRecord[] {
@@ -783,6 +1153,7 @@ export function rebuildCallSessions(options: SessionizeOptions = {}): CallSessio
       WHERE sid = ?
       `,
     );
+    const insert = createCallSessionInsertStatement(db);
     for (const session of nextSessions) {
       const group = groups.get(session.rootCallSid) ?? [];
       for (const leg of group) {
@@ -791,128 +1162,14 @@ export function rebuildCallSessions(options: SessionizeOptions = {}): CallSessio
     }
 
     db.prepare("DELETE FROM call_sessions").run();
-    const insert = db.prepare(
-      `
-      INSERT INTO call_sessions (
-        session_id,
-        root_call_sid,
-        primary_leg_sid,
-        source,
-        direction,
-        outcome,
-        answered,
-        started_at,
-        answered_at,
-        ended_at,
-        talk_duration_seconds,
-        ring_duration_seconds,
-        employee_login_name,
-        employee_display_name,
-        employee_contact_id,
-        employee_phone,
-        recipient_employee_login_name,
-        recipient_employee_display_name,
-        presented_caller_id,
-        bridge_number,
-        target_phone,
-        counterparty_phone,
-        matched_contact_id,
-        matched_contact_name,
-        matched_business_account_id,
-        matched_company_name,
-        phone_match_type,
-        phone_match_ambiguity_count,
-        initiated_from_surface,
-        linked_account_row_key,
-        linked_business_account_id,
-        linked_contact_id,
-        metadata_json,
-        updated_at
-      ) VALUES (
-        @session_id,
-        @root_call_sid,
-        @primary_leg_sid,
-        @source,
-        @direction,
-        @outcome,
-        @answered,
-        @started_at,
-        @answered_at,
-        @ended_at,
-        @talk_duration_seconds,
-        @ring_duration_seconds,
-        @employee_login_name,
-        @employee_display_name,
-        @employee_contact_id,
-        @employee_phone,
-        @recipient_employee_login_name,
-        @recipient_employee_display_name,
-        @presented_caller_id,
-        @bridge_number,
-        @target_phone,
-        @counterparty_phone,
-        @matched_contact_id,
-        @matched_contact_name,
-        @matched_business_account_id,
-        @matched_company_name,
-        @phone_match_type,
-        @phone_match_ambiguity_count,
-        @initiated_from_surface,
-        @linked_account_row_key,
-        @linked_business_account_id,
-        @linked_contact_id,
-        @metadata_json,
-        @updated_at
-      )
-      `,
-    );
 
     for (const session of nextSessions) {
-      insert.run({
-        session_id: session.sessionId,
-        root_call_sid: session.rootCallSid,
-        primary_leg_sid: session.primaryLegSid,
-        source: session.source,
-        direction: session.direction,
-        outcome: session.outcome,
-        answered: session.answered ? 1 : 0,
-        started_at: session.startedAt,
-        answered_at: session.answeredAt,
-        ended_at: session.endedAt,
-        talk_duration_seconds: session.talkDurationSeconds,
-        ring_duration_seconds: session.ringDurationSeconds,
-        employee_login_name: session.employeeLoginName,
-        employee_display_name: session.employeeDisplayName,
-        employee_contact_id: session.employeeContactId,
-        employee_phone: session.employeePhone,
-        recipient_employee_login_name: session.recipientEmployeeLoginName,
-        recipient_employee_display_name: session.recipientEmployeeDisplayName,
-        presented_caller_id: session.presentedCallerId,
-        bridge_number: session.bridgeNumber,
-        target_phone: session.targetPhone,
-        counterparty_phone: session.counterpartyPhone,
-        matched_contact_id: session.matchedContactId,
-        matched_contact_name: session.matchedContactName,
-        matched_business_account_id: session.matchedBusinessAccountId,
-        matched_company_name: session.matchedCompanyName,
-        phone_match_type: session.phoneMatchType,
-        phone_match_ambiguity_count: session.phoneMatchAmbiguityCount,
-        initiated_from_surface: session.initiatedFromSurface,
-        linked_account_row_key: session.linkedAccountRowKey,
-        linked_business_account_id: session.linkedBusinessAccountId,
-        linked_contact_id: session.linkedContactId,
-        metadata_json: session.metadataJson,
-        updated_at: session.updatedAt,
-      });
+      insert.run(toCallSessionInsertParams(session));
     }
   });
 
   replace(sessions);
-  sessions.forEach((session) => {
-    upsertCallAuditEvent(session);
-  });
-  invalidateDashboardSnapshotCache();
-  publishAuditLogChanged("call-sessions-rebuilt");
+  finalizeCallSessionWrites("call-sessions-rebuilt", sessions);
   return sessions;
 }
 

@@ -14,7 +14,12 @@ import {
   readTwilioVerifiedCallerDirectory,
   type TwilioVerifiedCallerIdentity,
 } from "@/lib/twilio";
-import { readCallLegsBySessionId, readCallSessionById, rebuildCallSessions } from "@/lib/call-analytics/sessionize";
+import {
+  readCallLegsBySessionId,
+  readCallSessionById,
+  rebuildCallSession,
+  rebuildCallSessions,
+} from "@/lib/call-analytics/sessionize";
 import type { CallEmployeeDirectoryItem, CallSessionRecord } from "@/lib/call-analytics/types";
 import {
   readCallEmployeeDirectory,
@@ -87,15 +92,7 @@ type TwilioCallRecordLike = {
 };
 
 let refreshInFlight: Promise<CallIngestState> | null = null;
-const CALL_SESSION_REBUILD_DEBOUNCE_MS = 1500;
-const CALL_SESSION_REBUILD_SLOW_MS = 2000;
 const RECENT_RECONCILE_WINDOW_MS = 48 * 60 * 60 * 1000;
-let scheduledSessionRebuild: ReturnType<typeof setTimeout> | null = null;
-let sessionRebuildInFlight = false;
-const pendingBridgeNumbers = new Set<string>();
-let pendingSessionRebuildPromise: Promise<void> | null = null;
-let pendingSessionRebuildResolve: (() => void) | null = null;
-let pendingSessionRebuildReject: ((error: unknown) => void) | null = null;
 
 export type CallAnalyticsRefreshEligibility = Pick<
   CallIngestState,
@@ -115,85 +112,21 @@ export type TwilioStatusCallbackResult = {
   rebuildPromise: Promise<void> | null;
 };
 
-function scheduleCallSessionRebuild(bridgeNumbers: string[] = []): Promise<void> {
-  for (const number of bridgeNumbers) {
-    if (number) {
-      pendingBridgeNumbers.add(number);
-    }
-  }
-
-  if (!pendingSessionRebuildPromise) {
-    pendingSessionRebuildPromise = new Promise<void>((resolve, reject) => {
-      pendingSessionRebuildResolve = resolve;
-      pendingSessionRebuildReject = reject;
-    });
-  }
-
-  if (!scheduledSessionRebuild) {
-    scheduledSessionRebuild = setTimeout(runScheduledSessionRebuild, CALL_SESSION_REBUILD_DEBOUNCE_MS);
-  }
-
-  return pendingSessionRebuildPromise;
-}
-
-function runScheduledSessionRebuild(): void {
-  if (sessionRebuildInFlight) {
-    scheduledSessionRebuild = setTimeout(runScheduledSessionRebuild, CALL_SESSION_REBUILD_DEBOUNCE_MS);
-    return;
-  }
-
-  scheduledSessionRebuild = null;
-  const resolve = pendingSessionRebuildResolve;
-  const reject = pendingSessionRebuildReject;
-  pendingSessionRebuildResolve = null;
-  pendingSessionRebuildReject = null;
-  pendingSessionRebuildPromise = null;
-
-  const bridgeNumbers = [...pendingBridgeNumbers];
-  pendingBridgeNumbers.clear();
-
-  const startedAt = Date.now();
-  sessionRebuildInFlight = true;
-  try {
-    rebuildCallSessions({ bridgeNumbers });
-    resolve?.();
-  } catch (error) {
-    reject?.(error);
-  } finally {
-    sessionRebuildInFlight = false;
-    const durationMs = Date.now() - startedAt;
-    if (durationMs > CALL_SESSION_REBUILD_SLOW_MS) {
-      console.warn("[call-sessions] rebuild took longer than expected", {
-        durationMs,
-        bridgeNumbers: bridgeNumbers.length,
-      });
-    }
-
-    if (pendingBridgeNumbers.size > 0 && !scheduledSessionRebuild) {
-      scheduledSessionRebuild = setTimeout(runScheduledSessionRebuild, CALL_SESSION_REBUILD_DEBOUNCE_MS);
-    }
-  }
-}
-
-function queueCallSessionRebuildInBackground(bridgeNumbers: string[] = []): void {
-  void scheduleCallSessionRebuild(bridgeNumbers).catch((error) => {
-    console.error("[call-sessions] scheduled rebuild failed", {
-      error: error instanceof Error ? error.message : String(error),
-      bridgeNumbers: bridgeNumbers.length,
-    });
-  });
-}
-
-function queueCallSessionRebuildAfterInventoryLookup(): void {
-  void readTwilioPhoneInventory()
-    .then((inventory) => {
-      queueCallSessionRebuildInBackground(inventory.voiceNumbers);
+function queueTargetedCallSessionRebuildInBackground(options: {
+  rootCallSid?: string | null;
+  sessionId?: string | null;
+  bridgeNumbers?: string[];
+}): Promise<void> {
+  return Promise.resolve()
+    .then(() => {
+      rebuildCallSession(options);
     })
     .catch((error) => {
-      console.warn("[twilio] phone inventory refresh failed during session reconcile", {
+      console.error("[call-sessions] targeted rebuild failed", {
+        sessionId: options.sessionId ?? null,
+        rootCallSid: options.rootCallSid ?? null,
         error: error instanceof Error ? error.message : String(error),
       });
-      queueCallSessionRebuildInBackground();
     });
 }
 
@@ -826,8 +759,14 @@ export async function reconcileTwilioSession(sessionId: string): Promise<CallSes
     normalizeTwilioCallRecord(call, "app_bridge", normalizedSessionId);
   }
 
-  queueCallSessionRebuildAfterInventoryLookup();
-  return readCallSessionById(normalizedSessionId) ?? existingSession;
+  const refreshedSession =
+    rebuildCallSession({
+      rootCallSid,
+      sessionId: normalizedSessionId,
+    }) ??
+    readCallSessionById(normalizedSessionId);
+
+  return refreshedSession ?? existingSession;
 }
 
 function readCallbackUrlBase(requestOrUrl?: string | URL | NextRequest): string {
@@ -924,7 +863,9 @@ export function recordProvisionalBridgeCall(input: ProvisionalBridgeCallInput): 
     },
   });
 
-  rebuildCallSessions({
+  rebuildCallSession({
+    rootCallSid: input.rootCallSid,
+    sessionId: input.sessionId,
     bridgeNumbers: [input.bridgeNumber],
   });
 }
@@ -1270,17 +1211,10 @@ export async function processTwilioStatusCallback(
     },
   });
 
-  const rebuildPromise = (async () => {
-    try {
-      const inventory = await readTwilioPhoneInventory();
-      return scheduleCallSessionRebuild(inventory.voiceNumbers);
-    } catch (error) {
-      console.warn("[twilio] phone inventory refresh failed during status callback", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return scheduleCallSessionRebuild();
-    }
-  })();
+  const rebuildPromise = queueTargetedCallSessionRebuildInBackground({
+    rootCallSid: params.ParentCallSid?.trim() || callSid,
+    sessionId,
+  });
   invalidateDashboardSnapshotCache();
   writeCallIngestState({
     status: readCallIngestState().fullHistoryComplete ? "complete" : "idle",

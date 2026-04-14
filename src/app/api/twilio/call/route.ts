@@ -20,6 +20,7 @@ import {
   reconcileTwilioSession,
   recordProvisionalBridgeCall,
 } from "@/lib/call-analytics/ingest";
+import type { CallSessionRecord } from "@/lib/call-analytics/types";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { formatPhoneForTwilioDial } from "@/lib/phone";
 import { endBridgeCall, resolveCallerProfile, startBridgeCall } from "@/lib/twilio-outbound";
@@ -37,7 +38,8 @@ type StartPayload = {
 };
 
 const ACTIVE_BRIDGE_CALL_LOOKBACK_MS = 45_000;
-const ACTIVE_SESSION_RECONCILE_INTERVAL_MS = 15_000;
+const ACTIVE_SESSION_RECONCILE_INTERVAL_MS = 30_000;
+const ACTIVE_SESSION_CALLBACK_FRESHNESS_MS = 20_000;
 const pendingBridgeCallStarts = new Map<string, Promise<BridgeCallStartResult>>();
 const pendingSessionReconciles = new Map<string, Promise<unknown>>();
 const lastSessionReconcileAt = new Map<string, number>();
@@ -141,9 +143,22 @@ async function startOrJoinPendingBridgeCall(
   }
 }
 
-function maybeStartSessionReconcile(sessionId: string): void {
-  const normalizedSessionId = sessionId.trim();
+function shouldSkipFreshWebhookDrivenReconcile(session: CallSessionRecord): boolean {
+  const updatedAtMs = Date.parse(session.updatedAt);
+  if (!Number.isFinite(updatedAtMs)) {
+    return false;
+  }
+
+  return Date.now() - updatedAtMs < ACTIVE_SESSION_CALLBACK_FRESHNESS_MS;
+}
+
+function maybeStartSessionReconcile(session: CallSessionRecord): void {
+  const normalizedSessionId = session.sessionId.trim();
   if (!normalizedSessionId) {
+    return;
+  }
+
+  if (shouldSkipFreshWebhookDrivenReconcile(session)) {
     return;
   }
 
@@ -184,7 +199,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   if (!session.endedAt || session.outcome === "in_progress") {
-    maybeStartSessionReconcile(sessionId);
+    maybeStartSessionReconcile(session);
     session = readCallSessionById(sessionId) ?? session;
   } else {
     pendingSessionReconciles.delete(sessionId);

@@ -16,12 +16,16 @@ const {
 } = vi.hoisted(() => ({
   buildPhoneMatchIndexMock: vi.fn(() => ({})),
   getEnvMock: vi.fn(() => ({
+    APP_BASE_URL: "https://sales-meadowb.example.com",
     DAILY_CALL_COACHING_ENABLED: true,
     DAILY_CALL_COACHING_LOOKBACK_DAYS: 1,
     DAILY_CALL_COACHING_SCHEDULE_HOUR: 7,
     DAILY_CALL_COACHING_SCHEDULE_MINUTE: 0,
     DAILY_CALL_COACHING_SENDER_LOGIN: "jserrano",
     DAILY_CALL_COACHING_TIME_ZONE: "America/Toronto",
+    MAIL_PROXY_SHARED_SECRET: "proxy-secret",
+    MAIL_SERVICE_SHARED_SECRET: "shared-secret",
+    MAIL_SERVICE_URL: "https://mail-service.example.com",
     MAIL_INTERNAL_DOMAIN: "meadowb.com",
     OPENAI_API_KEY: "",
   })),
@@ -104,6 +108,7 @@ import {
   buildDailyCallCoachingReport,
   getDailyCallCoachingExistingSkipDetail,
   buildDailyCallCoachingMailPayload,
+  resolveDailyCallCoachingMailSendTarget,
   buildDailyCallCoachingStats,
   buildFallbackDailyCallCoachingContent,
   runDailyCallCoaching,
@@ -165,12 +170,16 @@ describe("daily-call-coaching", () => {
     buildPhoneMatchIndexMock.mockReturnValue({});
     getEnvMock.mockReset();
     getEnvMock.mockReturnValue({
+      APP_BASE_URL: "https://sales-meadowb.example.com",
       DAILY_CALL_COACHING_ENABLED: true,
       DAILY_CALL_COACHING_LOOKBACK_DAYS: 1,
       DAILY_CALL_COACHING_SCHEDULE_HOUR: 7,
       DAILY_CALL_COACHING_SCHEDULE_MINUTE: 0,
       DAILY_CALL_COACHING_SENDER_LOGIN: "jserrano",
       DAILY_CALL_COACHING_TIME_ZONE: "America/Toronto",
+      MAIL_PROXY_SHARED_SECRET: "proxy-secret",
+      MAIL_SERVICE_SHARED_SECRET: "shared-secret",
+      MAIL_SERVICE_URL: "https://mail-service.example.com",
       MAIL_INTERNAL_DOMAIN: "meadowb.com",
       OPENAI_API_KEY: "",
     });
@@ -438,6 +447,36 @@ describe("daily-call-coaching", () => {
     expect(payload.to[0]?.contactId).toBe(157497);
     expect(payload.matchedContacts[0]?.contactId).toBe(157497);
     expect(payload.matchedContacts[0]?.email).toBe("stita@meadowb.com");
+  });
+
+  it("routes internal coaching email through the embedded mail proxy when available", () => {
+    const target = resolveDailyCallCoachingMailSendTarget({
+      recipientEmail: "stita@meadowb.com",
+      sender: {
+        loginName: "jserrano",
+        displayName: "Jorge Serrano",
+        email: "jserrano@meadowb.com",
+      },
+    });
+
+    expect(target.transport).toBe("embedded_proxy");
+    expect(target.url).toBe("https://sales-meadowb.example.com/quotes/api/mail/messages/send");
+    expect(target.assertion.startsWith("mbmail.v1.")).toBe(true);
+  });
+
+  it("keeps external coaching email on the configured mail service", () => {
+    const target = resolveDailyCallCoachingMailSendTarget({
+      recipientEmail: "preview@example.com",
+      sender: {
+        loginName: "jserrano",
+        displayName: "Jorge Serrano",
+        email: "jserrano@meadowb.com",
+      },
+    });
+
+    expect(target.transport).toBe("mail_service");
+    expect(target.url).toBe("https://mail-service.example.com/api/mail/messages/send");
+    expect(target.assertion.startsWith("mbmail.v1.")).toBe(true);
   });
 
   it("aggregates aliased rep login names into one daily report", async () => {

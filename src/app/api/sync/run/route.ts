@@ -23,6 +23,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       authCookieRefresh,
       force: true,
     });
+    if (responseBody.alreadyRunning) {
+      throw new HttpError(409, "A full account sync is already running.");
+    }
     const response = NextResponse.json(responseBody);
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);

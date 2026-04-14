@@ -63,6 +63,19 @@ export function ensureMailServiceConfigured(): {
   };
 }
 
+export function ensureMailProxyConfigured(): {
+  sharedSecret: string;
+} {
+  const env = getEnv();
+  if (!env.MAIL_PROXY_SHARED_SECRET) {
+    throw new HttpError(500, "MAIL_PROXY_SHARED_SECRET is not configured.");
+  }
+
+  return {
+    sharedSecret: env.MAIL_PROXY_SHARED_SECRET,
+  };
+}
+
 export async function resolveMailSenderForRequest(
   request: NextRequest,
   authCookieRefresh?: AuthCookieRefreshState,
@@ -118,8 +131,10 @@ function signAssertion(encodedPayload: string, sharedSecret: string): string {
   return crypto.createHmac("sha256", sharedSecret).update(encodedPayload).digest("base64url");
 }
 
-export function buildMailServiceAssertion(input: ResolvedMailSender): string {
-  const { sharedSecret } = ensureMailServiceConfigured();
+function buildSignedMailAssertion(
+  input: ResolvedMailSender,
+  sharedSecret: string,
+): string {
   const issuedAt = Date.now();
   const payload = {
     loginName: input.loginName,
@@ -133,4 +148,14 @@ export function buildMailServiceAssertion(input: ResolvedMailSender): string {
   const encodedPayload = base64UrlEncode(JSON.stringify(payload));
   const signature = signAssertion(encodedPayload, sharedSecret);
   return `${MAIL_ASSERTION_NAMESPACE}.${MAIL_ASSERTION_VERSION}.${encodedPayload}.${signature}`;
+}
+
+export function buildMailServiceAssertion(input: ResolvedMailSender): string {
+  const { sharedSecret } = ensureMailServiceConfigured();
+  return buildSignedMailAssertion(input, sharedSecret);
+}
+
+export function buildMailProxyAssertion(input: ResolvedMailSender): string {
+  const { sharedSecret } = ensureMailProxyConfigured();
+  return buildSignedMailAssertion(input, sharedSecret);
 }

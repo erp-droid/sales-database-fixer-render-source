@@ -78,7 +78,10 @@ type TwilioCallContextValue = {
   error: string | null;
 };
 
-const CALL_STATUS_POLL_INTERVAL_MS = 5_000;
+const CALL_STATUS_POLL_INTERVAL_MS_INITIAL = 5_000;
+const CALL_STATUS_POLL_INTERVAL_MS_ACTIVE = 15_000;
+const CALL_STATUS_POLL_INTERVAL_MS_CONNECTED = 20_000;
+const CALL_STATUS_POLL_BACKOFF_AFTER_MS = 30_000;
 
 const TwilioCallContext = createContext<TwilioCallContextValue | null>(null);
 
@@ -304,6 +307,7 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
     context?: StartCallContext;
   } | null>(null);
   const statusPollFailureCountRef = useRef(0);
+  const callStartedAtRef = useRef<number | null>(null);
 
   function clearActiveCallState(): void {
     setCallSid(null);
@@ -313,6 +317,7 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
     setActiveUserPhone(null);
     setActiveTargetPhone(null);
     statusPollFailureCountRef.current = 0;
+    callStartedAtRef.current = null;
   }
 
   useEffect(() => {
@@ -371,6 +376,7 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
     setCallerVerification(null);
     setIsInitializing(true);
     statusPollFailureCountRef.current = 0;
+    callStartedAtRef.current = Date.now();
     setActiveLabel(label ?? phone);
     setStatusText("Calling your phone...");
     setActiveUserPhone(cachedCallerPhone);
@@ -539,6 +545,31 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
 
     const activeSessionId = sessionId;
     let cancelled = false;
+    let timeoutId: number | null = null;
+    let lastKnownAnswered = false;
+
+    function computeNextPollDelay(answered: boolean): number {
+      if (answered) {
+        return CALL_STATUS_POLL_INTERVAL_MS_CONNECTED;
+      }
+
+      const startedAt = callStartedAtRef.current;
+      if (startedAt && Date.now() - startedAt >= CALL_STATUS_POLL_BACKOFF_AFTER_MS) {
+        return CALL_STATUS_POLL_INTERVAL_MS_ACTIVE;
+      }
+
+      return CALL_STATUS_POLL_INTERVAL_MS_INITIAL;
+    }
+
+    function scheduleNextPoll(answered: boolean): void {
+      if (cancelled) {
+        return;
+      }
+
+      timeoutId = window.setTimeout(() => {
+        void pollStatus();
+      }, computeNextPollDelay(answered));
+    }
 
     async function pollStatus() {
       try {
@@ -562,18 +593,22 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
           ) {
             clearActiveCallState();
             setError("The previous call session could not be verified. You can start a new call.");
+            return;
           }
+          scheduleNextPoll(lastKnownAnswered);
           return;
         }
 
         statusPollFailureCountRef.current = 0;
 
         if (payload.active) {
+          lastKnownAnswered = payload.answered;
           setStatusText(
             payload.answered
               ? "Call connected."
               : "Answer your phone to connect the call.",
           );
+          scheduleNextPoll(payload.answered);
           return;
         }
 
@@ -583,18 +618,20 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
         if (statusPollFailureCountRef.current >= 3) {
           clearActiveCallState();
           setError("The previous call session timed out. You can start a new call.");
+          return;
         }
+
+        scheduleNextPoll(lastKnownAnswered);
       }
     }
 
     void pollStatus();
-    const intervalId = window.setInterval(() => {
-      void pollStatus();
-    }, CALL_STATUS_POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [activeLabel, sessionId]);
 

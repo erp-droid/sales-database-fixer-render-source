@@ -21,6 +21,7 @@ function setMailEnv(): void {
   process.env.AUTH_COOKIE_SECURE = "false";
   process.env.MAIL_SERVICE_URL = "https://mail-service.example.com";
   process.env.MAIL_SERVICE_SHARED_SECRET = "shared-secret";
+  process.env.MAIL_PROXY_SHARED_SECRET = "proxy-secret";
   process.env.MAIL_INTERNAL_DOMAIN = "meadowb.com";
   process.env.CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS = "86400000";
 }
@@ -50,6 +51,27 @@ describe("mail auth helpers", () => {
     const { buildMailServiceAssertion } = await import("@/lib/mail-auth");
 
     const token = buildMailServiceAssertion({
+      loginName: "jserrano",
+      displayName: "Jorge Serrano",
+      senderEmail: "jserrano@meadowb.com",
+    });
+
+    expect(token.startsWith("mbmail.v1.")).toBe(true);
+    const [, , encodedPayload] = token.split(".");
+    const decoded = JSON.parse(
+      Buffer.from(encodedPayload, "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+
+    expect(decoded.loginName).toBe("jserrano");
+    expect(decoded.displayName).toBe("Jorge Serrano");
+    expect(decoded.senderEmail).toBe("jserrano@meadowb.com");
+    expect(decoded.sourceApp).toBe("sales-database-fixer");
+  });
+
+  it("builds a signed assertion for the embedded mail proxy", async () => {
+    const { buildMailProxyAssertion } = await import("@/lib/mail-auth");
+
+    const token = buildMailProxyAssertion({
       loginName: "jserrano",
       displayName: "Jorge Serrano",
       senderEmail: "jserrano@meadowb.com",

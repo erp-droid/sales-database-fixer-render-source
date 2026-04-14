@@ -17,6 +17,7 @@ import { replaceAllAccountRows, readAllAccountRowsFromReadModel } from "@/lib/re
 import { invalidateReadModelCaches } from "@/lib/read-model/cache";
 import { syncCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
 import { readCallIngestState } from "@/lib/call-analytics/ingest";
+import { publishBusinessAccountChanged } from "@/lib/business-account-live";
 import { withServiceAcumaticaSession } from "@/lib/acumatica-service-auth";
 import { getEnv } from "@/lib/env";
 import { syncMeetingBookings } from "@/lib/meeting-bookings";
@@ -430,6 +431,12 @@ async function runFullSync(
       accounts_count: counts.accountsCount,
       contacts_count: counts.contactsCount,
       progress_json: null,
+    });
+    publishBusinessAccountChanged({
+      accountRecordId: "__full_sync__",
+      businessAccountId: null,
+      targetContactId: null,
+      reason: "full-sync",
     });
 
     kickGeocodeWorker();

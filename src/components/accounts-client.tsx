@@ -3382,6 +3382,18 @@ export function AccountsClient({
     },
   );
 
+  const refreshSnapshotFromLive = useEffectEvent(async () => {
+    const cachedDataset = readCachedDatasetFromStorage();
+
+    try {
+      const nextRows = await loadSnapshotRows(cachedDataset);
+      setAllRows(enforceSinglePrimaryPerAccountRows(nextRows));
+      setError(null);
+    } catch {
+      // Ignore transient full-refresh failures and keep the current working set.
+    }
+  });
+
   useEffect(() => {
     if (!session?.authenticated) {
       return;
@@ -3391,7 +3403,16 @@ export function AccountsClient({
     const handleChanged = (rawEvent: MessageEvent) => {
       try {
         const parsed = JSON.parse(rawEvent.data) as BusinessAccountLiveEvent;
-        if (parsed && parsed.type === "changed" && parsed.accountRecordId) {
+        if (parsed?.type !== "changed") {
+          return;
+        }
+
+        if (parsed.reason === "full-sync") {
+          void refreshSnapshotFromLive();
+          return;
+        }
+
+        if (parsed.accountRecordId) {
           void refreshLiveUpdatedAccount(parsed);
         }
       } catch {
@@ -3405,7 +3426,7 @@ export function AccountsClient({
       eventSource.removeEventListener("changed", handleChanged as EventListener);
       eventSource.close();
     };
-  }, [refreshLiveUpdatedAccount, session?.authenticated]);
+  }, [refreshLiveUpdatedAccount, refreshSnapshotFromLive, session?.authenticated]);
 
   useEffect(() => {
     if (!session?.authenticated || !selected) {

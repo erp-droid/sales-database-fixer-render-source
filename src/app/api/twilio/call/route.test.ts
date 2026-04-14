@@ -290,3 +290,123 @@ describe("POST /api/twilio/call", () => {
     );
   });
 });
+
+describe("GET /api/twilio/call", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    getAuthCookieValue.mockReturnValue("cookie");
+  });
+
+  it("skips Twilio reconcile when webhook activity updated the session recently", async () => {
+    const freshUpdatedAt = new Date(Date.now() - 5_000).toISOString();
+    readCallSessionById.mockReturnValue({
+      sessionId: "session-1",
+      rootCallSid: "CA123",
+      primaryLegSid: "CA123",
+      source: "app_bridge",
+      direction: "outbound",
+      outcome: "in_progress",
+      answered: false,
+      startedAt: "2026-04-14T12:00:00.000Z",
+      answeredAt: null,
+      endedAt: null,
+      talkDurationSeconds: null,
+      ringDurationSeconds: null,
+      employeeLoginName: "bkoczka",
+      employeeDisplayName: "Brock Koczka",
+      employeeContactId: 42,
+      employeePhone: "+14165550111",
+      recipientEmployeeLoginName: null,
+      recipientEmployeeDisplayName: null,
+      presentedCallerId: "+14165550111",
+      bridgeNumber: "+14165559999",
+      targetPhone: "+14165550123",
+      counterpartyPhone: "+14165550123",
+      matchedContactId: null,
+      matchedContactName: null,
+      matchedBusinessAccountId: null,
+      matchedCompanyName: null,
+      phoneMatchType: "none",
+      phoneMatchAmbiguityCount: 0,
+      initiatedFromSurface: "accounts",
+      linkedAccountRowKey: null,
+      linkedBusinessAccountId: null,
+      linkedContactId: null,
+      metadataJson: "{}",
+      updatedAt: freshUpdatedAt,
+    });
+
+    const { GET } = await import("@/app/api/twilio/call/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/twilio/call?sessionId=session-1"),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({
+        sessionId: "session-1",
+        active: true,
+        outcome: "in_progress",
+      }),
+    );
+    expect(reconcileTwilioSession).not.toHaveBeenCalled();
+  });
+
+  it("starts a Twilio reconcile once an active session has gone stale", async () => {
+    const staleUpdatedAt = new Date(Date.now() - 45_000).toISOString();
+    const staleSession = {
+      sessionId: "session-2",
+      rootCallSid: "CA456",
+      primaryLegSid: "CA456",
+      source: "app_bridge",
+      direction: "outbound",
+      outcome: "in_progress",
+      answered: false,
+      startedAt: "2026-04-14T12:00:00.000Z",
+      answeredAt: null,
+      endedAt: null,
+      talkDurationSeconds: null,
+      ringDurationSeconds: null,
+      employeeLoginName: "bkoczka",
+      employeeDisplayName: "Brock Koczka",
+      employeeContactId: 42,
+      employeePhone: "+14165550111",
+      recipientEmployeeLoginName: null,
+      recipientEmployeeDisplayName: null,
+      presentedCallerId: "+14165550111",
+      bridgeNumber: "+14165559999",
+      targetPhone: "+14165550123",
+      counterpartyPhone: "+14165550123",
+      matchedContactId: null,
+      matchedContactName: null,
+      matchedBusinessAccountId: null,
+      matchedCompanyName: null,
+      phoneMatchType: "none" as const,
+      phoneMatchAmbiguityCount: 0,
+      initiatedFromSurface: "accounts" as const,
+      linkedAccountRowKey: null,
+      linkedBusinessAccountId: null,
+      linkedContactId: null,
+      metadataJson: "{}",
+      updatedAt: staleUpdatedAt,
+    };
+
+    readCallSessionById.mockReturnValue(staleSession);
+    reconcileTwilioSession.mockResolvedValue(staleSession);
+
+    const { GET } = await import("@/app/api/twilio/call/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/twilio/call?sessionId=session-2"),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({
+        sessionId: "session-2",
+        active: true,
+      }),
+    );
+    expect(reconcileTwilioSession).toHaveBeenCalledWith("session-2");
+  });
+});

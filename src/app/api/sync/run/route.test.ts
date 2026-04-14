@@ -84,4 +84,39 @@ describe("POST /api/sync/run", () => {
       force: true,
     });
   });
+
+  it("returns a hard block when another sync is already in flight", async () => {
+    triggerReadModelSync.mockResolvedValueOnce({
+      accepted: true,
+      alreadyRunning: true,
+      status: {
+        status: "running" as const,
+        phase: "fetch",
+        startedAt: "2026-04-14T12:00:00.000Z",
+        completedAt: null,
+        lastSuccessfulSyncAt: "2026-04-14T11:45:00.000Z",
+        lastError: null,
+        rowsCount: 100,
+        accountsCount: 90,
+        contactsCount: 80,
+        progress: null,
+        manualSyncBlockedReason: null,
+      },
+    });
+
+    const { POST } = await import("@/app/api/sync/run/route");
+    const response = await POST(
+      new NextRequest("http://localhost/api/sync/run", {
+        method: "POST",
+        headers: {
+          cookie: ".ASPXAUTH=existing-cookie",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "A full account sync is already running.",
+    });
+  });
 });

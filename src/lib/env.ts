@@ -70,6 +70,7 @@ const schema = z.object({
   ACUMATICA_OPPORTUNITY_LINK_TO_DRIVE_DEFAULT: z.string().default(""),
   MAIL_SERVICE_URL: z.string().url().optional(),
   MAIL_SERVICE_SHARED_SECRET: z.string().min(1).optional(),
+  MAIL_PROXY_SHARED_SECRET: z.string().min(1).optional(),
   MAIL_INTERNAL_DOMAIN: z.string().min(1).default("meadowb.com"),
   MAIL_CONNECT_RETURN_PATH: z.string().min(1).default("/mail"),
   ONBOARDING_TRIGGER_SECRET: z.string().min(1).optional(),
@@ -173,10 +174,11 @@ export type AppEnv = {
   ACUMATICA_OPPORTUNITY_ATTR_PROJECT_TYPE_ID: string;
   ACUMATICA_OPPORTUNITY_LINK_TO_DRIVE_DEFAULT: string;
   ACUMATICA_OPPORTUNITY_DEFAULT_LINK_TO_DRIVE: string;
-    MAIL_SERVICE_URL?: string;
-    MAIL_SERVICE_SHARED_SECRET?: string;
-    MAIL_INTERNAL_DOMAIN: string;
-    MAIL_CONNECT_RETURN_PATH: string;
+  MAIL_SERVICE_URL?: string;
+  MAIL_SERVICE_SHARED_SECRET?: string;
+  MAIL_PROXY_SHARED_SECRET?: string;
+  MAIL_INTERNAL_DOMAIN: string;
+  MAIL_CONNECT_RETURN_PATH: string;
   ONBOARDING_TRIGGER_SECRET?: string;
   ONBOARDING_SCAN_LOOKBACK_HOURS: number;
   ONBOARDING_WON_STAGES: string[];
@@ -315,6 +317,7 @@ export function getEnv(): AppEnv {
     ),
     MAIL_SERVICE_URL: emptyToUndefined(process.env.MAIL_SERVICE_URL),
     MAIL_SERVICE_SHARED_SECRET: emptyToUndefined(process.env.MAIL_SERVICE_SHARED_SECRET),
+    MAIL_PROXY_SHARED_SECRET: emptyToUndefined(process.env.MAIL_PROXY_SHARED_SECRET),
     MAIL_INTERNAL_DOMAIN: emptyToUndefined(process.env.MAIL_INTERNAL_DOMAIN),
     MAIL_CONNECT_RETURN_PATH: emptyToUndefined(process.env.MAIL_CONNECT_RETURN_PATH),
     ONBOARDING_TRIGGER_SECRET: emptyToUndefined(process.env.ONBOARDING_TRIGGER_SECRET),

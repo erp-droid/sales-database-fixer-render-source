@@ -18,7 +18,11 @@ import { countRemainingCallActivitySyncJobs } from "@/lib/call-analytics/postcal
 import { readCallActivitySyncBySessionId } from "@/lib/call-analytics/postcall-store";
 import { readCallSessions } from "@/lib/call-analytics/sessionize";
 import type { CallIngestState } from "@/lib/call-analytics/types";
-import { buildMailServiceAssertion, ensureMailServiceConfigured } from "@/lib/mail-auth";
+import {
+  buildMailProxyAssertion,
+  buildMailServiceAssertion,
+  ensureMailServiceConfigured,
+} from "@/lib/mail-auth";
 import { getReadModelDb } from "@/lib/read-model/db";
 import type { MailComposePayload, MailRecipient } from "@/types/mail-compose";
 
@@ -230,6 +234,58 @@ function cleanText(value: string | null | undefined): string {
 
 function normalizeComparable(value: string | null | undefined): string {
   return cleanText(value).toLowerCase();
+}
+
+function normalizeMountPath(value: string | null | undefined, fallback = "/quotes"): string {
+  const raw = cleanText(value) || fallback;
+  const prefixed = raw.startsWith("/") ? raw : `/${raw}`;
+  return prefixed === "/" ? fallback : prefixed.replace(/\/+$/, "");
+}
+
+function isInternalMailboxEmail(email: string, internalDomain: string): boolean {
+  const normalizedEmail = normalizeComparable(email);
+  const normalizedDomain = normalizeComparable(internalDomain);
+  return Boolean(normalizedEmail && normalizedDomain && normalizedEmail.endsWith(`@${normalizedDomain}`));
+}
+
+export function resolveDailyCallCoachingMailSendTarget(input: {
+  recipientEmail: string;
+  sender: Pick<InternalMailboxProfile, "loginName" | "displayName" | "email">;
+}): {
+  url: string;
+  assertion: string;
+  transport: "embedded_proxy" | "mail_service";
+} {
+  const env = getEnv();
+  const appBaseUrl = cleanText(env.APP_BASE_URL);
+  const canUseEmbeddedProxy =
+    isInternalMailboxEmail(input.recipientEmail, env.MAIL_INTERNAL_DOMAIN) &&
+    appBaseUrl.length > 0 &&
+    cleanText(env.MAIL_PROXY_SHARED_SECRET).length > 0;
+
+  if (canUseEmbeddedProxy) {
+    const mountPath = normalizeMountPath(process.env.MBQ_BASE_PATH, "/quotes");
+    return {
+      url: `${appBaseUrl.replace(/\/$/, "")}${mountPath}/api/mail/messages/send`,
+      assertion: buildMailProxyAssertion({
+        loginName: input.sender.loginName,
+        senderEmail: input.sender.email,
+        displayName: input.sender.displayName,
+      }),
+      transport: "embedded_proxy",
+    };
+  }
+
+  const { serviceUrl } = ensureMailServiceConfigured();
+  return {
+    url: `${serviceUrl.replace(/\/$/, "")}/api/mail/messages/send`,
+    assertion: buildMailServiceAssertion({
+      loginName: input.sender.loginName,
+      senderEmail: input.sender.email,
+      displayName: input.sender.displayName,
+    }),
+    transport: "mail_service",
+  };
 }
 
 function escapeHtml(value: string): string {
@@ -1988,23 +2044,21 @@ async function sendDailyCallCoachingEmail(
   sender: InternalMailboxProfile,
   recipient: InternalMailboxProfile,
 ): Promise<void> {
-  const { serviceUrl } = ensureMailServiceConfigured();
   const payload = buildDailyCallCoachingMailPayload(
     report,
     recipient,
     sender.contactId ?? null,
   );
-  const assertion = buildMailServiceAssertion({
-    loginName: sender.loginName,
-    senderEmail: sender.email,
-    displayName: sender.displayName,
+  const target = resolveDailyCallCoachingMailSendTarget({
+    recipientEmail: recipient.email,
+    sender,
   });
 
-  const response = await fetchWithTimeout(`${serviceUrl.replace(/\/$/, "")}/api/mail/messages/send`, {
+  const response = await fetchWithTimeout(target.url, {
     method: "POST",
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${assertion}`,
+      Authorization: `Bearer ${target.assertion}`,
       "Content-Type": "application/json",
       "x-mb-skip-activity-sync": "1",
     },
