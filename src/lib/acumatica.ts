@@ -3533,6 +3533,59 @@ export async function invokeBusinessAccountAction(
   );
 }
 
+export async function deleteBusinessAccount(
+  cookieValue: string,
+  businessAccountId: string,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<void> {
+  const normalizedBusinessAccountId = businessAccountId.trim();
+  if (!normalizedBusinessAccountId) {
+    throw new HttpError(400, "Business account ID is required.");
+  }
+
+  const resourcePath = `/BusinessAccount/${encodeURIComponent(normalizedBusinessAccountId)}`;
+  const { response } = await performAcumaticaRequestWithEndpointFallback(
+    cookieValue,
+    resourcePath,
+    {
+      method: "DELETE",
+      authCookieRefresh,
+    },
+  );
+
+  if (!response.ok) {
+    const errorResponse = await parseErrorResponse(response);
+    throw new HttpError(
+      response.status,
+      errorResponse.message,
+      errorResponse.details,
+    );
+  }
+
+  if (response.status === 204) {
+    return;
+  }
+
+  const responseText = await response.text();
+  if (!responseText.trim()) {
+    return;
+  }
+
+  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
+  if (!contentType.includes("application/json")) {
+    return;
+  }
+
+  try {
+    JSON.parse(responseText);
+  } catch {
+    throw new HttpError(
+      502,
+      `Acumatica returned invalid JSON while deleting business account '${normalizedBusinessAccountId}'.`,
+    );
+  }
+}
+
 export async function deleteContact(
   cookieValue: string,
   contactId: number,

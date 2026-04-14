@@ -4,14 +4,17 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const deleteBusinessAccountMock = vi.fn();
 const deleteContactMock = vi.fn();
 const fetchBusinessAccountByIdMock = vi.fn();
 const executeDeferredContactMergeRequestMock = vi.fn();
 const normalizeBusinessAccountRowsMock = vi.fn(() => []);
+const removeReadModelRowsByAccountMock = vi.fn();
 const removeReadModelRowsByContactIdMock = vi.fn();
 const replaceReadModelAccountRowsMock = vi.fn();
 
 vi.mock("@/lib/acumatica", () => ({
+  deleteBusinessAccount: deleteBusinessAccountMock,
   deleteContact: deleteContactMock,
   fetchBusinessAccountById: fetchBusinessAccountByIdMock,
 }));
@@ -25,6 +28,7 @@ vi.mock("@/lib/business-accounts", () => ({
 }));
 
 vi.mock("@/lib/read-model/accounts", () => ({
+  removeReadModelRowsByAccount: removeReadModelRowsByAccountMock,
   removeReadModelRowsByContactId: removeReadModelRowsByContactIdMock,
   replaceReadModelAccountRows: replaceReadModelAccountRowsMock,
 }));
@@ -285,6 +289,46 @@ describe("deferred actions executor", () => {
     const record = getStoredDeferredActionById(queued.id);
     expect(record?.status).toBe("executed");
     expect(record?.attemptCount).toBe(1);
+  });
+
+  it("executes queued business account deletions and removes the account from the read model", async () => {
+    const {
+      approveDeferredActions,
+      enqueueDeferredBusinessAccountDeleteAction,
+      getStoredDeferredActionById,
+    } = await import("@/lib/deferred-actions-store");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const { runDueDeferredActions } = await import("@/lib/deferred-actions-executor");
+
+    const actor = { loginName: "jserrano", name: "Jorge Serrano" };
+    const queued = enqueueDeferredBusinessAccountDeleteAction({
+      sourceSurface: "accounts",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "BA0001",
+      companyName: "Alpha Foods",
+      reason: "Closed account",
+      actor,
+    });
+    approveDeferredActions([queued.id], actor);
+
+    const db = getReadModelDb();
+    db.prepare("UPDATE deferred_actions SET execute_after_at = ? WHERE id = ?").run(
+      new Date().toISOString(),
+      queued.id,
+    );
+
+    deleteBusinessAccountMock.mockResolvedValue(undefined);
+
+    const result = await runDueDeferredActions("cookie", actor, { value: null });
+    expect(result).toEqual({
+      executedCount: 1,
+      failedCount: 0,
+    });
+    expect(deleteBusinessAccountMock).toHaveBeenCalledWith("cookie", "BA0001", { value: null });
+    expect(removeReadModelRowsByAccountMock).toHaveBeenCalledWith("record-1", "BA0001");
+
+    const record = getStoredDeferredActionById(queued.id);
+    expect(record?.status).toBe("executed");
   });
 
   it("passes queued merge previews to the deferred merge executor", async () => {

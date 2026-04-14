@@ -263,6 +263,112 @@ describe("deferred actions store", () => {
     ).toHaveLength(1);
   });
 
+  it("queues and projects business account deletions", async () => {
+    const {
+      applyDeferredActionsToRows,
+      enqueueDeferredBusinessAccountDeleteAction,
+      listDeferredActionSummaries,
+    } = await import("@/lib/deferred-actions-store");
+    const { replaceAllAccountRows } = await import("@/lib/read-model/accounts");
+
+    replaceAllAccountRows([
+      {
+        id: "record-1",
+        accountRecordId: "record-1",
+        rowKey: "record-1:primary",
+        contactId: null,
+        isPrimaryContact: false,
+        companyPhone: "905-555-0100",
+        companyPhoneSource: "account",
+        phoneNumber: "905-555-0100",
+        salesRepId: "109343",
+        salesRepName: "Jorge Serrano",
+        accountType: "Lead",
+        opportunityCount: 0,
+        industryType: null,
+        subCategory: null,
+        companyRegion: null,
+        week: null,
+        businessAccountId: "BA0001",
+        companyName: "Alpha Foods",
+        companyDescription: null,
+        address: "1 Main St, Toronto, ON, CA",
+        addressLine1: "1 Main St",
+        addressLine2: "",
+        city: "Toronto",
+        state: "ON",
+        postalCode: "M1M 1M1",
+        country: "CA",
+        primaryContactName: null,
+        primaryContactJobTitle: null,
+        primaryContactPhone: null,
+        primaryContactExtension: null,
+        primaryContactRawPhone: null,
+        primaryContactEmail: null,
+        primaryContactId: null,
+        category: "A",
+        notes: null,
+        lastModifiedIso: "2026-04-01T10:00:00.000Z",
+      },
+    ]);
+
+    enqueueDeferredBusinessAccountDeleteAction({
+      sourceSurface: "accounts",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "BA0001",
+      companyName: "Alpha Foods",
+      reason: "Account no longer needed",
+      actor: {
+        loginName: "jserrano",
+        name: "Jorge Serrano",
+      },
+    });
+
+    const summaries = listDeferredActionSummaries();
+    expect(summaries[0]).toMatchObject({
+      actionType: "deleteBusinessAccount",
+      companyName: "Alpha Foods",
+      accountType: "Lead",
+      opportunityCount: 0,
+      reason: "Account no longer needed",
+    });
+
+    const projectedRows = applyDeferredActionsToRows([
+      {
+        id: "record-1",
+        accountRecordId: "record-1",
+        rowKey: "record-1:primary",
+        contactId: null,
+        isPrimaryContact: false,
+        phoneNumber: null,
+        salesRepId: null,
+        salesRepName: null,
+        industryType: null,
+        subCategory: null,
+        companyRegion: null,
+        week: null,
+        businessAccountId: "BA0001",
+        companyName: "Alpha Foods",
+        address: "",
+        addressLine1: "",
+        addressLine2: "",
+        city: "",
+        state: "",
+        postalCode: "",
+        country: "",
+        primaryContactName: null,
+        primaryContactPhone: null,
+        primaryContactEmail: null,
+        primaryContactId: null,
+        category: null,
+        notes: null,
+        lastModifiedIso: null,
+      },
+    ]);
+
+    expect(projectedRows).toEqual([]);
+  });
+
   it("globally hides queued loser contacts even if sync rows come back under a fallback account key", async () => {
     const {
       applyDeferredActionsToRows,

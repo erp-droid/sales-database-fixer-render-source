@@ -1764,6 +1764,14 @@ function canDeleteRowContact(row: BusinessAccountRow): boolean {
   return resolveRowContactId(row) !== null;
 }
 
+function canDeleteBusinessAccountRow(row: BusinessAccountRow): boolean {
+  return (
+    resolveRowContactId(row) === null &&
+    row.businessAccountId.trim().length > 0 &&
+    resolveRowBusinessAccountRecordId(row).trim().length > 0
+  );
+}
+
 function matchEmployeeByName(
   employees: EmployeeOption[],
   name: string | null | undefined,
@@ -2369,6 +2377,9 @@ export function AccountsClient({
     isOpen: false,
   });
   const [deleteQueueRows, setDeleteQueueRows] = useState<BusinessAccountRow[]>([]);
+  const [deleteBusinessAccountRow, setDeleteBusinessAccountRow] = useState<BusinessAccountRow | null>(
+    null,
+  );
   const [opportunityDrawerContext, setOpportunityDrawerContext] =
     useState<OpportunityDrawerContext>({
       initialAccountRecordId: null,
@@ -2416,6 +2427,7 @@ export function AccountsClient({
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeletingContact, setIsDeletingContact] = useState(false);
+  const [isDeletingBusinessAccount, setIsDeletingBusinessAccount] = useState(false);
   const [isDeletingSelectedContacts, setIsDeletingSelectedContacts] = useState(false);
   const [employeeOptions, setEmployeeOptions] = useState<EmployeeOption[]>([]);
   const [isEmployeesLoading, setIsEmployeesLoading] = useState(false);
@@ -4925,6 +4937,28 @@ export function AccountsClient({
     setDeleteQueueRows([]);
   }
 
+  function openDeleteBusinessAccountConfirmation(row: BusinessAccountRow) {
+    if (!canDeleteBusinessAccountRow(row)) {
+      setSaveError(
+        "Delete every contact on this business account before queueing the account deletion.",
+      );
+      setSaveNotice(null);
+      return;
+    }
+
+    closeTransientMenus();
+    setDeleteBusinessAccountRow(row);
+    setSaveError(null);
+  }
+
+  function closeDeleteBusinessAccountConfirmation() {
+    if (isDeletingBusinessAccount) {
+      return;
+    }
+
+    setDeleteBusinessAccountRow(null);
+  }
+
   function resetContactEnhanceState() {
     setIsEnhancingContact(false);
     setContactEnhanceError(null);
@@ -6085,6 +6119,76 @@ export function AccountsClient({
     }
   }
 
+  async function deleteBusinessAccountRowAction(
+    targetRow: BusinessAccountRow,
+    reason: string,
+  ): Promise<boolean> {
+    const accountRecordId = resolveRowBusinessAccountRecordId(targetRow);
+    const businessAccountId = targetRow.businessAccountId.trim();
+    if (!accountRecordId) {
+      setSaveError("This row has no business account record ID, so it cannot be deleted.");
+      return false;
+    }
+
+    if (!businessAccountId) {
+      setSaveError("This row has no Acumatica business account ID, so it cannot be deleted.");
+      return false;
+    }
+
+    setIsDeletingBusinessAccount(true);
+    setSaveError(null);
+    setSaveNotice(null);
+
+    try {
+      const deleteResponse = await fetch(
+        `/api/business-accounts/${encodeURIComponent(accountRecordId)}?source=accounts`,
+        {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ reason }),
+        },
+      );
+      const deletePayload = await readJsonResponse<{ error?: string }>(deleteResponse);
+      if (!deleteResponse.ok) {
+        throw new Error(parseError(deletePayload));
+      }
+
+      const deletedRowKeys = new Set(
+        allRowsRef.current
+          .filter((row) => resolveRowBusinessAccountRecordId(row) === accountRecordId)
+          .map((row) => getRowKey(row)),
+      );
+      setAllRows((currentRows) =>
+        replaceRowsForAccount(currentRows, [], accountRecordId, businessAccountId),
+      );
+      setLastSyncedAt(new Date().toISOString());
+      clearCachedMapData();
+      setSelectedContactRowKeys((current) =>
+        current.filter((rowKey) => !deletedRowKeys.has(rowKey)),
+      );
+
+      const deletedSelectedAccount =
+        selected !== null && resolveRowBusinessAccountRecordId(selected) === accountRecordId;
+      if (deletedSelectedAccount) {
+        closeDrawer({ preserveNotice: true });
+      }
+
+      setSaveNotice("Business account queued for deletion.");
+      return true;
+    } catch (deleteError) {
+      setSaveError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Failed to queue business account deletion.",
+      );
+      return false;
+    } finally {
+      setIsDeletingBusinessAccount(false);
+    }
+  }
+
   function handleDeleteSelectedContact() {
     if (!selected) {
       return;
@@ -6106,6 +6210,17 @@ export function AccountsClient({
     const deleted = await deleteContactRow(deleteQueueRows[0], reason);
     if (deleted) {
       setDeleteQueueRows([]);
+    }
+  }
+
+  async function handleConfirmDeleteBusinessAccount(reason: string) {
+    if (!deleteBusinessAccountRow) {
+      return;
+    }
+
+    const deleted = await deleteBusinessAccountRowAction(deleteBusinessAccountRow, reason);
+    if (deleted) {
+      setDeleteBusinessAccountRow(null);
     }
   }
 
@@ -6807,6 +6922,7 @@ export function AccountsClient({
                   const rowHasNote = hasRowNote(row);
                   const rowCanEditNote = canEditRowNote(row);
                   const rowCanDelete = canDeleteRowContact(row);
+                  const rowCanDeleteBusinessAccount = canDeleteBusinessAccountRow(row);
                   const rowCanAddContact = canAddContactToRow(row);
                   const isRowSelectable = rowContactId !== null;
                   const isRowChecked = selectedContactRowKeys.includes(rowKey);
@@ -6944,6 +7060,16 @@ export function AccountsClient({
                                   type="button"
                                 >
                                   Delete contact
+                                </button>
+                                <button
+                                  className={`${styles.rowMenuAction} ${styles.rowMenuActionDanger}`}
+                                  disabled={!rowCanDeleteBusinessAccount}
+                                  onClick={() => {
+                                    openDeleteBusinessAccountConfirmation(row);
+                                  }}
+                                  type="button"
+                                >
+                                  Delete business account
                                 </button>
                               </div>
                             ) : null}
@@ -7093,6 +7219,27 @@ export function AccountsClient({
             companyName: row.companyName ?? null,
           }),
         )}
+      />
+      <QueueDeleteContactsModal
+        confirmLabel="Queue account deletion"
+        description="This request will go to the Deletion Queue for approval and will remove the business account after contacts have already been deleted."
+        isOpen={deleteBusinessAccountRow !== null}
+        isSubmitting={isDeletingBusinessAccount}
+        onClose={closeDeleteBusinessAccountConfirmation}
+        onConfirm={handleConfirmDeleteBusinessAccount}
+        reasonPlaceholder="Explain why this business account should be deleted."
+        targets={
+          deleteBusinessAccountRow
+            ? [
+                {
+                  key: resolveRowBusinessAccountRecordId(deleteBusinessAccountRow),
+                  contactName: null,
+                  companyName: deleteBusinessAccountRow.companyName ?? null,
+                },
+              ]
+            : []
+        }
+        title="Queue business account deletion"
       />
 
       <aside className={`${styles.drawer} ${selected ? styles.drawerOpen : ""}`}>
@@ -7980,12 +8127,28 @@ export function AccountsClient({
                 disabled={
                   isSaving ||
                   isDeletingContact ||
+                  isDeletingBusinessAccount ||
                   (selected.contactId ?? selected.primaryContactId ?? null) === null
                 }
                 onClick={handleDeleteSelectedContact}
                 type="button"
               >
                 {isDeletingContact ? "Deleting..." : "Delete contact"}
+              </button>
+              <button
+                className={styles.deleteContactButton}
+                disabled={
+                  isSaving ||
+                  isDeletingContact ||
+                  isDeletingBusinessAccount ||
+                  !canDeleteBusinessAccountRow(selected)
+                }
+                onClick={() => {
+                  openDeleteBusinessAccountConfirmation(selected);
+                }}
+                type="button"
+              >
+                {isDeletingBusinessAccount ? "Deleting..." : "Delete business account"}
               </button>
             </div>
           </div>

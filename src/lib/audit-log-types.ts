@@ -16,6 +16,7 @@ export const AUDIT_ACTION_GROUPS = [
   "contact_delete",
   "contact_merge",
   "business_account_create",
+  "business_account_delete",
 ] as const;
 
 export type AuditActionGroup = (typeof AUDIT_ACTION_GROUPS)[number];

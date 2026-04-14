@@ -14,13 +14,20 @@ type QueueDeleteContactsModalProps = {
   isOpen: boolean;
   isSubmitting: boolean;
   targets: QueueDeleteContactTarget[];
+  title?: string;
+  description?: string;
+  reasonPlaceholder?: string;
+  confirmLabel?: string;
   onClose: () => void;
   onConfirm: (reason: string) => void | Promise<void>;
 };
 
 function formatTargetLabel(target: QueueDeleteContactTarget): string {
-  const contactName = target.contactName?.trim() || "Unnamed contact";
   const companyName = target.companyName?.trim();
+  const contactName = target.contactName?.trim();
+  if (!contactName) {
+    return companyName || "Unnamed record";
+  }
   return companyName ? `${contactName} at ${companyName}` : contactName;
 }
 
@@ -28,6 +35,10 @@ export function QueueDeleteContactsModal({
   isOpen,
   isSubmitting,
   targets,
+  title,
+  description,
+  reasonPlaceholder,
+  confirmLabel,
   onClose,
   onConfirm,
 }: QueueDeleteContactsModalProps) {
@@ -69,10 +80,11 @@ export function QueueDeleteContactsModal({
         <div className={styles.header}>
           <div>
             <h2 id="queue-delete-title">
-              {isBulk ? `Queue ${targets.length} contact deletions` : "Queue contact deletion"}
+              {title ?? (isBulk ? `Queue ${targets.length} contact deletions` : "Queue contact deletion")}
             </h2>
             <p className={styles.subtitle}>
-              The reason below will appear in the Deletion Queue under the `Reason` column.
+              {description ??
+                "The reason below will appear in the Deletion Queue under the `Reason` column."}
             </p>
           </div>
           <button
@@ -100,7 +112,7 @@ export function QueueDeleteContactsModal({
               className={styles.textarea}
               disabled={isSubmitting}
               onChange={(event) => setReason(event.target.value)}
-              placeholder="Explain why this contact should be deleted."
+              placeholder={reasonPlaceholder ?? "Explain why this contact should be deleted."}
               rows={5}
               value={reason}
             />
@@ -124,7 +136,7 @@ export function QueueDeleteContactsModal({
             }}
             type="button"
           >
-            {isSubmitting ? "Queueing..." : "Queue deletion"}
+            {isSubmitting ? "Queueing..." : (confirmLabel ?? "Queue deletion")}
           </button>
         </div>
       </div>

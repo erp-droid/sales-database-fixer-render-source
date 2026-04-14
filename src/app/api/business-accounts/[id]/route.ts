@@ -5,6 +5,8 @@ import { ZodError } from "zod";
 import type { BusinessAccountRow } from "@/types/business-account";
 
 import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
+import { enqueueDeferredBusinessAccountDeleteAction } from "@/lib/deferred-actions-store";
 import {
   type AuthCookieRefreshState,
   fetchBusinessAccountById,
@@ -61,6 +63,7 @@ import {
 } from "@/lib/phone";
 import {
   readBusinessAccountDetailFromReadModel,
+  readStoredBusinessAccountRowsFromReadModel,
   replaceReadModelAccountRows,
 } from "@/lib/read-model/accounts";
 import {
@@ -74,9 +77,11 @@ import {
   waitForReadModelSync,
 } from "@/lib/read-model/sync";
 import {
+  parseDeleteReasonPayload,
   parseContactOnlyUpdatePayload,
   parseUpdatePayload,
 } from "@/lib/validation";
+import type { DeferredDeleteBusinessAccountResponse } from "@/types/deferred-action";
 
 type RouteContext = {
   params: Promise<{
@@ -209,6 +214,14 @@ function isStandaloneContactRow(row: BusinessAccountRow | null): row is Business
     row.businessAccountId.trim().length === 0 &&
     (row.contactId ?? row.primaryContactId ?? null) !== null
   );
+}
+
+function storedAccountStillHasContacts(rows: BusinessAccountRow[]): boolean {
+  return rows.some((row) => {
+    const contactId = row.contactId ?? null;
+    const primaryContactId = row.primaryContactId ?? null;
+    return contactId !== null || primaryContactId !== null;
+  });
 }
 
 function buildStandaloneContactFallback(
@@ -1565,6 +1578,112 @@ export async function PUT(
     } else {
       response = NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
+
+    if (authCookieRefresh.value) {
+      setAuthCookie(response, authCookieRefresh.value);
+    }
+
+    return response;
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  context: RouteContext,
+): Promise<NextResponse> {
+  const authCookieRefresh = {
+    value: null as string | null,
+  };
+
+  try {
+    const { id } = await context.params;
+    const accountRecordId = id.trim();
+    if (!accountRecordId) {
+      throw new HttpError(400, "Business account ID is required.");
+    }
+
+    const cookieValue = requireAuthCookieValue(request);
+    const body = await request.json().catch(() => {
+      throw new HttpError(400, "Request body must be valid JSON.");
+    });
+    const { reason } = parseDeleteReasonPayload(body);
+    const storedRows = readStoredBusinessAccountRowsFromReadModel(accountRecordId);
+    if (storedRows.length === 0) {
+      throw new HttpError(
+        404,
+        "Business account was not found in the current snapshot. Sync the accounts list and try again.",
+      );
+    }
+
+    if (storedAccountStillHasContacts(storedRows)) {
+      throw new HttpError(
+        409,
+        "Delete the remaining contacts on this business account before queueing the account deletion.",
+      );
+    }
+
+    const actor = await resolveDeferredActionActor(
+      request,
+      cookieValue,
+      authCookieRefresh,
+    );
+    const representativeRow = storedRows[0];
+    const businessAccountId = representativeRow?.businessAccountId?.trim() ?? "";
+    if (!businessAccountId) {
+      throw new HttpError(
+        400,
+        "This business account does not have an Acumatica account ID, so it cannot be queued for deletion.",
+      );
+    }
+
+    const queued = enqueueDeferredBusinessAccountDeleteAction({
+      sourceSurface: request.nextUrl.searchParams.get("source")?.trim() || "accounts",
+      businessAccountRecordId: accountRecordId,
+      businessAccountId,
+      companyName: representativeRow?.companyName?.trim() || null,
+      reason,
+      actor,
+    });
+
+    const response = NextResponse.json({
+      queued: true,
+      actionId: queued.id,
+      actionType: "deleteBusinessAccount",
+      businessAccountRecordId: accountRecordId,
+      businessAccountId,
+      reason,
+      executeAfterAt: queued.executeAfterAt,
+      status: "pending_review",
+    } satisfies DeferredDeleteBusinessAccountResponse);
+    if (authCookieRefresh.value) {
+      setAuthCookie(response, authCookieRefresh.value);
+    }
+
+    return response;
+  } catch (error) {
+    const response =
+      error instanceof ZodError
+        ? NextResponse.json(
+            {
+              error: "Invalid delete request payload",
+              details: error.flatten(),
+            },
+            { status: 400 },
+          )
+        : error instanceof HttpError
+          ? NextResponse.json(
+              {
+                error: error.message,
+                details: error.details,
+              },
+              { status: error.status },
+            )
+          : NextResponse.json(
+              {
+                error: getErrorMessage(error),
+              },
+              { status: 500 },
+            );
 
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);

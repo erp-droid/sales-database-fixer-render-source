@@ -128,6 +128,12 @@ function parseStoredRow(payload: string): BusinessAccountRow | null {
   }
 }
 
+function parseStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
+  return rows
+    .map((row) => parseStoredRow(row.payload_json))
+    .filter((row): row is BusinessAccountRow => row !== null);
+}
+
 function readAccountRowsVersion(): string {
   const db = getReadModelDb();
   const accountRow = db
@@ -183,15 +189,28 @@ export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
     )
     .all() as StoredAccountRow[];
 
-  allRowsCache = rows
-    .map((row) => parseStoredRow(row.payload_json))
-    .filter((row): row is BusinessAccountRow => row !== null);
+  allRowsCache = parseStoredRows(rows);
   allRowsCache = applyDeferredActionsToRows(allRowsCache);
   allRowsCache = applyLocalAccountMetadataToRows(allRowsCache);
   allRowsCache = applyLastCalledAtToBusinessAccountRows(allRowsCache);
   allRowsCacheVersion = nextVersion;
 
   return allRowsCache;
+}
+
+export function readStoredAccountRowsFromReadModel(): BusinessAccountRow[] {
+  const db = getReadModelDb();
+  const rows = db
+    .prepare(
+      `
+      SELECT payload_json
+      FROM account_rows
+      ORDER BY company_name COLLATE NOCASE ASC, row_key ASC
+      `,
+    )
+    .all() as StoredAccountRow[];
+
+  return parseStoredRows(rows);
 }
 
 export function replaceAllAccountRows(rows: BusinessAccountRow[]): void {
@@ -497,6 +516,30 @@ export function readBusinessAccountRowsFromReadModel(
   });
 }
 
+export function readStoredBusinessAccountRowsFromReadModel(
+  accountRecordId: string,
+): BusinessAccountRow[] {
+  const normalized = accountRecordId.trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const db = getReadModelDb();
+  const rows = db
+    .prepare(
+      `
+      SELECT payload_json
+      FROM account_rows
+      WHERE account_record_id = ?
+         OR id = ?
+      ORDER BY updated_at DESC, row_key ASC
+      `,
+    )
+    .all(normalized, normalized) as StoredAccountRow[];
+
+  return parseStoredRows(rows);
+}
+
 export function readBusinessAccountDetailFromReadModel(
   accountRecordId: string,
   contactId?: number | null,
@@ -525,6 +568,37 @@ export function removeReadModelRowsByContactId(contactId: number): void {
     WHERE contact_id = ?
     `,
   ).run(contactId);
+  rebuildSalesRepDirectoryFromStoredRows();
+  invalidateReadModelCaches();
+}
+
+export function removeReadModelRowsByAccount(
+  accountRecordId: string,
+  businessAccountId?: string | null,
+): void {
+  const normalizedAccountRecordId = accountRecordId.trim();
+  const normalizedBusinessAccountId = businessAccountId?.trim() ?? "";
+  const db = getReadModelDb();
+
+  if (normalizedBusinessAccountId) {
+    db.prepare(
+      `
+      DELETE FROM account_rows
+      WHERE account_record_id = ?
+         OR id = ?
+         OR business_account_id = ?
+      `,
+    ).run(normalizedAccountRecordId, normalizedAccountRecordId, normalizedBusinessAccountId);
+  } else {
+    db.prepare(
+      `
+      DELETE FROM account_rows
+      WHERE account_record_id = ?
+         OR id = ?
+      `,
+    ).run(normalizedAccountRecordId, normalizedAccountRecordId);
+  }
+
   rebuildSalesRepDirectoryFromStoredRows();
   invalidateReadModelCaches();
 }

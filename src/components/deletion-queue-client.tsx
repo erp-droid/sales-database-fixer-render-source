@@ -114,12 +114,20 @@ function formatActionTitle(item: DeferredActionSummary): string {
     return item.contactName?.trim() || (item.contactId ? `Delete Contact ${item.contactId}` : "Delete Contact");
   }
 
+  if (item.actionType === "deleteBusinessAccount") {
+    return item.companyName?.trim() || item.businessAccountId?.trim() || "Delete Business Account";
+  }
+
   return item.keptContactName?.trim() || (item.keptContactId ? `Merge Into ${item.keptContactId}` : "Merge Contacts");
 }
 
 function formatActionDetail(item: DeferredActionSummary): string {
   if (item.actionType === "deleteContact") {
     return "Delete contact";
+  }
+
+  if (item.actionType === "deleteBusinessAccount") {
+    return "Delete business account";
   }
 
   return `Merge ${item.loserContactIds.length} contact${item.loserContactIds.length === 1 ? "" : "s"} into kept contact`;

@@ -5,10 +5,19 @@ import type { BusinessAccountRow } from "@/types/business-account";
 
 const requireAuthCookieValue = vi.fn(() => "cookie");
 const setAuthCookie = vi.fn();
+const resolveDeferredActionActor = vi.fn(async () => ({
+  loginName: "jserrano",
+  name: "Jorge Serrano",
+}));
+const enqueueDeferredBusinessAccountDeleteAction = vi.fn(() => ({
+  id: "delete-account-1",
+  executeAfterAt: "2026-04-16T01:00:00.000Z",
+}));
 const getEnv = vi.fn(() => ({
   READ_MODEL_ENABLED: true,
 }));
 const readBusinessAccountDetailFromReadModel = vi.fn();
+const readStoredBusinessAccountRowsFromReadModel = vi.fn();
 const replaceReadModelAccountRows = vi.fn();
 const maybeTriggerReadModelSync = vi.fn();
 const readSyncStatus = vi.fn(() => ({
@@ -29,12 +38,21 @@ vi.mock("@/lib/auth", () => ({
   setAuthCookie,
 }));
 
+vi.mock("@/lib/deferred-action-actor", () => ({
+  resolveDeferredActionActor,
+}));
+
+vi.mock("@/lib/deferred-actions-store", () => ({
+  enqueueDeferredBusinessAccountDeleteAction,
+}));
+
 vi.mock("@/lib/env", () => ({
   getEnv,
 }));
 
 vi.mock("@/lib/read-model/accounts", () => ({
   readBusinessAccountDetailFromReadModel,
+  readStoredBusinessAccountRowsFromReadModel,
   replaceReadModelAccountRows,
 }));
 
@@ -102,7 +120,18 @@ describe("GET /api/business-accounts/[id]", () => {
       READ_MODEL_ENABLED: true,
     });
     readBusinessAccountDetailFromReadModel.mockReset();
+    readStoredBusinessAccountRowsFromReadModel.mockReset();
     replaceReadModelAccountRows.mockReset();
+    resolveDeferredActionActor.mockReset();
+    resolveDeferredActionActor.mockResolvedValue({
+      loginName: "jserrano",
+      name: "Jorge Serrano",
+    });
+    enqueueDeferredBusinessAccountDeleteAction.mockReset();
+    enqueueDeferredBusinessAccountDeleteAction.mockReturnValue({
+      id: "delete-account-1",
+      executeAfterAt: "2026-04-16T01:00:00.000Z",
+    });
     maybeTriggerReadModelSync.mockReset();
     readSyncStatus.mockReset();
     readSyncStatus.mockReturnValue({
@@ -175,5 +204,111 @@ describe("GET /api/business-accounts/[id]", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: "Business account not found.",
     });
+  });
+});
+
+describe("DELETE /api/business-accounts/[id]", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    requireAuthCookieValue.mockReset();
+    requireAuthCookieValue.mockReturnValue("cookie");
+    setAuthCookie.mockReset();
+    readStoredBusinessAccountRowsFromReadModel.mockReset();
+    resolveDeferredActionActor.mockReset();
+    resolveDeferredActionActor.mockResolvedValue({
+      loginName: "jserrano",
+      name: "Jorge Serrano",
+    });
+    enqueueDeferredBusinessAccountDeleteAction.mockReset();
+    enqueueDeferredBusinessAccountDeleteAction.mockReturnValue({
+      id: "delete-account-1",
+      executeAfterAt: "2026-04-16T01:00:00.000Z",
+    });
+  });
+
+  it("rejects deleting a business account while contacts still exist", async () => {
+    readStoredBusinessAccountRowsFromReadModel.mockReturnValue([
+      buildRow({
+        accountRecordId: "record-1",
+        businessAccountId: "B200000003",
+        contactId: 157252,
+        primaryContactId: 157252,
+      }),
+    ]);
+
+    const { DELETE } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await DELETE(
+      new NextRequest("http://localhost/api/business-accounts/record-1?source=accounts", {
+        method: "DELETE",
+        body: JSON.stringify({ reason: "Company closed" }),
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error:
+        "Delete the remaining contacts on this business account before queueing the account deletion.",
+    });
+    expect(enqueueDeferredBusinessAccountDeleteAction).not.toHaveBeenCalled();
+  });
+
+  it("queues the business account delete when no contacts remain", async () => {
+    readStoredBusinessAccountRowsFromReadModel.mockReturnValue([
+      buildRow({
+        accountRecordId: "record-1",
+        rowKey: "record-1:primary",
+        businessAccountId: "B200000003",
+        contactId: null,
+        isPrimaryContact: false,
+        primaryContactId: null,
+        primaryContactName: null,
+        primaryContactPhone: null,
+        primaryContactEmail: null,
+      }),
+    ]);
+
+    const { DELETE } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await DELETE(
+      new NextRequest("http://localhost/api/business-accounts/record-1?source=accounts", {
+        method: "DELETE",
+        body: JSON.stringify({ reason: "Duplicate placeholder account" }),
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      queued: true,
+      actionId: "delete-account-1",
+      actionType: "deleteBusinessAccount",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "B200000003",
+      reason: "Duplicate placeholder account",
+      executeAfterAt: "2026-04-16T01:00:00.000Z",
+      status: "pending_review",
+    });
+    expect(enqueueDeferredBusinessAccountDeleteAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessAccountRecordId: "record-1",
+        businessAccountId: "B200000003",
+        reason: "Duplicate placeholder account",
+        sourceSurface: "accounts",
+      }),
+    );
   });
 });

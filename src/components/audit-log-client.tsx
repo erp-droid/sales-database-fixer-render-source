@@ -37,6 +37,7 @@ const ACTION_LABELS: Record<AuditActionGroup, string> = {
   contact_delete: "Contact deleted",
   contact_merge: "Contact merged",
   business_account_create: "Business account created",
+  business_account_delete: "Business account deleted",
 };
 
 const RESULT_LABELS: Record<AuditResultCode, string> = {
@@ -227,7 +228,8 @@ export function AuditLogClient() {
         actionGroupParam === "contact_create" ||
         actionGroupParam === "contact_delete" ||
         actionGroupParam === "contact_merge" ||
-        actionGroupParam === "business_account_create"
+        actionGroupParam === "business_account_create" ||
+        actionGroupParam === "business_account_delete"
         ? actionGroupParam
         : "all",
     );
@@ -479,6 +481,7 @@ export function AuditLogClient() {
             <option value="contact_delete">Contact deleted</option>
             <option value="contact_merge">Contact merged</option>
             <option value="business_account_create">Business account created</option>
+            <option value="business_account_delete">Business account deleted</option>
           </select>
         </label>
 

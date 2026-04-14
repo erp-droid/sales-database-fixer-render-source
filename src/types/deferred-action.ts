@@ -13,6 +13,7 @@ export type DeferredActionStatus = (typeof DEFERRED_ACTION_STATUSES)[number];
 
 export const DEFERRED_ACTION_TYPES = [
   "deleteContact",
+  "deleteBusinessAccount",
   "mergeContacts",
 ] as const;
 
@@ -78,6 +79,17 @@ export type DeferredDeleteContactResponse = {
   actionId: string;
   actionType: "deleteContact";
   contactId: number;
+  reason: string;
+  executeAfterAt: string;
+  status: "pending_review";
+};
+
+export type DeferredDeleteBusinessAccountResponse = {
+  queued: true;
+  actionId: string;
+  actionType: "deleteBusinessAccount";
+  businessAccountRecordId: string;
+  businessAccountId: string;
   reason: string;
   executeAfterAt: string;
   status: "pending_review";

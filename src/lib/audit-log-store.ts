@@ -1023,7 +1023,12 @@ export function upsertCallAuditEvent(session: CallSessionRecord, options: WriteO
 }
 
 function buildDeferredActionFields(record: StoredDeferredActionRecord): AuditAffectedField[] {
-  const labels = record.affectedFields.length > 0 ? record.affectedFields : ["Contact record"];
+  const labels =
+    record.affectedFields.length > 0
+      ? record.affectedFields
+      : record.actionType === "deleteBusinessAccount"
+        ? ["Business account record"]
+        : ["Contact record"];
   return labels.map((label) => ({
     key: fieldKeyFromLabel(label),
     label,
@@ -1052,6 +1057,10 @@ function buildDeferredActionLinks(record: StoredDeferredActionRecord): AuditLogL
     if (contactLink) {
       links.push(contactLink);
     }
+    return links;
+  }
+
+  if (record.actionType === "deleteBusinessAccount") {
     return links;
   }
 
@@ -1107,6 +1116,28 @@ function summarizeDeferredAction(
     }
   }
 
+  if (record.actionType === "deleteBusinessAccount") {
+    const company =
+      cleanString(record.companyName) ??
+      cleanString(record.businessAccountId) ??
+      "business account";
+    const reason = cleanString(record.reason);
+    const withReason = (summary: string): string =>
+      reason ? `${summary}. Reason: ${reason}` : summary;
+    switch (resultCode) {
+      case "queued":
+        return withReason(`Queued business account deletion for ${company}`);
+      case "approved":
+        return withReason(`Approved queued business account deletion for ${company}`);
+      case "cancelled":
+        return withReason(`Cancelled queued business account deletion for ${company}`);
+      case "executed":
+        return withReason(`Executed business account deletion for ${company}`);
+      default:
+        return withReason(`Failed queued business account deletion for ${company}`);
+    }
+  }
+
   const keptName =
     cleanString(record.keptContactName) ??
     (record.keptContactId !== null ? `Contact ${record.keptContactId}` : "kept contact");
@@ -1141,8 +1172,13 @@ function writeDeferredLifecycleEvent(
     {
       id: `deferred:${record.id}:${resultCode}`,
       occurredAt,
-      itemType: "contact",
-      actionGroup: record.actionType === "deleteContact" ? "contact_delete" : "contact_merge",
+      itemType: record.actionType === "deleteBusinessAccount" ? "business_account" : "contact",
+      actionGroup:
+        record.actionType === "deleteContact"
+          ? "contact_delete"
+          : record.actionType === "deleteBusinessAccount"
+            ? "business_account_delete"
+            : "contact_merge",
       resultCode,
       actorLoginName: actor.loginName,
       actorName: actor.name,
@@ -1151,9 +1187,18 @@ function writeDeferredLifecycleEvent(
       businessAccountRecordId: record.businessAccountRecordId,
       businessAccountId: record.businessAccountId,
       companyName: record.companyName,
-      contactId: record.actionType === "deleteContact" ? record.contactId : record.keptContactId,
+      contactId:
+        record.actionType === "deleteContact"
+          ? record.contactId
+          : record.actionType === "mergeContacts"
+            ? record.keptContactId
+            : null,
       contactName:
-        record.actionType === "deleteContact" ? record.contactName : record.keptContactName,
+        record.actionType === "deleteContact"
+          ? record.contactName
+          : record.actionType === "mergeContacts"
+            ? record.keptContactName
+            : null,
       affectedFields: buildDeferredActionFields(record),
       links: buildDeferredActionLinks(record),
     },

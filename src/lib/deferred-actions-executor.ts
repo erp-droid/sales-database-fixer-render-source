@@ -1,4 +1,5 @@
 import {
+  deleteBusinessAccount,
   deleteContact,
   fetchBusinessAccountById,
   type AuthCookieRefreshState,
@@ -17,6 +18,7 @@ import {
 } from "@/lib/deferred-actions-store";
 import { getErrorMessage, HttpError } from "@/lib/errors";
 import {
+  removeReadModelRowsByAccount,
   removeReadModelRowsByContactId,
   replaceReadModelAccountRows,
 } from "@/lib/read-model/accounts";
@@ -120,6 +122,56 @@ async function executeDeferredDeleteContact(
   removeReadModelRowsByContactId(payload.contactId);
 }
 
+function parseDeleteBusinessAccountPayload(record: StoredDeferredActionRecord): {
+  businessAccountId: string;
+} {
+  const businessAccountId = record.businessAccountId?.trim() ?? "";
+  if (businessAccountId) {
+    return {
+      businessAccountId,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(record.payloadJson) as Record<string, unknown>;
+    const payloadBusinessAccountId =
+      typeof parsed.businessAccountId === "string" ? parsed.businessAccountId.trim() : "";
+    if (!payloadBusinessAccountId) {
+      throw new Error("Queued business account delete payload is missing businessAccountId.");
+    }
+
+    return {
+      businessAccountId: payloadBusinessAccountId,
+    };
+  } catch (error) {
+    throw new Error(
+      error instanceof Error
+        ? error.message
+        : "Queued business account delete payload is invalid.",
+    );
+  }
+}
+
+async function executeDeferredDeleteBusinessAccount(
+  record: StoredDeferredActionRecord,
+  cookieValue: string,
+  authCookieRefresh: AuthCookieRefreshState,
+): Promise<void> {
+  const payload = parseDeleteBusinessAccountPayload(record);
+  try {
+    await deleteBusinessAccount(cookieValue, payload.businessAccountId, authCookieRefresh);
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.status !== 404) {
+      throw error;
+    }
+  }
+
+  removeReadModelRowsByAccount(
+    record.businessAccountRecordId?.trim() ?? payload.businessAccountId,
+    payload.businessAccountId,
+  );
+}
+
 async function executeDeferredMergeContacts(
   record: StoredDeferredActionRecord,
   cookieValue: string,
@@ -187,6 +239,8 @@ export async function runDueDeferredActions(
     try {
       if (record.actionType === "deleteContact") {
         await executeDeferredDeleteContact(record, cookieValue, authCookieRefresh);
+      } else if (record.actionType === "deleteBusinessAccount") {
+        await executeDeferredDeleteBusinessAccount(record, cookieValue, authCookieRefresh);
       } else {
         await executeDeferredMergeContacts(record, cookieValue, authCookieRefresh);
       }

@@ -10,6 +10,10 @@ export type DeferredDeleteContactPreview = {
   rowKey: string | null;
 };
 
+export type DeferredDeleteBusinessAccountPreview = {
+  actionType: "deleteBusinessAccount";
+};
+
 export type DeferredMergeContactsFieldSnapshot = Partial<
   Record<ContactMergeFieldKey, string | null>
 >;
@@ -29,6 +33,7 @@ export type DeferredMergeContactsPreview = {
 
 export type DeferredContactOperationPreview =
   | DeferredDeleteContactPreview
+  | DeferredDeleteBusinessAccountPreview
   | DeferredMergeContactsPreview;
 
 function getRowKey(row: BusinessAccountRow): string {
@@ -172,12 +177,20 @@ export function applyDeferredMergeContactsToRows(
   return enforceSinglePrimaryPerAccountRows(nextRows);
 }
 
+export function applyDeferredDeleteBusinessAccountToRows(): BusinessAccountRow[] {
+  return [];
+}
+
 export function applyDeferredContactOperationToRows(
   rows: BusinessAccountRow[],
   preview: DeferredContactOperationPreview,
 ): BusinessAccountRow[] {
   if (preview.actionType === "deleteContact") {
     return applyDeferredDeleteContactToRows(rows, preview);
+  }
+
+  if (preview.actionType === "deleteBusinessAccount") {
+    return applyDeferredDeleteBusinessAccountToRows();
   }
 
   return applyDeferredMergeContactsToRows(rows, preview);

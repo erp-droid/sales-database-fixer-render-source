@@ -10,7 +10,7 @@ import {
 } from "@/lib/deferred-contact-operations";
 import { publishDeferredActionsChanged } from "@/lib/deferred-actions-live";
 import { getEnv } from "@/lib/env";
-import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
+import { readStoredAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import { CONTACT_MERGE_FIELD_KEYS } from "@/types/contact-merge";
 import type { BusinessAccountRow, BusinessAccountType } from "@/types/business-account";
 import type {
@@ -148,6 +148,15 @@ type EnqueueDeferredMergeContactsInput = {
   preview: DeferredContactOperationPreview;
 };
 
+type EnqueueDeferredDeleteBusinessAccountInput = {
+  sourceSurface: string;
+  businessAccountRecordId: string;
+  businessAccountId: string;
+  companyName: string | null;
+  reason: string;
+  actor: DeferredActionActor;
+};
+
 function parseJsonArray<T>(value: string, predicate: (item: unknown) => item is T): T[] {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -182,6 +191,12 @@ function parsePreview(
         actionType: "deleteContact",
         contactId,
         rowKey: typeof record.rowKey === "string" ? record.rowKey : null,
+      };
+    }
+
+    if (actionType === "deleteBusinessAccount") {
+      return {
+        actionType: "deleteBusinessAccount",
       };
     }
 
@@ -247,8 +262,12 @@ function parsePreview(
 
 function toStoredRecord(row: StoredDeferredAction): StoredDeferredActionRecord | null {
   const actionType =
-    row.action_type === "mergeContacts" ? "mergeContacts" : row.action_type === "deleteContact"
+    row.action_type === "mergeContacts"
+      ? "mergeContacts"
+      : row.action_type === "deleteContact"
       ? "deleteContact"
+      : row.action_type === "deleteBusinessAccount"
+        ? "deleteBusinessAccount"
       : null;
   if (!actionType) {
     return null;
@@ -348,7 +367,7 @@ function choosePreferredAccountRow(
 
 function buildDeferredActionAccountMetadataMap(): Map<string, DeferredActionAccountMetadata> {
   const env = getEnv();
-  const rows = readAllAccountRowsFromReadModel();
+  const rows = readStoredAccountRowsFromReadModel();
   const rowsByKey = new Map<string, BusinessAccountRow>();
 
   for (const row of rows) {
@@ -932,6 +951,144 @@ export function enqueueDeferredContactDeleteAction(
 
   invalidateReadModelCaches();
   publishDeferredActionsChanged("queued-delete");
+  const record = getStoredDeferredActionById(id);
+  if (record) {
+    upsertDeferredActionAuditEvents(record);
+  }
+  return {
+    id,
+    executeAfterAt,
+  };
+}
+
+function findMatchingActiveDeleteBusinessAccountAction(
+  input: EnqueueDeferredDeleteBusinessAccountInput,
+): StoredDeferredActionRecord | null {
+  return (
+    readStoredActions().find((record) => {
+      if (
+        record.actionType !== "deleteBusinessAccount" ||
+        !ACTIVE_PREVIEW_STATUSES.has(record.status)
+      ) {
+        return false;
+      }
+
+      const recordAccountRecordId = record.businessAccountRecordId?.trim() ?? "";
+      const recordBusinessAccountId = record.businessAccountId?.trim() ?? "";
+      return (
+        recordAccountRecordId === input.businessAccountRecordId.trim() ||
+        (recordBusinessAccountId.length > 0 &&
+          recordBusinessAccountId === input.businessAccountId.trim())
+      );
+    }) ?? null
+  );
+}
+
+export function enqueueDeferredBusinessAccountDeleteAction(
+  input: EnqueueDeferredDeleteBusinessAccountInput,
+): {
+  id: string;
+  executeAfterAt: string;
+} {
+  const existing = findMatchingActiveDeleteBusinessAccountAction(input);
+  if (existing) {
+    const db = getReadModelDb();
+    const now = new Date().toISOString();
+    const reason = input.reason.trim();
+    db.prepare(
+      `
+      UPDATE deferred_actions
+      SET reason = ?,
+          payload_json = ?,
+          updated_at = ?
+      WHERE id = ?
+      `,
+    ).run(
+      reason,
+      JSON.stringify({
+        businessAccountRecordId: input.businessAccountRecordId,
+        businessAccountId: input.businessAccountId,
+        reason,
+      }),
+      now,
+      existing.id,
+    );
+    invalidateReadModelCaches();
+    publishDeferredActionsChanged("queued-delete-account");
+    const record = getStoredDeferredActionById(existing.id);
+    if (record) {
+      upsertDeferredActionAuditEvents(record);
+    }
+    return {
+      id: existing.id,
+      executeAfterAt: existing.executeAfterAt,
+    };
+  }
+
+  const db = getReadModelDb();
+  const id = buildActionId();
+  const now = new Date().toISOString();
+  const executeAfterAt = computeNextDeferredExecutionAt();
+  const reason = input.reason.trim();
+  const preview = {
+    actionType: "deleteBusinessAccount",
+  } as const;
+
+  db.prepare(
+    `
+    INSERT INTO deferred_actions (
+      id,
+      action_type,
+      status,
+      source_surface,
+      business_account_record_id,
+      business_account_id,
+      company_name,
+      contact_id,
+      contact_name,
+      contact_row_key,
+      kept_contact_id,
+      kept_contact_name,
+      loser_contact_ids_json,
+      loser_contact_names_json,
+      affected_fields_json,
+      reason,
+      payload_json,
+      preview_json,
+      requested_by_login_name,
+      requested_by_name,
+      requested_at,
+      execute_after_at,
+      attempt_count,
+      max_attempts,
+      last_attempt_at,
+      updated_at
+    ) VALUES (?, 'deleteBusinessAccount', 'pending_review', ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, '[]', '[]', ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?)
+    `,
+  ).run(
+    id,
+    input.sourceSurface,
+    input.businessAccountRecordId,
+    input.businessAccountId,
+    input.companyName,
+    JSON.stringify(["Business account record"]),
+    reason,
+    JSON.stringify({
+      businessAccountRecordId: input.businessAccountRecordId,
+      businessAccountId: input.businessAccountId,
+      reason,
+    }),
+    JSON.stringify(preview),
+    input.actor.loginName,
+    input.actor.name,
+    now,
+    executeAfterAt,
+    DEFAULT_DEFERRED_ACTION_MAX_ATTEMPTS,
+    now,
+  );
+
+  invalidateReadModelCaches();
+  publishDeferredActionsChanged("queued-delete-account");
   const record = getStoredDeferredActionById(id);
   if (record) {
     upsertDeferredActionAuditEvents(record);
