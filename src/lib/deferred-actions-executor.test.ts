@@ -331,6 +331,83 @@ describe("deferred actions executor", () => {
     expect(record?.status).toBe("executed");
   });
 
+  it("defers queued business account deletions until queued contact deletes finish upstream", async () => {
+    const {
+      approveDeferredActions,
+      enqueueDeferredBusinessAccountDeleteAction,
+      enqueueDeferredContactDeleteAction,
+      getStoredDeferredActionById,
+    } = await import("@/lib/deferred-actions-store");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const { runDueDeferredActions } = await import("@/lib/deferred-actions-executor");
+
+    const actor = { loginName: "jserrano", name: "Jorge Serrano" };
+    const queuedContactDelete = enqueueDeferredContactDeleteAction({
+      sourceSurface: "accounts",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "BA0001",
+      companyName: "Alpha Foods",
+      contactId: 157497,
+      contactName: "Jorge Serrano",
+      contactRowKey: "record-1:contact:157497",
+      reason: "Queued before deleting the business account",
+      actor,
+    });
+    const queuedAccountDelete = enqueueDeferredBusinessAccountDeleteAction({
+      sourceSurface: "accounts",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "BA0001",
+      companyName: "Alpha Foods",
+      reason: "Closed account",
+      actor,
+    });
+    approveDeferredActions([queuedContactDelete.id, queuedAccountDelete.id], actor);
+
+    const db = getReadModelDb();
+    db.prepare("UPDATE deferred_actions SET execute_after_at = ? WHERE id = ?").run(
+      "2099-01-01T00:00:00.000Z",
+      queuedContactDelete.id,
+    );
+    db.prepare("UPDATE deferred_actions SET execute_after_at = ? WHERE id = ?").run(
+      new Date().toISOString(),
+      queuedAccountDelete.id,
+    );
+
+    fetchBusinessAccountByIdMock.mockResolvedValue({
+      id: "record-1",
+      BusinessAccountID: { value: "BA0001" },
+      Contacts: [
+        {
+          ContactID: { value: 157497 },
+        },
+      ],
+      PrimaryContact: {
+        value: {
+          ContactID: { value: 157497 },
+        },
+      },
+    });
+    normalizeBusinessAccountRowsMock.mockReturnValue([
+      {
+        contactId: 157497,
+        primaryContactId: 157497,
+      },
+    ]);
+
+    const result = await runDueDeferredActions("cookie", actor, { value: null });
+    expect(result).toEqual({
+      executedCount: 0,
+      failedCount: 0,
+    });
+    expect(deleteBusinessAccountMock).not.toHaveBeenCalled();
+
+    const record = getStoredDeferredActionById(queuedAccountDelete.id);
+    expect(record?.status).toBe("approved");
+    expect(record?.failureMessage).toBe(
+      "Waiting for 1 queued contact to be deleted before removing the business account.",
+    );
+  });
+
   it("passes queued merge previews to the deferred merge executor", async () => {
     const {
       approveDeferredActions,

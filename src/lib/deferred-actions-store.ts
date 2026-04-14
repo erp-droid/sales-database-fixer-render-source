@@ -1351,6 +1351,32 @@ export function markDeferredActionRetryScheduled(
   }
 }
 
+export function markDeferredActionDeferred(
+  actionId: string,
+  failureMessage: string,
+  executeAfterAt: string,
+): void {
+  const db = getReadModelDb();
+  const now = new Date().toISOString();
+  db.prepare(
+    `
+    UPDATE deferred_actions
+    SET status = 'approved',
+        failure_message = ?,
+        execute_after_at = ?,
+        updated_at = ?
+    WHERE id = ?
+      AND status = 'approved'
+    `,
+  ).run(failureMessage, executeAfterAt, now, actionId);
+  invalidateReadModelCaches();
+  publishDeferredActionsChanged("approved");
+  const record = getStoredDeferredActionById(actionId);
+  if (record) {
+    upsertDeferredActionAuditEvents(record);
+  }
+}
+
 export function markDeferredActionExecuted(
   actionId: string,
   actor: DeferredActionActor,

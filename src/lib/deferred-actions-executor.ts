@@ -7,9 +7,12 @@ import {
 import { normalizeBusinessAccountRows } from "@/lib/business-accounts";
 import { executeDeferredContactMergeRequest } from "@/lib/contact-merge-execution";
 import {
+  computeNextDeferredExecutionAt,
   DEFAULT_DEFERRED_ACTION_MAX_ATTEMPTS,
   listDueApprovedDeferredActions,
+  listStoredDeferredActionRecords,
   listStaleExecutingDeferredActions,
+  markDeferredActionDeferred,
   markDeferredActionExecuted,
   markDeferredActionExecuting,
   markDeferredActionFailed,
@@ -35,6 +38,15 @@ const DEFERRED_ACTION_RETRY_BACKOFF_MS = [
   15 * 60_000,
   30 * 60_000,
 ] as const;
+
+const ACTIVE_CONTACT_DELETE_BLOCKING_STATUSES: ReadonlySet<
+  StoredDeferredActionRecord["status"]
+> = new Set([
+  "pending_review",
+  "approved",
+  "executing",
+  "failed",
+] as const);
 
 function isRetryableDeferredActionError(error: unknown): boolean {
   if (!(error instanceof HttpError)) {
@@ -172,6 +184,106 @@ async function executeDeferredDeleteBusinessAccount(
   );
 }
 
+function sortDueActionsForExecution(
+  dueActions: StoredDeferredActionRecord[],
+): StoredDeferredActionRecord[] {
+  const priority = (record: StoredDeferredActionRecord): number => {
+    if (record.actionType === "deleteBusinessAccount") {
+      return 2;
+    }
+
+    if (record.actionType === "mergeContacts") {
+      return 1;
+    }
+
+    return 0;
+  };
+
+  return [...dueActions].sort((left, right) => {
+    const byPriority = priority(left) - priority(right);
+    if (byPriority !== 0) {
+      return byPriority;
+    }
+
+    const byExecuteAfter = left.executeAfterAt.localeCompare(right.executeAfterAt);
+    if (byExecuteAfter !== 0) {
+      return byExecuteAfter;
+    }
+
+    const byRequestedAt = left.requestedAt.localeCompare(right.requestedAt);
+    if (byRequestedAt !== 0) {
+      return byRequestedAt;
+    }
+
+    return left.id.localeCompare(right.id);
+  });
+}
+
+function collectLiveBusinessAccountContactIds(rows: ReturnType<typeof normalizeBusinessAccountRows>): number[] {
+  return [...new Set(
+    rows.flatMap((row) => {
+      const ids: number[] = [];
+      if (typeof row.contactId === "number" && Number.isInteger(row.contactId) && row.contactId > 0) {
+        ids.push(row.contactId);
+      }
+      if (
+        typeof row.primaryContactId === "number" &&
+        Number.isInteger(row.primaryContactId) &&
+        row.primaryContactId > 0
+      ) {
+        ids.push(row.primaryContactId);
+      }
+      return ids;
+    }),
+  )];
+}
+
+async function resolveDeleteBusinessAccountDeferral(
+  record: StoredDeferredActionRecord,
+  cookieValue: string,
+  authCookieRefresh: AuthCookieRefreshState,
+): Promise<{ failureMessage: string; executeAfterAt: string } | null> {
+  const accountLookupId = record.businessAccountRecordId?.trim() || record.businessAccountId?.trim() || "";
+  if (!accountLookupId) {
+    return null;
+  }
+
+  try {
+    const liveRaw = await fetchBusinessAccountById(cookieValue, accountLookupId, authCookieRefresh);
+    const liveRows = normalizeBusinessAccountRows(liveRaw);
+    const liveContactIds = collectLiveBusinessAccountContactIds(liveRows);
+    if (liveContactIds.length === 0) {
+      return null;
+    }
+
+    const activeDeleteContactIds = new Set(
+      listStoredDeferredActionRecords()
+        .filter(
+          (queuedRecord) =>
+            queuedRecord.actionType === "deleteContact" &&
+            ACTIVE_CONTACT_DELETE_BLOCKING_STATUSES.has(queuedRecord.status),
+        )
+        .map((queuedRecord) => queuedRecord.contactId)
+        .filter((contactId): contactId is number => Number.isInteger(contactId) && (contactId ?? 0) > 0),
+    );
+    const allLiveContactsQueued = liveContactIds.every((contactId) => activeDeleteContactIds.has(contactId));
+    const noun = liveContactIds.length === 1 ? "contact" : "contacts";
+    const failureMessage = allLiveContactsQueued
+      ? `Waiting for ${liveContactIds.length} queued ${noun} to be deleted before removing the business account.`
+      : `Business account deletion is queued, but ${liveContactIds.length} ${noun} still exist in Acumatica. Queue or complete those contact deletions first.`;
+
+    return {
+      failureMessage,
+      executeAfterAt: computeNextDeferredExecutionAt(),
+    };
+  } catch (error) {
+    if (error instanceof HttpError && error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 async function executeDeferredMergeContacts(
   record: StoredDeferredActionRecord,
   cookieValue: string,
@@ -227,11 +339,23 @@ export async function runDueDeferredActions(
   failedCount: number;
 }> {
   recoverStaleExecutingDeferredActions(actor);
-  const dueActions = listDueApprovedDeferredActions();
+  const dueActions = sortDueActionsForExecution(listDueApprovedDeferredActions());
   let executedCount = 0;
   let failedCount = 0;
 
   for (const record of dueActions) {
+    if (record.actionType === "deleteBusinessAccount") {
+      const deferred = await resolveDeleteBusinessAccountDeferral(
+        record,
+        cookieValue,
+        authCookieRefresh,
+      );
+      if (deferred) {
+        markDeferredActionDeferred(record.id, deferred.failureMessage, deferred.executeAfterAt);
+        continue;
+      }
+    }
+
     if (!markDeferredActionExecuting(record.id, actor)) {
       continue;
     }

@@ -238,7 +238,7 @@ describe("DELETE /api/business-accounts/[id]", () => {
     });
   });
 
-  it("rejects deleting a business account while contacts still exist", async () => {
+  it("queues deleting a business account even while contacts still exist", async () => {
     readStoredBusinessAccountRowsFromReadModel.mockReturnValue([
       buildRow({
         accountRecordId: "record-1",
@@ -281,12 +281,25 @@ describe("DELETE /api/business-accounts/[id]", () => {
       },
     );
 
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toMatchObject({
-      error:
-        "Delete the remaining contacts on this business account before queueing the account deletion.",
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      queued: true,
+      actionId: "delete-account-1",
+      actionType: "deleteBusinessAccount",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "B200000003",
+      reason: "Company closed",
+      executeAfterAt: "2026-04-16T01:00:00.000Z",
+      status: "pending_review",
     });
-    expect(enqueueDeferredBusinessAccountDeleteAction).not.toHaveBeenCalled();
+    expect(enqueueDeferredBusinessAccountDeleteAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessAccountRecordId: "record-1",
+        businessAccountId: "B200000003",
+        reason: "Company closed",
+        sourceSurface: "accounts",
+      }),
+    );
   });
 
   it("rechecks the live account before rejecting a business account delete", async () => {

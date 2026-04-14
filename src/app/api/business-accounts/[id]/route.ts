@@ -1648,13 +1648,6 @@ export async function DELETE(
       );
     }
 
-    if (storedAccountStillHasContacts(candidateRows)) {
-      throw new HttpError(
-        409,
-        "Delete the remaining contacts on this business account before queueing the account deletion.",
-      );
-    }
-
     const actor = await resolveDeferredActionActor(
       request,
       cookieValue,
