@@ -16,6 +16,7 @@ export type SyncStatusResponse = {
   accountsCount: number;
   contactsCount: number;
   progress: SyncProgress | null;
+  manualSyncBlockedReason: string | null;
 };
 
 export type SyncRunResponse = {

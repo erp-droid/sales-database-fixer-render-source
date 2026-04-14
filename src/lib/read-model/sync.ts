@@ -16,6 +16,7 @@ import { getReadModelDb } from "@/lib/read-model/db";
 import { replaceAllAccountRows, readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import { invalidateReadModelCaches } from "@/lib/read-model/cache";
 import { syncCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
+import { readCallIngestState } from "@/lib/call-analytics/ingest";
 import { withServiceAcumaticaSession } from "@/lib/acumatica-service-auth";
 import { getEnv } from "@/lib/env";
 import { syncMeetingBookings } from "@/lib/meeting-bookings";
@@ -50,6 +51,7 @@ function readNextStoredValue<K extends keyof StoredSyncState>(
 
 let syncInFlight: Promise<void> | null = null;
 let geocodeInFlight: Promise<void> | null = null;
+const RECENT_CALL_ACTIVITY_BLOCK_WINDOW_MS = 5 * 60 * 1000;
 
 function toSyncStatusResponse(record: StoredSyncState | undefined): SyncStatusResponse {
   let progress: SyncStatusResponse["progress"] = null;
@@ -73,7 +75,87 @@ function toSyncStatusResponse(record: StoredSyncState | undefined): SyncStatusRe
     accountsCount: record?.accounts_count ?? 0,
     contactsCount: record?.contacts_count ?? 0,
     progress,
+    manualSyncBlockedReason: null,
   };
+}
+
+function readStoredSyncState(): StoredSyncState | undefined {
+  const db = getReadModelDb();
+  return db
+    .prepare(
+      `
+      SELECT
+        status,
+        started_at,
+        completed_at,
+        last_successful_sync_at,
+        last_error,
+        rows_count,
+        accounts_count,
+        contacts_count,
+        phase,
+        progress_json
+      FROM sync_state
+      WHERE scope = 'full'
+      `,
+    )
+    .get() as StoredSyncState | undefined;
+}
+
+function readActiveCallCount(): number {
+  const db = getReadModelDb();
+  const row = db
+    .prepare(
+      `
+      SELECT COUNT(*) AS total
+      FROM call_sessions
+      WHERE ended_at IS NULL OR outcome = 'in_progress'
+      `,
+    )
+    .get() as { total?: number } | undefined;
+
+  return Math.max(0, Number(row?.total ?? 0));
+}
+
+function formatRemainingMinutes(remainingMs: number): string {
+  const minutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
+export function readManualSyncBlockedReason(nowMs = Date.now()): string | null {
+  const status = toSyncStatusResponse(readStoredSyncState());
+  if (status.status === "running") {
+    return "A full account sync is already running.";
+  }
+
+  const activeCallCount = readActiveCallCount();
+  if (activeCallCount > 0) {
+    return `Sync is temporarily blocked while ${activeCallCount} live call${
+      activeCallCount === 1 ? "" : "s"
+    } ${activeCallCount === 1 ? "is" : "are"} in progress.`;
+  }
+
+  const ingestState = readCallIngestState();
+  if (ingestState.lastWebhookAt) {
+    const lastWebhookMs = Date.parse(ingestState.lastWebhookAt);
+    const ageMs = nowMs - lastWebhookMs;
+    if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < RECENT_CALL_ACTIVITY_BLOCK_WINDOW_MS) {
+      return "Sync is temporarily blocked because call activity was received recently. Wait a few minutes after calls finish.";
+    }
+  }
+
+  const cooldownMs = getEnv().READ_MODEL_SYNC_INTERVAL_MS;
+  const lastSuccessMs = status.lastSuccessfulSyncAt
+    ? Date.parse(status.lastSuccessfulSyncAt)
+    : Number.NaN;
+  if (Number.isFinite(lastSuccessMs)) {
+    const ageMs = nowMs - lastSuccessMs;
+    if (ageMs >= 0 && ageMs < cooldownMs) {
+      return `Sync was run recently. Wait ${formatRemainingMinutes(cooldownMs - ageMs)} before starting another full refresh.`;
+    }
+  }
+
+  return null;
 }
 
 function writeSyncState(next: Partial<StoredSyncState> & { status: StoredSyncState["status"] }): void {
@@ -375,28 +457,9 @@ async function runFullSync(
 }
 
 export function readSyncStatus(): SyncStatusResponse {
-  const db = getReadModelDb();
-  const record = db
-    .prepare(
-      `
-      SELECT
-        status,
-        started_at,
-        completed_at,
-        last_successful_sync_at,
-        last_error,
-        rows_count,
-        accounts_count,
-        contacts_count,
-        phase,
-        progress_json
-      FROM sync_state
-      WHERE scope = 'full'
-      `,
-    )
-    .get() as StoredSyncState | undefined;
-
-  return toSyncStatusResponse(record);
+  const status = toSyncStatusResponse(readStoredSyncState());
+  status.manualSyncBlockedReason = readManualSyncBlockedReason();
+  return status;
 }
 
 export function hasReadModelSnapshot(): boolean {

@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
 import { validateSessionWithAcumatica } from "@/lib/acumatica";
 import { getErrorMessage, HttpError } from "@/lib/errors";
-import { triggerReadModelSync } from "@/lib/read-model/sync";
+import { readManualSyncBlockedReason, triggerReadModelSync } from "@/lib/read-model/sync";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh = {
@@ -15,6 +15,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const cookieValue = requireAuthCookieValue(request);
     await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
+    const blockedReason = readManualSyncBlockedReason();
+    if (blockedReason) {
+      throw new HttpError(409, blockedReason);
+    }
     const responseBody = await triggerReadModelSync(cookieValue, {
       authCookieRefresh,
       force: true,

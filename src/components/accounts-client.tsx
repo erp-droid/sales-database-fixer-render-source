@@ -2342,6 +2342,8 @@ export function AccountsClient({
   const [syncStartedAt, setSyncStartedAt] = useState<number | null>(null);
   const [syncElapsedMs, setSyncElapsedMs] = useState(0);
   const [lastSyncDurationMs, setLastSyncDurationMs] = useState<number | null>(null);
+  const [syncBlockedReason, setSyncBlockedReason] = useState<string | null>(null);
+  const [remoteSyncRunning, setRemoteSyncRunning] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [pageInput, setPageInput] = useState("1");
@@ -2552,6 +2554,8 @@ export function AccountsClient({
       if (statusResponse.ok && isSyncStatusResponse(nextStatusPayload)) {
         statusPayload = nextStatusPayload;
         setLastSyncedAt(nextStatusPayload.lastSuccessfulSyncAt);
+        setSyncBlockedReason(nextStatusPayload.manualSyncBlockedReason ?? null);
+        setRemoteSyncRunning(nextStatusPayload.status === "running");
 
         if (canUseCachedSnapshot(cachedDataset, nextStatusPayload)) {
           return cachedDataset.rows;
@@ -4371,6 +4375,16 @@ export function AccountsClient({
   }
 
   async function handleSyncRecords() {
+    if (remoteSyncRunning) {
+      setError("A full account sync is already running.");
+      return;
+    }
+
+    if (syncBlockedReason) {
+      setError(syncBlockedReason);
+      return;
+    }
+
     hydratingContactRowKeysRef.current.clear();
     hydratedContactRowKeysRef.current.clear();
     resolvingPrimaryAccountIdsRef.current.clear();
@@ -4415,6 +4429,9 @@ export function AccountsClient({
         if (!isSyncStatusResponse(statusPayload)) {
           throw new Error("Unexpected sync status response.");
         }
+
+        setSyncBlockedReason(statusPayload.manualSyncBlockedReason ?? null);
+        setRemoteSyncRunning(statusPayload.status === "running");
 
         setSyncProgress({
           fetchedAccounts: statusPayload.progress?.fetchedAccounts ?? statusPayload.accountsCount,
@@ -6338,12 +6355,16 @@ export function AccountsClient({
         <>
           <button
             className={styles.syncNowButton}
-            disabled={isSyncing}
+            disabled={isSyncing || remoteSyncRunning || Boolean(syncBlockedReason)}
             onClick={handleSyncRecords}
+            title={
+              syncBlockedReason ??
+              (remoteSyncRunning ? "A full account sync is already running." : undefined)
+            }
             type="button"
           >
             <SyncIcon />
-            <span>{isSyncing ? "Syncing..." : "Sync now"}</span>
+            <span>{isSyncing || remoteSyncRunning ? "Syncing..." : "Sync now"}</span>
           </button>
           {canExportAccountsCsv ? (
             <a className={styles.toolbarButton} href={accountsCsvExportHref}>
