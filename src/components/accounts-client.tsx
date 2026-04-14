@@ -2185,16 +2185,19 @@ function resolveRowBusinessAccountRecordId(row: BusinessAccountRow): string {
 function buildBusinessAccountDetailUrl(
   accountRecordId: string,
   contactId?: number | null,
+  options?: { live?: boolean },
 ): string {
   const basePath = `/api/business-accounts/${encodeURIComponent(accountRecordId.trim())}`;
-  if (contactId === null || contactId === undefined) {
-    return basePath;
+  const params = new URLSearchParams();
+  if (contactId !== null && contactId !== undefined) {
+    params.set("contactId", String(contactId));
+  }
+  if (options?.live) {
+    params.set("live", "1");
   }
 
-  const params = new URLSearchParams({
-    contactId: String(contactId),
-  });
-  return `${basePath}?${params.toString()}`;
+  const query = params.toString();
+  return query ? `${basePath}?${query}` : basePath;
 }
 
 function buildBusinessAccountCallHistoryUrl(
@@ -2226,6 +2229,14 @@ function buildMeetingSourceFromRow(row: BusinessAccountRow): MeetingSourceContex
     contactPhone: row.primaryContactPhone,
     contactEmail: resolveRowContactEmail(row),
   };
+}
+
+function isBusinessAccountStaleSaveMessage(message: string | null | undefined): boolean {
+  const normalized = message?.trim().toLowerCase() ?? "";
+  return (
+    normalized.includes("modified in acumatica after you loaded it") ||
+    normalized.includes("changed while you were editing it")
+  );
 }
 
 function toMergeableContactCandidate(row: BusinessAccountRow): MergeableContactCandidate {
@@ -5063,85 +5074,97 @@ export function AccountsClient({
     setEmployeesError(null);
 
     try {
-      const accountRecordId = row.accountRecordId ?? row.id;
-      const response = await fetch(
-        buildBusinessAccountDetailUrl(accountRecordId, resolveRowContactId(row)),
-        {
-          cache: "no-store",
-        },
-      );
-      const payload = await readJsonResponse<
-        BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
-      >(response);
-
-      if (response.status === 401) {
-        setSaveError(
-          "Your Acumatica session expired while loading this record. Sign in again and retry.",
-        );
+      const reloadedRow = await reloadAccountRow(row, { live: true });
+      if (!reloadedRow) {
         return;
       }
 
-      if (!response.ok) {
-        setSaveError(parseError(payload));
-        return;
-      }
-
-      const refreshedRow = isBusinessAccountDetailResponse(payload)
-        ? (readDetailResponseRows(payload)
-            ? findMatchingAccountRow(readDetailResponseRows(payload) ?? [], row) ?? payload.row
-            : payload.row)
-        : isBusinessAccountRow(payload)
-          ? payload
-          : null;
-
-      if (!refreshedRow) {
-        return;
-      }
-
-      const refreshedRows = readDetailResponseRows(payload);
-      const canonicalAccountRecordId =
-        refreshedRow.accountRecordId ?? refreshedRow.id ?? accountRecordId;
-      const mergedRow =
-        row.isPrimaryContact === false
-          ? {
-              ...row,
-              ...refreshedRow,
-              accountRecordId: canonicalAccountRecordId,
-              rowKey: refreshedRow.rowKey ?? row.rowKey,
-              contactId: refreshedRow.contactId ?? row.contactId,
-              isPrimaryContact:
-                refreshedRow.isPrimaryContact ?? row.isPrimaryContact,
-              companyPhone: refreshedRow.companyPhone ?? row.companyPhone,
-              phoneNumber: refreshedRow.phoneNumber ?? row.phoneNumber,
-            }
-          : {
-              ...refreshedRow,
-              accountRecordId: canonicalAccountRecordId,
-            };
-
-      if (refreshedRows && refreshedRows.length > 0) {
-        setAllRows((currentRows) =>
-          replaceRowsForAccount(
-            currentRows,
-            refreshedRows,
-            canonicalAccountRecordId,
-            refreshedRow.businessAccountId,
-          ),
-        );
-      } else {
-        setAllRows((currentRows) =>
-          enforceSinglePrimaryPerAccountRows(
-            currentRows.map((currentRow) =>
-              getRowKey(currentRow) === getRowKey(row) ? mergedRow : currentRow,
-            ),
-          ),
-        );
-      }
-      setSelected(mergedRow);
-      setDraft(buildDraft(mergedRow));
+      setSelected(reloadedRow);
+      setDraft(buildDraft(reloadedRow));
     } catch {
       // Keep base row loaded in drawer if detail fetch fails.
     }
+  }
+
+  async function reloadAccountRow(
+    row: BusinessAccountRow,
+    options?: { live?: boolean },
+  ): Promise<BusinessAccountRow | null> {
+    const accountRecordId = row.accountRecordId ?? row.id;
+    const response = await fetch(
+      buildBusinessAccountDetailUrl(accountRecordId, resolveRowContactId(row), {
+        live: options?.live,
+      }),
+      {
+        cache: "no-store",
+      },
+    );
+    const payload = await readJsonResponse<
+      BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
+    >(response);
+
+    if (response.status === 401) {
+      throw new Error(
+        "Your Acumatica session expired while loading this record. Sign in again and retry.",
+      );
+    }
+
+    if (!response.ok) {
+      throw new Error(parseError(payload));
+    }
+
+    const refreshedRow = isBusinessAccountDetailResponse(payload)
+      ? (readDetailResponseRows(payload)
+          ? findMatchingAccountRow(readDetailResponseRows(payload) ?? [], row) ?? payload.row
+          : payload.row)
+      : isBusinessAccountRow(payload)
+        ? payload
+        : null;
+
+    if (!refreshedRow) {
+      return null;
+    }
+
+    const refreshedRows = readDetailResponseRows(payload);
+    const canonicalAccountRecordId =
+      refreshedRow.accountRecordId ?? refreshedRow.id ?? accountRecordId;
+    const mergedRow =
+      row.isPrimaryContact === false
+        ? {
+            ...row,
+            ...refreshedRow,
+            accountRecordId: canonicalAccountRecordId,
+            rowKey: refreshedRow.rowKey ?? row.rowKey,
+            contactId: refreshedRow.contactId ?? row.contactId,
+            isPrimaryContact: refreshedRow.isPrimaryContact ?? row.isPrimaryContact,
+            companyPhone: refreshedRow.companyPhone ?? row.companyPhone,
+            phoneNumber: refreshedRow.phoneNumber ?? row.phoneNumber,
+          }
+        : {
+            ...refreshedRow,
+            accountRecordId: canonicalAccountRecordId,
+          };
+
+    if (refreshedRows && refreshedRows.length > 0) {
+      setAllRows((currentRows) =>
+        replaceRowsForAccount(
+          currentRows,
+          refreshedRows,
+          canonicalAccountRecordId,
+          refreshedRow.businessAccountId,
+        ),
+      );
+    } else {
+      setAllRows((currentRows) =>
+        enforceSinglePrimaryPerAccountRows(
+          currentRows.map((currentRow) =>
+            getRowKey(currentRow) === getRowKey(row) ? mergedRow : currentRow,
+          ),
+        ),
+      );
+    }
+
+    return mergedRow;
   }
 
   function handleSelectDrawerCompany(option: CreateContactAccountOption) {
@@ -5524,6 +5547,26 @@ export function AccountsClient({
       clearCachedMapData();
       saved = true;
     } catch (saveRequestError) {
+      if (
+        saveRequestError instanceof SaveDraftError &&
+        isBusinessAccountStaleSaveMessage(saveRequestError.message)
+      ) {
+        try {
+          const refreshedRow = await reloadAccountRow(sourceRow, { live: true });
+          if (refreshedRow) {
+            setSelected(refreshedRow);
+            setDraft(buildDraft(refreshedRow));
+            setSaveFieldErrors({});
+            setSaveError(
+              "This record changed in Acumatica. The latest version was loaded. Review it and save again.",
+            );
+            return saved;
+          }
+        } catch {
+          // Fall through to the original stale-record error when the live reload fails.
+        }
+      }
+
       setSaveFieldErrors(
         saveRequestError instanceof SaveDraftError ? saveRequestError.fieldErrors : {},
       );

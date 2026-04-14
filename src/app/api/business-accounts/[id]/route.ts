@@ -224,6 +224,35 @@ function storedAccountStillHasContacts(rows: BusinessAccountRow[]): boolean {
   });
 }
 
+async function resolveDeleteCandidateRows(
+  cookieValue: string,
+  accountRecordId: string,
+  authCookieRefresh: AuthCookieRefreshState,
+): Promise<BusinessAccountRow[]> {
+  const storedRows = readStoredBusinessAccountRowsFromReadModel(accountRecordId);
+  if (storedRows.length > 0 && !storedAccountStillHasContacts(storedRows)) {
+    return storedRows;
+  }
+
+  try {
+    const liveRaw = await fetchBusinessAccountById(
+      cookieValue,
+      accountRecordId,
+      authCookieRefresh,
+    );
+    const liveRows = normalizeBusinessAccountRows(liveRaw);
+    if (getEnv().READ_MODEL_ENABLED) {
+      replaceReadModelAccountRows(accountRecordId, liveRows);
+    }
+    return liveRows;
+  } catch (error) {
+    if (storedRows.length > 0) {
+      return storedRows;
+    }
+    throw error;
+  }
+}
+
 function buildStandaloneContactFallback(
   row: BusinessAccountRow,
 ): ReturnType<typeof parseUpdatePayload> {
@@ -1607,15 +1636,19 @@ export async function DELETE(
       throw new HttpError(400, "Request body must be valid JSON.");
     });
     const { reason } = parseDeleteReasonPayload(body);
-    const storedRows = readStoredBusinessAccountRowsFromReadModel(accountRecordId);
-    if (storedRows.length === 0) {
+    const candidateRows = await resolveDeleteCandidateRows(
+      cookieValue,
+      accountRecordId,
+      authCookieRefresh,
+    );
+    if (candidateRows.length === 0) {
       throw new HttpError(
         404,
         "Business account was not found in the current snapshot. Sync the accounts list and try again.",
       );
     }
 
-    if (storedAccountStillHasContacts(storedRows)) {
+    if (storedAccountStillHasContacts(candidateRows)) {
       throw new HttpError(
         409,
         "Delete the remaining contacts on this business account before queueing the account deletion.",
@@ -1627,7 +1660,7 @@ export async function DELETE(
       cookieValue,
       authCookieRefresh,
     );
-    const representativeRow = storedRows[0];
+    const representativeRow = candidateRows[0];
     const businessAccountId = representativeRow?.businessAccountId?.trim() ?? "";
     if (!businessAccountId) {
       throw new HttpError(

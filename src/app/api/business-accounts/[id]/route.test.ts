@@ -16,6 +16,10 @@ const enqueueDeferredBusinessAccountDeleteAction = vi.fn(() => ({
 const getEnv = vi.fn(() => ({
   READ_MODEL_ENABLED: true,
 }));
+const fetchBusinessAccountById = vi.fn();
+const fetchContactById = vi.fn();
+const updateBusinessAccount = vi.fn();
+const updateContact = vi.fn();
 const readBusinessAccountDetailFromReadModel = vi.fn();
 const readStoredBusinessAccountRowsFromReadModel = vi.fn();
 const replaceReadModelAccountRows = vi.fn();
@@ -48,6 +52,13 @@ vi.mock("@/lib/deferred-actions-store", () => ({
 
 vi.mock("@/lib/env", () => ({
   getEnv,
+}));
+
+vi.mock("@/lib/acumatica", () => ({
+  fetchBusinessAccountById,
+  fetchContactById,
+  updateBusinessAccount,
+  updateContact,
 }));
 
 vi.mock("@/lib/read-model/accounts", () => ({
@@ -214,6 +225,7 @@ describe("DELETE /api/business-accounts/[id]", () => {
     requireAuthCookieValue.mockReturnValue("cookie");
     setAuthCookie.mockReset();
     readStoredBusinessAccountRowsFromReadModel.mockReset();
+    fetchBusinessAccountById.mockReset();
     resolveDeferredActionActor.mockReset();
     resolveDeferredActionActor.mockResolvedValue({
       loginName: "jserrano",
@@ -235,6 +247,23 @@ describe("DELETE /api/business-accounts/[id]", () => {
         primaryContactId: 157252,
       }),
     ]);
+    fetchBusinessAccountById.mockResolvedValue({
+      id: "record-1",
+      BusinessAccountID: { value: "B200000003" },
+      AccountName: { value: "Alpha Inc" },
+      Contacts: [
+        {
+          ContactID: { value: 157252 },
+          DisplayName: { value: "Jorge Serrano" },
+        },
+      ],
+      PrimaryContact: {
+        value: {
+          ContactID: { value: 157252 },
+          DisplayName: { value: "Jorge Serrano" },
+        },
+      },
+    });
 
     const { DELETE } = await import("@/app/api/business-accounts/[id]/route");
     const response = await DELETE(
@@ -258,6 +287,69 @@ describe("DELETE /api/business-accounts/[id]", () => {
         "Delete the remaining contacts on this business account before queueing the account deletion.",
     });
     expect(enqueueDeferredBusinessAccountDeleteAction).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the live account before rejecting a business account delete", async () => {
+    readStoredBusinessAccountRowsFromReadModel.mockReturnValue([
+      buildRow({
+        accountRecordId: "record-1",
+        rowKey: "record-1:contact:157252",
+        businessAccountId: "B200000003",
+        contactId: 157252,
+        primaryContactId: 157252,
+      }),
+    ]);
+    fetchBusinessAccountById.mockResolvedValue({
+      id: "record-1",
+      BusinessAccountID: { value: "B200000003" },
+      AccountName: { value: "Alpha Inc" },
+      Contacts: [],
+      PrimaryContact: { value: null },
+    });
+
+    const { DELETE } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await DELETE(
+      new NextRequest("http://localhost/api/business-accounts/record-1?source=accounts", {
+        method: "DELETE",
+        body: JSON.stringify({ reason: "Duplicate placeholder account" }),
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      queued: true,
+      actionId: "delete-account-1",
+      actionType: "deleteBusinessAccount",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "B200000003",
+      reason: "Duplicate placeholder account",
+      executeAfterAt: "2026-04-16T01:00:00.000Z",
+      status: "pending_review",
+    });
+    expect(fetchBusinessAccountById).toHaveBeenCalledWith(
+      "cookie",
+      "record-1",
+      expect.objectContaining({ value: null }),
+    );
+    expect(replaceReadModelAccountRows).toHaveBeenCalledWith(
+      "record-1",
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountRecordId: "record-1",
+          businessAccountId: "B200000003",
+          contactId: null,
+          primaryContactId: null,
+        }),
+      ]),
+    );
   });
 
   it("queues the business account delete when no contacts remain", async () => {
