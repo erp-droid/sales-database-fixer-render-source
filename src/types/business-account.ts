@@ -171,6 +171,7 @@ export type BusinessAccountMapPoint = {
   country: string;
   primaryContactName: string | null;
   primaryContactPhone: string | null;
+  primaryContactExtension?: string | null;
   primaryContactEmail: string | null;
   category: Category | null;
   notes: string | null;
@@ -183,6 +184,7 @@ export type BusinessAccountMapPoint = {
     contactId: number | null;
     name: string | null;
     phone: string | null;
+    extension?: string | null;
     email: string | null;
     isPrimary: boolean;
     notes: string | null;

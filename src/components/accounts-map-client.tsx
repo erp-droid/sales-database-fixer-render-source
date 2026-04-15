@@ -25,7 +25,11 @@ import {
   readCachedSyncMeta,
   writeCachedDatasetToStorage,
 } from "@/lib/client-dataset-cache";
-import { formatPhoneDraftValue, normalizePhoneForSave } from "@/lib/phone";
+import {
+  formatPhoneDraftValue,
+  normalizeExtensionForSave,
+  normalizePhoneForSave,
+} from "@/lib/phone";
 import { CallPhoneButton } from "@/components/call-phone-button";
 import {
   QueueDeleteContactsModal,
@@ -45,7 +49,7 @@ type SessionResponse = {
 };
 
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
-const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v4";
+const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v5";
 const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
 
 const MAP_DETAIL_FIELD_KEYS = [
@@ -94,6 +98,7 @@ type MapContactSummary = {
   contactId: number | null;
   name: string | null;
   phone: string | null;
+  extension: string | null;
   email: string | null;
   isPrimary: boolean;
   notes: string | null;
@@ -102,6 +107,7 @@ type MapContactSummary = {
 type MapContactDraft = {
   name: string;
   phone: string;
+  extension: string;
   email: string;
   notes: string;
 };
@@ -222,7 +228,11 @@ function buildSalesRepFilterOptionsFromRows(
   }
 
   return [...grouped.values()]
-    .map(({ accountKeys: _accountKeys, ...option }) => option)
+    .map((option) => ({
+      key: option.key,
+      label: option.label,
+      count: option.count,
+    }))
     .sort((left, right) => {
       if (left.label === "Unassigned" && right.label !== "Unassigned") {
         return 1;
@@ -277,6 +287,20 @@ function hasText(value: string | null | undefined): value is string {
   return Boolean(value && value.trim());
 }
 
+function formatPhoneWithExtension(
+  phone: string | null | undefined,
+  extension: string | null | undefined,
+): string {
+  const trimmedPhone = phone?.trim() ?? "";
+  const trimmedExtension = extension?.trim() ?? "";
+
+  if (!trimmedPhone) {
+    return "-";
+  }
+
+  return trimmedExtension ? `${trimmedPhone} Ext. ${trimmedExtension}` : trimmedPhone;
+}
+
 function readRowAccountKey(row: BusinessAccountRow): string {
   return (
     row.accountRecordId?.trim() ||
@@ -306,6 +330,7 @@ function buildContactsFromRows(rows: BusinessAccountRow[]): MapContactSummary[] 
       contactId: row.contactId ?? null,
       name: row.primaryContactName,
       phone: row.primaryContactPhone,
+      extension: row.primaryContactExtension ?? null,
       email: row.primaryContactEmail,
       isPrimary: Boolean(row.isPrimaryContact),
       notes: row.notes ?? null,
@@ -322,6 +347,7 @@ function buildContactsFromRows(rows: BusinessAccountRow[]): MapContactSummary[] 
       contactId: existing.contactId ?? nextContact.contactId,
       name: hasText(existing.name) ? existing.name : nextContact.name,
       phone: hasText(existing.phone) ? existing.phone : nextContact.phone,
+      extension: hasText(existing.extension) ? existing.extension : nextContact.extension,
       email: hasText(existing.email) ? existing.email : nextContact.email,
       isPrimary: existing.isPrimary || nextContact.isPrimary,
       notes: hasText(existing.notes) ? existing.notes : nextContact.notes,
@@ -331,7 +357,10 @@ function buildContactsFromRows(rows: BusinessAccountRow[]): MapContactSummary[] 
   return [...deduped.values()]
     .filter(
       (contact) =>
-        hasText(contact.name) || hasText(contact.email) || hasText(contact.phone),
+        hasText(contact.name) ||
+        hasText(contact.email) ||
+        hasText(contact.phone) ||
+        hasText(contact.extension),
     )
     .sort((left, right) => {
       if (left.isPrimary !== right.isPrimary) {
@@ -348,6 +377,7 @@ function buildContactDraft(contact: MapContactSummary): MapContactDraft {
   return {
     name: contact.name ?? "",
     phone: contact.phone ?? "",
+    extension: contact.extension ?? "",
     email: contact.email ?? "",
     notes: contact.notes ?? "",
   };
@@ -442,6 +472,8 @@ function updateRowsAfterContactSave(
         contactId: updatedTargetContactId,
         primaryContactName: updatedRow.primaryContactName ?? row.primaryContactName,
         primaryContactPhone: updatedRow.primaryContactPhone ?? row.primaryContactPhone,
+        primaryContactExtension:
+          updatedRow.primaryContactExtension ?? row.primaryContactExtension ?? null,
         primaryContactEmail: updatedRow.primaryContactEmail ?? row.primaryContactEmail,
         notes: updatedRow.notes ?? row.notes,
       };
@@ -508,6 +540,8 @@ function removeDeletedContactFromAccountRows(
         primaryContactId: null,
         primaryContactName: null,
         primaryContactPhone: null,
+        primaryContactExtension: null,
+        primaryContactRawPhone: null,
         primaryContactEmail: null,
         notes: null,
       },
@@ -537,6 +571,7 @@ function buildPointFromRows(
       ...point,
       primaryContactName: null,
       primaryContactPhone: null,
+      primaryContactExtension: null,
       primaryContactEmail: null,
       notes: null,
       contacts: [],
@@ -564,6 +599,7 @@ function buildPointFromRows(
     country: representativeRow.country || point.country,
     primaryContactName: primaryRow.primaryContactName,
     primaryContactPhone: primaryRow.primaryContactPhone,
+    primaryContactExtension: primaryRow.primaryContactExtension ?? null,
     primaryContactEmail: primaryRow.primaryContactEmail,
     category: representativeRow.category ?? point.category,
     notes: primaryRow.notes ?? representativeRow.notes ?? null,
@@ -573,6 +609,7 @@ function buildPointFromRows(
       contactId: contact.contactId,
       name: contact.name,
       phone: contact.phone,
+      extension: contact.extension,
       email: contact.email,
       isPrimary: contact.isPrimary,
       notes: contact.notes,
@@ -739,6 +776,7 @@ function buildMapContactUpdateRequest(
     companyPhone: targetRow.companyPhone ?? null,
     primaryContactName: targetRow.primaryContactName,
     primaryContactPhone: targetRow.primaryContactPhone,
+    primaryContactExtension: targetRow.primaryContactExtension ?? null,
     primaryContactEmail: targetRow.primaryContactEmail,
     category: targetRow.category,
     notes: targetRow.notes,
@@ -1030,6 +1068,7 @@ export function AccountsMapClient({
         contactId: contact.contactId,
         name: contact.name,
         phone: contact.phone,
+        extension: contact.extension ?? null,
         email: contact.email,
         isPrimary: contact.isPrimary,
         notes: contact.notes,
@@ -1050,6 +1089,7 @@ export function AccountsMapClient({
         contactId: null,
         name: selectedPoint.primaryContactName,
         phone: selectedPoint.primaryContactPhone,
+        extension: selectedPoint.primaryContactExtension ?? null,
         email: selectedPoint.primaryContactEmail,
         isPrimary: true,
         notes: selectedPoint.notes,
@@ -1540,6 +1580,7 @@ export function AccountsMapClient({
       const existing = current[rowKey] ?? {
         name: "",
         phone: "",
+        extension: "",
         email: "",
         notes: "",
       };
@@ -1548,7 +1589,12 @@ export function AccountsMapClient({
         ...current,
         [rowKey]: {
           ...existing,
-          [field]: field === "phone" ? formatPhoneDraftValue(value) : value,
+          [field]:
+            field === "phone"
+              ? formatPhoneDraftValue(value)
+              : field === "extension"
+                ? value.replace(/\D/g, "").slice(0, 5)
+                : value,
         },
       };
     });
@@ -1601,11 +1647,24 @@ export function AccountsMapClient({
       return;
     }
 
-    if (
-      contactDraft.phone.trim().length > 0 &&
-      normalizePhoneForSave(contactDraft.phone) === null
-    ) {
+    const trimmedPhone = contactDraft.phone.trim();
+    const trimmedExtension = contactDraft.extension.trim();
+
+    if (trimmedPhone.length > 0 && normalizePhoneForSave(trimmedPhone) === null) {
       setContactActionError("Phone number must use the format ###-###-####.");
+      return;
+    }
+
+    if (!trimmedPhone && trimmedExtension) {
+      setContactActionError("Extension requires a phone number.");
+      return;
+    }
+
+    const normalizedExtension = trimmedExtension
+      ? normalizeExtensionForSave(trimmedExtension)
+      : null;
+    if (trimmedExtension && (!normalizedExtension || normalizedExtension.length > 5)) {
+      setContactActionError("Extension must use 1 to 5 digits.");
       return;
     }
 
@@ -1648,7 +1707,8 @@ export function AccountsMapClient({
           buildMapContactUpdateRequest(targetRow, selectedPoint, {
             targetContactId: contact.contactId,
             primaryContactName: contactDraft.name.trim() || null,
-            primaryContactPhone: contactDraft.phone.trim() || null,
+            primaryContactPhone: trimmedPhone || null,
+            primaryContactExtension: normalizedExtension,
             primaryContactEmail: contactDraft.email.trim() || null,
             notes: contactDraft.notes.trim() || null,
           }),
@@ -1856,6 +1916,8 @@ export function AccountsMapClient({
             setAsPrimaryContact: true,
             primaryContactName: contact.name ?? targetRow.primaryContactName,
             primaryContactPhone: contact.phone ?? targetRow.primaryContactPhone,
+            primaryContactExtension:
+              contact.extension ?? targetRow.primaryContactExtension ?? null,
             primaryContactEmail: contact.email ?? targetRow.primaryContactEmail,
             notes: contact.notes ?? targetRow.notes,
           }),
@@ -2209,6 +2271,24 @@ export function AccountsMapClient({
                                 />
                               </label>
                               <label className={styles.contactField}>
+                                Extension
+                                <input
+                                  disabled={updatingContactRowKey !== null}
+                                  inputMode="numeric"
+                                  maxLength={5}
+                                  onChange={(event) =>
+                                    updateContactDraft(
+                                      contact.rowKey,
+                                      "extension",
+                                      event.target.value,
+                                    )
+                                  }
+                                  placeholder="Extension"
+                                  title="Extension must use 1 to 5 digits."
+                                  value={draft.extension}
+                                />
+                              </label>
+                              <label className={styles.contactField}>
                                 Email
                                 <input
                                   disabled={updatingContactRowKey !== null}
@@ -2241,7 +2321,7 @@ export function AccountsMapClient({
                           ) : (
                             <>
                               <div className={styles.contactPhoneRow}>
-                                <p>{renderText(contact.phone)}</p>
+                                <p>{formatPhoneWithExtension(contact.phone, contact.extension)}</p>
                                 <CallPhoneButton
                                   label={`${contact.name ?? selectedPoint?.companyName ?? "Contact"} phone`}
                                   phone={contact.phone}

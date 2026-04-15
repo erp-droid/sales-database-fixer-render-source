@@ -199,13 +199,17 @@ function buildContactsFromRows(rows: BusinessAccountRow[]) {
       contactId: row.contactId ?? null,
       name: row.primaryContactName,
       phone: row.primaryContactPhone,
+      extension: row.primaryContactExtension ?? null,
       email: row.primaryContactEmail,
       isPrimary: Boolean(row.isPrimaryContact),
       notes: row.notes ?? null,
     }))
     .filter(
       (contact) =>
-        hasText(contact.name) || hasText(contact.phone) || hasText(contact.email),
+        hasText(contact.name) ||
+        hasText(contact.phone) ||
+        hasText(contact.extension) ||
+        hasText(contact.email),
     )
     .sort((left, right) => {
       if (left.isPrimary !== right.isPrimary) {
@@ -313,7 +317,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                   representativeRow.address,
                   contacts
                     .map((contact) =>
-                      [contact.name, contact.email, contact.phone].filter(Boolean).join(" "),
+                      [contact.name, contact.email, contact.phone, contact.extension]
+                        .filter(Boolean)
+                        .join(" "),
                     )
                     .join(" "),
                 ]
@@ -381,6 +387,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                 country: row.country,
                 primaryContactName: row.primaryContactName,
                 primaryContactPhone: row.primaryContactPhone,
+                primaryContactExtension: row.primaryContactExtension ?? null,
                 primaryContactEmail: row.primaryContactEmail,
                 category: row.category,
                 notes: row.notes,
@@ -433,6 +440,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                   row.salesRepName,
                   row.address,
                   row.primaryContactName,
+                  row.primaryContactExtension,
                   row.primaryContactEmail,
                 ]
                   .filter(Boolean)
@@ -497,6 +505,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
               country: row.country,
               primaryContactName: row.primaryContactName,
               primaryContactPhone: row.primaryContactPhone,
+              primaryContactExtension: row.primaryContactExtension ?? null,
               primaryContactEmail: row.primaryContactEmail,
               category: row.category,
               notes: row.notes,

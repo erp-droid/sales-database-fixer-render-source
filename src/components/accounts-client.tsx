@@ -2259,6 +2259,7 @@ function clearCachedMapData() {
   try {
     window.localStorage.removeItem("businessAccounts.mapCache.v3");
     window.localStorage.removeItem("businessAccounts.mapCache.v4");
+    window.localStorage.removeItem("businessAccounts.mapCache.v5");
   } catch {
     // Ignore storage failures while updating client caches.
   }
@@ -4178,6 +4179,14 @@ export function AccountsClient({
                             row.primaryContactPhone,
                             refreshedRow.primaryContactPhone,
                           ),
+                          primaryContactExtension: pickPreferredText(
+                            row.primaryContactExtension,
+                            refreshedRow.primaryContactExtension,
+                          ),
+                          primaryContactRawPhone: pickPreferredText(
+                            row.primaryContactRawPhone,
+                            refreshedRow.primaryContactRawPhone,
+                          ),
                           primaryContactEmail: pickPreferredText(
                             row.primaryContactEmail,
                             refreshedRow.primaryContactEmail,
@@ -5128,6 +5137,18 @@ export function AccountsClient({
     const refreshedRows = readDetailResponseRows(payload);
     const canonicalAccountRecordId =
       refreshedRow.accountRecordId ?? refreshedRow.id ?? accountRecordId;
+    const refreshedPrimaryContactExtension = Object.prototype.hasOwnProperty.call(
+      refreshedRow,
+      "primaryContactExtension",
+    )
+      ? refreshedRow.primaryContactExtension ?? null
+      : row.primaryContactExtension ?? null;
+    const refreshedPrimaryContactRawPhone = Object.prototype.hasOwnProperty.call(
+      refreshedRow,
+      "primaryContactRawPhone",
+    )
+      ? refreshedRow.primaryContactRawPhone ?? null
+      : row.primaryContactRawPhone ?? null;
     const mergedRow =
       row.isPrimaryContact === false
         ? {
@@ -5139,10 +5160,14 @@ export function AccountsClient({
             isPrimaryContact: refreshedRow.isPrimaryContact ?? row.isPrimaryContact,
             companyPhone: refreshedRow.companyPhone ?? row.companyPhone,
             phoneNumber: refreshedRow.phoneNumber ?? row.phoneNumber,
+            primaryContactExtension: refreshedPrimaryContactExtension,
+            primaryContactRawPhone: refreshedPrimaryContactRawPhone,
           }
         : {
             ...refreshedRow,
             accountRecordId: canonicalAccountRecordId,
+            primaryContactExtension: refreshedPrimaryContactExtension,
+            primaryContactRawPhone: refreshedPrimaryContactRawPhone,
           };
 
     if (refreshedRows && refreshedRows.length > 0) {
@@ -6296,15 +6321,21 @@ export function AccountsClient({
     phone: string | null | undefined,
     label: string,
     context: NonNullable<ComponentProps<typeof CallPhoneButton>["context"]>,
+    extension?: string | null,
   ): ReactNode {
     const text = readTextValue(phone);
     if (!text) {
       return renderBlankCell(label);
     }
 
+    const extensionValue = readTextValue(extension);
+
     return (
       <div className={styles.phoneValue}>
         <span>{text}</span>
+        {extensionValue ? (
+          <span className={styles.secondaryCellText}>Ext. {extensionValue}</span>
+        ) : null}
         <CallPhoneButton className={styles.tableCallButton} context={context} label={label} phone={text} />
       </div>
     );
@@ -6415,6 +6446,7 @@ export function AccountsClient({
           linkedCompanyName: row.companyName,
           linkedContactName: row.primaryContactName,
         },
+        visibleColumns.includes("primaryContactExtension") ? null : row.primaryContactExtension,
       );
     }
 
