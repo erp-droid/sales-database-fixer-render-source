@@ -5485,6 +5485,34 @@ export function AccountsClient({
         }
       }
 
+      let refreshedSavedAccountRows: BusinessAccountRow[] | null = null;
+      if (!accountWasReassigned) {
+        try {
+          const refreshResponse = await fetch(
+            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId),
+            {
+              cache: "no-store",
+            },
+          );
+          const refreshPayload = await readJsonResponse<
+            BusinessAccountDetailResponse | BusinessAccountRow | { error?: string }
+          >(refreshResponse);
+
+          if (!refreshResponse.ok) {
+            throw new Error(parseError(refreshPayload));
+          }
+
+          refreshedSavedAccountRows =
+            readDetailResponseRows(refreshPayload) ??
+            (() => {
+              const refreshedRow = readDetailResponseRow(refreshPayload);
+              return refreshedRow ? [refreshedRow] : null;
+            })();
+        } catch {
+          refreshedSavedAccountRows = null;
+        }
+      }
+
       if (accountWasReassigned) {
         setAllRows((currentRows) => {
           const withoutSourceAccount = currentRows.filter((row) => {
@@ -5537,6 +5565,39 @@ export function AccountsClient({
         setLastSyncedAt(new Date().toISOString());
         clearCachedMapData();
         setSaveNotice("Saved to Acumatica.");
+        saved = true;
+        return saved;
+      }
+
+      if (refreshedSavedAccountRows && refreshedSavedAccountRows.length > 0) {
+        setAllRows((currentRows) =>
+          replaceRowsForAccount(
+            currentRows,
+            refreshedSavedAccountRows,
+            updatedAccountRecordId,
+            updatedRow.businessAccountId,
+          ),
+        );
+
+        const selectedMatchesSource =
+          selected && getRowKey(selected) === sourceRowKey;
+        if (selectedMatchesSource) {
+          const selectedAfterSave =
+            findMatchingAccountRow(refreshedSavedAccountRows, {
+              ...sourceRow,
+              accountRecordId: updatedAccountRecordId,
+              businessAccountId: updatedRow.businessAccountId,
+              contactId: updatedContactId,
+              primaryContactId: updatedPrimaryContactId,
+            }) ?? updatedRow;
+          setSelected(selectedAfterSave);
+          setAddressLookupArmed(false);
+          setDraft(buildDraft(selectedAfterSave));
+        }
+
+        setSaveNotice("Saved to Acumatica.");
+        setLastSyncedAt(new Date().toISOString());
+        clearCachedMapData();
         saved = true;
         return saved;
       }
