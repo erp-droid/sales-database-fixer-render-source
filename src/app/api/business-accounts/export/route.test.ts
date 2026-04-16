@@ -140,7 +140,7 @@ describe("GET /api/business-accounts/export", () => {
     expect(payload.error).toBe("Only jserrano can export account CSV files.");
   });
 
-  it("falls back to live sync rows when no read-model snapshot exists", async () => {
+  it("returns 409 when no local snapshot exists in read-model mode", async () => {
     readAllAccountRowsFromReadModel.mockReturnValue([]);
     readSyncStatus.mockReturnValue({
       status: "running",
@@ -154,17 +154,16 @@ describe("GET /api/business-accounts/export", () => {
       contactsCount: 0,
       progress: null,
     });
-    fetchAllSyncRows.mockResolvedValue([buildRow()]);
 
     const { GET } = await import("@/app/api/business-accounts/export/route");
 
     const response = await GET(
       new NextRequest("http://localhost/api/business-accounts/export"),
     );
+    const payload = (await response.json()) as { error?: string };
 
-    expect(response.status).toBe(200);
-    expect(fetchAllSyncRows).toHaveBeenCalledWith("cookie", expect.any(Object), {
-      includeInternal: false,
-    });
+    expect(response.status).toBe(409);
+    expect(payload.error).toContain("No local snapshot yet.");
+    expect(fetchAllSyncRows).not.toHaveBeenCalled();
   });
 });

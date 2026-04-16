@@ -1,3 +1,5 @@
+import { publishBusinessAccountChanged } from "@/lib/business-account-live";
+
 type DeferredActionsLiveEvent = {
   type: "changed";
   at: string;
@@ -31,4 +33,12 @@ export function publishDeferredActionsChanged(reason: string): void {
   for (const listener of listeners.values()) {
     listener(event);
   }
+
+  // Keep account tables in sync across browsers when deferred visibility changes.
+  publishBusinessAccountChanged({
+    accountRecordId: "__deferred_actions__",
+    businessAccountId: null,
+    targetContactId: null,
+    reason: "full-sync",
+  });
 }

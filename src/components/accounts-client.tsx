@@ -375,6 +375,9 @@ function isSyncStatusResponse(value: unknown): value is SyncStatusResponse {
       record.status === "running" ||
       record.status === "failed") &&
     (record.phase === null || typeof record.phase === "string") &&
+    (record.deferredVisibilityVersion === undefined ||
+      record.deferredVisibilityVersion === null ||
+      typeof record.deferredVisibilityVersion === "string") &&
     (record.lastSuccessfulSyncAt === null ||
       typeof record.lastSuccessfulSyncAt === "string")
   );
@@ -1198,6 +1201,84 @@ function mergeSyncedRows(
   };
 }
 
+function buildAccountIdentityKey(row: BusinessAccountRow): string {
+  const accountRecordId = readTextValue(row.accountRecordId ?? row.id);
+  if (accountRecordId) {
+    return `record:${normalizeComparable(accountRecordId)}`;
+  }
+
+  const businessAccountId = readTextValue(row.businessAccountId);
+  if (businessAccountId) {
+    return `business:${normalizeComparable(businessAccountId)}`;
+  }
+
+  return "";
+}
+
+function mergeSnapshotRowsPreservingFields(
+  existingRows: BusinessAccountRow[],
+  incomingRows: BusinessAccountRow[],
+): BusinessAccountRow[] {
+  if (existingRows.length === 0 || incomingRows.length === 0) {
+    return incomingRows;
+  }
+
+  const byRowKey = new Map<string, BusinessAccountRow>();
+  const byAccountContact = new Map<string, BusinessAccountRow>();
+  const byAccountPrimary = new Map<string, BusinessAccountRow>();
+
+  for (const row of existingRows) {
+    if (row.rowKey && !byRowKey.has(row.rowKey)) {
+      byRowKey.set(row.rowKey, row);
+    }
+
+    const accountKey = buildAccountIdentityKey(row);
+    if (!accountKey) {
+      continue;
+    }
+
+    if (row.contactId !== null && row.contactId !== undefined) {
+      const contactKey = `${accountKey}|contact:${String(row.contactId)}`;
+      if (!byAccountContact.has(contactKey)) {
+        byAccountContact.set(contactKey, row);
+      }
+    }
+
+    if (row.isPrimaryContact) {
+      const primaryKey = `${accountKey}|primary`;
+      if (!byAccountPrimary.has(primaryKey)) {
+        byAccountPrimary.set(primaryKey, row);
+      }
+    }
+  }
+
+  return incomingRows.map((incomingRow) => {
+    const existingByRowKey = incomingRow.rowKey ? byRowKey.get(incomingRow.rowKey) : null;
+    if (existingByRowKey) {
+      return mergeSyncedRows(existingByRowKey, incomingRow);
+    }
+
+    const incomingAccountKey = buildAccountIdentityKey(incomingRow);
+    let existingMatch: BusinessAccountRow | null = null;
+    if (
+      incomingAccountKey &&
+      incomingRow.contactId !== null &&
+      incomingRow.contactId !== undefined
+    ) {
+      existingMatch =
+        byAccountContact.get(
+          `${incomingAccountKey}|contact:${String(incomingRow.contactId)}`,
+        ) ?? null;
+    }
+
+    if (!existingMatch && incomingAccountKey && incomingRow.isPrimaryContact) {
+      existingMatch = byAccountPrimary.get(`${incomingAccountKey}|primary`) ?? null;
+    }
+
+    return existingMatch ? mergeSyncedRows(existingMatch, incomingRow) : incomingRow;
+  });
+}
+
 function sharesCompanyPhoneGroup(
   left: BusinessAccountRow,
   right: BusinessAccountRow,
@@ -1615,11 +1696,29 @@ function normalizeCachedSyncTimestamp(value: string | null | undefined): string 
   return trimmed || null;
 }
 
+function normalizeDeferredVisibilityVersion(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed || null;
+}
+
 function canUseCachedSnapshot(
   cachedDataset: CachedDataset | null,
   status: SyncStatusResponse,
 ): cachedDataset is CachedDataset {
   if (!cachedDataset || !isBusinessAccountRows(cachedDataset.rows) || cachedDataset.rows.length === 0) {
+    return false;
+  }
+
+  const cachedDeferredVisibilityVersion = normalizeDeferredVisibilityVersion(
+    cachedDataset.deferredVisibilityVersion,
+  );
+  const remoteDeferredVisibilityVersion = normalizeDeferredVisibilityVersion(
+    status.deferredVisibilityVersion,
+  );
+  if (
+    remoteDeferredVisibilityVersion &&
+    cachedDeferredVisibilityVersion !== remoteDeferredVisibilityVersion
+  ) {
     return false;
   }
 
@@ -2366,6 +2465,7 @@ export function AccountsClient({
   const [remoteSyncRunning, setRemoteSyncRunning] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [deferredVisibilityVersion, setDeferredVisibilityVersion] = useState<string | null>(null);
   const [pageInput, setPageInput] = useState("1");
   const [error, setError] = useState<string | null>(null);
 
@@ -2530,12 +2630,8 @@ export function AccountsClient({
     signal?: AbortSignal,
   ) {
     let statusPayload: SyncStatusResponse | null = null;
-    const hasCachedRows =
-      Boolean(cachedDataset) &&
-      isBusinessAccountRows(cachedDataset?.rows) &&
-      cachedDataset.rows.length > 0;
 
-    async function fetchRows(forceLive = false): Promise<BusinessAccountsResponse> {
+    async function fetchRows(): Promise<BusinessAccountsResponse> {
       const params = new URLSearchParams({
         sortBy: "companyName",
         sortDir: "asc",
@@ -2544,9 +2640,6 @@ export function AccountsClient({
         full: "1",
         includeInternal: "1",
       });
-      if (forceLive) {
-        params.set("live", "1");
-      }
 
       const rowsResponse = await fetch(`/api/business-accounts?${params.toString()}`, {
         cache: "no-store",
@@ -2578,6 +2671,9 @@ export function AccountsClient({
       if (statusResponse.ok && isSyncStatusResponse(nextStatusPayload)) {
         statusPayload = nextStatusPayload;
         setLastSyncedAt(nextStatusPayload.lastSuccessfulSyncAt);
+        setDeferredVisibilityVersion(
+          normalizeDeferredVisibilityVersion(nextStatusPayload.deferredVisibilityVersion),
+        );
         setSyncBlockedReason(nextStatusPayload.manualSyncBlockedReason ?? null);
         setRemoteSyncRunning(nextStatusPayload.status === "running");
 
@@ -2593,17 +2689,6 @@ export function AccountsClient({
     }
 
     const rowsPayload = await fetchRows();
-    const shouldTryLiveFallback =
-      rowsPayload.items.length === 0 &&
-      !hasCachedRows &&
-      (!statusPayload || (!statusPayload.lastSuccessfulSyncAt && statusPayload.rowsCount === 0));
-
-    if (shouldTryLiveFallback) {
-      const liveRowsPayload = await fetchRows(true);
-      if (liveRowsPayload.items.length > 0) {
-        return liveRowsPayload.items;
-      }
-    }
 
     if (statusPayload && !statusPayload.lastSuccessfulSyncAt && rowsPayload.items.length === 0) {
       setError("No local snapshot yet. Click Sync records to build the first snapshot.");
@@ -3272,9 +3357,12 @@ export function AccountsClient({
       allRowsCountRef.current = cachedDataset.rows.length;
       setAllRows(enforceSinglePrimaryPerAccountRows(cachedDataset.rows));
       setLastSyncedAt(cachedDataset.lastSyncedAt);
+      setDeferredVisibilityVersion(cachedDataset.deferredVisibilityVersion ?? null);
       setLoading(false);
     } else {
-      setLastSyncedAt(readCachedSyncMeta().lastSyncedAt);
+      const cachedSyncMeta = readCachedSyncMeta();
+      setLastSyncedAt(cachedSyncMeta.lastSyncedAt);
+      setDeferredVisibilityVersion(cachedSyncMeta.deferredVisibilityVersion ?? null);
     }
 
     setCacheHydrated(true);
@@ -3292,10 +3380,11 @@ export function AccountsClient({
     const payload: CachedDataset = {
       rows: allRows,
       lastSyncedAt,
+      deferredVisibilityVersion,
     };
 
     writeCachedDatasetToStorage(payload);
-  }, [allRows, cacheHydrated, isSyncing, lastSyncedAt]);
+  }, [allRows, cacheHydrated, deferredVisibilityVersion, isSyncing, lastSyncedAt]);
 
   useEffect(() => {
     async function fetchSession() {
@@ -3411,7 +3500,11 @@ export function AccountsClient({
 
     try {
       const nextRows = await loadSnapshotRows(cachedDataset);
-      setAllRows(enforceSinglePrimaryPerAccountRows(nextRows));
+      setAllRows((currentRows) =>
+        enforceSinglePrimaryPerAccountRows(
+          mergeSnapshotRowsPreservingFields(currentRows, nextRows),
+        ),
+      );
       setError(null);
     } catch {
       // Ignore transient full-refresh failures and keep the current working set.
@@ -3806,7 +3899,11 @@ export function AccountsClient({
           return;
         }
 
-        setAllRows(enforceSinglePrimaryPerAccountRows(nextRows));
+        setAllRows((currentRows) =>
+          enforceSinglePrimaryPerAccountRows(
+            mergeSnapshotRowsPreservingFields(currentRows, nextRows),
+          ),
+        );
         setLastSyncDurationMs(Date.now() - startedAt);
       } catch (fetchError) {
         if (controller.signal.aborted) {

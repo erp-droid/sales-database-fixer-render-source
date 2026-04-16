@@ -348,6 +348,15 @@ function readCachedLastSyncedAt(): string | null {
   );
 }
 
+function readCachedDeferredVisibilityVersion(): string | null {
+  return (
+    getMemoryCachedDataset()?.deferredVisibilityVersion ??
+    readCachedDatasetFromStorage()?.deferredVisibilityVersion ??
+    readCachedSyncMeta().deferredVisibilityVersion ??
+    null
+  );
+}
+
 function makeReviewedItemKey(
   metric: DataQualityMetricKey,
   basis: DataQualityBasis,
@@ -1817,6 +1826,7 @@ export function DataQualityClient({
     const payload: CachedDataset = {
       rows: nextRows,
       lastSyncedAt: readCachedLastSyncedAt(),
+      deferredVisibilityVersion: readCachedDeferredVisibilityVersion(),
     };
     writeCachedDatasetToStorage(payload);
   }

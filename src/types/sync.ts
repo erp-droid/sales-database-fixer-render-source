@@ -11,6 +11,7 @@ export type SyncStatusResponse = {
   startedAt: string | null;
   completedAt: string | null;
   lastSuccessfulSyncAt: string | null;
+  deferredVisibilityVersion?: string | null;
   lastError: string | null;
   rowsCount: number;
   accountsCount: number;

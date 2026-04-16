@@ -753,6 +753,11 @@ export async function GET(
         }
         return response;
       }
+
+      throw new HttpError(
+        404,
+        "Business account is not in the local SQLite snapshot. Click Sync records to refresh.",
+      );
     }
 
     const rawAccount = await fetchBusinessAccountById(cookieValue, id, authCookieRefresh);

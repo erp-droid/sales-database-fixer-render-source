@@ -132,6 +132,7 @@ const schema = z.object({
   DATA_QUALITY_HISTORY_PATH: z.string().min(1).optional(),
   READ_MODEL_STALE_AFTER_MS: z.string().optional(),
   READ_MODEL_SYNC_INTERVAL_MS: z.string().optional(),
+  READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: z.string().optional(),
   CALL_ANALYTICS_STALE_AFTER_MS: z.string().optional(),
   CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS: z.string().optional(),
 });
@@ -228,6 +229,7 @@ export type AppEnv = {
   DATA_QUALITY_HISTORY_PATH: string;
   READ_MODEL_STALE_AFTER_MS: number;
   READ_MODEL_SYNC_INTERVAL_MS: number;
+  READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: number;
   CALL_ANALYTICS_STALE_AFTER_MS: number;
   CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS: number;
 };
@@ -375,6 +377,9 @@ export function getEnv(): AppEnv {
     DATA_QUALITY_HISTORY_PATH: emptyToUndefined(process.env.DATA_QUALITY_HISTORY_PATH),
     READ_MODEL_STALE_AFTER_MS: emptyToUndefined(process.env.READ_MODEL_STALE_AFTER_MS),
     READ_MODEL_SYNC_INTERVAL_MS: emptyToUndefined(process.env.READ_MODEL_SYNC_INTERVAL_MS),
+    READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: emptyToUndefined(
+      process.env.READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS,
+    ),
     CALL_ANALYTICS_STALE_AFTER_MS: emptyToUndefined(process.env.CALL_ANALYTICS_STALE_AFTER_MS),
     CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS: emptyToUndefined(
       process.env.CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS,
@@ -483,6 +488,10 @@ export function getEnv(): AppEnv {
     READ_MODEL_SYNC_INTERVAL_MS: Math.max(
       60_000,
       Number(parsed.data.READ_MODEL_SYNC_INTERVAL_MS ?? "900000") || 900_000,
+    ),
+    READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: Math.max(
+      300_000,
+      Number(parsed.data.READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS ?? "1800000") || 1_800_000,
     ),
     CALL_ANALYTICS_STALE_AFTER_MS: Math.max(
       60_000,

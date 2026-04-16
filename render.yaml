@@ -144,6 +144,8 @@ services:
         value: "300000"
       - key: READ_MODEL_SYNC_INTERVAL_MS
         value: "900000"
+      - key: READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS
+        value: "1800000"
       - key: CALL_ANALYTICS_STALE_AFTER_MS
         value: "300000"
       - key: CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS

@@ -544,7 +544,9 @@ export function readBusinessAccountDetailFromReadModel(
   accountRecordId: string,
   contactId?: number | null,
 ): BusinessAccountDetailResponse | null {
-  const rows = readBusinessAccountRowsFromReadModel(accountRecordId);
+  const rows = applyLastCalledAtToBusinessAccountRows(
+    applyDeferredActionsToRows(readBusinessAccountRowsFromReadModel(accountRecordId)),
+  );
   if (rows.length === 0) {
     return null;
   }

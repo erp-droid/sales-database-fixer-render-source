@@ -29,6 +29,7 @@ type CallStatusResponse = {
   endedAt: string | null;
   outcome: string;
   sessionId: string;
+  updatedAt?: string;
 };
 
 type CallerPhoneResponse = {
@@ -82,6 +83,9 @@ const CALL_STATUS_POLL_INTERVAL_MS_INITIAL = 5_000;
 const CALL_STATUS_POLL_INTERVAL_MS_ACTIVE = 15_000;
 const CALL_STATUS_POLL_INTERVAL_MS_CONNECTED = 20_000;
 const CALL_STATUS_POLL_BACKOFF_AFTER_MS = 30_000;
+const CALL_STATUS_STALE_UNANSWERED_AFTER_MS = 2 * 60_000;
+const CALL_STATUS_RECHECK_TIMEOUT_MS = 8_000;
+const CALL_START_RECHECK_COOLDOWN_MS = 10_000;
 
 const TwilioCallContext = createContext<TwilioCallContextValue | null>(null);
 
@@ -184,6 +188,50 @@ async function startServerCall(
   }
 
   return payload as StartCallResponse;
+}
+
+function isLikelyStaleUnansweredCall(status: CallStatusResponse): boolean {
+  if (!status.active || status.answered) {
+    return false;
+  }
+
+  const updatedAtMs = Date.parse(status.updatedAt ?? "");
+  if (!Number.isFinite(updatedAtMs)) {
+    return false;
+  }
+
+  return Date.now() - updatedAtMs >= CALL_STATUS_STALE_UNANSWERED_AFTER_MS;
+}
+
+async function readServerCallStatus(
+  sessionId: string,
+): Promise<CallStatusResponse | null> {
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  let response: Response;
+  try {
+    response = await fetchJsonWithTimeout(
+      `/api/twilio/call?sessionId=${encodeURIComponent(normalizedSessionId)}`,
+      {
+        cache: "no-store",
+      },
+      CALL_STATUS_RECHECK_TIMEOUT_MS,
+    );
+  } catch {
+    return null;
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | CallStatusResponse
+    | null;
+  if (!response.ok || !payload || typeof payload.active !== "boolean") {
+    return null;
+  }
+
+  return payload;
 }
 
 async function endServerCall(callSid: string): Promise<void> {
@@ -308,6 +356,7 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const statusPollFailureCountRef = useRef(0);
   const callStartedAtRef = useRef<number | null>(null);
+  const lastStartRecheckAtRef = useRef(0);
 
   function clearActiveCallState(): void {
     setCallSid(null);
@@ -318,6 +367,7 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
     setActiveTargetPhone(null);
     statusPollFailureCountRef.current = 0;
     callStartedAtRef.current = null;
+    lastStartRecheckAtRef.current = 0;
   }
 
   useEffect(() => {
@@ -363,8 +413,37 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      setError("A call is already in progress. Hang up before starting another.");
-      return;
+      if (!isInitializing && sessionId) {
+        const now = Date.now();
+        const startedAtMs = callStartedAtRef.current;
+        const hasStaleLocalState =
+          typeof startedAtMs === "number" &&
+          Number.isFinite(startedAtMs) &&
+          now - startedAtMs >= CALL_STATUS_STALE_UNANSWERED_AFTER_MS;
+        if (!hasStaleLocalState) {
+          setError("A call is already in progress. Hang up before starting another.");
+          return;
+        }
+
+        if (now - lastStartRecheckAtRef.current < CALL_START_RECHECK_COOLDOWN_MS) {
+          setError("A call is already in progress. Hang up before starting another.");
+          return;
+        }
+        lastStartRecheckAtRef.current = now;
+
+        const status = await readServerCallStatus(sessionId);
+        if (status && (!status.active || isLikelyStaleUnansweredCall(status))) {
+          clearActiveCallState();
+        } else if (!status && hasStaleLocalState) {
+          clearActiveCallState();
+        } else {
+          setError("A call is already in progress. Hang up before starting another.");
+          return;
+        }
+      } else {
+        setError("A call is already in progress. Hang up before starting another.");
+        return;
+      }
     }
 
     setLastCallRequest({
@@ -602,6 +681,12 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
         statusPollFailureCountRef.current = 0;
 
         if (payload.active) {
+          if (isLikelyStaleUnansweredCall(payload)) {
+            clearActiveCallState();
+            setError("The previous call attempt appears stale. You can start a new call.");
+            return;
+          }
+
           lastKnownAnswered = payload.answered;
           setStatusText(
             payload.answered

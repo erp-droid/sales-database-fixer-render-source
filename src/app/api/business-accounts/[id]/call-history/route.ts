@@ -73,6 +73,12 @@ export async function GET(
     if (getEnv().READ_MODEL_ENABLED) {
       maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
       selectedRow = readBusinessAccountDetailFromReadModel(id, requestedContactId)?.row ?? null;
+      if (!selectedRow) {
+        throw new HttpError(
+          404,
+          "Business account is not in the local SQLite snapshot. Click Sync records to refresh.",
+        );
+      }
     }
 
     if (!selectedRow) {

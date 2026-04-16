@@ -86,6 +86,7 @@ const DEFAULT_MAP_PANEL_PREFERENCES: MapPanelPreferences = {
 type CachedDataset = {
   rows?: BusinessAccountRow[];
   lastSyncedAt?: string | null;
+  deferredVisibilityVersion?: string | null;
 };
 
 type CachedMapResponse = {
@@ -899,9 +900,11 @@ function readDatasetEntry(): { storageKey: string; dataset: CachedDataset } | nu
 }
 
 function writeDatasetRows(rows: BusinessAccountRow[], lastSyncedAt: string | null) {
+  const cachedSyncMeta = readCachedSyncMeta();
   writeCachedDatasetToStorage({
     rows,
     lastSyncedAt,
+    deferredVisibilityVersion: cachedSyncMeta.deferredVisibilityVersion ?? null,
   });
 }
 

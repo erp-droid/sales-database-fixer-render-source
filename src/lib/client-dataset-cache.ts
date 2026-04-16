@@ -19,10 +19,12 @@ const SYNC_META_STORAGE_KEY = "businessAccounts.syncMeta.v1";
 export type CachedDataset = {
   rows: BusinessAccountRow[];
   lastSyncedAt: string | null;
+  deferredVisibilityVersion: string | null;
 };
 
 export type CachedSyncMeta = {
   lastSyncedAt: string | null;
+  deferredVisibilityVersion: string | null;
 };
 
 let memoryDataset: CachedDataset | null = null;
@@ -96,12 +98,17 @@ export function readCachedDatasetFromStorage(): CachedDataset | null {
       const parsed = JSON.parse(raw) as {
         rows?: unknown;
         lastSyncedAt?: unknown;
+        deferredVisibilityVersion?: unknown;
       };
       if (Array.isArray(parsed.rows) && parsed.rows.every((row) => isBusinessAccountRow(row))) {
         const dataset: CachedDataset = {
           rows: parsed.rows,
           lastSyncedAt:
             typeof parsed.lastSyncedAt === "string" ? parsed.lastSyncedAt : null,
+          deferredVisibilityVersion:
+            typeof parsed.deferredVisibilityVersion === "string"
+              ? parsed.deferredVisibilityVersion
+              : null,
         };
 
         memoryDataset = dataset;
@@ -126,15 +133,22 @@ export function readCachedSyncMeta(): CachedSyncMeta {
   try {
     const raw = window.localStorage.getItem(SYNC_META_STORAGE_KEY);
     if (!raw) {
-      return { lastSyncedAt: null };
+      return { lastSyncedAt: null, deferredVisibilityVersion: null };
     }
 
-    const parsed = JSON.parse(raw) as { lastSyncedAt?: unknown };
+    const parsed = JSON.parse(raw) as {
+      lastSyncedAt?: unknown;
+      deferredVisibilityVersion?: unknown;
+    };
     return {
       lastSyncedAt: typeof parsed.lastSyncedAt === "string" ? parsed.lastSyncedAt : null,
+      deferredVisibilityVersion:
+        typeof parsed.deferredVisibilityVersion === "string"
+          ? parsed.deferredVisibilityVersion
+          : null,
     };
   } catch {
-    return { lastSyncedAt: null };
+    return { lastSyncedAt: null, deferredVisibilityVersion: null };
   }
 }
 
@@ -158,6 +172,9 @@ export function writeCachedDatasetToStorage(dataset: CachedDataset): void {
   } catch {
     // Ignore storage failures.
   }
-  writeCachedSyncMeta({ lastSyncedAt: dataset.lastSyncedAt });
+  writeCachedSyncMeta({
+    lastSyncedAt: dataset.lastSyncedAt,
+    deferredVisibilityVersion: dataset.deferredVisibilityVersion,
+  });
   emitDatasetUpdated();
 }

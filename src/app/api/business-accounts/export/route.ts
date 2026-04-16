@@ -45,9 +45,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (READ_MODEL_ENABLED) {
       maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
       sourceRows = readAllAccountRowsFromReadModel();
+      if (sourceRows.length === 0 && !hasUsableReadModelSnapshot()) {
+        throw new HttpError(
+          409,
+          "No local snapshot yet. Click Sync records to build the SQLite snapshot before exporting.",
+        );
+      }
     }
 
-    if (sourceRows.length === 0 && (!READ_MODEL_ENABLED || !hasUsableReadModelSnapshot())) {
+    if (sourceRows.length === 0 && !READ_MODEL_ENABLED) {
       sourceRows = await fetchAllSyncRows(cookieValue, authCookieRefresh, {
         includeInternal: false,
       });

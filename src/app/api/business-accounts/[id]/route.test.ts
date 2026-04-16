@@ -216,6 +216,27 @@ describe("GET /api/business-accounts/[id]", () => {
       error: "Business account not found.",
     });
   });
+
+  it("returns 404 when the account exists but deferred visibility hides all rows", async () => {
+    fetchBusinessAccountById.mockReset();
+    readBusinessAccountDetailFromReadModel.mockReturnValue(null);
+
+    const { GET } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/business-accounts/record-1"),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    expect(fetchBusinessAccountById).not.toHaveBeenCalled();
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Business account is not in the local SQLite snapshot. Click Sync records to refresh.",
+    });
+  });
 });
 
 describe("DELETE /api/business-accounts/[id]", () => {

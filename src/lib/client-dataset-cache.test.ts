@@ -77,6 +77,7 @@ describe("client dataset cache", () => {
     cache.writeCachedDatasetToStorage({
       rows: [SAMPLE_ROW],
       lastSyncedAt: "2026-03-13T21:36:00.592Z",
+      deferredVisibilityVersion: "0|",
     });
 
     vi.resetModules();
@@ -85,6 +86,7 @@ describe("client dataset cache", () => {
     expect(reloadedCache.readCachedDatasetFromStorage()).toEqual({
       rows: [SAMPLE_ROW],
       lastSyncedAt: "2026-03-13T21:36:00.592Z",
+      deferredVisibilityVersion: "0|",
     });
   });
 

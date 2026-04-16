@@ -53,6 +53,7 @@ function readNextStoredValue<K extends keyof StoredSyncState>(
 let syncInFlight: Promise<void> | null = null;
 let geocodeInFlight: Promise<void> | null = null;
 const RECENT_CALL_ACTIVITY_BLOCK_WINDOW_MS = 5 * 60 * 1000;
+const MIN_STALE_RUNNING_SYNC_AFTER_MS = 10 * 60 * 1000;
 
 function toSyncStatusResponse(record: StoredSyncState | undefined): SyncStatusResponse {
   let progress: SyncStatusResponse["progress"] = null;
@@ -71,6 +72,7 @@ function toSyncStatusResponse(record: StoredSyncState | undefined): SyncStatusRe
     startedAt: record?.started_at ?? null,
     completedAt: record?.completed_at ?? null,
     lastSuccessfulSyncAt: record?.last_successful_sync_at ?? null,
+    deferredVisibilityVersion: null,
     lastError: record?.last_error ?? null,
     rowsCount: record?.rows_count ?? 0,
     accountsCount: record?.accounts_count ?? 0,
@@ -118,13 +120,105 @@ function readActiveCallCount(): number {
   return Math.max(0, Number(row?.total ?? 0));
 }
 
+function isStaleRunningSyncState(record: StoredSyncState, nowMs: number): boolean {
+  if (record.status !== "running") {
+    return false;
+  }
+
+  const startedAtMs = Date.parse(record.started_at ?? "");
+  if (!Number.isFinite(startedAtMs)) {
+    return true;
+  }
+
+  const ageMs = nowMs - startedAtMs;
+  if (!Number.isFinite(ageMs) || ageMs < 0) {
+    return false;
+  }
+
+  const staleAfterMs = Math.max(
+    MIN_STALE_RUNNING_SYNC_AFTER_MS,
+    getEnv().READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS,
+  );
+  return ageMs >= staleAfterMs;
+}
+
+function recoverStaleRunningSyncState(
+  record: StoredSyncState,
+  nowMs: number,
+): StoredSyncState | undefined {
+  const startedAtMs = Date.parse(record.started_at ?? "");
+  const ageMs = Number.isFinite(startedAtMs) ? Math.max(0, nowMs - startedAtMs) : Number.NaN;
+  const ageMinutes = Number.isFinite(ageMs) ? Math.max(1, Math.round(ageMs / 60_000)) : null;
+  const completedAt = new Date(nowMs).toISOString();
+  const failureMessage = ageMinutes
+    ? `Recovered stale sync lock after ${ageMinutes} minute${
+        ageMinutes === 1 ? "" : "s"
+      } in running state.`
+    : "Recovered stale sync lock left in running state.";
+
+  console.warn("[sync]", {
+    event: "recovered-stale-running-state",
+    startedAt: record.started_at,
+    completedAt,
+    failureMessage,
+  });
+
+  writeSyncState({
+    status: "failed",
+    phase: "failed",
+    completed_at: completedAt,
+    last_error: failureMessage,
+    progress_json: null,
+  });
+
+  return readStoredSyncState();
+}
+
+function readStoredSyncStateWithRecovery(nowMs = Date.now()): StoredSyncState | undefined {
+  const record = readStoredSyncState();
+  if (!record) {
+    return record;
+  }
+
+  if (record.status !== "running") {
+    return record;
+  }
+
+  if (syncInFlight) {
+    return record;
+  }
+
+  if (!isStaleRunningSyncState(record, nowMs)) {
+    return record;
+  }
+
+  return recoverStaleRunningSyncState(record, nowMs);
+}
+
+function readDeferredVisibilityVersion(): string {
+  const db = getReadModelDb();
+  const row = db
+    .prepare(
+      `
+      SELECT
+        COUNT(*) AS active_count,
+        COALESCE(MAX(updated_at), '') AS latest_updated_at
+      FROM deferred_actions
+      WHERE status IN ('pending_review', 'approved', 'executing', 'failed')
+      `,
+    )
+    .get() as { active_count?: number; latest_updated_at?: string } | undefined;
+
+  return `${Number(row?.active_count ?? 0)}|${row?.latest_updated_at ?? ""}`;
+}
+
 function formatRemainingMinutes(remainingMs: number): string {
   const minutes = Math.max(1, Math.ceil(remainingMs / 60_000));
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
 export function readManualSyncBlockedReason(nowMs = Date.now()): string | null {
-  const status = toSyncStatusResponse(readStoredSyncState());
+  const status = toSyncStatusResponse(readStoredSyncStateWithRecovery(nowMs));
   if (status.status === "running") {
     return "A full account sync is already running.";
   }
@@ -464,7 +558,8 @@ async function runFullSync(
 }
 
 export function readSyncStatus(): SyncStatusResponse {
-  const status = toSyncStatusResponse(readStoredSyncState());
+  const status = toSyncStatusResponse(readStoredSyncStateWithRecovery());
+  status.deferredVisibilityVersion = readDeferredVisibilityVersion();
   status.manualSyncBlockedReason = readManualSyncBlockedReason();
   return status;
 }
