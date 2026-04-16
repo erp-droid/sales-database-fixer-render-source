@@ -1308,6 +1308,65 @@ describe("Acumatica entity creation", () => {
     expect(retriedBody.note).toBe("Confirmed decision maker");
   });
 
+  it("falls back to record-id contact writes after repeated invalid-uri responses", async () => {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const parsedBody =
+        init?.body && typeof init.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null;
+
+      if (url.includes("/Contact?")) {
+        return jsonResponse({
+          status: 200,
+          body: [
+            {
+              id: "0fa8bd1d-a7ef-f011-8370-025dbe72350a",
+              ContactID: { value: 157252 },
+              DisplayName: { value: "Rayo Golwala" },
+            },
+          ],
+        });
+      }
+
+      if (
+        parsedBody?.id === "0fa8bd1d-a7ef-f011-8370-025dbe72350a" &&
+        parsedBody.note === "Confirmed decision maker"
+      ) {
+        return jsonResponse({
+          status: 200,
+          body: { ContactID: { value: 157252 } },
+        });
+      }
+
+      return jsonResponse({
+        status: 500,
+        body: {
+          message: "An error has occurred.",
+          exceptionMessage: "Invalid uri structure",
+        },
+      });
+    });
+
+    const { updateContact } = await import("@/lib/acumatica");
+    await updateContact("cookie", 157252, {
+      note: { value: "Confirmed decision maker" },
+    });
+
+    const requestUrls = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(requestUrls.some((url) => url.includes("/Contact?"))).toBe(true);
+
+    const recoveryCall = fetchMock.mock.calls.find(([, init]) => {
+      if (!init?.body || typeof init.body !== "string") {
+        return false;
+      }
+      const body = JSON.parse(init.body) as Record<string, unknown>;
+      return (
+        body.id === "0fa8bd1d-a7ef-f011-8370-025dbe72350a" &&
+        body.note === "Confirmed decision maker"
+      );
+    });
+    expect(recoveryCall).toBeDefined();
+  });
+
   it("prefers collection updates for business-account saves when requested", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ status: 200, body: { id: "account" } }));
 

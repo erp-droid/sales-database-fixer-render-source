@@ -3095,11 +3095,39 @@ function isDuplicateContactSelectionError(error: unknown): error is HttpError {
   );
 }
 
+function hasInvalidUriText(value: unknown, seen = new Set<unknown>()): boolean {
+  if (typeof value === "string") {
+    return value.trim().toLowerCase().includes("invalid uri");
+  }
+
+  if (value === null || value === undefined || typeof value !== "object") {
+    return false;
+  }
+
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasInvalidUriText(entry, seen));
+  }
+
+  return Object.values(value as Record<string, unknown>).some((entry) =>
+    hasInvalidUriText(entry, seen),
+  );
+}
+
 function isInvalidUriStructureError(error: unknown): error is HttpError {
   return (
     error instanceof HttpError &&
-    error.message.trim().toLowerCase().includes("invalid uri")
+    (error.message.trim().toLowerCase().includes("invalid uri") ||
+      hasInvalidUriText(error.details))
   );
+}
+
+function isRecoverableContactWriteError(error: unknown): error is HttpError {
+  return isDuplicateContactSelectionError(error) || isInvalidUriStructureError(error);
 }
 
 function buildPlainStringNoteRecoveryPayload(
@@ -3152,6 +3180,38 @@ function buildContactEntityRecoveryPayloads(
   // trigger ambiguous-account resolution upstream for duplicate customer names.
   pushVariant(["CompanyName"]);
   pushVariant(["CompanyName", "Type"]);
+
+  return variants;
+}
+
+function buildContactWriteRecoveryPayloads(
+  payload: Record<string, unknown>,
+  plainStringNotePayload: Record<string, unknown> | null,
+): Record<string, unknown>[] {
+  const variants: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+
+  const pushVariant = (candidate: Record<string, unknown>) => {
+    const fingerprint = JSON.stringify(candidate);
+    if (seen.has(fingerprint)) {
+      return;
+    }
+    seen.add(fingerprint);
+    variants.push(candidate);
+  };
+
+  const sourcePayloads: Record<string, unknown>[] = [payload];
+  if (plainStringNotePayload) {
+    sourcePayloads.push(plainStringNotePayload);
+    pushVariant(plainStringNotePayload);
+  }
+
+  for (const sourcePayload of sourcePayloads) {
+    const sourceVariants = buildContactEntityRecoveryPayloads(sourcePayload);
+    for (const variant of sourceVariants) {
+      pushVariant(variant);
+    }
+  }
 
   return variants;
 }
@@ -3335,8 +3395,10 @@ async function writeContactEntity<T>(
   } catch (error) {
     let resolvedError: unknown = error;
     const plainStringNotePayload = buildPlainStringNoteRecoveryPayload(payload);
+    const shouldUsePlainStringFallback =
+      plainStringNotePayload !== null && isInvalidUriStructureError(error);
 
-    if (plainStringNotePayload && isInvalidUriStructureError(error)) {
+    if (shouldUsePlainStringFallback) {
       try {
         return await requestAcumatica<T>(activeCookieValue, "/Contact", {
           method: "PUT",
@@ -3351,7 +3413,7 @@ async function writeContactEntity<T>(
     const defaultEntityPath = deriveDefaultAcumaticaEntityPath(
       getEnv().ACUMATICA_ENTITY_PATH,
     );
-    if (!isDuplicateContactSelectionError(resolvedError)) {
+    if (!isRecoverableContactWriteError(resolvedError)) {
       throw resolvedError;
     }
 
@@ -3373,13 +3435,17 @@ async function writeContactEntity<T>(
         });
         return response;
       } catch (defaultError) {
-        if (!isDuplicateContactSelectionError(defaultError)) {
+        if (!isRecoverableContactWriteError(defaultError)) {
           throw defaultError;
         }
+        resolvedError = defaultError;
       }
     }
 
-    const recoveryPayloads = buildContactEntityRecoveryPayloads(payload);
+    const recoveryPayloads = buildContactWriteRecoveryPayloads(
+      payload,
+      shouldUsePlainStringFallback ? plainStringNotePayload : null,
+    );
     for (const recoveryPayload of recoveryPayloads) {
       try {
         return await requestAcumatica<T>(activeCookieValue, "/Contact", {
@@ -3388,30 +3454,38 @@ async function writeContactEntity<T>(
           authCookieRefresh,
         });
       } catch (recoveryError) {
-        if (!isDuplicateContactSelectionError(recoveryError)) {
+        if (!isRecoverableContactWriteError(recoveryError)) {
           throw recoveryError;
         }
+        resolvedError = recoveryError;
       }
 
       if (!defaultEntityPath) {
         continue;
       }
 
-      const response = await requestAcumaticaAtEntityPath<T>(
-        activeCookieValue,
-        defaultEntityPath,
-        "/Contact",
-        {
-          method: "PUT",
-          body: JSON.stringify(recoveryPayload),
-          authCookieRefresh,
-        },
-      );
-      cacheResolvedAcumaticaEndpoint("/Contact", {
-        entityPath: defaultEntityPath,
-        source: "fallback-default",
-      });
-      return response;
+      try {
+        const response = await requestAcumaticaAtEntityPath<T>(
+          activeCookieValue,
+          defaultEntityPath,
+          "/Contact",
+          {
+            method: "PUT",
+            body: JSON.stringify(recoveryPayload),
+            authCookieRefresh,
+          },
+        );
+        cacheResolvedAcumaticaEndpoint("/Contact", {
+          entityPath: defaultEntityPath,
+          source: "fallback-default",
+        });
+        return response;
+      } catch (defaultRecoveryError) {
+        if (!isRecoverableContactWriteError(defaultRecoveryError)) {
+          throw defaultRecoveryError;
+        }
+        resolvedError = defaultRecoveryError;
+      }
     }
 
     if (typeof options?.contactId === "number" && Number.isFinite(options.contactId)) {
@@ -3436,7 +3510,7 @@ async function writeContactEntity<T>(
       }
     }
 
-    throw error;
+    throw resolvedError;
   }
 }
 
