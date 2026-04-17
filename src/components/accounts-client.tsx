@@ -5697,14 +5697,17 @@ export function AccountsClient({
       const selectedMatchesSource =
         selected && getRowKey(selected) === sourceRowKey;
       if (selectedMatchesSource) {
+        const selectedAfterSaveContactId = responseTargetsSelectedContact
+          ? updatedContactId
+          : selectedContactId ?? sourceRow.contactId ?? sourceRow.primaryContactId ?? updatedContactId;
         const selectedAfterSave: BusinessAccountRow = {
           ...sourceRow,
           accountRecordId: updatedAccountRecordId,
-          contactId: updatedContactId,
+          contactId: selectedAfterSaveContactId,
           primaryContactId: updatedPrimaryContactId,
           isPrimaryContact:
-            updatedPrimaryContactId !== null && updatedContactId !== null
-              ? updatedPrimaryContactId === updatedContactId
+            updatedPrimaryContactId !== null && selectedAfterSaveContactId !== null
+              ? updatedPrimaryContactId === selectedAfterSaveContactId
               : sourceRow.isPrimaryContact,
           companyName: updatedRow.companyName,
           companyDescription: updatedRow.companyDescription ?? null,
@@ -5726,14 +5729,24 @@ export function AccountsClient({
           companyPhone: updatedRow.companyPhone ?? sourceRow.companyPhone,
           companyPhoneSource:
             updatedRow.companyPhoneSource ?? sourceRow.companyPhoneSource ?? null,
-          primaryContactName: updatedRow.primaryContactName,
+          primaryContactName: responseTargetsSelectedContact
+            ? updatedRow.primaryContactName
+            : effectiveDraft.primaryContactName,
           primaryContactJobTitle:
-            updatedRow.primaryContactJobTitle ?? sourceRow.primaryContactJobTitle ?? null,
-          primaryContactPhone: updatedRow.primaryContactPhone,
+            responseTargetsSelectedContact
+              ? updatedRow.primaryContactJobTitle ?? sourceRow.primaryContactJobTitle ?? null
+              : effectiveDraft.primaryContactJobTitle ?? sourceRow.primaryContactJobTitle ?? null,
+          primaryContactPhone: responseTargetsSelectedContact
+            ? updatedRow.primaryContactPhone
+            : effectiveDraft.primaryContactPhone,
           primaryContactExtension:
-            updatedRow.primaryContactExtension ?? sourceRow.primaryContactExtension ?? null,
-          primaryContactEmail: updatedRow.primaryContactEmail,
-          notes: updatedRow.notes,
+            responseTargetsSelectedContact
+              ? updatedRow.primaryContactExtension ?? sourceRow.primaryContactExtension ?? null
+              : effectiveDraft.primaryContactExtension ?? sourceRow.primaryContactExtension ?? null,
+          primaryContactEmail: responseTargetsSelectedContact
+            ? updatedRow.primaryContactEmail
+            : effectiveDraft.primaryContactEmail,
+          notes: responseTargetsSelectedContact ? updatedRow.notes : effectiveDraft.notes,
         };
 
         setSelected(selectedAfterSave);
