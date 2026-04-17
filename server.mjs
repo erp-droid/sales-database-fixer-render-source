@@ -122,7 +122,14 @@ server.listen(port, hostname, () => {
   startPricingBookAutoSync(console);
 
   const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
+  let watchdogInFlight = false;
   setInterval(async () => {
+    if (watchdogInFlight) {
+      console.warn("[watchdog] previous cycle still running; skipping overlap");
+      return;
+    }
+
+    watchdogInFlight = true;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60_000);
 
@@ -182,6 +189,7 @@ server.listen(port, hostname, () => {
       console.error("[watchdog] cycle failed", error);
     } finally {
       clearTimeout(timeoutId);
+      watchdogInFlight = false;
     }
   }, WATCHDOG_INTERVAL_MS);
   console.log(`[watchdog] started; checking every ${WATCHDOG_INTERVAL_MS / 1000}s`);
@@ -215,126 +223,132 @@ server.listen(port, hostname, () => {
   );
   const DAILY_CALL_COACHING_INTERVAL_MS = 60 * 1000;
   let lastDailyCallCoachingWindow = null;
+  let dailyCallCoachingInFlight = false;
 
   async function runDailyCallCoachingCycle(trigger) {
-    if (!dailyCallCoachingEnabled) {
+    if (!dailyCallCoachingEnabled || dailyCallCoachingInFlight) {
       return;
     }
 
-    const now = new Date();
-    const localParts = readLocalDateParts(now, dailyCallCoachingTimeZone);
-    const currentDateKey = formatLocalDateKey(now, dailyCallCoachingTimeZone);
-    const localHour = Number.parseInt(localParts.hour, 10);
-    const localMinute = Number.parseInt(localParts.minute, 10);
-
-    if (!currentDateKey || !Number.isFinite(localHour) || !Number.isFinite(localMinute)) {
-      console.error("[daily-call-coaching] unable to resolve local schedule window", {
-        timeZone: dailyCallCoachingTimeZone,
-      });
-      return;
-    }
-
-    const beforeSchedule =
-      localHour < dailyCallCoachingScheduleHour ||
-      (localHour === dailyCallCoachingScheduleHour &&
-        localMinute < dailyCallCoachingScheduleMinute);
-    if (beforeSchedule || lastDailyCallCoachingWindow === currentDateKey) {
-      return;
-    }
-
-    const reportDate = shiftDateKey(
-      currentDateKey,
-      -dailyCallCoachingLookbackDays,
-      dailyCallCoachingTimeZone,
-    );
-    if (!reportDate) {
-      console.error("[daily-call-coaching] unable to resolve report date", {
-        currentDateKey,
-        lookbackDays: dailyCallCoachingLookbackDays,
-      });
-      return;
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15 * 60 * 1000);
-
+    dailyCallCoachingInFlight = true;
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/api/call-coaching/daily/run`, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          ...(process.env.DAILY_CALL_COACHING_SECRET
-            ? { "x-daily-call-coaching-secret": process.env.DAILY_CALL_COACHING_SECRET }
-            : {}),
-        },
-        body: JSON.stringify({ reportDate }),
-        signal: controller.signal,
-      });
-      const payload = await response.json().catch(() => null);
+      const now = new Date();
+      const localParts = readLocalDateParts(now, dailyCallCoachingTimeZone);
+      const currentDateKey = formatLocalDateKey(now, dailyCallCoachingTimeZone);
+      const localHour = Number.parseInt(localParts.hour, 10);
+      const localMinute = Number.parseInt(localParts.minute, 10);
 
-      if (!response.ok && response.status !== 207) {
-        console.error("[daily-call-coaching] cycle request failed", {
-          trigger,
-          reportDate,
-          status: response.status,
-          body: payload,
+      if (!currentDateKey || !Number.isFinite(localHour) || !Number.isFinite(localMinute)) {
+        console.error("[daily-call-coaching] unable to resolve local schedule window", {
+          timeZone: dailyCallCoachingTimeZone,
         });
         return;
       }
 
-      const report = payload && typeof payload === "object" ? payload : null;
-      const items = Array.isArray(report?.items) ? report.items : [];
-      const sent = items.filter((item) => item.status === "sent").length;
-      const skipped = items.filter((item) => item.status === "skipped").length;
-      const failed = items.filter((item) => item.status === "failed").length;
-      const coverageComplete = report?.dataCoverage?.complete === true;
-      const coverageStatus =
-        report?.dataCoverage && typeof report.dataCoverage.status === "string"
-          ? report.dataCoverage.status
-          : "unknown";
-      const coverageDetail =
-        report?.dataCoverage && typeof report.dataCoverage.detail === "string"
-          ? report.dataCoverage.detail
-          : "Call import coverage was not confirmed.";
+      const beforeSchedule =
+        localHour < dailyCallCoachingScheduleHour ||
+        (localHour === dailyCallCoachingScheduleHour &&
+          localMinute < dailyCallCoachingScheduleMinute);
+      if (beforeSchedule || lastDailyCallCoachingWindow === currentDateKey) {
+        return;
+      }
 
-      console.log(
-        `[daily-call-coaching] ${trigger}; report ${reportDate}; ${sent} sent, ${skipped} skipped, ${failed} failed; coverage ${coverageComplete ? coverageStatus : `blocked:${coverageStatus}`}`,
+      const reportDate = shiftDateKey(
+        currentDateKey,
+        -dailyCallCoachingLookbackDays,
+        dailyCallCoachingTimeZone,
       );
-
-      for (const item of items) {
-        console.log(
-          `[daily-call-coaching]   ${item.subjectLoginName}: ${item.status} - ${item.detail}`,
-        );
-      }
-
-      if (!coverageComplete) {
-        console.warn("[daily-call-coaching] waiting for full call import coverage", {
-          trigger,
-          reportDate,
-          status: coverageStatus,
-          detail: coverageDetail,
-          snapshotLastRecentSyncAt: report?.dataCoverage?.snapshotLastRecentSyncAt ?? null,
-          snapshotLatestSeenStartTime: report?.dataCoverage?.snapshotLatestSeenStartTime ?? null,
-          snapshotLastError: report?.dataCoverage?.snapshotLastError ?? null,
-          confirmedThroughDate: report?.dataCoverage?.confirmedThroughDate ?? null,
-          staleDays: report?.dataCoverage?.staleDays ?? null,
-          remainingCallSyncCount: report?.dataCoverage?.remainingCallSyncCount ?? null,
+      if (!reportDate) {
+        console.error("[daily-call-coaching] unable to resolve report date", {
+          currentDateKey,
+          lookbackDays: dailyCallCoachingLookbackDays,
         });
         return;
       }
 
-      if (failed === 0) {
-        lastDailyCallCoachingWindow = currentDateKey;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15 * 60 * 1000);
+
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/api/call-coaching/daily/run`, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            ...(process.env.DAILY_CALL_COACHING_SECRET
+              ? { "x-daily-call-coaching-secret": process.env.DAILY_CALL_COACHING_SECRET }
+              : {}),
+          },
+          body: JSON.stringify({ reportDate }),
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => null);
+
+        if (!response.ok && response.status !== 207) {
+          console.error("[daily-call-coaching] cycle request failed", {
+            trigger,
+            reportDate,
+            status: response.status,
+            body: payload,
+          });
+          return;
+        }
+
+        const report = payload && typeof payload === "object" ? payload : null;
+        const items = Array.isArray(report?.items) ? report.items : [];
+        const sent = items.filter((item) => item.status === "sent").length;
+        const skipped = items.filter((item) => item.status === "skipped").length;
+        const failed = items.filter((item) => item.status === "failed").length;
+        const coverageComplete = report?.dataCoverage?.complete === true;
+        const coverageStatus =
+          report?.dataCoverage && typeof report.dataCoverage.status === "string"
+            ? report.dataCoverage.status
+            : "unknown";
+        const coverageDetail =
+          report?.dataCoverage && typeof report.dataCoverage.detail === "string"
+            ? report.dataCoverage.detail
+            : "Call import coverage was not confirmed.";
+
+        console.log(
+          `[daily-call-coaching] ${trigger}; report ${reportDate}; ${sent} sent, ${skipped} skipped, ${failed} failed; coverage ${coverageComplete ? coverageStatus : `blocked:${coverageStatus}`}`,
+        );
+
+        for (const item of items) {
+          console.log(
+            `[daily-call-coaching]   ${item.subjectLoginName}: ${item.status} - ${item.detail}`,
+          );
+        }
+
+        if (!coverageComplete) {
+          console.warn("[daily-call-coaching] waiting for full call import coverage", {
+            trigger,
+            reportDate,
+            status: coverageStatus,
+            detail: coverageDetail,
+            snapshotLastRecentSyncAt: report?.dataCoverage?.snapshotLastRecentSyncAt ?? null,
+            snapshotLatestSeenStartTime: report?.dataCoverage?.snapshotLatestSeenStartTime ?? null,
+            snapshotLastError: report?.dataCoverage?.snapshotLastError ?? null,
+            confirmedThroughDate: report?.dataCoverage?.confirmedThroughDate ?? null,
+            staleDays: report?.dataCoverage?.staleDays ?? null,
+            remainingCallSyncCount: report?.dataCoverage?.remainingCallSyncCount ?? null,
+          });
+          return;
+        }
+
+        if (failed === 0) {
+          lastDailyCallCoachingWindow = currentDateKey;
+        }
+      } catch (error) {
+        console.error("[daily-call-coaching] cycle failed", {
+          trigger,
+          reportDate,
+          error,
+        });
+      } finally {
+        clearTimeout(timeoutId);
       }
-    } catch (error) {
-      console.error("[daily-call-coaching] cycle failed", {
-        trigger,
-        reportDate,
-        error,
-      });
     } finally {
-      clearTimeout(timeoutId);
+      dailyCallCoachingInFlight = false;
     }
   }
 

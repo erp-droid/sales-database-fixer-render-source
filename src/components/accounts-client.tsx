@@ -3479,7 +3479,11 @@ export function AccountsClient({
         if (selectedRow && rowMatchesLiveAccountEvent(selectedRow, event)) {
           const nextSelected =
             findMatchingAccountRow(refreshedRows, selectedRow) ?? responseRow;
-          if (isDraftDirty(draftRef.current)) {
+          const notesFieldFocused =
+            typeof document !== "undefined" &&
+            notesFieldRef.current !== null &&
+            document.activeElement === notesFieldRef.current;
+          if (notesFieldFocused || isDraftDirty(draftRef.current)) {
             setSaveNotice(
               "This record changed in Acumatica while you were editing. Your draft is preserved.",
             );
@@ -8204,11 +8208,21 @@ export function AccountsClient({
               <textarea
                 disabled={!selected.contactId}
                 ref={notesFieldRef}
-                onChange={(event) =>
-                  setDraft((current) =>
-                    current ? { ...current, notes: event.target.value } : current,
-                  )
-                }
+                onChange={(event) => {
+                  const nextNotes = event.target.value;
+                  setDraft((current) => {
+                    if (!current) {
+                      return current;
+                    }
+
+                    const nextDraft = {
+                      ...current,
+                      notes: nextNotes,
+                    };
+                    draftRef.current = nextDraft;
+                    return nextDraft;
+                  });
+                }}
                 rows={5}
                 value={draft.notes ?? ""}
               />

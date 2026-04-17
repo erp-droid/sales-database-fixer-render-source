@@ -18,8 +18,9 @@ import { runDueDeferredActions } from "@/lib/deferred-actions-executor";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 
 const SESSION_CHECK_TIMEOUT_MS = 3000;
-const AUTHENTICATED_SESSION_CACHE_TTL_MS = 15_000;
-const DEGRADED_SESSION_CACHE_TTL_MS = 5_000;
+const AUTHENTICATED_SESSION_CACHE_TTL_MS = 60_000;
+const DEGRADED_SESSION_CACHE_TTL_MS = 20_000;
+const CALLER_IDENTITY_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 type SessionResponsePayload = {
   authenticated: boolean;
@@ -34,6 +35,7 @@ type CachedSessionResponse = {
 };
 
 const cachedSessionResponses = new Map<string, CachedSessionResponse>();
+const callerIdentityRefreshByUser = new Map<string, number>();
 
 function isAbortError(error: unknown): boolean {
   return (
@@ -140,6 +142,25 @@ function runInBackground(task: () => Promise<void>): void {
   }
 }
 
+function shouldRefreshCallerIdentity(userId: string, nowMs = Date.now()): boolean {
+  const lastRefreshAt = callerIdentityRefreshByUser.get(userId) ?? 0;
+  if (nowMs - lastRefreshAt < CALLER_IDENTITY_REFRESH_INTERVAL_MS) {
+    return false;
+  }
+
+  callerIdentityRefreshByUser.set(userId, nowMs);
+  if (callerIdentityRefreshByUser.size > 1000) {
+    const staleBefore = nowMs - CALLER_IDENTITY_REFRESH_INTERVAL_MS * 2;
+    for (const [cachedUserId, refreshedAt] of callerIdentityRefreshByUser.entries()) {
+      if (refreshedAt < staleBefore) {
+        callerIdentityRefreshByUser.delete(cachedUserId);
+      }
+    }
+  }
+
+  return true;
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const cookieValue = getAuthCookieValue(request);
   const storedUser = buildStoredUser(request);
@@ -148,6 +169,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   };
 
   if (!cookieValue) {
+    if (storedUser?.id) {
+      callerIdentityRefreshByUser.delete(storedUser.id);
+    }
     const response = NextResponse.json({ authenticated: false, user: null });
     clearStoredLoginName(response);
     return response;
@@ -170,31 +194,38 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
 
     const normalizedUser = normalizeSessionUser(payload) ?? storedUser;
-    const deferredActor = createDeferredActionActor({
-      loginName: normalizedUser?.id ?? null,
-      name: normalizedUser?.name ?? null,
-    });
-
+    const userId = normalizedUser?.id ?? storedUser.id;
     const activeCookieValue = authCookieRefresh.value ?? cookieValue;
-    if (hasRunnableDeferredActions() || storedUser.id) {
+    const shouldRunDeferredActions = hasRunnableDeferredActions();
+    const shouldRunIdentityRefresh = shouldRefreshCallerIdentity(userId);
+    if (shouldRunDeferredActions || shouldRunIdentityRefresh) {
       runInBackground(async () => {
-        try {
-          await resolveSignedInCallerIdentity(
-            activeCookieValue,
-            storedUser.id,
-            { value: null },
-            { allowFullDirectorySync: false },
-          );
-        } catch (error) {
-          if (!(error instanceof HttpError) || ![403, 422].includes(error.status)) {
-            // Keep the session check resilient. Calling enforces caller identity.
+        if (shouldRunIdentityRefresh) {
+          try {
+            await resolveSignedInCallerIdentity(
+              activeCookieValue,
+              userId,
+              { value: null },
+              { allowFullDirectorySync: false },
+            );
+          } catch (error) {
+            if (!(error instanceof HttpError) || ![403, 422].includes(error.status)) {
+              // Keep the session check resilient. Calling enforces caller identity.
+            }
           }
         }
 
-        try {
-          await runDueDeferredActions(activeCookieValue, deferredActor, { value: null });
-        } catch {
-          // Keep session validation responsive even if deferred execution fails.
+        if (shouldRunDeferredActions) {
+          const deferredActor = createDeferredActionActor({
+            loginName: normalizedUser?.id ?? null,
+            name: normalizedUser?.name ?? null,
+          });
+
+          try {
+            await runDueDeferredActions(activeCookieValue, deferredActor, { value: null });
+          } catch {
+            // Keep session validation responsive even if deferred execution fails.
+          }
         }
       });
     }
@@ -213,6 +244,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   } catch (error) {
     if (error instanceof HttpError && error.status === 401) {
       cachedSessionResponses.delete(cacheKey);
+      if (storedUser?.id) {
+        callerIdentityRefreshByUser.delete(storedUser.id);
+      }
       return buildInvalidSessionResponse();
     }
 
