@@ -35,7 +35,6 @@ import type {
   BusinessAccountContactCreateResponse,
 } from "@/types/business-account-create";
 import {
-  buildCanonicalCompanyPhoneGroupKey,
   enforceSinglePrimaryPerAccountRows,
   queryBusinessAccounts,
   resolveCompanyPhone,
@@ -1277,16 +1276,6 @@ function mergeSnapshotRowsPreservingFields(
 
     return existingMatch ? mergeSyncedRows(existingMatch, incomingRow) : incomingRow;
   });
-}
-
-function sharesCompanyPhoneGroup(
-  left: BusinessAccountRow,
-  right: BusinessAccountRow,
-): boolean {
-  return (
-    buildCanonicalCompanyPhoneGroupKey(left) ===
-    buildCanonicalCompanyPhoneGroupKey(right)
-  );
 }
 
 function parseError(payload: unknown): string {
@@ -5457,8 +5446,13 @@ export function AccountsClient({
       const updatedRow = payload as BusinessAccountRow;
       const updatedAccountRecordId =
         updatedRow.accountRecordId ?? updatedRow.id ?? accountRecordId;
-      const updatedContactId = updatedRow.contactId ?? selectedContactId;
+      const returnedContactId = updatedRow.contactId ?? null;
+      const updatedContactId = returnedContactId ?? selectedContactId;
       const updatedPrimaryContactId = updatedRow.primaryContactId;
+      const responseTargetsSelectedContact =
+        returnedContactId !== null &&
+        selectedContactId !== null &&
+        returnedContactId === selectedContactId;
       const accountWasReassigned = updatedAccountRecordId !== accountRecordId;
       let reassignedAccountRows: BusinessAccountRow[] | null = null;
 
@@ -5614,8 +5608,7 @@ export function AccountsClient({
               rowAccountRecordId === accountRecordId ||
               rowAccountRecordId === updatedAccountRecordId ||
               row.businessAccountId === selectedBusinessAccountId;
-            const sameCompanyPhoneGroup = sharesCompanyPhoneGroup(row, updatedRow);
-            if (!sameAccount && !sameCompanyPhoneGroup) {
+            if (!sameAccount) {
               return row;
             }
 
@@ -5641,9 +5634,9 @@ export function AccountsClient({
               category: sameAccount ? updatedRow.category : row.category,
               lastModifiedIso: sameAccount ? updatedRow.lastModifiedIso : row.lastModifiedIso,
               companyPhone:
-                sameCompanyPhoneGroup ? updatedRow.companyPhone ?? row.companyPhone : row.companyPhone,
+                sameAccount ? updatedRow.companyPhone ?? row.companyPhone : row.companyPhone,
               companyPhoneSource:
-                sameCompanyPhoneGroup
+                sameAccount
                   ? updatedRow.companyPhoneSource ?? row.companyPhoneSource ?? null
                   : row.companyPhoneSource,
               primaryContactId: sameAccount ? updatedPrimaryContactId : row.primaryContactId,
@@ -5656,24 +5649,43 @@ export function AccountsClient({
                   : row.isPrimaryContact,
             };
 
-            if (
-              sameAccount &&
+            const matchesSourceRow = getRowKey(row) === sourceRowKey;
+            const matchesSelectedContact =
+              selectedContactId !== null &&
+              row.contactId !== null &&
+              row.contactId !== undefined &&
+              row.contactId === selectedContactId;
+            const matchesUpdatedContact =
               updatedContactId !== null &&
               row.contactId !== null &&
               row.contactId !== undefined &&
-              row.contactId === updatedContactId
+              row.contactId === updatedContactId;
+            const shouldPatchContact = matchesSourceRow || matchesSelectedContact || matchesUpdatedContact;
+
+            if (
+              shouldPatchContact
             ) {
               return {
                 ...updatedCommon,
-                contactId: updatedContactId,
-                primaryContactName: updatedRow.primaryContactName,
+                contactId: row.contactId,
+                primaryContactName: responseTargetsSelectedContact
+                  ? updatedRow.primaryContactName
+                  : effectiveDraft.primaryContactName,
                 primaryContactJobTitle:
-                  updatedRow.primaryContactJobTitle ?? row.primaryContactJobTitle ?? null,
-                primaryContactPhone: updatedRow.primaryContactPhone,
+                  responseTargetsSelectedContact
+                    ? updatedRow.primaryContactJobTitle ?? row.primaryContactJobTitle ?? null
+                    : effectiveDraft.primaryContactJobTitle ?? row.primaryContactJobTitle ?? null,
+                primaryContactPhone: responseTargetsSelectedContact
+                  ? updatedRow.primaryContactPhone
+                  : effectiveDraft.primaryContactPhone,
                 primaryContactExtension:
-                  updatedRow.primaryContactExtension ?? row.primaryContactExtension ?? null,
-                primaryContactEmail: updatedRow.primaryContactEmail,
-                notes: updatedRow.notes,
+                  responseTargetsSelectedContact
+                    ? updatedRow.primaryContactExtension ?? row.primaryContactExtension ?? null
+                    : effectiveDraft.primaryContactExtension ?? row.primaryContactExtension ?? null,
+                primaryContactEmail: responseTargetsSelectedContact
+                  ? updatedRow.primaryContactEmail
+                  : effectiveDraft.primaryContactEmail,
+                notes: responseTargetsSelectedContact ? updatedRow.notes : effectiveDraft.notes,
               };
             }
 

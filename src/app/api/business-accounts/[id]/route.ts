@@ -645,36 +645,59 @@ async function buildResponseRowFromRawAccount(
     rawAccount,
     authCookieRefresh,
   );
+  const normalizedRows = normalizeBusinessAccountRows(rawAccount);
 
   let responseRow = refreshedAccountRow;
   if (isUsableContactId(targetContactId)) {
-    try {
-      const refreshedTargetContact = await fetchContactById(
-        cookieValue,
-        targetContactId,
-        authCookieRefresh,
-      );
-      const normalizedTargetRow = normalizeBusinessAccount(
-        withPrimaryContact(rawAccount, refreshedTargetContact),
-      );
+    const targetContactRow =
+      normalizedRows.find(
+        (row) =>
+          row.contactId !== null &&
+          row.contactId !== undefined &&
+          row.contactId === targetContactId,
+      ) ?? null;
+
+    if (targetContactRow) {
       responseRow = {
         ...refreshedAccountRow,
-        ...normalizedTargetRow,
+        ...targetContactRow,
         id: refreshedAccountRow.id,
         accountRecordId: refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id,
-        rowKey: `${refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id}:contact:${targetContactId}`,
-        contactId: targetContactId,
-        isPrimaryContact:
-          refreshedAccountRow.primaryContactId !== null &&
-          refreshedAccountRow.primaryContactId === targetContactId,
-        primaryContactId: refreshedAccountRow.primaryContactId,
+        rowKey:
+          targetContactRow.rowKey ??
+          `${refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id}:contact:${targetContactId}`,
+        contactId: targetContactRow.contactId ?? targetContactId,
+        primaryContactId: targetContactRow.primaryContactId ?? refreshedAccountRow.primaryContactId,
       };
-    } catch (contactError) {
-      if (
-        contactError instanceof HttpError &&
-        (contactError.status === 401 || contactError.status === 403)
-      ) {
-        throw contactError;
+    } else {
+      try {
+        const refreshedTargetContact = await fetchContactById(
+          cookieValue,
+          targetContactId,
+          authCookieRefresh,
+        );
+        const normalizedTargetRow = normalizeBusinessAccount(
+          withPrimaryContact(rawAccount, refreshedTargetContact),
+        );
+        responseRow = {
+          ...refreshedAccountRow,
+          ...normalizedTargetRow,
+          id: refreshedAccountRow.id,
+          accountRecordId: refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id,
+          rowKey: `${refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id}:contact:${targetContactId}`,
+          contactId: targetContactId,
+          isPrimaryContact:
+            refreshedAccountRow.primaryContactId !== null &&
+            refreshedAccountRow.primaryContactId === targetContactId,
+          primaryContactId: refreshedAccountRow.primaryContactId,
+        };
+      } catch (contactError) {
+        if (
+          contactError instanceof HttpError &&
+          (contactError.status === 401 || contactError.status === 403)
+        ) {
+          throw contactError;
+        }
       }
     }
   }
@@ -1481,17 +1504,29 @@ export async function PUT(
         effectiveUpdateRequest,
         responseTargetContactId,
       );
-      responseRow = applyOptimisticSavedUpdateToRow(
-        responseRow,
-        currentAccountRow,
-        effectiveUpdateRequest,
-        responseTargetContactId,
-      );
+      const optimisticTargetRow =
+        responseTargetContactId !== null
+          ? optimisticRows.find(
+              (row) =>
+                row.contactId !== null &&
+                row.contactId !== undefined &&
+                row.contactId === responseTargetContactId,
+            ) ?? null
+          : null;
+      responseRow =
+        optimisticTargetRow ??
+        applyOptimisticSavedUpdateToRow(
+          responseRow,
+          currentAccountRow,
+          effectiveUpdateRequest,
+          responseTargetContactId,
+        );
 
       console.warn("[business-account-update]", {
         event: "save-verification-stale-response",
         accountRecordId: resolvedRecordId,
         targetContactId: responseTargetContactId,
+        responseContactId: responseRow.contactId ?? null,
       });
 
       if (getEnv().READ_MODEL_ENABLED) {
