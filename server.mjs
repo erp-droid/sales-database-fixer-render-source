@@ -394,9 +394,15 @@ server.listen(port, hostname, () => {
   );
   const callActivitySyncMaxBatchesPerWindow = readBoundedInteger(
     process.env.CALL_ACTIVITY_SYNC_MAX_BATCHES_PER_WINDOW,
-    60,
+    20,
     1,
     500,
+  );
+  const CALL_ACTIVITY_SYNC_REFRESH_MIN_INTERVAL_MS = readBoundedInteger(
+    process.env.CALL_ACTIVITY_SYNC_REFRESH_MIN_INTERVAL_MS,
+    10 * 60_000,
+    60_000,
+    60 * 60_000,
   );
   const callActivitySyncUsesScheduledWindow =
     process.env.CALL_ACTIVITY_SYNC_SCHEDULE_HOUR !== undefined ||
@@ -429,6 +435,7 @@ server.listen(port, hostname, () => {
   let callActivitySyncInFlight = false;
   let lastCallActivitySyncWindow = null;
   let activeCallActivitySyncDateKey = null;
+  let lastCallActivityRefreshAtMs = 0;
 
   async function runCallAnalyticsRefresh(trigger) {
     const controller = new AbortController();
@@ -574,7 +581,15 @@ server.listen(port, hostname, () => {
     callActivitySyncInFlight = true;
 
     try {
-      await runCallAnalyticsRefresh(`${trigger}:refresh:${targetDateKey}`);
+      const nowMs = Date.now();
+      const continuingActiveTarget = activeCallActivitySyncDateKey === targetDateKey;
+      if (
+        !continuingActiveTarget ||
+        nowMs - lastCallActivityRefreshAtMs >= CALL_ACTIVITY_SYNC_REFRESH_MIN_INTERVAL_MS
+      ) {
+        await runCallAnalyticsRefresh(`${trigger}:refresh:${targetDateKey}`);
+        lastCallActivityRefreshAtMs = nowMs;
+      }
 
       let processedCount = 0;
       let syncedCount = 0;
@@ -649,7 +664,7 @@ server.listen(port, hostname, () => {
         }, CALL_ACTIVITY_SYNC_SCHEDULE_CHECK_INTERVAL_MS);
       }, minuteAlignedDelayMs);
       console.log(
-        `[call-activity-sync] worker started; daily schedule ${String(callActivitySyncScheduleHour).padStart(2, "0")}:${String(callActivitySyncScheduleMinute).padStart(2, "0")} ${callActivitySyncTimeZone}; batch ${CALL_ACTIVITY_SYNC_BATCH_SIZE}; max batches ${callActivitySyncMaxBatchesPerWindow}; retries every ${Math.round(CALL_ACTIVITY_SYNC_SCHEDULE_CHECK_INTERVAL_MS / 1000)}s until complete`,
+        `[call-activity-sync] worker started; daily schedule ${String(callActivitySyncScheduleHour).padStart(2, "0")}:${String(callActivitySyncScheduleMinute).padStart(2, "0")} ${callActivitySyncTimeZone}; batch ${CALL_ACTIVITY_SYNC_BATCH_SIZE}; max batches ${callActivitySyncMaxBatchesPerWindow}; refresh every ${Math.round(CALL_ACTIVITY_SYNC_REFRESH_MIN_INTERVAL_MS / 1000)}s while catching up; retries every ${Math.round(CALL_ACTIVITY_SYNC_SCHEDULE_CHECK_INTERVAL_MS / 1000)}s until complete`,
       );
     } else {
       const initialDelayMs = 10_000;

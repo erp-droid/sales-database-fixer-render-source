@@ -582,6 +582,12 @@ export function shouldTriggerAutoSync(): boolean {
   if (status.status === "running") {
     return false;
   }
+  // Auto-sync must obey the same live-call/recent-call safety gates as manual syncs.
+  // This avoids heavy full refreshes while call activity is still flowing.
+  const blockedReason = readManualSyncBlockedReason();
+  if (blockedReason) {
+    return false;
+  }
   if (!status.lastSuccessfulSyncAt) {
     // Do not start the first full snapshot from ordinary page loads.
     // The user should trigger the initial sync explicitly.
