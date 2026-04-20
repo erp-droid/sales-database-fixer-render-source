@@ -159,6 +159,10 @@ const runtimeStallMonitorEnabled = readFeatureEnabled(
   process.env.RUNTIME_STALL_MONITOR_ENABLED,
   process.env.NODE_ENV === "production",
 );
+const pricingBookAutoSyncEnabled = readFeatureEnabled(
+  process.env.PRICING_BOOK_AUTO_SYNC_ENABLED,
+  process.env.NODE_ENV !== "production",
+);
 const RUNTIME_MONITOR_INTERVAL_MS = readBoundedInteger(
   process.env.RUNTIME_MONITOR_INTERVAL_MS,
   60_000,
@@ -425,7 +429,12 @@ if (runtimeStallMonitorEnabled && runtimeEventLoopLagHistogram) {
 server.listen(port, hostname, () => {
   console.log(`sales-meadowb listening on http://${hostname}:${port}`);
   console.log(`embedded pricing-book-app mounted at ${quotesMountPath}`);
-  startPricingBookAutoSync(console);
+  if (pricingBookAutoSyncEnabled) {
+    startPricingBookAutoSync(console);
+    console.log("[pricing-book-auto-sync] enabled");
+  } else {
+    console.log("[pricing-book-auto-sync] disabled on this runtime");
+  }
   if (runtimeStallMonitorEnabled) {
     console.log(
       `[runtime-stall] monitor started; interval ${Math.round(RUNTIME_MONITOR_INTERVAL_MS / 1000)}s; lag defer ${RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS}ms; request slow warn ${RUNTIME_SLOW_REQUEST_WARN_MS}ms`,

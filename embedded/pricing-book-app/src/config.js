@@ -213,7 +213,7 @@ export const config = {
     autoSyncResumeDelayMs: parseInteger(env.ESTIMATE_LIBRARY_AUTO_SYNC_RESUME_DELAY_MS, 15000),
     autoSyncQuotaBackoffMs: parseInteger(env.ESTIMATE_LIBRARY_AUTO_SYNC_QUOTA_BACKOFF_MS, 70000),
     autoSyncErrorBackoffMs: parseInteger(env.ESTIMATE_LIBRARY_AUTO_SYNC_ERROR_BACKOFF_MS, 1000 * 60 * 5),
-    autoSyncMaxFilesPerRun: parseInteger(env.ESTIMATE_LIBRARY_AUTO_SYNC_MAX_FILES, 1000)
+    autoSyncMaxFilesPerRun: parseInteger(env.ESTIMATE_LIBRARY_AUTO_SYNC_MAX_FILES, 100)
   },
   mail: {
     proxySharedSecret: env.MAIL_PROXY_SHARED_SECRET || "",
