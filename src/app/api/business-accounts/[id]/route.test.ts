@@ -36,6 +36,7 @@ const readSyncStatus = vi.fn(() => ({
   contactsCount: 1,
 }));
 const waitForReadModelSync = vi.fn();
+const publishBusinessAccountChanged = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
   requireAuthCookieValue,
@@ -79,6 +80,10 @@ vi.mock("@/lib/read-model/sync", () => ({
   waitForReadModelSync,
 }));
 
+vi.mock("@/lib/business-account-live", () => ({
+  publishBusinessAccountChanged,
+}));
+
 function buildRow(overrides?: Partial<BusinessAccountRow>): BusinessAccountRow {
   return {
     id: "record-1",
@@ -117,6 +122,30 @@ function buildRow(overrides?: Partial<BusinessAccountRow>): BusinessAccountRow {
     lastEmailedAt: null,
     lastModifiedIso: "2026-04-01T10:00:00.000Z",
     ...overrides,
+  };
+}
+
+function buildNoopPutPayload(row: BusinessAccountRow): Record<string, unknown> {
+  return {
+    companyName: row.companyName,
+    companyDescription: row.companyDescription,
+    addressLine1: row.addressLine1,
+    addressLine2: row.addressLine2,
+    city: row.city,
+    state: row.state,
+    postalCode: row.postalCode,
+    country: row.country,
+    salesRepId: row.salesRepId,
+    salesRepName: row.salesRepName,
+    companyPhone: row.companyPhone ?? row.phoneNumber ?? null,
+    primaryContactName: row.primaryContactName,
+    primaryContactJobTitle: row.primaryContactJobTitle ?? null,
+    primaryContactPhone: row.primaryContactPhone,
+    primaryContactExtension: row.primaryContactExtension ?? null,
+    primaryContactEmail: row.primaryContactEmail,
+    category: row.category,
+    notes: row.notes,
+    expectedLastModified: row.lastModifiedIso,
   };
 }
 
@@ -436,5 +465,81 @@ describe("DELETE /api/business-accounts/[id]", () => {
         sourceSurface: "accounts",
       }),
     );
+  });
+});
+
+describe("PUT /api/business-accounts/[id]", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    requireAuthCookieValue.mockReset();
+    requireAuthCookieValue.mockReturnValue("cookie");
+    setAuthCookie.mockReset();
+    publishBusinessAccountChanged.mockReset();
+    fetchBusinessAccountById.mockReset();
+    updateBusinessAccount.mockReset();
+    updateContact.mockReset();
+    readBusinessAccountDetailFromReadModel.mockReset();
+    replaceReadModelAccountRows.mockReset();
+  });
+
+  it("short-circuits cached no-op saves without writing to Acumatica", async () => {
+    const cachedRow = buildRow({
+      contactId: null,
+      primaryContactId: null,
+      rowKey: "record-1:primary",
+      companyPhone: "437-213-9438",
+      phoneNumber: "437-213-9438",
+      salesRepId: null,
+      salesRepName: null,
+      category: null,
+      primaryContactName: null,
+      primaryContactJobTitle: null,
+      primaryContactPhone: null,
+      primaryContactExtension: null,
+      primaryContactRawPhone: null,
+      primaryContactEmail: null,
+      notes: null,
+    });
+
+    readBusinessAccountDetailFromReadModel.mockImplementation(
+      (_id: string, contactId?: number) => {
+        if (contactId !== undefined) {
+          return null;
+        }
+
+        return {
+          row: cachedRow,
+          rows: [cachedRow],
+          accountLocation: null,
+        };
+      },
+    );
+
+    const { PUT } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/business-accounts/record-1", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(buildNoopPutPayload(cachedRow)),
+      }),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: cachedRow.id,
+      accountRecordId: cachedRow.accountRecordId,
+      companyName: cachedRow.companyName,
+    });
+    expect(fetchBusinessAccountById).not.toHaveBeenCalled();
+    expect(updateBusinessAccount).not.toHaveBeenCalled();
+    expect(updateContact).not.toHaveBeenCalled();
+    expect(publishBusinessAccountChanged).toHaveBeenCalledTimes(1);
   });
 });

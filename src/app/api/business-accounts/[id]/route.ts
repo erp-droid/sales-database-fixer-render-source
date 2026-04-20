@@ -343,6 +343,10 @@ function readContactPhone(record: unknown): string | null {
     phone1: readWrappedString(record, "Phone1"),
     phone2: readWrappedString(record, "Phone2"),
     phone3: readWrappedString(record, "Phone3"),
+    extension:
+      readWrappedString(record, "Extension") ??
+      readWrappedString(record, "Phone1Ext") ??
+      readWrappedString(record, "extension"),
   }).phone;
 }
 
@@ -351,6 +355,10 @@ function readContactExtension(record: unknown): string | null {
     phone1: readWrappedString(record, "Phone1"),
     phone2: readWrappedString(record, "Phone2"),
     phone3: readWrappedString(record, "Phone3"),
+    extension:
+      readWrappedString(record, "Extension") ??
+      readWrappedString(record, "Phone1Ext") ??
+      readWrappedString(record, "extension"),
   }).extension;
 }
 
@@ -597,6 +605,40 @@ function buildBusinessAccountUpdateIdentifiers(
     .map((value) => value.trim())
     .filter(Boolean)
     .filter((value, index, array) => array.indexOf(value) === index);
+}
+
+function buildCachedContactComparisonRow(
+  cachedCurrentRow: BusinessAccountRow | null,
+  cachedTargetRow: BusinessAccountRow | null,
+  cachedTargetContactId: number | null,
+): BusinessAccountRow | null {
+  if (cachedTargetContactId === null) {
+    return cachedTargetRow ?? cachedCurrentRow;
+  }
+
+  if (cachedTargetRow !== null) {
+    return {
+      ...cachedTargetRow,
+      accountRecordId: cachedTargetRow.accountRecordId ?? cachedTargetRow.id,
+      contactId: cachedTargetContactId,
+      rowKey:
+        cachedTargetRow.rowKey ??
+        `${cachedTargetRow.accountRecordId ?? cachedTargetRow.id}:contact:${cachedTargetContactId}`,
+    };
+  }
+
+  if (cachedCurrentRow !== null) {
+    return {
+      ...cachedCurrentRow,
+      accountRecordId: cachedCurrentRow.accountRecordId ?? cachedCurrentRow.id,
+      contactId: cachedTargetContactId,
+      rowKey:
+        cachedCurrentRow.rowKey ??
+        `${cachedCurrentRow.accountRecordId ?? cachedCurrentRow.id}:contact:${cachedTargetContactId}`,
+    };
+  }
+
+  return null;
 }
 
 async function normalizeWithContactNotes(
@@ -958,6 +1000,31 @@ export async function PUT(
       !currentCachedBusinessAccountId &&
       requestedAssignedBusinessAccountId !== null &&
       cachedTargetContactId !== null;
+    const cachedContactComparisonRow = buildCachedContactComparisonRow(
+      cachedCurrentRow,
+      cachedTargetRow,
+      cachedTargetContactId,
+    );
+    const requestedUnknownTargetContact =
+      cachedTargetContactId !== null && cachedTargetRow === null;
+    const isNoopSaveAgainstCachedRow =
+      cachedCurrentRow !== null &&
+      !isOrphanContactAssignment &&
+      !requestedUnknownTargetContact &&
+      !updateRequest.setAsPrimaryContact &&
+      !hasBusinessAccountChanges(cachedCurrentRow, updateRequest) &&
+      !hasPrimaryContactChanges(
+        cachedContactComparisonRow ?? cachedCurrentRow,
+        updateRequest,
+      );
+
+    if (isNoopSaveAgainstCachedRow) {
+      return withLocalCompanyDescription(
+        cachedContactComparisonRow ?? cachedCurrentRow,
+        updateRequest,
+        submittedCompanyDescription,
+      );
+    }
 
     if (isOrphanContactAssignment) {
       if (
@@ -1055,27 +1122,6 @@ export async function PUT(
       (updateRequest.contactOnlyIntent === true || implicitContactOnlyIntent) &&
       cachedTargetContactId !== null
     ) {
-      const cachedContactComparisonRow =
-        cachedTargetRow !== null
-          ? {
-              ...cachedTargetRow,
-              accountRecordId: cachedTargetRow.accountRecordId ?? cachedTargetRow.id,
-              contactId: cachedTargetContactId,
-              rowKey:
-                cachedTargetRow.rowKey ??
-                `${cachedTargetRow.accountRecordId ?? cachedTargetRow.id}:contact:${cachedTargetContactId}`,
-            }
-          : cachedCurrentRow !== null
-            ? {
-                ...cachedCurrentRow,
-                accountRecordId: cachedCurrentRow.accountRecordId ?? cachedCurrentRow.id,
-                contactId: cachedTargetContactId,
-                rowKey:
-                  cachedCurrentRow.rowKey ??
-                  `${cachedCurrentRow.accountRecordId ?? cachedCurrentRow.id}:contact:${cachedTargetContactId}`,
-              }
-            : null;
-
       const currentTargetContact = await fetchContactById(
         activeCookieValue,
         cachedTargetContactId,
