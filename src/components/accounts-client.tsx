@@ -2502,6 +2502,10 @@ export function AccountsClient({
   const [drawerFocusTarget, setDrawerFocusTarget] = useState<"notes" | null>(null);
   const [draft, setDraft] = useState<BusinessAccountUpdateRequest | null>(null);
   const draftRef = useRef<BusinessAccountUpdateRequest | null>(null);
+  const [isDrawerHydrating, setIsDrawerHydrating] = useState(false);
+  const notesDraftDirtyRef = useRef(false);
+  const drawerLoadRequestIdRef = useRef(0);
+  const drawerLoadAbortControllerRef = useRef<AbortController | null>(null);
   const [isEnhancingContact, setIsEnhancingContact] = useState(false);
   const [contactEnhanceError, setContactEnhanceError] = useState<string | null>(null);
   const [contactEnhanceNotice, setContactEnhanceNotice] = useState<string | null>(null);
@@ -2821,6 +2825,22 @@ export function AccountsClient({
     }
   }
 
+  function isNotesFieldFocused(): boolean {
+    return (
+      typeof document !== "undefined" &&
+      notesFieldRef.current !== null &&
+      document.activeElement === notesFieldRef.current
+    );
+  }
+
+  function shouldPreserveCurrentDraftOnServerRefresh(): boolean {
+    if (notesDraftDirtyRef.current) {
+      return true;
+    }
+
+    return isNotesFieldFocused() || isDraftDirty(draftRef.current);
+  }
+
   useEffect(() => {
     allRowsRef.current = allRows;
     allRowsCountRef.current = allRows.length;
@@ -2835,8 +2855,25 @@ export function AccountsClient({
   }, [draft]);
 
   useEffect(() => {
+    if (!draft || !selected) {
+      notesDraftDirtyRef.current = false;
+      return;
+    }
+
+    if (!isDraftDirty(draft) && (draft.notes ?? "") === (selected.notes ?? "")) {
+      notesDraftDirtyRef.current = false;
+    }
+  }, [draft, selected]);
+
+  useEffect(() => {
     isSavingRef.current = isSaving;
   }, [isSaving]);
+
+  useEffect(() => {
+    return () => {
+      drawerLoadAbortControllerRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -3468,11 +3505,7 @@ export function AccountsClient({
         if (selectedRow && rowMatchesLiveAccountEvent(selectedRow, event)) {
           const nextSelected =
             findMatchingAccountRow(refreshedRows, selectedRow) ?? responseRow;
-          const notesFieldFocused =
-            typeof document !== "undefined" &&
-            notesFieldRef.current !== null &&
-            document.activeElement === notesFieldRef.current;
-          if (notesFieldFocused || isDraftDirty(draftRef.current)) {
+          if (shouldPreserveCurrentDraftOnServerRefresh()) {
             setSaveNotice(
               "This record changed in Acumatica while you were editing. Your draft is preserved.",
             );
@@ -3825,7 +3858,7 @@ export function AccountsClient({
   }, [isCreateMenuOpen, isFiltersOpen, rowMenuRowKey]);
 
   useEffect(() => {
-    if (!selected || drawerFocusTarget !== "notes" || !notesFieldRef.current) {
+    if (!selected || drawerFocusTarget !== "notes" || !notesFieldRef.current || isDrawerHydrating) {
       return;
     }
 
@@ -3833,7 +3866,7 @@ export function AccountsClient({
     target.focus();
     target.scrollIntoView({ behavior: "smooth", block: "center" });
     setDrawerFocusTarget(null);
-  }, [drawerFocusTarget, selected]);
+  }, [drawerFocusTarget, isDrawerHydrating, selected]);
 
   useEffect(() => {
     if (!emailComposerState.isOpen || mailSession || isMailSessionLoading) {
@@ -5098,6 +5131,11 @@ export function AccountsClient({
   }
 
   function closeDrawer(options?: { preserveNotice?: boolean }) {
+    drawerLoadRequestIdRef.current += 1;
+    drawerLoadAbortControllerRef.current?.abort();
+    drawerLoadAbortControllerRef.current = null;
+    notesDraftDirtyRef.current = false;
+    setIsDrawerHydrating(false);
     setSelected(null);
     setDraft(null);
     setDrawerFocusTarget(null);
@@ -5149,6 +5187,15 @@ export function AccountsClient({
     row: BusinessAccountRow,
     options?: { focusTarget?: "notes" | null },
   ) {
+    drawerLoadRequestIdRef.current += 1;
+    const requestId = drawerLoadRequestIdRef.current;
+    drawerLoadAbortControllerRef.current?.abort();
+    const requestController = new AbortController();
+    drawerLoadAbortControllerRef.current = requestController;
+    notesDraftDirtyRef.current = false;
+    setIsDrawerHydrating(true);
+    const requestedAccountRecordId = row.accountRecordId ?? row.id;
+    const requestedContactId = resolveRowContactId(row);
     closeTransientMenus();
     closeMailComposer();
     setIsCreateDrawerOpen(false);
@@ -5173,21 +5220,59 @@ export function AccountsClient({
     setEmployeesError(null);
 
     try {
-      const reloadedRow = await reloadAccountRow(row, { live: true });
+      const reloadedRow = await reloadAccountRow(row, {
+        live: true,
+        signal: requestController.signal,
+      });
       if (!reloadedRow) {
         return;
       }
 
+      if (requestController.signal.aborted || requestId !== drawerLoadRequestIdRef.current) {
+        return;
+      }
+
+      const activeSelected = selectedRef.current;
+      if (!activeSelected) {
+        return;
+      }
+
+      const activeAccountRecordId = activeSelected.accountRecordId ?? activeSelected.id;
+      const activeContactId = resolveRowContactId(activeSelected);
+      if (
+        activeAccountRecordId !== requestedAccountRecordId ||
+        activeContactId !== requestedContactId
+      ) {
+        return;
+      }
+
       setSelected(reloadedRow);
+      if (shouldPreserveCurrentDraftOnServerRefresh()) {
+        setSaveNotice(
+          "This record refreshed while you were editing. Your draft is preserved.",
+        );
+        return;
+      }
+
       setDraft(buildDraft(reloadedRow));
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
       // Keep base row loaded in drawer if detail fetch fails.
+    } finally {
+      if (requestId === drawerLoadRequestIdRef.current) {
+        setIsDrawerHydrating(false);
+        if (drawerLoadAbortControllerRef.current === requestController) {
+          drawerLoadAbortControllerRef.current = null;
+        }
+      }
     }
   }
 
   async function reloadAccountRow(
     row: BusinessAccountRow,
-    options?: { live?: boolean },
+    options?: { live?: boolean; signal?: AbortSignal },
   ): Promise<BusinessAccountRow | null> {
     const accountRecordId = row.accountRecordId ?? row.id;
     const response = await fetch(
@@ -5196,6 +5281,7 @@ export function AccountsClient({
       }),
       {
         cache: "no-store",
+        signal: options?.signal,
       },
     );
     const payload = await readJsonResponse<
@@ -8231,10 +8317,12 @@ export function AccountsClient({
             <label>
               Contact Notes
               <textarea
-                disabled={!selected.contactId}
+                aria-busy={isDrawerHydrating}
+                disabled={!selected.contactId || isDrawerHydrating}
                 ref={notesFieldRef}
                 onChange={(event) => {
                   const nextNotes = event.target.value;
+                  notesDraftDirtyRef.current = true;
                   setDraft((current) => {
                     if (!current) {
                       return current;
