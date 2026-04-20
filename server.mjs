@@ -101,6 +101,12 @@ function roundMetric(value, digits = 1) {
   return Math.round(value * base) / base;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function percentileFromSorted(values, percentile) {
   if (values.length === 0) {
     return 0;
@@ -155,6 +161,45 @@ await nextApp.prepare();
 const handle = nextApp.getRequestHandler();
 const server = express();
 const startedAt = new Date();
+const startupBootAtMs = Date.now();
+const startupWarmupEnabled = readFeatureEnabled(
+  process.env.STARTUP_WARMUP_ENABLED,
+  process.env.NODE_ENV === "production",
+);
+const STARTUP_WARMUP_MAX_ATTEMPTS = readBoundedInteger(
+  process.env.STARTUP_WARMUP_MAX_ATTEMPTS,
+  6,
+  1,
+  20,
+);
+const STARTUP_WARMUP_INITIAL_DELAY_MS = readBoundedInteger(
+  process.env.STARTUP_WARMUP_INITIAL_DELAY_MS,
+  150,
+  0,
+  30_000,
+);
+const STARTUP_WARMUP_RETRY_DELAY_MS = readBoundedInteger(
+  process.env.STARTUP_WARMUP_RETRY_DELAY_MS,
+  750,
+  0,
+  30_000,
+);
+const STARTUP_WARMUP_REQUEST_TIMEOUT_MS = readBoundedInteger(
+  process.env.STARTUP_WARMUP_REQUEST_TIMEOUT_MS,
+  3_000,
+  250,
+  30_000,
+);
+const STARTUP_WARMUP_PATHS = ["/api/healthz", "/api/sync/status", "/api/auth/session"];
+const STARTUP_GATED_PATHS = new Set(["/api/sync/status", "/api/auth/session"]);
+const STARTUP_PROBE_LOG_PATHS = new Set(STARTUP_WARMUP_PATHS);
+const startupFirstProbeLogged = new Set();
+const startupState = {
+  phase: startupWarmupEnabled ? "booting" : "ready",
+  reason: startupWarmupEnabled ? "awaiting_warmup" : "warmup_disabled",
+  warmupAttempt: 0,
+  readyAtMs: startupWarmupEnabled ? 0 : startupBootAtMs,
+};
 const runtimeStallMonitorEnabled = readFeatureEnabled(
   process.env.RUNTIME_STALL_MONITOR_ENABLED,
   process.env.NODE_ENV === "production",
@@ -216,6 +261,15 @@ const RUNTIME_BACKGROUND_WORK_MAX_ACTIVE_REQUESTS = readBoundedInteger(
   40,
   1,
   5_000,
+);
+const RUNTIME_PRIORITY_ROUTE_KEYS = new Set([
+  "GET /api/healthz",
+  "HEAD /api/healthz",
+  "GET /api/sync/status",
+]);
+const runtimeTrackAllRoutes = readFeatureEnabled(
+  process.env.RUNTIME_TRACK_ALL_ROUTES,
+  process.env.NODE_ENV !== "production",
 );
 const runtimeTailSampleByRoute = new Map();
 const runtimeDeferralLogByTask = new Map();
@@ -293,9 +347,6 @@ function shouldDeferBackgroundWork(taskName) {
   const lagExceeded =
     runtimeLastLagP99Ms >= RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS ||
     runtimeLastLagMaxMs >= RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS;
-  if (lagExceeded) {
-    runtimeLastLagSpikeAtMs = nowMs;
-  }
 
   const inCooldown =
     runtimeLastLagSpikeAtMs > 0 && nowMs - runtimeLastLagSpikeAtMs < RUNTIME_BACKGROUND_WORK_COOLDOWN_MS;
@@ -325,7 +376,220 @@ function shouldDeferBackgroundWork(taskName) {
   return true;
 }
 
+function normalizeRequestPath(pathname) {
+  return String(pathname || "/").split("?")[0] || "/";
+}
+
+function isStartupProbeRequest(req) {
+  return req.get("x-mb-startup-probe") === "1";
+}
+
+function startupElapsedMs(nowMs = Date.now()) {
+  return Math.max(0, nowMs - startupBootAtMs);
+}
+
+function isStartupReady() {
+  return startupState.phase === "ready";
+}
+
+function markStartupReady(reason) {
+  if (isStartupReady()) {
+    return;
+  }
+
+  startupState.phase = "ready";
+  startupState.reason = reason;
+  startupState.readyAtMs = Date.now();
+  console.log("[startup] readiness gate opened", {
+    reason,
+    startupElapsedMs: startupElapsedMs(startupState.readyAtMs),
+    warmupAttempt: startupState.warmupAttempt,
+  });
+}
+
+function buildStartupGatePayload(pathname, nowMs) {
+  return {
+    ok: false,
+    ready: false,
+    status: "warming",
+    path: pathname,
+    startedAt: startedAt.toISOString(),
+    timestamp: new Date(nowMs).toISOString(),
+    startupElapsedMs: startupElapsedMs(nowMs),
+    warmupAttempt: startupState.warmupAttempt,
+    warmupEnabled: startupWarmupEnabled,
+    message: "Service is warming up. Retry in a few seconds.",
+  };
+}
+
+function maybeLogFirstStartupProbe(req, res, durationMs) {
+  const pathname = normalizeRequestPath(req.path || req.originalUrl || req.url);
+  if (!STARTUP_PROBE_LOG_PATHS.has(pathname) || startupFirstProbeLogged.has(pathname)) {
+    return;
+  }
+
+  startupFirstProbeLogged.add(pathname);
+  console.log("[startup] first probe observed", {
+    path: pathname,
+    method: req.method,
+    statusCode: res.statusCode,
+    durationMs: roundMetric(durationMs),
+    startupElapsedMs: startupElapsedMs(),
+    source: isStartupProbeRequest(req) ? "startup_warmup" : "external",
+    userAgent: req.get("user-agent") || null,
+  });
+}
+
+async function probeStartupEndpoint(pathname) {
+  const url = new URL(`http://127.0.0.1:${port}${pathname}`);
+  url.searchParams.set("startupWarmup", String(Date.now()));
+
+  const controller = new AbortController();
+  const startedMs = Date.now();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, STARTUP_WARMUP_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "x-mb-startup-probe": "1",
+      },
+      cache: "no-store",
+      redirect: "manual",
+      signal: controller.signal,
+    });
+    await response.arrayBuffer().catch(() => null);
+
+    return {
+      path: pathname,
+      statusCode: response.status,
+      durationMs: Date.now() - startedMs,
+      timedOut: false,
+      ok: response.status > 0 && response.status < 500,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      path: pathname,
+      statusCode: 0,
+      durationMs: Date.now() - startedMs,
+      timedOut: error instanceof Error && error.name === "AbortError",
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function runStartupWarmupSequence() {
+  if (!startupWarmupEnabled) {
+    return;
+  }
+
+  startupState.phase = "warming";
+  startupState.reason = "running_warmup";
+
+  if (STARTUP_WARMUP_INITIAL_DELAY_MS > 0) {
+    await sleep(STARTUP_WARMUP_INITIAL_DELAY_MS);
+  }
+
+  let lastFailures = [];
+
+  for (let attempt = 1; attempt <= STARTUP_WARMUP_MAX_ATTEMPTS; attempt += 1) {
+    startupState.warmupAttempt = attempt;
+
+    const results = await Promise.all(STARTUP_WARMUP_PATHS.map((path) => probeStartupEndpoint(path)));
+    const failures = results.filter((result) => !result.ok);
+
+    if (failures.length === 0) {
+      console.log("[startup] warmup completed", {
+        attempt,
+        startupElapsedMs: startupElapsedMs(),
+        results: results.map((result) => ({
+          path: result.path,
+          statusCode: result.statusCode,
+          durationMs: result.durationMs,
+        })),
+      });
+      markStartupReady("warmup_complete");
+      return;
+    }
+
+    lastFailures = failures;
+    console.warn("[startup] warmup attempt failed", {
+      attempt,
+      startupElapsedMs: startupElapsedMs(),
+      failures: failures.map((failure) => ({
+        path: failure.path,
+        statusCode: failure.statusCode,
+        durationMs: failure.durationMs,
+        timedOut: failure.timedOut,
+        error: failure.error,
+      })),
+    });
+
+    if (attempt < STARTUP_WARMUP_MAX_ATTEMPTS && STARTUP_WARMUP_RETRY_DELAY_MS > 0) {
+      await sleep(STARTUP_WARMUP_RETRY_DELAY_MS);
+    }
+  }
+
+  console.error("[startup] warmup exhausted; fail-open readiness", {
+    attempts: STARTUP_WARMUP_MAX_ATTEMPTS,
+    startupElapsedMs: startupElapsedMs(),
+    failures: lastFailures.map((failure) => ({
+      path: failure.path,
+      statusCode: failure.statusCode,
+      durationMs: failure.durationMs,
+      timedOut: failure.timedOut,
+      error: failure.error,
+    })),
+  });
+  markStartupReady("warmup_fail_open");
+}
+
 server.disable("x-powered-by");
+server.use((req, res, next) => {
+  const pathname = normalizeRequestPath(req.path || req.originalUrl || req.url);
+  if (!STARTUP_PROBE_LOG_PATHS.has(pathname)) {
+    next();
+    return;
+  }
+
+  const startedAtNs = process.hrtime.bigint();
+  let finalized = false;
+  const finalize = () => {
+    if (finalized) {
+      return;
+    }
+    finalized = true;
+    const durationMs = Number(process.hrtime.bigint() - startedAtNs) / 1_000_000;
+    maybeLogFirstStartupProbe(req, res, durationMs);
+  };
+
+  res.on("finish", finalize);
+  res.on("close", finalize);
+  next();
+});
+server.use((req, res, next) => {
+  if (isStartupReady() || isStartupProbeRequest(req)) {
+    next();
+    return;
+  }
+
+  const pathname = normalizeRequestPath(req.path || req.originalUrl || req.url);
+  if (!STARTUP_GATED_PATHS.has(pathname)) {
+    next();
+    return;
+  }
+
+  const nowMs = Date.now();
+  res.set("Retry-After", "2");
+  res.status(503).json(buildStartupGatePayload(pathname, nowMs));
+});
 if (runtimeStallMonitorEnabled) {
   server.use((req, res, next) => {
     const startedAtNs = process.hrtime.bigint();
@@ -342,14 +606,17 @@ if (runtimeStallMonitorEnabled) {
       runtimeActiveRequestCount = Math.max(0, runtimeActiveRequestCount - 1);
       const durationMs = Number(process.hrtime.bigint() - startedAtNs) / 1_000_000;
       const nowMs = Date.now();
-      const routeSamples = runtimeTailSampleByRoute.get(routeKey) ?? [];
-      routeSamples.push({
-        timestampMs: nowMs,
-        durationMs,
-        statusCode: res.statusCode,
-      });
-      pruneRuntimeRouteSamples(routeSamples, nowMs);
-      runtimeTailSampleByRoute.set(routeKey, routeSamples);
+      const shouldTrackRouteTail = runtimeTrackAllRoutes || RUNTIME_PRIORITY_ROUTE_KEYS.has(routeKey);
+      if (shouldTrackRouteTail) {
+        const routeSamples = runtimeTailSampleByRoute.get(routeKey) ?? [];
+        routeSamples.push({
+          timestampMs: nowMs,
+          durationMs,
+          statusCode: res.statusCode,
+        });
+        pruneRuntimeRouteSamples(routeSamples, nowMs);
+        runtimeTailSampleByRoute.set(routeKey, routeSamples);
+      }
 
       const isHealthRoute = routeKey === "GET /api/healthz" || routeKey === "HEAD /api/healthz";
       if (durationMs >= RUNTIME_SLOW_REQUEST_WARN_MS || (isHealthRoute && durationMs >= RUNTIME_HEALTHCHECK_WARN_MS)) {
@@ -368,14 +635,40 @@ if (runtimeStallMonitorEnabled) {
   });
 }
 server.get("/api/healthz", (req, res) => {
-  res.status(200).json({
+  const nowMs = Date.now();
+  const payload = {
     ok: true,
+    ready: true,
+    status: "ready",
     uptimeSeconds: Math.floor(process.uptime()),
     startedAt: startedAt.toISOString(),
-    timestamp: new Date().toISOString(),
-  });
+    timestamp: new Date(nowMs).toISOString(),
+    startupElapsedMs: startupElapsedMs(nowMs),
+    startupWarmupEnabled: startupWarmupEnabled,
+    startupWarmupAttempt: startupState.warmupAttempt,
+    startupReadinessReason: startupState.reason,
+  };
+  if (!isStartupReady() && !isStartupProbeRequest(req)) {
+    res.set("Retry-After", "2");
+    res.status(503).json({
+      ...payload,
+      ok: false,
+      ready: false,
+      status: "warming",
+      message: "Service is warming up. Retry in a few seconds.",
+    });
+    return;
+  }
+
+  res.status(200).json(payload);
 });
 server.head("/api/healthz", (req, res) => {
+  if (!isStartupReady() && !isStartupProbeRequest(req)) {
+    res.set("Retry-After", "2");
+    res.status(503).end();
+    return;
+  }
+
   res.status(200).end();
 });
 server.get("/api/runtime/health-slo", (req, res) => {
@@ -384,6 +677,9 @@ server.get("/api/runtime/health-slo", (req, res) => {
   const routeSummaryMap = Object.fromEntries(
     routeSummaries.map((summary) => [summary.route, summary]),
   );
+  const lagLastSpikeAt = runtimeLastLagSpikeAtMs > 0 ? new Date(runtimeLastLagSpikeAtMs).toISOString() : null;
+  const lagLastSpikeAgeMs =
+    runtimeLastLagSpikeAtMs > 0 ? Math.max(0, nowMs - runtimeLastLagSpikeAtMs) : null;
 
   res.status(200).json({
     ok: true,
@@ -391,9 +687,19 @@ server.get("/api/runtime/health-slo", (req, res) => {
     monitorEnabled: runtimeStallMonitorEnabled,
     lagP99Ms: runtimeLastLagP99Ms,
     lagMaxMs: runtimeLastLagMaxMs,
+    lagLastSpikeAt,
+    lagLastSpikeAgeMs,
     lagAlertThresholdMs: RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS,
     activeRequests: runtimeActiveRequestCount,
     requestWindowSeconds: Math.round(RUNTIME_REQUEST_METRICS_WINDOW_MS / 1000),
+    startup: {
+      phase: startupState.phase,
+      reason: startupState.reason,
+      warmupAttempt: startupState.warmupAttempt,
+      startedAt: startedAt.toISOString(),
+      readyAt: startupState.readyAtMs > 0 ? new Date(startupState.readyAtMs).toISOString() : null,
+      startupElapsedMs: startupElapsedMs(nowMs),
+    },
     routes: {
       healthzGet: routeSummaryMap["GET /api/healthz"] ?? null,
       healthzHead: routeSummaryMap["HEAD /api/healthz"] ?? null,
@@ -426,11 +732,15 @@ if (runtimeStallMonitorEnabled && runtimeEventLoopLagHistogram) {
     const prioritySummaries = priorityRoutes
       .map((route) => routeSummaries.find((summary) => summary.route === route))
       .filter(Boolean);
-    const hotTailSummaries = routeSummaries
-      .filter((summary) => !priorityRoutes.includes(summary.route))
-      .sort((left, right) => right.p99Ms - left.p99Ms)
-      .slice(0, 3);
-    const combinedSummaries = [...prioritySummaries, ...hotTailSummaries];
+    const combinedSummaries = runtimeTrackAllRoutes
+      ? [
+          ...prioritySummaries,
+          ...routeSummaries
+            .filter((summary) => !priorityRoutes.includes(summary.route))
+            .sort((left, right) => right.p99Ms - left.p99Ms)
+            .slice(0, 3),
+        ]
+      : prioritySummaries;
 
     const lagLog = {
       lagP95Ms,
@@ -465,6 +775,31 @@ if (runtimeStallMonitorEnabled && runtimeEventLoopLagHistogram) {
 }
 
 server.listen(port, hostname, () => {
+  console.log("[startup] listener opened", {
+    host: hostname,
+    port,
+    bootStartedAt: new Date(startupBootAtMs).toISOString(),
+    startupElapsedMs: startupElapsedMs(),
+    warmupEnabled: startupWarmupEnabled,
+  });
+  if (startupWarmupEnabled) {
+    console.log("[startup] warmup sequence starting", {
+      attempts: STARTUP_WARMUP_MAX_ATTEMPTS,
+      initialDelayMs: STARTUP_WARMUP_INITIAL_DELAY_MS,
+      retryDelayMs: STARTUP_WARMUP_RETRY_DELAY_MS,
+      probeTimeoutMs: STARTUP_WARMUP_REQUEST_TIMEOUT_MS,
+      paths: STARTUP_WARMUP_PATHS,
+    });
+    void runStartupWarmupSequence().catch((error) => {
+      console.error("[startup] warmup sequence crashed; fail-open readiness", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      markStartupReady("warmup_error_fail_open");
+    });
+  } else {
+    console.log("[startup] warmup disabled; readiness gate open immediately");
+  }
+
   console.log(`sales-meadowb listening on http://${hostname}:${port}`);
   console.log(`embedded pricing-book-app mounted at ${quotesMountPath}`);
   if (pricingBookAutoSyncEnabled) {
@@ -477,6 +812,10 @@ server.listen(port, hostname, () => {
     console.log(
       `[runtime-stall] monitor started; interval ${Math.round(RUNTIME_MONITOR_INTERVAL_MS / 1000)}s; lag defer ${RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS}ms; request slow warn ${RUNTIME_SLOW_REQUEST_WARN_MS}ms`,
     );
+    console.log("[runtime-stall] route-tail scope", {
+      trackAllRoutes: runtimeTrackAllRoutes,
+      priorityRoutes: Array.from(RUNTIME_PRIORITY_ROUTE_KEYS),
+    });
   }
 
   const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;

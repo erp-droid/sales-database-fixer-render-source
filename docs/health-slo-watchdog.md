@@ -16,7 +16,8 @@ Trigger condition:
   - `/api/healthz` and `/api/sync/status` 5xx count >= `HEALTH_SLO_ROUTE_5XX_THRESHOLD_COUNT`
 - Event-loop lag trigger:
   - `lagP99Ms >= HEALTH_SLO_EVENT_LOOP_P99_THRESHOLD_MS` OR
-  - `lagMaxMs >= HEALTH_SLO_EVENT_LOOP_MAX_THRESHOLD_MS`
+  - `lagMaxMs >= HEALTH_SLO_EVENT_LOOP_MAX_THRESHOLD_MS` with a recent spike age
+    (`lagLastSpikeAgeMs <= HEALTH_SLO_EVENT_LOOP_MAX_SPIKE_AGE_MS`, default 6 minutes)
   - Metrics source: `/api/runtime/health-slo` (exported by `server.mjs` runtime monitor)
   - Optional strict mode: `HEALTH_SLO_REQUIRE_RUNTIME_METRICS=true` makes missing runtime metrics a trigger condition.
 
@@ -58,3 +59,15 @@ Live smoke (real probes, no forced incident):
 APP_BASE_URL=https://sales-meadowb.onrender.com \
 node scripts/trigger-health-slo-watchdog.cjs
 ```
+
+## Related Regression Canary
+
+For deploy gating focused on intermittent transient `502` windows (multi-pass burst probes across `/`, `/signin`, `/api/healthz`, `/api/sync/status`, `/api/auth/session`), use:
+
+```bash
+APP_BASE_URL=https://sales-meadowb.onrender.com \
+npm run canary:transient-502
+```
+
+Artifacts are written to `tmp/watchdog-probe-<timestamp>.log` and `tmp/watchdog-probe-<timestamp>.json`.
+Guardrails and on-call interpretation are documented in [docs/transient-502-canary.md](transient-502-canary.md).

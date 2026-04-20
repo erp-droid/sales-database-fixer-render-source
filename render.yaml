@@ -28,6 +28,16 @@ services:
         sync: false
       - key: APP_BASE_URL
         value: https://sales-meadowb.onrender.com
+      - key: STARTUP_WARMUP_ENABLED
+        value: "true"
+      - key: STARTUP_WARMUP_MAX_ATTEMPTS
+        value: "6"
+      - key: STARTUP_WARMUP_INITIAL_DELAY_MS
+        value: "150"
+      - key: STARTUP_WARMUP_RETRY_DELAY_MS
+        value: "750"
+      - key: STARTUP_WARMUP_REQUEST_TIMEOUT_MS
+        value: "3000"
       - key: MBQ_BASE_PATH
         value: /quotes
       - key: MBQ_INTEGRATED_AUTH_ENABLED

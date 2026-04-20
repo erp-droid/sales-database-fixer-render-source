@@ -389,6 +389,11 @@ function readNumericMetric(value) {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function readNullableNumericMetric(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 function buildIncidentPayload(input) {
   const requestLogWindowUtc = buildProbeWindow([
     input.healthProbes,
@@ -421,6 +426,7 @@ function buildIncidentPayload(input) {
       route5xxThresholdCount: input.route5xxThresholdCount,
       eventLoopP99ThresholdMs: input.eventLoopP99ThresholdMs,
       eventLoopMaxThresholdMs: input.eventLoopMaxThresholdMs,
+      eventLoopMaxSpikeAgeMs: input.eventLoopMaxSpikeAgeMs,
     },
     evidence: {
       reasons: input.reasons,
@@ -534,6 +540,12 @@ async function main() {
     10,
     60_000,
   );
+  const eventLoopMaxSpikeAgeMs = readBoundedInteger(
+    "HEALTH_SLO_EVENT_LOOP_MAX_SPIKE_AGE_MS",
+    6 * 60_000,
+    1_000,
+    60 * 60_000,
+  );
   const requireRuntimeMetrics = readBoolean("HEALTH_SLO_REQUIRE_RUNTIME_METRICS", false);
   const eventLookbackMinutes = readBoundedInteger(
     "HEALTH_SLO_RENDER_EVENT_LOOKBACK_MINUTES",
@@ -555,6 +567,7 @@ async function main() {
     route5xxThresholdCount,
     eventLoopP99ThresholdMs,
     eventLoopMaxThresholdMs,
+    eventLoopMaxSpikeAgeMs,
     requireRuntimeMetrics,
     eventLookbackMinutes,
     incidentPath:
@@ -581,8 +594,17 @@ async function main() {
     runtimeMetrics.ok && runtimeMetrics.payload && typeof runtimeMetrics.payload === "object"
       ? runtimeMetrics.payload
       : null;
+  const nowMs = Date.now();
   const runtimeLagP99Ms = readNumericMetric(runtimePayload?.lagP99Ms);
   const runtimeLagMaxMs = readNumericMetric(runtimePayload?.lagMaxMs);
+  const runtimeLagLastSpikeAtMs = parseIsoMs(runtimePayload?.lagLastSpikeAt);
+  const runtimeLagLastSpikeAgeMsRaw = readNullableNumericMetric(runtimePayload?.lagLastSpikeAgeMs);
+  const runtimeLagLastSpikeAgeMs =
+    runtimeLagLastSpikeAgeMsRaw !== null
+      ? Math.max(0, runtimeLagLastSpikeAgeMsRaw)
+      : runtimeLagLastSpikeAtMs !== null
+        ? Math.max(0, nowMs - runtimeLagLastSpikeAtMs)
+        : null;
   const runtimeHealthRoute = runtimePayload?.routes?.healthzGet ?? null;
   const runtimeSyncRoute = runtimePayload?.routes?.syncStatusGet ?? null;
 
@@ -608,13 +630,26 @@ async function main() {
       `sync-status 5xx count ${syncSummary.status5xxCount} >= ${config.route5xxThresholdCount}`,
     );
   }
-  if (
-    runtimePayload &&
-    (runtimeLagP99Ms >= config.eventLoopP99ThresholdMs ||
-      runtimeLagMaxMs >= config.eventLoopMaxThresholdMs)
-  ) {
+  const eventLoopP99Breached = runtimePayload && runtimeLagP99Ms >= config.eventLoopP99ThresholdMs;
+  const eventLoopMaxBreached = runtimePayload && runtimeLagMaxMs >= config.eventLoopMaxThresholdMs;
+  const eventLoopMaxRecent =
+    eventLoopMaxBreached &&
+    runtimeLagLastSpikeAgeMs !== null &&
+    runtimeLagLastSpikeAgeMs <= config.eventLoopMaxSpikeAgeMs;
+
+  if (eventLoopP99Breached) {
     reasons.push(
-      `event-loop lag spike p99=${runtimeLagP99Ms}ms max=${runtimeLagMaxMs}ms (thresholds p99>=${config.eventLoopP99ThresholdMs}ms or max>=${config.eventLoopMaxThresholdMs}ms)`,
+      `event-loop lag spike p99=${runtimeLagP99Ms}ms max=${runtimeLagMaxMs}ms (p99 threshold ${config.eventLoopP99ThresholdMs}ms)`,
+    );
+  } else if (eventLoopMaxRecent) {
+    reasons.push(
+      `event-loop lag max=${runtimeLagMaxMs}ms breached threshold ${config.eventLoopMaxThresholdMs}ms within ${Math.round(
+        runtimeLagLastSpikeAgeMs,
+      )}ms`,
+    );
+  } else if (eventLoopMaxBreached && runtimeLagLastSpikeAgeMs === null) {
+    reasons.push(
+      `event-loop lag max=${runtimeLagMaxMs}ms breached threshold ${config.eventLoopMaxThresholdMs}ms (spike timestamp unavailable)`,
     );
   }
   if (
@@ -652,6 +687,9 @@ async function main() {
       ok: runtimeMetrics.ok,
       lagP99Ms: runtimeLagP99Ms,
       lagMaxMs: runtimeLagMaxMs,
+      lagLastSpikeAt: runtimeLagLastSpikeAtMs ? new Date(runtimeLagLastSpikeAtMs).toISOString() : null,
+      lagLastSpikeAgeMs: runtimeLagLastSpikeAgeMs,
+      lagMaxSpikeAgeThresholdMs: config.eventLoopMaxSpikeAgeMs,
     },
     renderServerFailedEvents: render.events.length,
   };
@@ -674,6 +712,7 @@ async function main() {
     route5xxThresholdCount: config.route5xxThresholdCount,
     eventLoopP99ThresholdMs: config.eventLoopP99ThresholdMs,
     eventLoopMaxThresholdMs: config.eventLoopMaxThresholdMs,
+    eventLoopMaxSpikeAgeMs: config.eventLoopMaxSpikeAgeMs,
     eventLookbackMinutes: config.eventLookbackMinutes,
     timeoutBreach,
     maxConsecutiveTimeouts,
