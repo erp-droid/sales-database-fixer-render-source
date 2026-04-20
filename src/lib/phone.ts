@@ -265,6 +265,7 @@ export function resolvePrimaryContactPhoneFields(values: {
   phone1: string | null | undefined;
   phone2?: string | null | undefined;
   phone3?: string | null | undefined;
+  extension?: string | null | undefined;
 }): {
   phone: string | null;
   extension: string | null;
@@ -272,25 +273,32 @@ export function resolvePrimaryContactPhoneFields(values: {
   const phone1 = sanitizePhoneInput(values.phone1);
   const phone2 = sanitizePhoneInput(values.phone2);
   const phone3 = sanitizePhoneInput(values.phone3);
+  const explicitExtension = sanitizePhoneInput(values.extension);
+  const normalizedExplicitExtension =
+    explicitExtension && isExtensionLikeValue(explicitExtension)
+      ? normalizeExtensionForSave(explicitExtension)
+      : null;
 
   if (phone1) {
     return {
       phone: formatPhoneForDisplay(phone1),
-      extension: phone2 && isExtensionLikeValue(phone2) ? normalizeExtensionForSave(phone2) : null,
+      extension:
+        normalizedExplicitExtension ??
+        (phone2 && isExtensionLikeValue(phone2) ? normalizeExtensionForSave(phone2) : null),
     };
   }
 
   if (phone2 && looksLikeFullNorthAmericanPhone(phone2)) {
     return {
       phone: formatPhoneForDisplay(phone2),
-      extension: null,
+      extension: normalizedExplicitExtension,
     };
   }
 
   if (phone3 && looksLikeFullNorthAmericanPhone(phone3)) {
     return {
       phone: formatPhoneForDisplay(phone3),
-      extension: null,
+      extension: normalizedExplicitExtension,
     };
   }
 
