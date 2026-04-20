@@ -394,6 +394,19 @@ function readNullableNumericMetric(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function isRouteAnomalous(summary, p99ThresholdMs, status5xxThresholdCount) {
+  if (!summary || typeof summary !== "object") {
+    return false;
+  }
+
+  const p99Ms = Number(summary.p99Ms);
+  const status5xxCount = Number(summary.status5xxCount);
+  return (
+    (Number.isFinite(p99Ms) && p99Ms >= p99ThresholdMs) ||
+    (Number.isFinite(status5xxCount) && status5xxCount >= status5xxThresholdCount)
+  );
+}
+
 function buildIncidentPayload(input) {
   const requestLogWindowUtc = buildProbeWindow([
     input.healthProbes,
@@ -546,6 +559,10 @@ async function main() {
     1_000,
     60 * 60_000,
   );
+  const suppressMaxOnlyEventLoopSpikes = readBoolean(
+    "HEALTH_SLO_SUPPRESS_MAX_ONLY_EVENT_LOOP_SPIKES",
+    true,
+  );
   const requireRuntimeMetrics = readBoolean("HEALTH_SLO_REQUIRE_RUNTIME_METRICS", false);
   const eventLookbackMinutes = readBoundedInteger(
     "HEALTH_SLO_RENDER_EVENT_LOOKBACK_MINUTES",
@@ -568,6 +585,7 @@ async function main() {
     eventLoopP99ThresholdMs,
     eventLoopMaxThresholdMs,
     eventLoopMaxSpikeAgeMs,
+    suppressMaxOnlyEventLoopSpikes,
     requireRuntimeMetrics,
     eventLookbackMinutes,
     incidentPath:
@@ -607,6 +625,32 @@ async function main() {
         : null;
   const runtimeHealthRoute = runtimePayload?.routes?.healthzGet ?? null;
   const runtimeSyncRoute = runtimePayload?.routes?.syncStatusGet ?? null;
+  const healthProbeRouteImpact = isRouteAnomalous(
+    healthSummary,
+    config.routeP99ThresholdMs,
+    config.route5xxThresholdCount,
+  );
+  const syncProbeRouteImpact = isRouteAnomalous(
+    syncSummary,
+    config.routeP99ThresholdMs,
+    config.route5xxThresholdCount,
+  );
+  const runtimeHealthRouteImpact = isRouteAnomalous(
+    runtimeHealthRoute,
+    config.routeP99ThresholdMs,
+    config.route5xxThresholdCount,
+  );
+  const runtimeSyncRouteImpact = isRouteAnomalous(
+    runtimeSyncRoute,
+    config.routeP99ThresholdMs,
+    config.route5xxThresholdCount,
+  );
+  const priorityRouteImpactDetected =
+    timeoutBreach ||
+    healthProbeRouteImpact ||
+    syncProbeRouteImpact ||
+    runtimeHealthRouteImpact ||
+    runtimeSyncRouteImpact;
 
   const reasons = [];
   if (timeoutBreach) {
@@ -636,33 +680,38 @@ async function main() {
     eventLoopMaxBreached &&
     runtimeLagLastSpikeAgeMs !== null &&
     runtimeLagLastSpikeAgeMs <= config.eventLoopMaxSpikeAgeMs;
+  let maxOnlySpikeSuppressed = false;
 
   if (eventLoopP99Breached) {
     reasons.push(
       `event-loop lag spike p99=${runtimeLagP99Ms}ms max=${runtimeLagMaxMs}ms (p99 threshold ${config.eventLoopP99ThresholdMs}ms)`,
     );
   } else if (eventLoopMaxRecent) {
-    reasons.push(
-      `event-loop lag max=${runtimeLagMaxMs}ms breached threshold ${config.eventLoopMaxThresholdMs}ms within ${Math.round(
-        runtimeLagLastSpikeAgeMs,
-      )}ms`,
-    );
+    if (config.suppressMaxOnlyEventLoopSpikes && !priorityRouteImpactDetected) {
+      maxOnlySpikeSuppressed = true;
+    } else {
+      reasons.push(
+        `event-loop lag max=${runtimeLagMaxMs}ms breached threshold ${config.eventLoopMaxThresholdMs}ms within ${Math.round(
+          runtimeLagLastSpikeAgeMs,
+        )}ms`,
+      );
+    }
   } else if (eventLoopMaxBreached && runtimeLagLastSpikeAgeMs === null) {
-    reasons.push(
-      `event-loop lag max=${runtimeLagMaxMs}ms breached threshold ${config.eventLoopMaxThresholdMs}ms (spike timestamp unavailable)`,
-    );
+    if (config.suppressMaxOnlyEventLoopSpikes && !priorityRouteImpactDetected) {
+      maxOnlySpikeSuppressed = true;
+    } else {
+      reasons.push(
+        `event-loop lag max=${runtimeLagMaxMs}ms breached threshold ${config.eventLoopMaxThresholdMs}ms (spike timestamp unavailable)`,
+      );
+    }
   }
   if (
-    runtimeHealthRoute &&
-    (readNumericMetric(runtimeHealthRoute.p99Ms) >= config.routeP99ThresholdMs ||
-      readNumericMetric(runtimeHealthRoute.status5xxCount) >= config.route5xxThresholdCount)
+    runtimeHealthRouteImpact
   ) {
     reasons.push("runtime tail anomaly detected on GET /api/healthz");
   }
   if (
-    runtimeSyncRoute &&
-    (readNumericMetric(runtimeSyncRoute.p99Ms) >= config.routeP99ThresholdMs ||
-      readNumericMetric(runtimeSyncRoute.status5xxCount) >= config.route5xxThresholdCount)
+    runtimeSyncRouteImpact
   ) {
     reasons.push("runtime tail anomaly detected on GET /api/sync/status");
   }
@@ -690,6 +739,9 @@ async function main() {
       lagLastSpikeAt: runtimeLagLastSpikeAtMs ? new Date(runtimeLagLastSpikeAtMs).toISOString() : null,
       lagLastSpikeAgeMs: runtimeLagLastSpikeAgeMs,
       lagMaxSpikeAgeThresholdMs: config.eventLoopMaxSpikeAgeMs,
+      suppressMaxOnlyEventLoopSpikes: config.suppressMaxOnlyEventLoopSpikes,
+      priorityRouteImpactDetected,
+      maxOnlySpikeSuppressed,
     },
     renderServerFailedEvents: render.events.length,
   };
