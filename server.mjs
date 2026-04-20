@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import next from "next";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 
 import { app as pricingBookApp, startPricingBookAutoSync } from "./embedded/pricing-book-app/src/index.js";
 
@@ -84,6 +85,60 @@ function shiftDateKey(dateKey, offsetDays, timeZone) {
   return formatLocalDateKey(shifted, timeZone);
 }
 
+function toMilliseconds(nanoseconds) {
+  const numeric = Number(nanoseconds);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return numeric / 1_000_000;
+}
+
+function roundMetric(value, digits = 1) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  const base = 10 ** digits;
+  return Math.round(value * base) / base;
+}
+
+function percentileFromSorted(values, percentile) {
+  if (values.length === 0) {
+    return 0;
+  }
+  const boundedPercentile = Math.max(0, Math.min(100, percentile));
+  const index = Math.min(
+    values.length - 1,
+    Math.max(0, Math.ceil((boundedPercentile / 100) * values.length) - 1),
+  );
+  return values[index];
+}
+
+function normalizeRequestPathForMetrics(pathname) {
+  const rawPath = String(pathname || "/").split("?")[0] || "/";
+  const normalizedPath = rawPath
+    .split("/")
+    .map((segment) => {
+      if (!segment) {
+        return "";
+      }
+      if (/^\d+$/.test(segment)) {
+        return ":id";
+      }
+      if (/^[0-9a-f]{16,}$/i.test(segment)) {
+        return ":id";
+      }
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(segment)) {
+        return ":id";
+      }
+      if (/^[A-Za-z0-9_-]{24,}$/.test(segment)) {
+        return ":token";
+      }
+      return segment;
+    })
+    .join("/");
+  return normalizedPath || "/";
+}
+
 const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
 const port = Number(process.env.PORT || 3000);
@@ -100,8 +155,172 @@ await nextApp.prepare();
 const handle = nextApp.getRequestHandler();
 const server = express();
 const startedAt = new Date();
+const runtimeStallMonitorEnabled = readFeatureEnabled(
+  process.env.RUNTIME_STALL_MONITOR_ENABLED,
+  process.env.NODE_ENV === "production",
+);
+const RUNTIME_MONITOR_INTERVAL_MS = readBoundedInteger(
+  process.env.RUNTIME_MONITOR_INTERVAL_MS,
+  60_000,
+  5_000,
+  10 * 60_000,
+);
+const RUNTIME_MONITOR_EVENT_LOOP_RESOLUTION_MS = readBoundedInteger(
+  process.env.RUNTIME_MONITOR_EVENT_LOOP_RESOLUTION_MS,
+  20,
+  5,
+  1_000,
+);
+const RUNTIME_REQUEST_METRICS_WINDOW_MS = readBoundedInteger(
+  process.env.RUNTIME_REQUEST_METRICS_WINDOW_MS,
+  15 * 60_000,
+  60_000,
+  60 * 60_000,
+);
+const RUNTIME_REQUEST_MAX_SAMPLES_PER_ROUTE = readBoundedInteger(
+  process.env.RUNTIME_REQUEST_MAX_SAMPLES_PER_ROUTE,
+  800,
+  100,
+  20_000,
+);
+const RUNTIME_SLOW_REQUEST_WARN_MS = readBoundedInteger(
+  process.env.RUNTIME_SLOW_REQUEST_WARN_MS,
+  1_500,
+  100,
+  60_000,
+);
+const RUNTIME_HEALTHCHECK_WARN_MS = readBoundedInteger(
+  process.env.RUNTIME_HEALTHCHECK_WARN_MS,
+  4_000,
+  100,
+  60_000,
+);
+const RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS = readBoundedInteger(
+  process.env.RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS,
+  750,
+  100,
+  60_000,
+);
+const RUNTIME_BACKGROUND_WORK_COOLDOWN_MS = readBoundedInteger(
+  process.env.RUNTIME_BACKGROUND_WORK_COOLDOWN_MS,
+  120_000,
+  0,
+  60 * 60_000,
+);
+const RUNTIME_BACKGROUND_WORK_MAX_ACTIVE_REQUESTS = readBoundedInteger(
+  process.env.RUNTIME_BACKGROUND_WORK_MAX_ACTIVE_REQUESTS,
+  40,
+  1,
+  5_000,
+);
+const runtimeTailSampleByRoute = new Map();
+const runtimeDeferralLogByTask = new Map();
+let runtimeActiveRequestCount = 0;
+let runtimeLastLagP99Ms = 0;
+let runtimeLastLagMaxMs = 0;
+let runtimeLastLagSpikeAtMs = 0;
+const runtimeEventLoopLagHistogram = runtimeStallMonitorEnabled
+  ? monitorEventLoopDelay({ resolution: RUNTIME_MONITOR_EVENT_LOOP_RESOLUTION_MS })
+  : null;
+
+if (runtimeEventLoopLagHistogram) {
+  runtimeEventLoopLagHistogram.enable();
+}
+
+function pruneRuntimeRouteSamples(routeSamples, nowMs) {
+  const cutoffMs = nowMs - RUNTIME_REQUEST_METRICS_WINDOW_MS;
+  while (routeSamples.length > 0 && routeSamples[0].timestampMs < cutoffMs) {
+    routeSamples.shift();
+  }
+
+  if (routeSamples.length > RUNTIME_REQUEST_MAX_SAMPLES_PER_ROUTE) {
+    routeSamples.splice(0, routeSamples.length - RUNTIME_REQUEST_MAX_SAMPLES_PER_ROUTE);
+  }
+}
+
+function shouldDeferBackgroundWork(taskName) {
+  if (!runtimeStallMonitorEnabled) {
+    return false;
+  }
+
+  const nowMs = Date.now();
+  const lagExceeded =
+    runtimeLastLagP99Ms >= RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS ||
+    runtimeLastLagMaxMs >= RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS;
+  if (lagExceeded) {
+    runtimeLastLagSpikeAtMs = nowMs;
+  }
+
+  const inCooldown =
+    runtimeLastLagSpikeAtMs > 0 && nowMs - runtimeLastLagSpikeAtMs < RUNTIME_BACKGROUND_WORK_COOLDOWN_MS;
+  const overloaded = runtimeActiveRequestCount >= RUNTIME_BACKGROUND_WORK_MAX_ACTIVE_REQUESTS;
+
+  if (!lagExceeded && !inCooldown && !overloaded) {
+    return false;
+  }
+
+  const lastLogAtMs = runtimeDeferralLogByTask.get(taskName) ?? 0;
+  if (nowMs - lastLogAtMs >= 30_000) {
+    runtimeDeferralLogByTask.set(taskName, nowMs);
+    console.warn("[runtime-stall] deferring background cycle", {
+      task: taskName,
+      lagP99Ms: runtimeLastLagP99Ms,
+      lagMaxMs: runtimeLastLagMaxMs,
+      activeRequests: runtimeActiveRequestCount,
+      lagThresholdMs: RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS,
+      requestThreshold: RUNTIME_BACKGROUND_WORK_MAX_ACTIVE_REQUESTS,
+      cooldownRemainingMs:
+        runtimeLastLagSpikeAtMs > 0
+          ? Math.max(0, RUNTIME_BACKGROUND_WORK_COOLDOWN_MS - (nowMs - runtimeLastLagSpikeAtMs))
+          : 0,
+    });
+  }
+
+  return true;
+}
 
 server.disable("x-powered-by");
+if (runtimeStallMonitorEnabled) {
+  server.use((req, res, next) => {
+    const startedAtNs = process.hrtime.bigint();
+    const routeKey = `${req.method.toUpperCase()} ${normalizeRequestPathForMetrics(req.path || req.originalUrl || req.url)}`;
+    runtimeActiveRequestCount += 1;
+    let finalized = false;
+
+    const finalize = () => {
+      if (finalized) {
+        return;
+      }
+      finalized = true;
+
+      runtimeActiveRequestCount = Math.max(0, runtimeActiveRequestCount - 1);
+      const durationMs = Number(process.hrtime.bigint() - startedAtNs) / 1_000_000;
+      const nowMs = Date.now();
+      const routeSamples = runtimeTailSampleByRoute.get(routeKey) ?? [];
+      routeSamples.push({
+        timestampMs: nowMs,
+        durationMs,
+        statusCode: res.statusCode,
+      });
+      pruneRuntimeRouteSamples(routeSamples, nowMs);
+      runtimeTailSampleByRoute.set(routeKey, routeSamples);
+
+      const isHealthRoute = routeKey === "GET /api/healthz" || routeKey === "HEAD /api/healthz";
+      if (durationMs >= RUNTIME_SLOW_REQUEST_WARN_MS || (isHealthRoute && durationMs >= RUNTIME_HEALTHCHECK_WARN_MS)) {
+        console.warn("[runtime-stall] slow request", {
+          route: routeKey,
+          statusCode: res.statusCode,
+          durationMs: roundMetric(durationMs),
+          activeRequests: runtimeActiveRequestCount,
+        });
+      }
+    };
+
+    res.on("finish", finalize);
+    res.on("close", finalize);
+    next();
+  });
+}
 server.get("/api/healthz", (req, res) => {
   res.status(200).json({
     ok: true,
@@ -116,16 +335,111 @@ server.head("/api/healthz", (req, res) => {
 server.use(quotesMountPath, pricingBookApp);
 server.all("*", (req, res) => handle(req, res));
 
+if (runtimeStallMonitorEnabled && runtimeEventLoopLagHistogram) {
+  const runtimeMonitorTimer = setInterval(() => {
+    const nowMs = Date.now();
+    const lagP95Ms = roundMetric(toMilliseconds(runtimeEventLoopLagHistogram.percentile(95)));
+    const lagP99Ms = roundMetric(toMilliseconds(runtimeEventLoopLagHistogram.percentile(99)));
+    const lagMaxMs = roundMetric(toMilliseconds(runtimeEventLoopLagHistogram.max));
+
+    runtimeLastLagP99Ms = lagP99Ms;
+    runtimeLastLagMaxMs = lagMaxMs;
+    if (
+      lagP99Ms >= RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS ||
+      lagMaxMs >= RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS
+    ) {
+      runtimeLastLagSpikeAtMs = nowMs;
+    }
+
+    const routeSummaries = [];
+    for (const [routeKey, routeSamples] of runtimeTailSampleByRoute.entries()) {
+      pruneRuntimeRouteSamples(routeSamples, nowMs);
+      if (routeSamples.length === 0) {
+        runtimeTailSampleByRoute.delete(routeKey);
+        continue;
+      }
+
+      const durations = routeSamples
+        .map((sample) => sample.durationMs)
+        .sort((left, right) => left - right);
+      const count = durations.length;
+      const p50Ms = roundMetric(percentileFromSorted(durations, 50));
+      const p95Ms = roundMetric(percentileFromSorted(durations, 95));
+      const p99Ms = roundMetric(percentileFromSorted(durations, 99));
+      const maxMs = roundMetric(durations[count - 1] ?? 0);
+      const status5xxCount = routeSamples.filter((sample) => sample.statusCode >= 500).length;
+
+      routeSummaries.push({
+        route: routeKey,
+        count,
+        p50Ms,
+        p95Ms,
+        p99Ms,
+        maxMs,
+        status5xxCount,
+      });
+    }
+
+    const priorityRoutes = ["GET /api/healthz", "HEAD /api/healthz", "GET /api/sync/status"];
+    const prioritySummaries = priorityRoutes
+      .map((route) => routeSummaries.find((summary) => summary.route === route))
+      .filter(Boolean);
+    const hotTailSummaries = routeSummaries
+      .filter((summary) => !priorityRoutes.includes(summary.route))
+      .sort((left, right) => right.p99Ms - left.p99Ms)
+      .slice(0, 3);
+    const combinedSummaries = [...prioritySummaries, ...hotTailSummaries];
+
+    const lagLog = {
+      lagP95Ms,
+      lagP99Ms,
+      lagMaxMs,
+      activeRequests: runtimeActiveRequestCount,
+      sampledRoutes: routeSummaries.length,
+      windowSeconds: Math.round(RUNTIME_REQUEST_METRICS_WINDOW_MS / 1000),
+    };
+    if (
+      lagP99Ms >= RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS ||
+      lagMaxMs >= RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS
+    ) {
+      console.warn("[runtime-stall] event-loop", lagLog);
+    } else {
+      console.log("[runtime-stall] event-loop", lagLog);
+    }
+
+    if (combinedSummaries.length > 0) {
+      console.log("[runtime-stall] request-tail", {
+        windowSeconds: Math.round(RUNTIME_REQUEST_METRICS_WINDOW_MS / 1000),
+        routes: combinedSummaries,
+      });
+    }
+
+    runtimeEventLoopLagHistogram.reset();
+  }, RUNTIME_MONITOR_INTERVAL_MS);
+
+  if (typeof runtimeMonitorTimer.unref === "function") {
+    runtimeMonitorTimer.unref();
+  }
+}
+
 server.listen(port, hostname, () => {
   console.log(`sales-meadowb listening on http://${hostname}:${port}`);
   console.log(`embedded pricing-book-app mounted at ${quotesMountPath}`);
   startPricingBookAutoSync(console);
+  if (runtimeStallMonitorEnabled) {
+    console.log(
+      `[runtime-stall] monitor started; interval ${Math.round(RUNTIME_MONITOR_INTERVAL_MS / 1000)}s; lag defer ${RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS}ms; request slow warn ${RUNTIME_SLOW_REQUEST_WARN_MS}ms`,
+    );
+  }
 
   const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
   let watchdogInFlight = false;
   setInterval(async () => {
     if (watchdogInFlight) {
       console.warn("[watchdog] previous cycle still running; skipping overlap");
+      return;
+    }
+    if (shouldDeferBackgroundWork("watchdog")) {
       return;
     }
 
@@ -227,6 +541,9 @@ server.listen(port, hostname, () => {
 
   async function runDailyCallCoachingCycle(trigger) {
     if (!dailyCallCoachingEnabled || dailyCallCoachingInFlight) {
+      return;
+    }
+    if (shouldDeferBackgroundWork(`daily-call-coaching:${trigger}`)) {
       return;
     }
 
@@ -547,6 +864,9 @@ server.listen(port, hostname, () => {
     if (!callActivitySyncEnabled || callActivitySyncInFlight) {
       return;
     }
+    if (shouldDeferBackgroundWork(`call-activity-sync:${trigger}`)) {
+      return;
+    }
 
     const now = new Date();
     const localParts = readLocalDateParts(now, callActivitySyncTimeZone);
@@ -602,6 +922,10 @@ server.listen(port, hostname, () => {
       let batchFailed = false;
 
       for (; batchCount < callActivitySyncMaxBatchesPerWindow; batchCount += 1) {
+        if (batchCount > 0 && shouldDeferBackgroundWork(`call-activity-sync:${trigger}:catchup`)) {
+          break;
+        }
+
         executedBatches += 1;
         const result = await runCallActivitySyncBatch(`${trigger}:batch-${batchCount + 1}`, {
           dateKey: targetDateKey,
@@ -643,6 +967,9 @@ server.listen(port, hostname, () => {
 
   async function runIntervalCallActivitySyncCycle(trigger) {
     if (!callActivitySyncEnabled || callActivitySyncInFlight) {
+      return;
+    }
+    if (shouldDeferBackgroundWork(`call-activity-sync:${trigger}`)) {
       return;
     }
 
