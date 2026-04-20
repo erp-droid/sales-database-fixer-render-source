@@ -150,6 +150,12 @@ services:
         value: "300000"
       - key: CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS
         value: "86400000"
+      - key: BUSINESS_ACCOUNTS_STREAM_MAX_GLOBAL
+        value: "48"
+      - key: BUSINESS_ACCOUNTS_STREAM_MAX_PER_IP
+        value: "4"
+      - key: BUSINESS_ACCOUNTS_STREAM_RETRY_AFTER_SECONDS
+        value: "5"
       - key: CALL_ACTIVITY_SYNC_ENABLED
         value: "true"
       - key: CALL_ACTIVITY_SYNC_SECRET
