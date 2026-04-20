@@ -242,6 +242,48 @@ function pruneRuntimeRouteSamples(routeSamples, nowMs) {
   }
 }
 
+function summarizeRuntimeRoute(routeKey, routeSamples, nowMs) {
+  pruneRuntimeRouteSamples(routeSamples, nowMs);
+  if (routeSamples.length === 0) {
+    return null;
+  }
+
+  const durations = routeSamples
+    .map((sample) => sample.durationMs)
+    .sort((left, right) => left - right);
+  const count = durations.length;
+  const p50Ms = roundMetric(percentileFromSorted(durations, 50));
+  const p95Ms = roundMetric(percentileFromSorted(durations, 95));
+  const p99Ms = roundMetric(percentileFromSorted(durations, 99));
+  const maxMs = roundMetric(durations[count - 1] ?? 0);
+  const status5xxCount = routeSamples.filter((sample) => sample.statusCode >= 500).length;
+
+  return {
+    route: routeKey,
+    count,
+    p50Ms,
+    p95Ms,
+    p99Ms,
+    maxMs,
+    status5xxCount,
+  };
+}
+
+function collectRuntimeRouteSummaries(nowMs) {
+  const routeSummaries = [];
+  for (const [routeKey, routeSamples] of runtimeTailSampleByRoute.entries()) {
+    const summary = summarizeRuntimeRoute(routeKey, routeSamples, nowMs);
+    if (!summary) {
+      runtimeTailSampleByRoute.delete(routeKey);
+      continue;
+    }
+
+    routeSummaries.push(summary);
+  }
+
+  return routeSummaries;
+}
+
 function shouldDeferBackgroundWork(taskName) {
   if (!runtimeStallMonitorEnabled) {
     return false;
@@ -336,6 +378,29 @@ server.get("/api/healthz", (req, res) => {
 server.head("/api/healthz", (req, res) => {
   res.status(200).end();
 });
+server.get("/api/runtime/health-slo", (req, res) => {
+  const nowMs = Date.now();
+  const routeSummaries = collectRuntimeRouteSummaries(nowMs);
+  const routeSummaryMap = Object.fromEntries(
+    routeSummaries.map((summary) => [summary.route, summary]),
+  );
+
+  res.status(200).json({
+    ok: true,
+    timestamp: new Date(nowMs).toISOString(),
+    monitorEnabled: runtimeStallMonitorEnabled,
+    lagP99Ms: runtimeLastLagP99Ms,
+    lagMaxMs: runtimeLastLagMaxMs,
+    lagAlertThresholdMs: RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS,
+    activeRequests: runtimeActiveRequestCount,
+    requestWindowSeconds: Math.round(RUNTIME_REQUEST_METRICS_WINDOW_MS / 1000),
+    routes: {
+      healthzGet: routeSummaryMap["GET /api/healthz"] ?? null,
+      healthzHead: routeSummaryMap["HEAD /api/healthz"] ?? null,
+      syncStatusGet: routeSummaryMap["GET /api/sync/status"] ?? null,
+    },
+  });
+});
 server.use(quotesMountPath, pricingBookApp);
 server.all("*", (req, res) => handle(req, res));
 
@@ -355,34 +420,7 @@ if (runtimeStallMonitorEnabled && runtimeEventLoopLagHistogram) {
       runtimeLastLagSpikeAtMs = nowMs;
     }
 
-    const routeSummaries = [];
-    for (const [routeKey, routeSamples] of runtimeTailSampleByRoute.entries()) {
-      pruneRuntimeRouteSamples(routeSamples, nowMs);
-      if (routeSamples.length === 0) {
-        runtimeTailSampleByRoute.delete(routeKey);
-        continue;
-      }
-
-      const durations = routeSamples
-        .map((sample) => sample.durationMs)
-        .sort((left, right) => left - right);
-      const count = durations.length;
-      const p50Ms = roundMetric(percentileFromSorted(durations, 50));
-      const p95Ms = roundMetric(percentileFromSorted(durations, 95));
-      const p99Ms = roundMetric(percentileFromSorted(durations, 99));
-      const maxMs = roundMetric(durations[count - 1] ?? 0);
-      const status5xxCount = routeSamples.filter((sample) => sample.statusCode >= 500).length;
-
-      routeSummaries.push({
-        route: routeKey,
-        count,
-        p50Ms,
-        p95Ms,
-        p99Ms,
-        maxMs,
-        status5xxCount,
-      });
-    }
+    const routeSummaries = collectRuntimeRouteSummaries(nowMs);
 
     const priorityRoutes = ["GET /api/healthz", "HEAD /api/healthz", "GET /api/sync/status"];
     const prioritySummaries = priorityRoutes

@@ -15,6 +15,7 @@
     "recover:daily-call-coaching": "tsx scripts/recover-daily-call-coaching.ts",
     "schedule:call-activity-sync": "node scripts/trigger-call-activity-sync.cjs",
     "schedule:daily-call-coaching": "node scripts/trigger-daily-call-coaching.cjs",
+    "schedule:health-slo-watchdog": "node scripts/trigger-health-slo-watchdog.cjs",
     "login:local": "node scripts/mail-activity-smoke.cjs --login-only",
     "verify:mail-activity": "node scripts/mail-activity-smoke.cjs"
   },

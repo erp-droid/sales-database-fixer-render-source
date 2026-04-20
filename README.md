@@ -152,6 +152,41 @@ Internal operational interfaces:
 
 Render should run the two cron services every 15 minutes. The routes decide whether the Toronto schedule window is due and use `scheduled_job_runs` for per-date idempotency.
 
+### Timeout Health-Check SLO Watchdog
+
+Production incident response also uses a timeout-focused watchdog that probes `/api/healthz` and pages when it sees consecutive timeout events.
+
+Rule:
+- Probe target: `https://sales-meadowb.onrender.com/api/healthz`
+- Timeout budget per probe: `HEALTH_SLO_TIMEOUT_MS` (default `3000`)
+- Trigger condition: `HEALTH_SLO_CONSECUTIVE_TIMEOUTS` consecutive timeouts inside `HEALTH_SLO_PROBE_ATTEMPTS` probes
+- Route anomaly coverage: `/api/healthz` and `/api/sync/status` p99 + 5xx thresholds (`HEALTH_SLO_ROUTE_P99_THRESHOLD_MS`, `HEALTH_SLO_ROUTE_5XX_THRESHOLD_COUNT`)
+- Event-loop coverage: `/api/runtime/health-slo` (`server.mjs` runtime-stall metrics) with p99/max thresholds (`HEALTH_SLO_EVENT_LOOP_P99_THRESHOLD_MS`, `HEALTH_SLO_EVENT_LOOP_MAX_THRESHOLD_MS`); set `HEALTH_SLO_REQUIRE_RUNTIME_METRICS=true` in incident cron
+- Correlation: include recent Render `server_failed` events (`RENDER_SERVICE_ID`, `RENDER_API_KEY`) and the UTC probe window in the incident payload
+- Destination: `HEALTH_SLO_PAGING_WEBHOOK_URL` (incident path label in payload defaults to `CTO + DevOps & SRE Engineer incident path`)
+
+Render cron command:
+
+```bash
+node scripts/trigger-health-slo-watchdog.cjs
+```
+
+Dry-run validation command (forces a test page payload without sending to webhook):
+
+```bash
+HEALTH_SLO_DRY_RUN=true \
+HEALTH_SLO_FORCE_INCIDENT=true \
+APP_BASE_URL=https://sales-meadowb.onrender.com \
+node scripts/trigger-health-slo-watchdog.cjs
+```
+
+Live smoke command (no forced incident):
+
+```bash
+APP_BASE_URL=https://sales-meadowb.onrender.com \
+node scripts/trigger-health-slo-watchdog.cjs
+```
+
 Manual verification examples:
 
 ```bash

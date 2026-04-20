@@ -248,3 +248,56 @@ services:
         value: "true"
       - key: DAILY_CALL_COACHING_SECRET
         sync: false
+
+  - type: cron
+    name: sales-meadowb-health-slo-watchdog
+    runtime: docker
+    repo: https://github.com/erp-droid/sales-database-fixer-render-source
+    branch: main
+    plan: starter
+    region: ohio
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    schedule: "*/5 * * * *"
+    dockerCommand: node scripts/trigger-health-slo-watchdog.cjs
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_BASE_URL
+        value: https://sales-meadowb.onrender.com
+      - key: HEALTH_SLO_HEALTHCHECK_PATH
+        value: /api/healthz
+      - key: HEALTH_SLO_SYNC_STATUS_PATH
+        value: /api/sync/status
+      - key: HEALTH_SLO_RUNTIME_METRICS_PATH
+        value: /api/runtime/health-slo
+      - key: HEALTH_SLO_TIMEOUT_MS
+        value: "3000"
+      - key: HEALTH_SLO_PROBE_ATTEMPTS
+        value: "3"
+      - key: HEALTH_SLO_CONSECUTIVE_TIMEOUTS
+        value: "2"
+      - key: HEALTH_SLO_PROBE_PAUSE_MS
+        value: "1000"
+      - key: HEALTH_SLO_ROUTE_P99_THRESHOLD_MS
+        value: "3000"
+      - key: HEALTH_SLO_ROUTE_5XX_THRESHOLD_COUNT
+        value: "1"
+      - key: HEALTH_SLO_EVENT_LOOP_P99_THRESHOLD_MS
+        value: "750"
+      - key: HEALTH_SLO_EVENT_LOOP_MAX_THRESHOLD_MS
+        value: "750"
+      - key: HEALTH_SLO_REQUIRE_RUNTIME_METRICS
+        value: "true"
+      - key: HEALTH_SLO_RENDER_EVENT_LOOKBACK_MINUTES
+        value: "30"
+      - key: HEALTH_SLO_INCIDENT_PATH
+        value: CTO + DevOps & SRE Engineer incident path
+      - key: HEALTH_SLO_PAGING_WEBHOOK_URL
+        sync: false
+      - key: HEALTH_SLO_PAGING_WEBHOOK_TOKEN
+        sync: false
+      - key: RENDER_SERVICE_ID
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
