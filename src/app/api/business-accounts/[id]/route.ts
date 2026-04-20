@@ -641,6 +641,42 @@ function buildCachedContactComparisonRow(
   return null;
 }
 
+function hydrateSparseUpdateRequestFromCachedRow(
+  parsedRequest: ReturnType<typeof parseUpdatePayload>,
+  requestBody: unknown,
+  fallbackRow: BusinessAccountRow,
+): ReturnType<typeof parseUpdatePayload> {
+  const nextRequest = { ...parsedRequest };
+
+  const applyIfMissing = <K extends keyof ReturnType<typeof parseUpdatePayload>>(
+    key: K,
+    value: ReturnType<typeof parseUpdatePayload>[K],
+  ) => {
+    if (!requestBodyHasOwnField(requestBody, String(key))) {
+      nextRequest[key] = value;
+    }
+  };
+
+  // Preserve optional account/contact values when callers submit sparse payloads.
+  applyIfMissing("companyDescription", fallbackRow.companyDescription ?? null);
+  applyIfMissing("salesRepId", fallbackRow.salesRepId ?? null);
+  applyIfMissing("salesRepName", fallbackRow.salesRepName ?? null);
+  applyIfMissing("industryType", fallbackRow.industryType ?? null);
+  applyIfMissing("subCategory", fallbackRow.subCategory ?? null);
+  applyIfMissing("companyRegion", fallbackRow.companyRegion ?? null);
+  applyIfMissing("week", fallbackRow.week ?? null);
+  applyIfMissing("companyPhone", resolveCompanyPhone(fallbackRow));
+  applyIfMissing("primaryContactName", fallbackRow.primaryContactName ?? null);
+  applyIfMissing("primaryContactJobTitle", fallbackRow.primaryContactJobTitle ?? null);
+  applyIfMissing("primaryContactPhone", fallbackRow.primaryContactPhone ?? null);
+  applyIfMissing("primaryContactExtension", fallbackRow.primaryContactExtension ?? null);
+  applyIfMissing("primaryContactEmail", fallbackRow.primaryContactEmail ?? null);
+  applyIfMissing("category", fallbackRow.category ?? null);
+  applyIfMissing("notes", fallbackRow.notes ?? null);
+
+  return nextRequest;
+}
+
 async function normalizeWithContactNotes(
   cookieValue: string,
   rawAccount: unknown,
@@ -984,6 +1020,13 @@ export async function PUT(
         ? readBusinessAccountDetailFromReadModel(id, cachedTargetContactId)
         : cachedDetail;
     const cachedTargetRow = cachedTargetDetail?.row ?? cachedCurrentRow;
+    if (cachedTargetRow !== null) {
+      updateRequest = hydrateSparseUpdateRequestFromCachedRow(
+        updateRequest,
+        requestBody,
+        cachedTargetRow,
+      );
+    }
     const implicitContactOnlyIntent =
       cachedCurrentRow !== null &&
       cachedTargetContactId !== null &&

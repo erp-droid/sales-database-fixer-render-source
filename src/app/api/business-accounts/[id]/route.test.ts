@@ -542,4 +542,89 @@ describe("PUT /api/business-accounts/[id]", () => {
     expect(updateContact).not.toHaveBeenCalled();
     expect(publishBusinessAccountChanged).toHaveBeenCalledTimes(1);
   });
+
+  it("treats sparse no-op payloads as unchanged by preserving cached optional fields", async () => {
+    const cachedRow = buildRow({
+      contactId: null,
+      primaryContactId: null,
+      rowKey: "record-1:primary",
+      companyPhone: null,
+      phoneNumber: null,
+      salesRepId: "109337",
+      salesRepName: "Jeffery Buhagiar",
+      companyRegion: "Region 6",
+      industryType: null,
+      subCategory: null,
+      week: null,
+      category: null,
+      primaryContactName: null,
+      primaryContactJobTitle: null,
+      primaryContactPhone: null,
+      primaryContactExtension: null,
+      primaryContactRawPhone: null,
+      primaryContactEmail: null,
+      notes: null,
+    });
+
+    readBusinessAccountDetailFromReadModel.mockImplementation(
+      (_id: string, contactId?: number) => {
+        if (contactId !== undefined) {
+          return null;
+        }
+
+        return {
+          row: cachedRow,
+          rows: [cachedRow],
+          accountLocation: null,
+        };
+      },
+    );
+
+    const sparseNoopPayload = {
+      companyName: cachedRow.companyName,
+      addressLine1: cachedRow.addressLine1,
+      addressLine2: cachedRow.addressLine2,
+      city: cachedRow.city,
+      state: cachedRow.state,
+      postalCode: cachedRow.postalCode,
+      country: cachedRow.country,
+      salesRepId: cachedRow.salesRepId,
+      salesRepName: cachedRow.salesRepName,
+      companyPhone: null,
+      primaryContactName: null,
+      primaryContactPhone: null,
+      primaryContactEmail: null,
+      category: cachedRow.category,
+      notes: cachedRow.notes,
+      expectedLastModified: cachedRow.lastModifiedIso,
+    };
+
+    const { PUT } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/business-accounts/record-1", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(sparseNoopPayload),
+      }),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: cachedRow.id,
+      accountRecordId: cachedRow.accountRecordId,
+      companyRegion: "Region 6",
+      salesRepId: "109337",
+      salesRepName: "Jeffery Buhagiar",
+    });
+    expect(fetchBusinessAccountById).not.toHaveBeenCalled();
+    expect(updateBusinessAccount).not.toHaveBeenCalled();
+    expect(updateContact).not.toHaveBeenCalled();
+  });
 });
