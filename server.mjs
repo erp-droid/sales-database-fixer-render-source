@@ -262,6 +262,18 @@ const RUNTIME_BACKGROUND_WORK_MAX_ACTIVE_REQUESTS = readBoundedInteger(
   1,
   5_000,
 );
+const RUNTIME_WATCHDOG_PRIORITY_ROUTE_P99_GUARD_MS = readBoundedInteger(
+  process.env.RUNTIME_WATCHDOG_PRIORITY_ROUTE_P99_GUARD_MS,
+  3_000,
+  100,
+  60_000,
+);
+const RUNTIME_WATCHDOG_PRIORITY_ROUTE_MAX_STALE_MS = readBoundedInteger(
+  process.env.RUNTIME_WATCHDOG_PRIORITY_ROUTE_MAX_STALE_MS,
+  Math.min(RUNTIME_REQUEST_METRICS_WINDOW_MS, Math.max(60_000, RUNTIME_MONITOR_INTERVAL_MS * 3)),
+  5_000,
+  RUNTIME_REQUEST_METRICS_WINDOW_MS,
+);
 const RUNTIME_PRIORITY_ROUTE_KEYS = new Set([
   "GET /api/healthz",
   "HEAD /api/healthz",
@@ -311,6 +323,7 @@ function summarizeRuntimeRoute(routeKey, routeSamples, nowMs) {
   const p99Ms = roundMetric(percentileFromSorted(durations, 99));
   const maxMs = roundMetric(durations[count - 1] ?? 0);
   const status5xxCount = routeSamples.filter((sample) => sample.statusCode >= 500).length;
+  const lastSampleTimestampMs = routeSamples[routeSamples.length - 1]?.timestampMs ?? null;
 
   return {
     route: routeKey,
@@ -320,6 +333,8 @@ function summarizeRuntimeRoute(routeKey, routeSamples, nowMs) {
     p99Ms,
     maxMs,
     status5xxCount,
+    lastSampleAt: lastSampleTimestampMs ? new Date(lastSampleTimestampMs).toISOString() : null,
+    lastSampleAgeMs: lastSampleTimestampMs ? Math.max(0, nowMs - lastSampleTimestampMs) : null,
   };
 }
 
@@ -338,6 +353,36 @@ function collectRuntimeRouteSummaries(nowMs) {
   return routeSummaries;
 }
 
+function isRuntimePriorityRouteHealthy(summary) {
+  return (
+    !!summary &&
+    Number.isFinite(summary.p99Ms) &&
+    summary.p99Ms <= RUNTIME_WATCHDOG_PRIORITY_ROUTE_P99_GUARD_MS &&
+    Number.isFinite(summary.lastSampleAgeMs) &&
+    summary.lastSampleAgeMs <= RUNTIME_WATCHDOG_PRIORITY_ROUTE_MAX_STALE_MS &&
+    summary.status5xxCount === 0
+  );
+}
+
+function evaluateWatchdogLagBypass(nowMs) {
+  const routeSummaries = collectRuntimeRouteSummaries(nowMs);
+  const healthzGet =
+    routeSummaries.find((summary) => summary.route === "GET /api/healthz") ?? null;
+  const healthzHead =
+    routeSummaries.find((summary) => summary.route === "HEAD /api/healthz") ?? null;
+  const syncStatusGet =
+    routeSummaries.find((summary) => summary.route === "GET /api/sync/status") ?? null;
+  const healthzHealthy = isRuntimePriorityRouteHealthy(healthzGet) || isRuntimePriorityRouteHealthy(healthzHead);
+  const syncStatusHealthy = isRuntimePriorityRouteHealthy(syncStatusGet);
+
+  return {
+    allowLagBypass: healthzHealthy && syncStatusHealthy,
+    healthzGet,
+    healthzHead,
+    syncStatusGet,
+  };
+}
+
 function shouldDeferBackgroundWork(taskName) {
   if (!runtimeStallMonitorEnabled) {
     return false;
@@ -354,6 +399,32 @@ function shouldDeferBackgroundWork(taskName) {
 
   if (!lagExceeded && !inCooldown && !overloaded) {
     return false;
+  }
+
+  if ((lagExceeded || inCooldown) && !overloaded && taskName === "watchdog") {
+    const guardrail = evaluateWatchdogLagBypass(nowMs);
+    if (guardrail.allowLagBypass) {
+      const bypassLogKey = `${taskName}:lag-bypass`;
+      const lastBypassLogAtMs = runtimeDeferralLogByTask.get(bypassLogKey) ?? 0;
+      if (nowMs - lastBypassLogAtMs >= 30_000) {
+        runtimeDeferralLogByTask.set(bypassLogKey, nowMs);
+        console.log("[runtime-stall] allowing watchdog cycle despite lag spike", {
+          task: taskName,
+          lagP99Ms: runtimeLastLagP99Ms,
+          lagMaxMs: runtimeLastLagMaxMs,
+          activeRequests: runtimeActiveRequestCount,
+          lagThresholdMs: RUNTIME_BACKGROUND_WORK_LAG_DEFER_MS,
+          p99GuardMs: RUNTIME_WATCHDOG_PRIORITY_ROUTE_P99_GUARD_MS,
+          maxSampleAgeMs: RUNTIME_WATCHDOG_PRIORITY_ROUTE_MAX_STALE_MS,
+          routes: {
+            healthzGet: guardrail.healthzGet,
+            healthzHead: guardrail.healthzHead,
+            syncStatusGet: guardrail.syncStatusGet,
+          },
+        });
+      }
+      return false;
+    }
   }
 
   const lastLogAtMs = runtimeDeferralLogByTask.get(taskName) ?? 0;
