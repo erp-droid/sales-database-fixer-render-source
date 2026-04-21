@@ -439,10 +439,13 @@ export function getEnv(): AppEnv {
     }
   }
 
+  const resolvedAcumaticaCompany =
+    parsed.data.ACUMATICA_COMPANY ??
+    (parsed.data.AUTH_PROVIDER === "acumatica" ? "MeadowBrook Live" : undefined);
   if (parsed.data.AUTH_PROVIDER === "acumatica" && !parsed.data.ACUMATICA_COMPANY) {
-    throw new Error(
-      "Invalid environment configuration for Acumatica auth provider: ACUMATICA_COMPANY",
-    );
+    console.warn("[env] ACUMATICA_COMPANY missing; using fallback company", {
+      fallbackCompany: resolvedAcumaticaCompany,
+    });
   }
 
   const readModelSqlitePath =
@@ -454,6 +457,7 @@ export function getEnv(): AppEnv {
   cachedEnv = {
     ...parsed.data,
     ACUMATICA_BASE_URL: resolvedAcumaticaBaseUrl,
+    ACUMATICA_COMPANY: resolvedAcumaticaCompany,
     AUTH_COOKIE_SECURE:
       parsed.data.AUTH_COOKIE_SECURE !== undefined
         ? parsed.data.AUTH_COOKIE_SECURE === "true"

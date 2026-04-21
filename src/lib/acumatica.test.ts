@@ -888,7 +888,7 @@ describe("Acumatica environment and login payload", () => {
     Object.assign(process.env, originalEnv);
   });
 
-  it("requires ACUMATICA_COMPANY for direct Acumatica auth", async () => {
+  it("falls back to MeadowBrook Live when ACUMATICA_COMPANY is missing", async () => {
     vi.resetModules();
     setAcumaticaEnv({
       ACUMATICA_COMPANY: undefined,
@@ -896,9 +896,7 @@ describe("Acumatica environment and login payload", () => {
 
     const { getEnv } = await import("@/lib/env");
 
-    expect(() => getEnv()).toThrow(
-      "Invalid environment configuration for Acumatica auth provider: ACUMATICA_COMPANY",
-    );
+    expect(getEnv().ACUMATICA_COMPANY).toBe("MeadowBrook Live");
   });
 
   it("sends MeadowBrook Live in the Acumatica login payload", async () => {
