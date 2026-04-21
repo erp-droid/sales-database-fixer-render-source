@@ -779,7 +779,26 @@ server.get("/api/runtime/health-slo", (req, res) => {
   });
 });
 server.use(quotesMountPath, pricingBookApp);
-server.all("*", (req, res) => handle(req, res));
+server.all("*", (req, res, next) => {
+  Promise.resolve(handle(req, res)).catch((error) => {
+    const method = req.method || "UNKNOWN";
+    const path = req.originalUrl || req.url || "*";
+    const message = error instanceof Error ? error.message : String(error);
+
+    console.error("[next-handler] request handling failed", {
+      method,
+      path,
+      message,
+    });
+
+    if (res.headersSent) {
+      next(error);
+      return;
+    }
+
+    res.status(500).send("Internal Server Error");
+  });
+});
 
 if (runtimeStallMonitorEnabled && runtimeEventLoopLagHistogram) {
   const runtimeMonitorTimer = setInterval(() => {
