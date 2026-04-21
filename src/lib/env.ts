@@ -33,7 +33,7 @@ const schema = z.object({
   AUTH_COOKIE_SECURE: z.enum(["true", "false"]).optional(),
   USER_CREDENTIALS_SECRET: z.string().min(1).optional(),
   APP_BASE_URL: z.string().url().optional(),
-  ACUMATICA_BASE_URL: z.string().url(),
+  ACUMATICA_BASE_URL: z.string().url().optional(),
   ACUMATICA_ENTITY_PATH: z.string().default("/entity/lightspeed/24.200.001"),
   ACUMATICA_COMPANY: z.string().min(1).optional(),
   ACUMATICA_BRANCH: z.string().min(1).optional(),
@@ -129,7 +129,11 @@ const schema = z.object({
   READ_MODEL_ENABLED: z.enum(["true", "false"]).optional(),
   READ_MODEL_AUTO_SYNC_ENABLED: z.enum(["true", "false"]).optional(),
   READ_MODEL_SQLITE_PATH: z.string().min(1).optional(),
+  READ_MODEL_STATE_BACKEND: z.enum(["sqlite", "shared"]).optional(),
   DATA_QUALITY_HISTORY_PATH: z.string().min(1).optional(),
+  DATA_QUALITY_HISTORY_BACKEND: z.enum(["file", "shared"]).optional(),
+  SHARED_STATE_CUTOVER_ENABLED: z.enum(["true", "false"]).optional(),
+  SHARED_STATE_BACKEND_DSN: z.string().min(1).optional(),
   READ_MODEL_STALE_AFTER_MS: z.string().optional(),
   READ_MODEL_SYNC_INTERVAL_MS: z.string().optional(),
   READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: z.string().optional(),
@@ -227,7 +231,11 @@ export type AppEnv = {
   READ_MODEL_ENABLED: boolean;
   READ_MODEL_AUTO_SYNC_ENABLED: boolean;
   READ_MODEL_SQLITE_PATH: string;
+  READ_MODEL_STATE_BACKEND: "sqlite" | "shared";
   DATA_QUALITY_HISTORY_PATH: string;
+  DATA_QUALITY_HISTORY_BACKEND: "file" | "shared";
+  SHARED_STATE_CUTOVER_ENABLED: boolean;
+  SHARED_STATE_BACKEND_DSN?: string;
   READ_MODEL_STALE_AFTER_MS: number;
   READ_MODEL_SYNC_INTERVAL_MS: number;
   READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: number;
@@ -254,7 +262,7 @@ export function getEnv(): AppEnv {
     AUTH_COOKIE_SECURE: process.env.AUTH_COOKIE_SECURE,
     USER_CREDENTIALS_SECRET: emptyToUndefined(process.env.USER_CREDENTIALS_SECRET),
     APP_BASE_URL: emptyToUndefined(process.env.APP_BASE_URL),
-    ACUMATICA_BASE_URL: process.env.ACUMATICA_BASE_URL,
+    ACUMATICA_BASE_URL: emptyToUndefined(process.env.ACUMATICA_BASE_URL),
     ACUMATICA_ENTITY_PATH: process.env.ACUMATICA_ENTITY_PATH,
     ACUMATICA_COMPANY: emptyToUndefined(process.env.ACUMATICA_COMPANY),
     ACUMATICA_BRANCH: emptyToUndefined(process.env.ACUMATICA_BRANCH),
@@ -376,7 +384,11 @@ export function getEnv(): AppEnv {
     READ_MODEL_ENABLED: process.env.READ_MODEL_ENABLED,
     READ_MODEL_AUTO_SYNC_ENABLED: process.env.READ_MODEL_AUTO_SYNC_ENABLED,
     READ_MODEL_SQLITE_PATH: emptyToUndefined(process.env.READ_MODEL_SQLITE_PATH),
+    READ_MODEL_STATE_BACKEND: emptyToUndefined(process.env.READ_MODEL_STATE_BACKEND),
     DATA_QUALITY_HISTORY_PATH: emptyToUndefined(process.env.DATA_QUALITY_HISTORY_PATH),
+    DATA_QUALITY_HISTORY_BACKEND: emptyToUndefined(process.env.DATA_QUALITY_HISTORY_BACKEND),
+    SHARED_STATE_CUTOVER_ENABLED: process.env.SHARED_STATE_CUTOVER_ENABLED,
+    SHARED_STATE_BACKEND_DSN: emptyToUndefined(process.env.SHARED_STATE_BACKEND_DSN),
     READ_MODEL_STALE_AFTER_MS: emptyToUndefined(process.env.READ_MODEL_STALE_AFTER_MS),
     READ_MODEL_SYNC_INTERVAL_MS: emptyToUndefined(process.env.READ_MODEL_SYNC_INTERVAL_MS),
     READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: emptyToUndefined(
@@ -397,6 +409,18 @@ export function getEnv(): AppEnv {
       .join(", ");
 
     throw new Error(`Invalid environment configuration: ${missing}`);
+  }
+
+  const resolvedAcumaticaBaseUrl =
+    parsed.data.ACUMATICA_BASE_URL ??
+    parsed.data.APP_BASE_URL ??
+    "http://127.0.0.1";
+
+  if (!parsed.data.ACUMATICA_BASE_URL) {
+    console.error("[env] ACUMATICA_BASE_URL missing; using fallback base URL", {
+      authProvider: parsed.data.AUTH_PROVIDER,
+      fallbackBaseUrl: resolvedAcumaticaBaseUrl,
+    });
   }
 
   if (parsed.data.AUTH_PROVIDER === "custom") {
@@ -429,6 +453,7 @@ export function getEnv(): AppEnv {
 
   cachedEnv = {
     ...parsed.data,
+    ACUMATICA_BASE_URL: resolvedAcumaticaBaseUrl,
     AUTH_COOKIE_SECURE:
       parsed.data.AUTH_COOKIE_SECURE !== undefined
         ? parsed.data.AUTH_COOKIE_SECURE === "true"
@@ -485,7 +510,13 @@ export function getEnv(): AppEnv {
       Math.trunc(Number(parsed.data.DAILY_CALL_COACHING_LOOKBACK_DAYS) || 1),
     ),
     READ_MODEL_SQLITE_PATH: readModelSqlitePath,
+    READ_MODEL_STATE_BACKEND: parsed.data.READ_MODEL_STATE_BACKEND ?? "sqlite",
     DATA_QUALITY_HISTORY_PATH: dataQualityHistoryPath,
+    DATA_QUALITY_HISTORY_BACKEND:
+      parsed.data.DATA_QUALITY_HISTORY_BACKEND ?? "file",
+    SHARED_STATE_CUTOVER_ENABLED:
+      parsed.data.SHARED_STATE_CUTOVER_ENABLED === "true",
+    SHARED_STATE_BACKEND_DSN: parsed.data.SHARED_STATE_BACKEND_DSN,
     READ_MODEL_STALE_AFTER_MS: Math.max(
       60_000,
       Number(parsed.data.READ_MODEL_STALE_AFTER_MS ?? "300000") || 300_000,

@@ -190,7 +190,7 @@ const STARTUP_WARMUP_REQUEST_TIMEOUT_MS = readBoundedInteger(
   250,
   30_000,
 );
-const STARTUP_WARMUP_PATHS = ["/api/healthz", "/api/sync/status", "/api/auth/session"];
+const STARTUP_WARMUP_PATHS = ["/api/healthz", "/api/sync/status", "/api/auth/session", "/signin"];
 const STARTUP_GATED_PATHS = new Set(["/api/sync/status", "/api/auth/session"]);
 const STARTUP_PROBE_LOG_PATHS = new Set(STARTUP_WARMUP_PATHS);
 const startupFirstProbeLogged = new Set();
