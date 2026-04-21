@@ -54,6 +54,7 @@ let syncInFlight: Promise<void> | null = null;
 let geocodeInFlight: Promise<void> | null = null;
 const RECENT_CALL_ACTIVITY_BLOCK_WINDOW_MS = 5 * 60 * 1000;
 const MIN_STALE_RUNNING_SYNC_AFTER_MS = 10 * 60 * 1000;
+const MIN_STALE_ACTIVE_CALL_BLOCK_AFTER_MS = 30 * 60 * 1000;
 
 function toSyncStatusResponse(record: StoredSyncState | undefined): SyncStatusResponse {
   let progress: SyncStatusResponse["progress"] = null;
@@ -105,17 +106,33 @@ function readStoredSyncState(): StoredSyncState | undefined {
     .get() as StoredSyncState | undefined;
 }
 
-function readActiveCallCount(): number {
+function readBlockingActiveCallCount(nowMs = Date.now()): number {
   const db = getReadModelDb();
+  const staleAfterMs = Math.max(
+    MIN_STALE_ACTIVE_CALL_BLOCK_AFTER_MS,
+    getEnv().READ_MODEL_ACTIVE_CALL_STALE_AFTER_MS,
+  );
+  const thresholdIso = new Date(Math.max(0, nowMs - staleAfterMs)).toISOString();
   const row = db
     .prepare(
       `
-      SELECT COUNT(*) AS total
+      SELECT
+        SUM(
+          CASE
+            WHEN COALESCE(
+              NULLIF(started_at, ''),
+              NULLIF(answered_at, ''),
+              NULLIF(updated_at, '')
+            ) >= ? THEN 1
+            ELSE 0
+          END
+        ) AS total
       FROM call_sessions
-      WHERE ended_at IS NULL OR outcome = 'in_progress'
+      WHERE ended_at IS NULL
+        AND outcome IN ('in_progress', 'unknown')
       `,
     )
-    .get() as { total?: number } | undefined;
+    .get(thresholdIso) as { total?: number } | undefined;
 
   return Math.max(0, Number(row?.total ?? 0));
 }
@@ -223,7 +240,7 @@ export function readManualSyncBlockedReason(nowMs = Date.now()): string | null {
     return "A full account sync is already running.";
   }
 
-  const activeCallCount = readActiveCallCount();
+  const activeCallCount = readBlockingActiveCallCount(nowMs);
   if (activeCallCount > 0) {
     return `Sync is temporarily blocked while ${activeCallCount} live call${
       activeCallCount === 1 ? "" : "s"
