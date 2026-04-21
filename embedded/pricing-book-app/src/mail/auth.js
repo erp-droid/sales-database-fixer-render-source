@@ -20,11 +20,17 @@ export class MailAuthError extends Error {
 }
 
 function getProxySecret() {
-  const secret = cleanString(config.mail.proxySharedSecret);
-  if (!secret) {
-    throw new MailAuthError("Mail proxy secret is not configured.", 500);
+  const proxySecret = cleanString(config.mail.proxySharedSecret);
+  if (proxySecret) {
+    return proxySecret;
   }
-  return secret;
+
+  const serviceSecret = cleanString(config.mail.serviceSharedSecret);
+  if (serviceSecret) {
+    return serviceSecret;
+  }
+
+  throw new MailAuthError("Mail proxy secret is not configured.", 500);
 }
 
 function decodeSignedToken(token) {

@@ -513,6 +513,28 @@ describe("daily-call-coaching", () => {
     }
   });
 
+  it("keeps embedded proxy routing when MAIL_PROXY_SHARED_SECRET is missing but service secret exists", () => {
+    const baselineEnv = getEnvMock();
+    getEnvMock.mockReturnValue({
+      ...baselineEnv,
+      MAIL_PROXY_SHARED_SECRET: undefined,
+      MAIL_SERVICE_SHARED_SECRET: "shared-secret",
+    });
+
+    const target = resolveDailyCallCoachingMailSendTarget({
+      recipientEmail: "stita@meadowb.com",
+      sender: {
+        loginName: "jserrano",
+        displayName: "Jorge Serrano",
+        email: "jserrano@meadowb.com",
+      },
+    });
+
+    expect(target.transport).toBe("embedded_proxy");
+    expect(target.url).toBe("https://sales-meadowb.example.com/quotes/api/mail/messages/send");
+    expect(target.assertion.startsWith("mbmail.v1.")).toBe(true);
+  });
+
   it("keeps external coaching email on the configured mail service", () => {
     const target = resolveDailyCallCoachingMailSendTarget({
       recipientEmail: "preview@example.com",

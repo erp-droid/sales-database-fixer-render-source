@@ -217,6 +217,7 @@ export const config = {
   },
   mail: {
     proxySharedSecret: env.MAIL_PROXY_SHARED_SECRET || "",
+    serviceSharedSecret: env.MAIL_SERVICE_SHARED_SECRET || "",
     encryptionSecret:
       env.MAIL_ENCRYPTION_SECRET ||
       env.MAIL_PROXY_SHARED_SECRET ||

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -87,6 +88,25 @@ describe("mail auth helpers", () => {
     expect(decoded.displayName).toBe("Jorge Serrano");
     expect(decoded.senderEmail).toBe("jserrano@meadowb.com");
     expect(decoded.sourceApp).toBe("sales-database-fixer");
+  });
+
+  it("falls back to the mail service secret when the proxy secret is missing", async () => {
+    delete process.env.MAIL_PROXY_SHARED_SECRET;
+    const { buildMailProxyAssertion } = await import("@/lib/mail-auth");
+
+    const token = buildMailProxyAssertion({
+      loginName: "jserrano",
+      displayName: "Jorge Serrano",
+      senderEmail: "jserrano@meadowb.com",
+    });
+
+    const [, , encodedPayload, signature] = token.split(".");
+    const expectedSignature = crypto
+      .createHmac("sha256", "shared-secret")
+      .update(encodedPayload)
+      .digest("base64url");
+
+    expect(signature).toBe(expectedSignature);
   });
 
   it("resolves the signed-in sender from the employee directory", async () => {

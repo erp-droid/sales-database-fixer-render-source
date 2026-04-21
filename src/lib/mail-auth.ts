@@ -67,13 +67,21 @@ export function ensureMailProxyConfigured(): {
   sharedSecret: string;
 } {
   const env = getEnv();
-  if (!env.MAIL_PROXY_SHARED_SECRET) {
-    throw new HttpError(500, "MAIL_PROXY_SHARED_SECRET is not configured.");
+  if (env.MAIL_PROXY_SHARED_SECRET) {
+    return {
+      sharedSecret: env.MAIL_PROXY_SHARED_SECRET,
+    };
   }
 
-  return {
-    sharedSecret: env.MAIL_PROXY_SHARED_SECRET,
-  };
+  // Emergency fallback: keep internal proxy auth operational when only the
+  // service assertion secret is configured in production.
+  if (env.MAIL_SERVICE_SHARED_SECRET) {
+    return {
+      sharedSecret: env.MAIL_SERVICE_SHARED_SECRET,
+    };
+  }
+
+  throw new HttpError(500, "MAIL_PROXY_SHARED_SECRET is not configured.");
 }
 
 export async function resolveMailSenderForRequest(

@@ -282,10 +282,13 @@ export function resolveDailyCallCoachingMailSendTarget(input: {
 } {
   const env = getEnv();
   const appBaseUrl = resolveEmbeddedProxyBaseUrl(env.APP_BASE_URL ?? "");
+  const hasEmbeddedProxyAssertionSecret =
+    cleanText(env.MAIL_PROXY_SHARED_SECRET).length > 0 ||
+    cleanText(env.MAIL_SERVICE_SHARED_SECRET).length > 0;
   const canUseEmbeddedProxy =
     isInternalMailboxEmail(input.recipientEmail, env.MAIL_INTERNAL_DOMAIN) &&
     appBaseUrl.length > 0 &&
-    cleanText(env.MAIL_PROXY_SHARED_SECRET).length > 0;
+    hasEmbeddedProxyAssertionSecret;
 
   if (canUseEmbeddedProxy) {
     const mountPath = normalizeMountPath(process.env.MBQ_BASE_PATH, "/quotes");
