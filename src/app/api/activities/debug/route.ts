@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { buildCookieHeader, requireAuthCookieValue } from "@/lib/auth";
 import { getEnv } from "@/lib/env";
-import { HttpError } from "@/lib/errors";
+import { HttpError, getErrorMessage } from "@/lib/errors";
 
 function buildAcumaticaUrl(resourcePath: string): string {
   const { ACUMATICA_BASE_URL, ACUMATICA_ENTITY_PATH } = getEnv();
@@ -61,14 +61,44 @@ async function proxyRequest(
   );
 }
 
+function buildErrorResponse(error: unknown): NextResponse {
+  if (error instanceof HttpError) {
+    return NextResponse.json(
+      {
+        error: error.message,
+        details: error.details ?? null,
+      },
+      { status: error.status },
+    );
+  }
+
+  return NextResponse.json(
+    {
+      error: getErrorMessage(error),
+    },
+    { status: 500 },
+  );
+}
+
+async function handleProxyRequest(
+  request: NextRequest,
+  method: "GET" | "POST" | "PUT",
+): Promise<NextResponse> {
+  try {
+    return await proxyRequest(request, method);
+  } catch (error) {
+    return buildErrorResponse(error);
+  }
+}
+
 export async function GET(request: NextRequest) {
-  return proxyRequest(request, "GET");
+  return handleProxyRequest(request, "GET");
 }
 
 export async function POST(request: NextRequest) {
-  return proxyRequest(request, "POST");
+  return handleProxyRequest(request, "POST");
 }
 
 export async function PUT(request: NextRequest) {
-  return proxyRequest(request, "PUT");
+  return handleProxyRequest(request, "PUT");
 }
