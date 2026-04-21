@@ -156,9 +156,33 @@ const nextApp = next({
   port,
 });
 
-await nextApp.prepare();
+const nextPrepareState = {
+  phase: "booting",
+  startedAtMs: Date.now(),
+  readyAtMs: 0,
+  error: null,
+};
+let handle = null;
+const nextPreparePromise = nextApp
+  .prepare()
+  .then(() => {
+    handle = nextApp.getRequestHandler();
+    nextPrepareState.phase = "ready";
+    nextPrepareState.readyAtMs = Date.now();
+    console.log("[startup] next runtime prepared", {
+      prepareDurationMs: Math.max(0, nextPrepareState.readyAtMs - nextPrepareState.startedAtMs),
+    });
+  })
+  .catch((error) => {
+    nextPrepareState.phase = "failed";
+    nextPrepareState.error = error instanceof Error ? error.message : String(error);
+    console.error("[startup] next runtime prepare failed", {
+      message: nextPrepareState.error,
+      prepareDurationMs: Math.max(0, Date.now() - nextPrepareState.startedAtMs),
+    });
+  });
+void nextPreparePromise;
 
-const handle = nextApp.getRequestHandler();
 const server = express();
 const startedAt = new Date();
 const startupBootAtMs = Date.now();
@@ -192,6 +216,13 @@ const STARTUP_WARMUP_REQUEST_TIMEOUT_MS = readBoundedInteger(
 );
 const STARTUP_WARMUP_PATHS = ["/api/healthz", "/api/sync/status", "/api/auth/session", "/signin"];
 const STARTUP_GATED_PATHS = new Set(["/api/sync/status", "/api/auth/session"]);
+const STARTUP_NON_5XX_FALLBACK_PATHS = new Set([
+  "/",
+  "/signin",
+  "/api/healthz",
+  "/api/sync/status",
+  "/api/auth/session",
+]);
 const STARTUP_PROBE_LOG_PATHS = new Set(STARTUP_WARMUP_PATHS);
 const startupFirstProbeLogged = new Set();
 const startupState = {
@@ -463,6 +494,14 @@ function isStartupReady() {
   return startupState.phase === "ready";
 }
 
+function isNextRuntimeReady() {
+  return typeof handle === "function" && nextPrepareState.phase === "ready";
+}
+
+function isServiceReady() {
+  return isStartupReady() && isNextRuntimeReady();
+}
+
 function markStartupReady(reason) {
   if (isStartupReady()) {
     return;
@@ -491,6 +530,69 @@ function buildStartupGatePayload(pathname, nowMs) {
     warmupEnabled: startupWarmupEnabled,
     message: "Service is warming up. Retry in a few seconds.",
   };
+}
+
+function buildStartupWarmSyncStatusPayload() {
+  return {
+    status: "running",
+    phase: "startup_warming",
+    startedAt: startedAt.toISOString(),
+    completedAt: null,
+    lastSuccessfulSyncAt: null,
+    deferredVisibilityVersion: null,
+    lastError: "Service is warming up. Retry in a few seconds.",
+    rowsCount: 0,
+    accountsCount: 0,
+    contactsCount: 0,
+    progress: null,
+    manualSyncBlockedReason: "Service startup warmup in progress.",
+  };
+}
+
+function respondWithStartupFallback(res, pathname, nowMs) {
+  if (!STARTUP_NON_5XX_FALLBACK_PATHS.has(pathname)) {
+    return false;
+  }
+
+  if (pathname === "/") {
+    res.redirect(307, "/signin");
+    return true;
+  }
+
+  if (pathname === "/signin") {
+    res
+      .status(200)
+      .type("html")
+      .send(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"2\"><title>Starting up</title></head><body><p>Service is warming up. Retry in a few seconds.</p></body></html>",
+      );
+    return true;
+  }
+
+  if (pathname === "/api/healthz") {
+    res.set("Retry-After", "2");
+    res.status(200).json(buildStartupGatePayload(pathname, nowMs));
+    return true;
+  }
+
+  if (pathname === "/api/sync/status") {
+    res.set("Retry-After", "2");
+    res.status(200).json(buildStartupWarmSyncStatusPayload());
+    return true;
+  }
+
+  if (pathname === "/api/auth/session") {
+    res.set("Retry-After", "2");
+    res.status(200).json({
+      authenticated: true,
+      user: null,
+      degraded: true,
+      warming: true,
+    });
+    return true;
+  }
+
+  return false;
 }
 
 function maybeLogFirstStartupProbe(req, res, durationMs) {
@@ -575,6 +677,15 @@ async function runStartupWarmupSequence() {
 
     const results = await Promise.all(STARTUP_WARMUP_PATHS.map((path) => probeStartupEndpoint(path)));
     const failures = results.filter((result) => !result.ok);
+    if (failures.length === 0 && !isNextRuntimeReady()) {
+      failures.push({
+        path: "next_runtime",
+        statusCode: 0,
+        durationMs: Math.max(0, Date.now() - nextPrepareState.startedAtMs),
+        timedOut: false,
+        error: "Next runtime prepare still in progress",
+      });
+    }
 
     if (failures.length === 0) {
       console.log("[startup] warmup completed", {
@@ -619,7 +730,7 @@ async function runStartupWarmupSequence() {
       error: failure.error,
     })),
   });
-  markStartupReady("warmup_fail_open");
+  markStartupReady(isNextRuntimeReady() ? "warmup_fail_open" : "warmup_fail_open_next_not_ready");
 }
 
 server.disable("x-powered-by");
@@ -646,18 +757,30 @@ server.use((req, res, next) => {
   next();
 });
 server.use((req, res, next) => {
-  if (isStartupReady() || isStartupProbeRequest(req)) {
+  if (isServiceReady() || isStartupProbeRequest(req)) {
     next();
     return;
   }
 
   const pathname = normalizeRequestPath(req.path || req.originalUrl || req.url);
-  if (!STARTUP_GATED_PATHS.has(pathname)) {
-    next();
+  const nowMs = Date.now();
+
+  if (respondWithStartupFallback(res, pathname, nowMs)) {
     return;
   }
 
-  const nowMs = Date.now();
+  if (!isStartupReady() && STARTUP_GATED_PATHS.has(pathname)) {
+    res.set("Retry-After", "2");
+    res.status(503).json(buildStartupGatePayload(pathname, nowMs));
+    return;
+  }
+
+  if (!isNextRuntimeReady()) {
+    res.set("Retry-After", "2");
+    res.status(503).json(buildStartupGatePayload(pathname, nowMs));
+    return;
+  }
+
   res.set("Retry-After", "2");
   res.status(503).json(buildStartupGatePayload(pathname, nowMs));
 });
@@ -707,10 +830,11 @@ if (runtimeStallMonitorEnabled) {
 }
 server.get("/api/healthz", (req, res) => {
   const nowMs = Date.now();
+  const serviceReady = isServiceReady();
   const payload = {
-    ok: true,
-    ready: true,
-    status: "ready",
+    ok: serviceReady,
+    ready: serviceReady,
+    status: serviceReady ? "ready" : "warming",
     uptimeSeconds: Math.floor(process.uptime()),
     startedAt: startedAt.toISOString(),
     timestamp: new Date(nowMs).toISOString(),
@@ -718,14 +842,24 @@ server.get("/api/healthz", (req, res) => {
     startupWarmupEnabled: startupWarmupEnabled,
     startupWarmupAttempt: startupState.warmupAttempt,
     startupReadinessReason: startupState.reason,
+    nextRuntimePhase: nextPrepareState.phase,
+    nextRuntimeReadyAt:
+      nextPrepareState.readyAtMs > 0 ? new Date(nextPrepareState.readyAtMs).toISOString() : null,
+    nextRuntimeError: nextPrepareState.error,
   };
-  if (!isStartupReady() && !isStartupProbeRequest(req)) {
+  if (!serviceReady && !isStartupProbeRequest(req)) {
+    res.set("Retry-After", "2");
+    res.status(200).json({
+      ...payload,
+      message: "Service is warming up. Retry in a few seconds.",
+    });
+    return;
+  }
+
+  if (!serviceReady) {
     res.set("Retry-After", "2");
     res.status(503).json({
       ...payload,
-      ok: false,
-      ready: false,
-      status: "warming",
       message: "Service is warming up. Retry in a few seconds.",
     });
     return;
@@ -734,7 +868,13 @@ server.get("/api/healthz", (req, res) => {
   res.status(200).json(payload);
 });
 server.head("/api/healthz", (req, res) => {
-  if (!isStartupReady() && !isStartupProbeRequest(req)) {
+  const serviceReady = isServiceReady();
+  if (!serviceReady && !isStartupProbeRequest(req)) {
+    res.status(200).end();
+    return;
+  }
+
+  if (!serviceReady) {
     res.set("Retry-After", "2");
     res.status(503).end();
     return;
@@ -770,6 +910,13 @@ server.get("/api/runtime/health-slo", (req, res) => {
       startedAt: startedAt.toISOString(),
       readyAt: startupState.readyAtMs > 0 ? new Date(startupState.readyAtMs).toISOString() : null,
       startupElapsedMs: startupElapsedMs(nowMs),
+      serviceReady: isServiceReady(),
+      nextRuntime: {
+        phase: nextPrepareState.phase,
+        error: nextPrepareState.error,
+        readyAt:
+          nextPrepareState.readyAtMs > 0 ? new Date(nextPrepareState.readyAtMs).toISOString() : null,
+      },
     },
     routes: {
       healthzGet: routeSummaryMap["GET /api/healthz"] ?? null,
@@ -780,6 +927,17 @@ server.get("/api/runtime/health-slo", (req, res) => {
 });
 server.use(quotesMountPath, pricingBookApp);
 server.all("*", (req, res, next) => {
+  if (!isNextRuntimeReady()) {
+    const pathname = normalizeRequestPath(req.path || req.originalUrl || req.url);
+    const nowMs = Date.now();
+    if (!isStartupProbeRequest(req) && respondWithStartupFallback(res, pathname, nowMs)) {
+      return;
+    }
+    res.set("Retry-After", "2");
+    res.status(503).json(buildStartupGatePayload(pathname, nowMs));
+    return;
+  }
+
   Promise.resolve(handle(req, res)).catch((error) => {
     const method = req.method || "UNKNOWN";
     const path = req.originalUrl || req.url || "*";
