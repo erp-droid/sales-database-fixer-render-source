@@ -2,6 +2,8 @@
 
 "use strict";
 
+const crypto = require("node:crypto");
+
 function readRequiredEnv(name) {
   const value = String(process.env[name] || "").trim();
   if (!value) {
@@ -65,6 +67,80 @@ function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function buildPayloadShape(value) {
+  if (value === null) {
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return [];
+    }
+    return [buildPayloadShape(value[0])];
+  }
+
+  const valueType = typeof value;
+  if (valueType === "string") {
+    return "__string";
+  }
+  if (valueType === "number") {
+    return "__number";
+  }
+  if (valueType === "boolean") {
+    return "__boolean";
+  }
+  if (valueType !== "object") {
+    return `__${valueType}`;
+  }
+
+  const shaped = {};
+  const keys = Object.keys(value).sort();
+  for (const key of keys) {
+    shaped[key] = buildPayloadShape(value[key]);
+  }
+  return shaped;
+}
+
+function computePayloadShapeHash(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const shape = buildPayloadShape(payload);
+  const digest = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(shape))
+    .digest("hex");
+  return digest.slice(0, 16);
+}
+
+const WATCHDOG_PROBE_HEADERS = [
+  "rndr-id",
+  "date",
+  "x-render-origin-server",
+  "x-mb-runtime-instance-id",
+  "x-mb-runtime-booted-at",
+  "x-mb-runtime-service-id",
+  "x-mb-runtime-git-commit",
+  "x-mb-runtime-git-branch",
+];
+
+function pickResponseHeaders(headers, includeHeaders) {
+  if (!headers || !Array.isArray(includeHeaders) || includeHeaders.length === 0) {
+    return null;
+  }
+
+  const picked = {};
+  for (const name of includeHeaders) {
+    const value = headers.get(name);
+    if (value !== null && value !== undefined && value !== "") {
+      picked[name] = value;
+    }
+  }
+
+  return Object.keys(picked).length > 0 ? picked : null;
 }
 
 function safeErrorMessage(error) {
@@ -188,7 +264,9 @@ function buildProbeWindow(groups) {
   };
 }
 
-async function probeEndpoint(url, timeoutMs) {
+async function probeEndpoint(url, timeoutMs, options = {}) {
+  const captureJson = options.captureJson === true;
+  const includeHeaders = Array.isArray(options.includeHeaders) ? options.includeHeaders : [];
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
   const controller = new AbortController();
@@ -204,7 +282,20 @@ async function probeEndpoint(url, timeoutMs) {
       signal: controller.signal,
     });
 
-    await response.text().catch(() => "");
+    const bodyText = await response.text().catch(() => "");
+    const headers = pickResponseHeaders(response.headers, includeHeaders);
+    let bodyJson = null;
+    let bodyJsonParseError = null;
+    let bodyShapeHash = null;
+
+    if (captureJson && bodyText) {
+      try {
+        bodyJson = JSON.parse(bodyText);
+        bodyShapeHash = computePayloadShapeHash(bodyJson);
+      } catch (error) {
+        bodyJsonParseError = safeErrorMessage(error);
+      }
+    }
 
     return {
       startedAt,
@@ -214,6 +305,10 @@ async function probeEndpoint(url, timeoutMs) {
       timedOut: false,
       ok: response.ok,
       error: null,
+      headers,
+      bodyJson,
+      bodyJsonParseError,
+      bodyShapeHash,
     };
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "AbortError";
@@ -226,6 +321,10 @@ async function probeEndpoint(url, timeoutMs) {
       timedOut,
       ok: false,
       error: safeErrorMessage(error),
+      headers: null,
+      bodyJson: null,
+      bodyJsonParseError: null,
+      bodyShapeHash: null,
     };
   } finally {
     clearTimeout(timeoutId);
@@ -234,8 +333,10 @@ async function probeEndpoint(url, timeoutMs) {
 
 async function runProbeSeries(config) {
   const healthEndpoint = `${config.baseUrl}${config.healthcheckPath}`;
+  const healthPayloadEndpoint = `${config.baseUrl}${config.healthPayloadPath}`;
   const syncEndpoint = `${config.baseUrl}${config.syncStatusPath}`;
   const healthProbes = [];
+  const healthPayloadProbes = [];
   const syncStatusProbes = [];
 
   for (let attempt = 1; attempt <= config.probeAttempts; attempt += 1) {
@@ -246,7 +347,20 @@ async function runProbeSeries(config) {
       ...healthSample,
     });
 
-    const syncSample = await probeEndpoint(syncEndpoint, config.timeoutMs);
+    const healthPayloadSample = await probeEndpoint(healthPayloadEndpoint, config.timeoutMs, {
+      captureJson: true,
+      includeHeaders: WATCHDOG_PROBE_HEADERS,
+    });
+    healthPayloadProbes.push({
+      attempt,
+      endpoint: healthPayloadEndpoint,
+      ...healthPayloadSample,
+    });
+
+    const syncSample = await probeEndpoint(syncEndpoint, config.timeoutMs, {
+      captureJson: true,
+      includeHeaders: WATCHDOG_PROBE_HEADERS,
+    });
     syncStatusProbes.push({
       attempt,
       endpoint: syncEndpoint,
@@ -260,6 +374,7 @@ async function runProbeSeries(config) {
 
   return {
     healthProbes,
+    healthPayloadProbes,
     syncStatusProbes,
   };
 }
@@ -394,6 +509,225 @@ function readNullableNumericMetric(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function toSyncPayloadSnapshot(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  return {
+    status: typeof payload.status === "string" ? payload.status : null,
+    rowsCount: readNullableNumericMetric(payload.rowsCount),
+    accountsCount: readNullableNumericMetric(payload.accountsCount),
+    contactsCount: readNullableNumericMetric(payload.contactsCount),
+  };
+}
+
+function collectUniqueHeaderValues(samples, headerName) {
+  return Array.from(
+    new Set(
+      (Array.isArray(samples) ? samples : [])
+        .map((sample) => sample?.headers?.[headerName])
+        .filter((value) => typeof value === "string" && value.length > 0),
+    ),
+  );
+}
+
+function collectUniqueHealthRuntimeIdentityValues(samples, field) {
+  return Array.from(
+    new Set(
+      (Array.isArray(samples) ? samples : [])
+        .map((sample) => sample?.bodyJson?.runtimeIdentity?.[field])
+        .filter((value) => typeof value === "string" && value.length > 0),
+    ),
+  );
+}
+
+function evaluateHealthPayloadParity(healthPayloadProbes, syncStatusProbes) {
+  const checkedSamples = Math.min(
+    Array.isArray(healthPayloadProbes) ? healthPayloadProbes.length : 0,
+    Array.isArray(syncStatusProbes) ? syncStatusProbes.length : 0,
+  );
+  const anomalies = [];
+
+  for (let index = 0; index < checkedSamples; index += 1) {
+    const healthProbe = healthPayloadProbes[index];
+    const syncProbe = syncStatusProbes[index];
+    if (!healthProbe || !syncProbe) {
+      continue;
+    }
+    if (healthProbe.statusCode !== 200 || syncProbe.statusCode !== 200) {
+      continue;
+    }
+
+    const healthPayload =
+      healthProbe.bodyJson && typeof healthProbe.bodyJson === "object"
+        ? healthProbe.bodyJson
+        : null;
+    const syncPayload = syncProbe.bodyJson && typeof syncProbe.bodyJson === "object"
+      ? syncProbe.bodyJson
+      : null;
+    const syncSnapshot = toSyncPayloadSnapshot(syncPayload);
+    if (!syncSnapshot || !syncSnapshot.status) {
+      continue;
+    }
+
+    const healthSyncPayload =
+      healthPayload &&
+      Object.prototype.hasOwnProperty.call(healthPayload, "syncStatus")
+        ? healthPayload.syncStatus
+        : undefined;
+    const healthSyncSnapshot = toSyncPayloadSnapshot(healthSyncPayload);
+    const healthReadModelEnabled =
+      healthPayload && typeof healthPayload.readModelEnabled === "boolean"
+        ? healthPayload.readModelEnabled
+        : null;
+    const healthRuntimeIdentity =
+      healthPayload && healthPayload.runtimeIdentity && typeof healthPayload.runtimeIdentity === "object"
+        ? healthPayload.runtimeIdentity
+        : null;
+    const healthRuntimeInstanceId =
+      healthProbe.headers?.["x-mb-runtime-instance-id"] ||
+      (typeof healthRuntimeIdentity?.instanceId === "string"
+        ? healthRuntimeIdentity.instanceId
+        : null);
+    const syncRuntimeInstanceId = syncProbe.headers?.["x-mb-runtime-instance-id"] || null;
+    const healthRuntimeBootedAt =
+      healthProbe.headers?.["x-mb-runtime-booted-at"] ||
+      (typeof healthRuntimeIdentity?.bootedAt === "string" ? healthRuntimeIdentity.bootedAt : null);
+    const syncRuntimeBootedAt = syncProbe.headers?.["x-mb-runtime-booted-at"] || null;
+    const healthRuntimeServiceId =
+      healthProbe.headers?.["x-mb-runtime-service-id"] ||
+      (typeof healthRuntimeIdentity?.serviceId === "string" ? healthRuntimeIdentity.serviceId : null);
+    const syncRuntimeServiceId = syncProbe.headers?.["x-mb-runtime-service-id"] || null;
+    const healthRuntimeGitCommit =
+      healthProbe.headers?.["x-mb-runtime-git-commit"] ||
+      (typeof healthRuntimeIdentity?.gitCommit === "string" ? healthRuntimeIdentity.gitCommit : null);
+    const syncRuntimeGitCommit = syncProbe.headers?.["x-mb-runtime-git-commit"] || null;
+    const healthRuntimeGitBranch =
+      healthProbe.headers?.["x-mb-runtime-git-branch"] ||
+      (typeof healthRuntimeIdentity?.gitBranch === "string" ? healthRuntimeIdentity.gitBranch : null);
+    const syncRuntimeGitBranch = syncProbe.headers?.["x-mb-runtime-git-branch"] || null;
+    const syncHasCounts =
+      (syncSnapshot.rowsCount || 0) > 0 ||
+      (syncSnapshot.accountsCount || 0) > 0 ||
+      (syncSnapshot.contactsCount || 0) > 0;
+
+    let reason = null;
+    if (!healthPayload) {
+      reason = `health payload was not JSON (${healthProbe.bodyJsonParseError || "parse failed"})`;
+    } else if (healthSyncPayload === undefined) {
+      reason = "health payload missing syncStatus field";
+    } else if (healthSyncPayload === null) {
+      reason = "health payload syncStatus is null";
+    } else if (!healthSyncSnapshot || !healthSyncSnapshot.status) {
+      reason = "health payload syncStatus is malformed";
+    } else if (
+      healthSyncSnapshot.status !== syncSnapshot.status ||
+      healthSyncSnapshot.rowsCount !== syncSnapshot.rowsCount ||
+      healthSyncSnapshot.accountsCount !== syncSnapshot.accountsCount ||
+      healthSyncSnapshot.contactsCount !== syncSnapshot.contactsCount
+    ) {
+      reason = "health payload syncStatus diverges from /api/sync/status";
+    }
+
+    if (!reason && healthReadModelEnabled === false && syncHasCounts) {
+      reason = "health payload reports readModelEnabled=false while sync counters are populated";
+    }
+
+    if (reason) {
+      anomalies.push({
+        attempt: Number(healthProbe.attempt) || index + 1,
+        reason,
+        healthRndrId: healthProbe.headers?.["rndr-id"] || null,
+        syncRndrId: syncProbe.headers?.["rndr-id"] || null,
+        healthRuntimeInstanceId,
+        syncRuntimeInstanceId,
+        healthRuntimeBootedAt,
+        syncRuntimeBootedAt,
+        healthRuntimeServiceId,
+        syncRuntimeServiceId,
+        healthRuntimeGitCommit,
+        syncRuntimeGitCommit,
+        healthRuntimeGitBranch,
+        syncRuntimeGitBranch,
+        healthPayloadShapeHash: healthProbe.bodyShapeHash || null,
+        syncPayloadShapeHash: syncProbe.bodyShapeHash || null,
+        healthReadModelEnabled,
+        healthSyncStatus: healthSyncSnapshot,
+        syncStatus: syncSnapshot,
+      });
+    }
+  }
+
+  const healthPayloadShapeHashes = Array.from(
+    new Set(
+      (Array.isArray(healthPayloadProbes) ? healthPayloadProbes : [])
+        .map((sample) => sample?.bodyShapeHash)
+        .filter((hash) => typeof hash === "string" && hash.length > 0),
+    ),
+  );
+  const syncPayloadShapeHashes = Array.from(
+    new Set(
+      (Array.isArray(syncStatusProbes) ? syncStatusProbes : [])
+        .map((sample) => sample?.bodyShapeHash)
+        .filter((hash) => typeof hash === "string" && hash.length > 0),
+    ),
+  );
+  const healthRuntimeInstanceIds = Array.from(
+    new Set([
+      ...collectUniqueHeaderValues(healthPayloadProbes, "x-mb-runtime-instance-id"),
+      ...collectUniqueHealthRuntimeIdentityValues(healthPayloadProbes, "instanceId"),
+    ]),
+  );
+  const syncRuntimeInstanceIds = collectUniqueHeaderValues(syncStatusProbes, "x-mb-runtime-instance-id");
+  const healthRuntimeBootedAtValues = Array.from(
+    new Set([
+      ...collectUniqueHeaderValues(healthPayloadProbes, "x-mb-runtime-booted-at"),
+      ...collectUniqueHealthRuntimeIdentityValues(healthPayloadProbes, "bootedAt"),
+    ]),
+  );
+  const syncRuntimeBootedAtValues = collectUniqueHeaderValues(syncStatusProbes, "x-mb-runtime-booted-at");
+  const healthRuntimeServiceIds = Array.from(
+    new Set([
+      ...collectUniqueHeaderValues(healthPayloadProbes, "x-mb-runtime-service-id"),
+      ...collectUniqueHealthRuntimeIdentityValues(healthPayloadProbes, "serviceId"),
+    ]),
+  );
+  const syncRuntimeServiceIds = collectUniqueHeaderValues(syncStatusProbes, "x-mb-runtime-service-id");
+  const healthRuntimeGitCommits = Array.from(
+    new Set([
+      ...collectUniqueHeaderValues(healthPayloadProbes, "x-mb-runtime-git-commit"),
+      ...collectUniqueHealthRuntimeIdentityValues(healthPayloadProbes, "gitCommit"),
+    ]),
+  );
+  const syncRuntimeGitCommits = collectUniqueHeaderValues(syncStatusProbes, "x-mb-runtime-git-commit");
+  const healthRuntimeGitBranches = Array.from(
+    new Set([
+      ...collectUniqueHeaderValues(healthPayloadProbes, "x-mb-runtime-git-branch"),
+      ...collectUniqueHealthRuntimeIdentityValues(healthPayloadProbes, "gitBranch"),
+    ]),
+  );
+  const syncRuntimeGitBranches = collectUniqueHeaderValues(syncStatusProbes, "x-mb-runtime-git-branch");
+
+  return {
+    checkedSamples,
+    anomalyCount: anomalies.length,
+    anomalies,
+    healthPayloadShapeHashes,
+    syncPayloadShapeHashes,
+    healthRuntimeInstanceIds,
+    syncRuntimeInstanceIds,
+    healthRuntimeBootedAtValues,
+    syncRuntimeBootedAtValues,
+    healthRuntimeServiceIds,
+    syncRuntimeServiceIds,
+    healthRuntimeGitCommits,
+    syncRuntimeGitCommits,
+    healthRuntimeGitBranches,
+    syncRuntimeGitBranches,
+  };
+}
+
 function isRouteAnomalous(summary, p99ThresholdMs, status5xxThresholdCount) {
   if (!summary || typeof summary !== "object") {
     return false;
@@ -410,6 +744,7 @@ function isRouteAnomalous(summary, p99ThresholdMs, status5xxThresholdCount) {
 function buildIncidentPayload(input) {
   const requestLogWindowUtc = buildProbeWindow([
     input.healthProbes,
+    input.healthPayloadProbes,
     input.syncStatusProbes,
   ]);
 
@@ -434,6 +769,7 @@ function buildIncidentPayload(input) {
       probeAttempts: input.probeAttempts,
       probePauseMs: input.probePauseMs,
       healthcheckPath: input.healthcheckPath,
+      healthPayloadPath: input.healthPayloadPath,
       syncStatusPath: input.syncStatusPath,
       routeP99ThresholdMs: input.routeP99ThresholdMs,
       route5xxThresholdCount: input.route5xxThresholdCount,
@@ -449,6 +785,11 @@ function buildIncidentPayload(input) {
       healthz: {
         summary: input.healthSummary,
         probes: input.healthProbes,
+      },
+      healthPayload: {
+        path: input.healthPayloadPath,
+        parity: input.healthPayloadParity,
+        probes: input.healthPayloadProbes,
       },
       syncStatus: {
         summary: input.syncSummary,
@@ -512,6 +853,10 @@ async function main() {
     readOptionalEnv("HEALTH_SLO_HEALTHCHECK_PATH"),
     "/api/healthz",
   );
+  const healthPayloadPath = normalizePath(
+    readOptionalEnv("HEALTH_SLO_HEALTH_PAYLOAD_PATH"),
+    "/api/health",
+  );
   const syncStatusPath = normalizePath(
     readOptionalEnv("HEALTH_SLO_SYNC_STATUS_PATH"),
     "/api/sync/status",
@@ -574,6 +919,7 @@ async function main() {
   const config = {
     baseUrl,
     healthcheckPath,
+    healthPayloadPath,
     syncStatusPath,
     runtimeMetricsPath,
     timeoutMs,
@@ -599,9 +945,13 @@ async function main() {
     forceIncident: readBoolean("HEALTH_SLO_FORCE_INCIDENT", false),
   };
 
-  const { healthProbes, syncStatusProbes } = await runProbeSeries(config);
+  const { healthProbes, healthPayloadProbes, syncStatusProbes } = await runProbeSeries(config);
   const healthSummary = summarizeProbeSeries(healthProbes);
   const syncSummary = summarizeProbeSeries(syncStatusProbes);
+  const healthPayloadParity = evaluateHealthPayloadParity(
+    healthPayloadProbes,
+    syncStatusProbes,
+  );
   const maxConsecutiveTimeouts = computeMaxConsecutiveTimeouts(healthProbes);
   const timeoutBreach = maxConsecutiveTimeouts >= config.timeoutThreshold;
 
@@ -674,6 +1024,11 @@ async function main() {
       `sync-status 5xx count ${syncSummary.status5xxCount} >= ${config.route5xxThresholdCount}`,
     );
   }
+  if (healthPayloadParity.anomalyCount > 0) {
+    reasons.push(
+      `health payload parity regression detected on ${config.healthPayloadPath} (${healthPayloadParity.anomalyCount}/${healthPayloadParity.checkedSamples} samples)`,
+    );
+  }
   const eventLoopP99Breached = runtimePayload && runtimeLagP99Ms >= config.eventLoopP99ThresholdMs;
   const eventLoopMaxBreached = runtimePayload && runtimeLagMaxMs >= config.eventLoopMaxThresholdMs;
   const eventLoopMaxRecent =
@@ -730,6 +1085,14 @@ async function main() {
     timeoutThreshold: config.timeoutThreshold,
     maxConsecutiveTimeouts,
     healthz: healthSummary,
+    healthPayload: {
+      path: config.healthPayloadPath,
+      checkedSamples: healthPayloadParity.checkedSamples,
+      anomalyCount: healthPayloadParity.anomalyCount,
+      anomalies: healthPayloadParity.anomalies.slice(0, 3),
+      healthPayloadShapeHashes: healthPayloadParity.healthPayloadShapeHashes,
+      syncPayloadShapeHashes: healthPayloadParity.syncPayloadShapeHashes,
+    },
     syncStatus: syncSummary,
     runtime: {
       endpoint: runtimeMetrics.endpoint,
@@ -759,6 +1122,7 @@ async function main() {
     probeAttempts: config.probeAttempts,
     probePauseMs: config.probePauseMs,
     healthcheckPath: config.healthcheckPath,
+    healthPayloadPath: config.healthPayloadPath,
     syncStatusPath: config.syncStatusPath,
     routeP99ThresholdMs: config.routeP99ThresholdMs,
     route5xxThresholdCount: config.route5xxThresholdCount,
@@ -770,8 +1134,10 @@ async function main() {
     maxConsecutiveTimeouts,
     reasons,
     healthSummary,
+    healthPayloadParity,
     syncSummary,
     healthProbes,
+    healthPayloadProbes,
     syncStatusProbes,
     runtimeMetrics,
     render,

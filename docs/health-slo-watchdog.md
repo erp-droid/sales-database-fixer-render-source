@@ -14,10 +14,16 @@ Trigger condition:
 - Additional route anomaly trigger:
   - `/api/healthz` and `/api/sync/status` p99 >= `HEALTH_SLO_ROUTE_P99_THRESHOLD_MS`
   - `/api/healthz` and `/api/sync/status` 5xx count >= `HEALTH_SLO_ROUTE_5XX_THRESHOLD_COUNT`
+- Payload parity trigger (even on `200` responses):
+  - `/api/health` response payload must include a non-null `syncStatus` object
+  - `/api/health.syncStatus` must match `/api/sync/status` core fields (`status`, `rowsCount`, `accountsCount`, `contactsCount`)
+  - Optional path override: `HEALTH_SLO_HEALTH_PAYLOAD_PATH` (default `/api/health`)
 - Event-loop lag trigger:
   - `lagP99Ms >= HEALTH_SLO_EVENT_LOOP_P99_THRESHOLD_MS` OR
   - `lagMaxMs >= HEALTH_SLO_EVENT_LOOP_MAX_THRESHOLD_MS` with a recent spike age
     (`lagLastSpikeAgeMs <= HEALTH_SLO_EVENT_LOOP_MAX_SPIKE_AGE_MS`, default 6 minutes)
+  - Max-only lag spikes are suppressed by default when timeout and priority-route
+    impact signals are clean (`HEALTH_SLO_SUPPRESS_MAX_ONLY_EVENT_LOOP_SPIKES=true`).
   - Metrics source: `/api/runtime/health-slo` (exported by `server.mjs` runtime monitor)
   - Optional strict mode: `HEALTH_SLO_REQUIRE_RUNTIME_METRICS=true` makes missing runtime metrics a trigger condition.
 
@@ -29,6 +35,7 @@ When an incident is triggered, the payload includes:
 - UTC probe window (`from`, `to`) and per-attempt probe rows
 - Consecutive timeout count
 - Route p99/5xx summaries for `/api/healthz` and `/api/sync/status`
+- `/api/health` payload-parity evidence, sampled `rndr-id` headers, runtime identity headers (`x-mb-runtime-*`), and payload-shape hashes for `/api/health` and `/api/sync/status`
 - Runtime lag snapshot (`lagP99Ms`, `lagMaxMs`) from `/api/runtime/health-slo`
 - Render `server_failed` events from the recent lookback window (`HEALTH_SLO_RENDER_EVENT_LOOKBACK_MINUTES`)
 - Render event IDs and reason fields when available
