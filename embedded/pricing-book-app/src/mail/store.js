@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { Firestore } from "@google-cloud/firestore";
 
 import { config } from "../config.js";
@@ -12,9 +14,11 @@ import {
 
 let firestore = null;
 let memoryStore = null;
+let resolvedFirestoreProjectId = null;
+let resolvedFirestoreOptions = null;
 
 function useFirestore() {
-  return Boolean(cleanString(config.mail.firestoreProjectId));
+  return Boolean(resolveFirestoreProjectId());
 }
 
 function getFirestore() {
@@ -23,10 +27,119 @@ function getFirestore() {
   }
   if (!firestore) {
     firestore = new Firestore({
-      projectId: config.mail.firestoreProjectId || undefined
+      ...resolveFirestoreOptionsObject(),
+      preferRest: true
     });
   }
   return firestore;
+}
+
+function getServiceAccountKeyFile() {
+  return cleanString(
+    process.env.MAIL_FIRESTORE_CREDENTIALS_KEY_FILE ||
+      process.env.MAIL_GOOGLE_SERVICE_ACCOUNT_KEY_FILE ||
+      process.env.QUOTE_DOC_GOOGLE_SERVICE_ACCOUNT_KEY_FILE ||
+      process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE ||
+      process.env.GOOGLE_APPLICATION_CREDENTIALS
+  );
+}
+
+function getServiceAccountJson() {
+  return cleanString(
+    process.env.MAIL_FIRESTORE_CREDENTIALS_JSON ||
+      process.env.MAIL_GOOGLE_SERVICE_ACCOUNT_JSON ||
+      process.env.QUOTE_DOC_GOOGLE_SERVICE_ACCOUNT_JSON ||
+      process.env.GOOGLE_SERVICE_ACCOUNT_JSON ||
+      process.env.GCP_SERVICE_ACCOUNT_JSON
+  );
+}
+
+function readServiceAccountFile(path = "") {
+  const keyFile = cleanString(path);
+  if (!keyFile) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(readFileSync(keyFile, "utf8"));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function resolveFirestoreOptionsObject() {
+  if (resolvedFirestoreOptions) {
+    return { ...resolvedFirestoreOptions };
+  }
+
+  const explicitProjectId = cleanString(config.mail.firestoreProjectId);
+  const serviceAccountJson = getServiceAccountJson();
+  const serviceAccountKeyFile = getServiceAccountKeyFile();
+
+  let parsedCredentials = null;
+  if (serviceAccountJson) {
+    try {
+      parsedCredentials = JSON.parse(serviceAccountJson);
+    } catch (_error) {
+      parsedCredentials = null;
+    }
+  }
+
+  if (!parsedCredentials && serviceAccountKeyFile) {
+    parsedCredentials = readServiceAccountFile(serviceAccountKeyFile);
+  }
+
+  const inferredProjectId =
+    explicitProjectId ||
+    cleanString(parsedCredentials?.project_id || parsedCredentials?.projectId);
+  resolvedFirestoreProjectId = inferredProjectId;
+
+  const nextOptions = {};
+  if (inferredProjectId) {
+    nextOptions.projectId = inferredProjectId;
+  }
+
+  const clientEmail = cleanString(parsedCredentials?.client_email || parsedCredentials?.clientEmail);
+  const privateKey = String(parsedCredentials?.private_key || parsedCredentials?.privateKey || "")
+    .replace(/\\n/g, "\n")
+    .trim();
+  if (clientEmail && privateKey) {
+    nextOptions.credentials = {
+      client_email: clientEmail,
+      private_key: privateKey
+    };
+  } else if (
+    normalizeComparable(parsedCredentials?.type) === "authorized_user" &&
+    cleanString(parsedCredentials?.client_id) &&
+    cleanString(parsedCredentials?.client_secret) &&
+    cleanString(parsedCredentials?.refresh_token)
+  ) {
+    nextOptions.credentials = {
+      type: "authorized_user",
+      client_id: cleanString(parsedCredentials.client_id),
+      client_secret: cleanString(parsedCredentials.client_secret),
+      refresh_token: cleanString(parsedCredentials.refresh_token)
+    };
+    const quotaProjectId = cleanString(
+      parsedCredentials?.quota_project_id || parsedCredentials?.quotaProjectId
+    );
+    if (quotaProjectId) {
+      nextOptions.credentials.quota_project_id = quotaProjectId;
+    }
+  } else if (serviceAccountKeyFile) {
+    nextOptions.keyFilename = serviceAccountKeyFile;
+  }
+
+  resolvedFirestoreOptions = nextOptions;
+  return { ...nextOptions };
+}
+
+function resolveFirestoreProjectId() {
+  if (resolvedFirestoreProjectId !== null) {
+    return resolvedFirestoreProjectId;
+  }
+  resolveFirestoreOptionsObject();
+  return resolvedFirestoreProjectId || "";
 }
 
 function getMemoryStore() {

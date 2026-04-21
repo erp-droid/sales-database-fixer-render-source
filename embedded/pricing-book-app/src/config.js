@@ -85,6 +85,23 @@ function parseEntityPath(raw) {
   };
 }
 
+function normalizeMountPath(raw, fallback = "/quotes") {
+  const text = cleanString(raw) || fallback;
+  const prefixed = text.startsWith("/") ? text : `/${text}`;
+  const withoutTrailingSlash = prefixed.replace(/\/+$/, "");
+  return withoutTrailingSlash || fallback;
+}
+
+function buildDefaultMailOauthRedirectUrl() {
+  const appBaseUrl = cleanString(env.APP_BASE_URL);
+  if (!appBaseUrl) {
+    return "";
+  }
+
+  const mountPath = normalizeMountPath(env.MBQ_BASE_PATH, "/quotes");
+  return `${appBaseUrl.replace(/\/$/, "")}${mountPath}/api/mail/oauth/callback`;
+}
+
 const opportunityAttributes = parseOpportunityAttributes(env.ACU_OPP_ATTRIBUTES_JSON);
 const parsedAcumaticaEntityPath = parseEntityPath(env.ACUMATICA_ENTITY_PATH);
 
@@ -223,11 +240,19 @@ export const config = {
       env.MAIL_PROXY_SHARED_SECRET ||
       env.AUTH_TOKEN_SECRET ||
       "mail-local-secret",
-    oauthClientId: env.GOOGLE_OAUTH_CLIENT_ID || "",
-    oauthClientSecret: env.GOOGLE_OAUTH_CLIENT_SECRET || "",
-    oauthRedirectUrl: env.MBQ_GOOGLE_OAUTH_REDIRECT_URL || env.GOOGLE_OAUTH_REDIRECT_URL || "",
+    oauthClientId: env.GOOGLE_OAUTH_CLIENT_ID || env.GOOGLE_CLIENT_ID || "",
+    oauthClientSecret: env.GOOGLE_OAUTH_CLIENT_SECRET || env.GOOGLE_CLIENT_SECRET || "",
+    oauthRedirectUrl:
+      env.MBQ_GOOGLE_OAUTH_REDIRECT_URL ||
+      env.GOOGLE_OAUTH_REDIRECT_URL ||
+      buildDefaultMailOauthRedirectUrl(),
     allowedDomain: env.GOOGLE_OAUTH_ALLOWED_DOMAIN || "meadowb.com",
-    firestoreProjectId: env.GOOGLE_FIRESTORE_PROJECT_ID || "",
+    firestoreProjectId:
+      env.MAIL_FIRESTORE_PROJECT_ID ||
+      env.GOOGLE_FIRESTORE_PROJECT_ID ||
+      env.FIREBASE_PROJECT_ID ||
+      env.ESTIMATE_LIBRARY_FIRESTORE_PROJECT_ID ||
+      "",
     pubsubTopic: env.GMAIL_PUBSUB_TOPIC || "",
     watchLabelIds: String(env.GMAIL_WATCH_LABEL_IDS || "INBOX,SENT,DRAFT")
       .split(",")
