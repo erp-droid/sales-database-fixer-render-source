@@ -242,6 +242,30 @@ function normalizeMountPath(value: string | null | undefined, fallback = "/quote
   return prefixed === "/" ? fallback : prefixed.replace(/\/+$/, "");
 }
 
+function resolveEmbeddedProxyBaseUrl(appBaseUrl: string): string {
+  const explicitBaseUrl = cleanText(appBaseUrl);
+  if (explicitBaseUrl) {
+    return explicitBaseUrl;
+  }
+
+  const renderExternalUrl = cleanText(process.env.RENDER_EXTERNAL_URL);
+  if (renderExternalUrl) {
+    return renderExternalUrl;
+  }
+
+  const renderExternalHostname = cleanText(process.env.RENDER_EXTERNAL_HOSTNAME);
+  if (renderExternalHostname) {
+    return `https://${renderExternalHostname}`;
+  }
+
+  const runtimePort = cleanText(process.env.PORT);
+  if (/^\d+$/.test(runtimePort)) {
+    return `http://127.0.0.1:${runtimePort}`;
+  }
+
+  return "";
+}
+
 function isInternalMailboxEmail(email: string, internalDomain: string): boolean {
   const normalizedEmail = normalizeComparable(email);
   const normalizedDomain = normalizeComparable(internalDomain);
@@ -257,7 +281,7 @@ export function resolveDailyCallCoachingMailSendTarget(input: {
   transport: "embedded_proxy" | "mail_service";
 } {
   const env = getEnv();
-  const appBaseUrl = cleanText(env.APP_BASE_URL);
+  const appBaseUrl = resolveEmbeddedProxyBaseUrl(env.APP_BASE_URL ?? "");
   const canUseEmbeddedProxy =
     isInternalMailboxEmail(input.recipientEmail, env.MAIL_INTERNAL_DOMAIN) &&
     appBaseUrl.length > 0 &&

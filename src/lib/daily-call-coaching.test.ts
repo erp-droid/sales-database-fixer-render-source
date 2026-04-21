@@ -464,6 +464,55 @@ describe("daily-call-coaching", () => {
     expect(target.assertion.startsWith("mbmail.v1.")).toBe(true);
   });
 
+  it("routes internal coaching email through embedded proxy using runtime port when APP_BASE_URL is missing", () => {
+    const priorPort = process.env.PORT;
+    const priorRenderExternalUrl = process.env.RENDER_EXTERNAL_URL;
+    const priorRenderExternalHostname = process.env.RENDER_EXTERNAL_HOSTNAME;
+
+    process.env.PORT = "4123";
+    delete process.env.RENDER_EXTERNAL_URL;
+    delete process.env.RENDER_EXTERNAL_HOSTNAME;
+
+    const baselineEnv = getEnvMock();
+    getEnvMock.mockReturnValue({
+      ...baselineEnv,
+      APP_BASE_URL: undefined,
+    });
+
+    try {
+      const target = resolveDailyCallCoachingMailSendTarget({
+        recipientEmail: "stita@meadowb.com",
+        sender: {
+          loginName: "jserrano",
+          displayName: "Jorge Serrano",
+          email: "jserrano@meadowb.com",
+        },
+      });
+
+      expect(target.transport).toBe("embedded_proxy");
+      expect(target.url).toBe("http://127.0.0.1:4123/quotes/api/mail/messages/send");
+      expect(target.assertion.startsWith("mbmail.v1.")).toBe(true);
+    } finally {
+      if (priorPort === undefined) {
+        delete process.env.PORT;
+      } else {
+        process.env.PORT = priorPort;
+      }
+
+      if (priorRenderExternalUrl === undefined) {
+        delete process.env.RENDER_EXTERNAL_URL;
+      } else {
+        process.env.RENDER_EXTERNAL_URL = priorRenderExternalUrl;
+      }
+
+      if (priorRenderExternalHostname === undefined) {
+        delete process.env.RENDER_EXTERNAL_HOSTNAME;
+      } else {
+        process.env.RENDER_EXTERNAL_HOSTNAME = priorRenderExternalHostname;
+      }
+    }
+  });
+
   it("keeps external coaching email on the configured mail service", () => {
     const target = resolveDailyCallCoachingMailSendTarget({
       recipientEmail: "preview@example.com",
