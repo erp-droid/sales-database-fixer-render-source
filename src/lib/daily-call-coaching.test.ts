@@ -402,8 +402,25 @@ describe("daily-call-coaching", () => {
     );
   });
 
+  it("allows retry-failed-only runs to retry failed recipients", () => {
+    expect(
+      getDailyCallCoachingExistingSkipDetail({
+        status: "failed",
+        retryFailedOnly: true,
+      }),
+    ).toBeNull();
+  });
+
   it("suppresses automatic retries while a send attempt is still pending", () => {
     expect(getDailyCallCoachingExistingSkipDetail({ status: "sending" })).toBe(
+      "Previous send attempt is still pending verification. Automatic retry is suppressed to avoid duplicate coach emails.",
+    );
+    expect(
+      getDailyCallCoachingExistingSkipDetail({
+        status: "sending",
+        retryFailedOnly: true,
+      }),
+    ).toBe(
       "Previous send attempt is still pending verification. Automatic retry is suppressed to avoid duplicate coach emails.",
     );
   });

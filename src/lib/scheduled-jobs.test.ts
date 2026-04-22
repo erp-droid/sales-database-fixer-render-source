@@ -28,6 +28,17 @@ describe("scheduled-jobs", () => {
     expect(result).toBe("2026-04-09");
   });
 
+  it("targets the current local day at the exact call-sync schedule minute", () => {
+    const result = resolveScheduledCallActivityTargetDate(
+      new Date("2026-04-09T21:00:00.000Z"),
+      "America/Toronto",
+      17,
+      0,
+    );
+
+    expect(result).toBe("2026-04-09");
+  });
+
   it("does not mark daily coaching due before the local schedule window", () => {
     const result = resolveScheduledDailyCallCoachingReportDate(
       new Date("2026-04-09T10:30:00.000Z"),
@@ -46,6 +57,21 @@ describe("scheduled-jobs", () => {
   it("marks daily coaching due after the local schedule window", () => {
     const result = resolveScheduledDailyCallCoachingReportDate(
       new Date("2026-04-09T12:30:00.000Z"),
+      "America/Toronto",
+      7,
+      0,
+      1,
+    );
+
+    expect(result).toEqual({
+      due: true,
+      reportDate: "2026-04-08",
+    });
+  });
+
+  it("marks daily coaching due at the exact local schedule minute", () => {
+    const result = resolveScheduledDailyCallCoachingReportDate(
+      new Date("2026-04-09T11:00:00.000Z"),
       "America/Toronto",
       7,
       0,

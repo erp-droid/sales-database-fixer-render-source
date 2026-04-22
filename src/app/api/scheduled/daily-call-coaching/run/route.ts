@@ -114,6 +114,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const result = await runDailyCallCoaching({
       reportDate: resolved.reportDate,
+      retryFailedOnly: true,
     });
 
     const expectedLogins = pickSubjectLogins(resolved.reportDate, timeZone);
@@ -121,14 +122,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       result.items.map((item) => item.recipientEmail.trim().toLowerCase()).filter(Boolean),
     );
     const failedItems = result.items.filter((item) => item.status === "failed");
+    const suppressedRetryItems = result.items.filter(
+      (item) => item.status === "skipped" && /Automatic retry is suppressed/i.test(item.detail),
+    );
 
-    if (!result.dataCoverage.complete || failedItems.length > 0) {
+    if (!result.dataCoverage.complete || failedItems.length > 0 || suppressedRetryItems.length > 0) {
       const detail = [
         `Scheduled daily coaching failed for ${resolved.reportDate}.`,
         `Coverage status: ${result.dataCoverage.status}.`,
         result.dataCoverage.detail,
         failedItems.length > 0
           ? `Failed recipients: ${failedItems.map((item) => item.recipientEmail).join(", ")}.`
+          : null,
+        suppressedRetryItems.length > 0
+          ? `Suppressed retries: ${suppressedRetryItems.map((item) => item.recipientEmail).join(", ")}.`
           : null,
       ]
         .filter(Boolean)

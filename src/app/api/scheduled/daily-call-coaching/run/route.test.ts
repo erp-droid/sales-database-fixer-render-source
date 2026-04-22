@@ -111,6 +111,7 @@ describe("POST /api/scheduled/daily-call-coaching/run", () => {
     expect(payload.reportDate).toBe("2026-04-12");
     expect(runDailyCallCoaching).toHaveBeenCalledWith({
       reportDate: "2026-04-12",
+      retryFailedOnly: true,
     });
     expect(writeScheduledJobRun).toHaveBeenNthCalledWith(
       1,
@@ -128,6 +129,25 @@ describe("POST /api/scheduled/daily-call-coaching/run", () => {
         status: "completed",
       }),
     );
+  });
+
+  it("treats the exact 7:00 AM local boundary as due", async () => {
+    vi.setSystemTime(new Date("2026-04-13T11:00:00.000Z"));
+    const { POST } = await import("@/app/api/scheduled/daily-call-coaching/run/route");
+
+    const response = await POST(buildRequest());
+    const payload = (await response.json()) as {
+      status: string;
+      reportDate: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.status).toBe("completed");
+    expect(payload.reportDate).toBe("2026-04-12");
+    expect(runDailyCallCoaching).toHaveBeenCalledWith({
+      reportDate: "2026-04-12",
+      retryFailedOnly: true,
+    });
   });
 
   it("skips a report date that already completed", async () => {
@@ -170,6 +190,45 @@ describe("POST /api/scheduled/daily-call-coaching/run", () => {
     expect(response.status).toBe(500);
     expect(payload.status).toBe("failed");
     expect(payload.detail).toContain("invalid delivery set");
+    expect(writeScheduledJobRun).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        jobName: "daily_call_coaching",
+        windowKey: "2026-04-12",
+        status: "failed",
+      }),
+    );
+  });
+
+  it("fails when a recipient remains suppressed after a previous ambiguous send attempt", async () => {
+    vi.setSystemTime(new Date("2026-04-13T11:30:00.000Z"));
+    runDailyCallCoaching.mockResolvedValue({
+      dataCoverage: {
+        complete: true,
+        status: "complete",
+        detail: "Coverage complete.",
+      },
+      items: [
+        {
+          subjectLoginName: "jserrano",
+          recipientEmail: "jserrano@meadowb.com",
+          status: "skipped",
+          detail: "Previous send attempt is still pending verification. Automatic retry is suppressed to avoid duplicate coach emails.",
+        },
+      ],
+    });
+
+    const { POST } = await import("@/app/api/scheduled/daily-call-coaching/run/route");
+
+    const response = await POST(buildRequest());
+    const payload = (await response.json()) as {
+      status: string;
+      detail: string;
+    };
+
+    expect(response.status).toBe(500);
+    expect(payload.status).toBe("failed");
+    expect(payload.detail).toContain("Suppressed retries");
     expect(writeScheduledJobRun).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({

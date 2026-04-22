@@ -187,8 +187,13 @@ type DailyCallSessionRecord = ReturnType<typeof readCallSessions>[number];
 export function getDailyCallCoachingExistingSkipDetail(input: {
   status: string | null | undefined;
   force?: boolean;
+  retryFailedOnly?: boolean;
 }): string | null {
   if (input.force) {
+    return null;
+  }
+
+  if (input.retryFailedOnly && input.status === "failed") {
     return null;
   }
 
@@ -2158,6 +2163,7 @@ export async function runDailyCallCoaching(options?: {
   previewRecipientLoginName?: string | null;
   previewRecipientEmail?: string | null;
   force?: boolean;
+  retryFailedOnly?: boolean;
 }): Promise<DailyCallCoachingRunResult> {
   const env = getEnv();
   const reportDate =
@@ -2218,6 +2224,7 @@ export async function runDailyCallCoaching(options?: {
     const existingSkipDetail = getDailyCallCoachingExistingSkipDetail({
       status: existingForRecipient?.status,
       force: options?.force,
+      retryFailedOnly: options?.retryFailedOnly,
     });
     if (existingSkipDetail) {
       items.push({
