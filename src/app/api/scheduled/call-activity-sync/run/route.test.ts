@@ -57,6 +57,8 @@ describe("POST /api/scheduled/call-activity-sync/run", () => {
     process.env.CALL_ACTIVITY_SYNC_SCHEDULE_MINUTE = "0";
     process.env.CALL_ACTIVITY_SYNC_BATCH_SIZE = "5";
     process.env.CALL_ACTIVITY_SYNC_MAX_BATCHES_PER_WINDOW = "10";
+    process.env.CALL_ACTIVITY_SYNC_RUNTIME_CAP_MS = "45000";
+    process.env.CALL_ACTIVITY_SYNC_REFRESH_BEFORE_RUN = "true";
     process.env.CALL_ACTIVITY_SYNC_SECRET = "test-call-activity-sync-secret";
 
     withServiceAcumaticaSession.mockImplementation(
@@ -161,5 +163,64 @@ describe("POST /api/scheduled/call-activity-sync/run", () => {
     expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
     expect(runDueCallActivitySyncJobs).not.toHaveBeenCalled();
     expect(writeScheduledJobRun).not.toHaveBeenCalled();
+  });
+
+  it("returns deferred when runtime cap is hit before the window finishes", async () => {
+    process.env.CALL_ACTIVITY_SYNC_RUNTIME_CAP_MS = "5000";
+    runDueCallActivitySyncJobs.mockImplementation(async () => {
+      vi.advanceTimersByTime(6000);
+      return {
+        processedCount: 1,
+        syncedCount: 1,
+        failedCount: 0,
+        skippedCount: 0,
+        remainingCount: 3,
+        completed: false,
+      };
+    });
+
+    const { POST } = await import("@/app/api/scheduled/call-activity-sync/run/route");
+
+    const response = await POST(buildRequest());
+    const payload = (await response.json()) as {
+      status: string;
+      detail: string;
+      runtime?: {
+        capMs: number;
+        elapsedMs: number;
+      };
+    };
+
+    expect(response.status).toBe(202);
+    expect(payload.status).toBe("deferred");
+    expect(payload.detail).toContain("runtime cap");
+    expect(payload.runtime?.capMs).toBe(5000);
+    expect(runDueCallActivitySyncJobs).toHaveBeenCalledTimes(1);
+    expect(writeScheduledJobRun).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        jobName: "call_activity_sync",
+        windowKey: "2026-04-13",
+        status: "running",
+      }),
+    );
+  });
+
+  it("can skip refresh and still complete using existing ingest state", async () => {
+    process.env.CALL_ACTIVITY_SYNC_REFRESH_BEFORE_RUN = "false";
+    readCallIngestState.mockReturnValue({
+      lastRecentSyncAt: null,
+      latestSeenStartTime: "2026-04-13T20:45:00.000Z",
+      lastError: null,
+    });
+
+    const { POST } = await import("@/app/api/scheduled/call-activity-sync/run/route");
+
+    const response = await POST(buildRequest());
+    const payload = (await response.json()) as { status: string };
+
+    expect(response.status).toBe(200);
+    expect(payload.status).toBe("completed");
+    expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
   });
 });
