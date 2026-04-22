@@ -95,7 +95,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       300_000,
     );
     const batchLimit = readBoundedInteger(process.env.CALL_ACTIVITY_SYNC_BATCH_SIZE, 5, 1, 25);
-    const refreshBeforeRun = readBooleanFlag(process.env.CALL_ACTIVITY_SYNC_REFRESH_BEFORE_RUN, true);
+    const refreshBeforeRun = readBooleanFlag(process.env.CALL_ACTIVITY_SYNC_REFRESH_BEFORE_RUN, false);
     const force = readForceFlag(request);
     const startedAtMs = Date.now();
     const targetDateKey =
