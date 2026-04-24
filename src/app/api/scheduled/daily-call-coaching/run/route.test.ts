@@ -372,6 +372,52 @@ describe("POST /api/scheduled/daily-call-coaching/run", () => {
     );
   });
 
+  it("completes with warnings when call import coverage is still postcall_pending", async () => {
+    vi.setSystemTime(new Date("2026-04-13T11:30:00.000Z"));
+    runDailyCallCoaching.mockResolvedValue({
+      dataCoverage: {
+        complete: false,
+        status: "postcall_pending",
+        detail:
+          "Call import is complete for 2026-04-12. 12 transcript/activity job(s) are still pending.",
+      },
+      items: [
+        {
+          subjectLoginName: "jserrano",
+          recipientEmail: "jserrano@meadowb.com",
+          status: "sent",
+          detail: "Sent.",
+          requiredCcEmail: "jserrano@meadowb.com",
+          ccConfirmed: true,
+          ccConfirmationDetail: "primary_recipient",
+          ccRecipients: [],
+        },
+      ],
+    });
+
+    const { POST } = await import("@/app/api/scheduled/daily-call-coaching/run/route");
+    const response = await POST(buildRequest());
+    const payload = (await response.json()) as {
+      status: string;
+      warnings: string[];
+      detail: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.status).toBe("completed_with_warnings");
+    expect(payload.warnings.length).toBeGreaterThan(0);
+    expect(payload.warnings[0]).toContain("Coverage is postcall_pending");
+    expect(payload.detail).toContain("Warnings:");
+    expect(writeScheduledJobRun).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        jobName: "daily_call_coaching",
+        windowKey: "2026-04-12",
+        status: "completed",
+      }),
+    );
+  });
+
   it("fails when the delivery set does not match the canonical rep count", async () => {
     vi.setSystemTime(new Date("2026-04-13T11:30:00.000Z"));
     pickSubjectLogins.mockReturnValue(["jserrano", "jsettle"]);
@@ -397,7 +443,7 @@ describe("POST /api/scheduled/daily-call-coaching/run", () => {
     );
   });
 
-  it("fails when a recipient remains suppressed after a previous ambiguous send attempt", async () => {
+  it("completes with warnings when a recipient remains suppressed after a previous ambiguous send attempt", async () => {
     vi.setSystemTime(new Date("2026-04-13T11:30:00.000Z"));
     runDailyCallCoaching.mockResolvedValue({
       dataCoverage: {
@@ -425,17 +471,20 @@ describe("POST /api/scheduled/daily-call-coaching/run", () => {
     const payload = (await response.json()) as {
       status: string;
       detail: string;
+      warnings: string[];
     };
 
-    expect(response.status).toBe(500);
-    expect(payload.status).toBe("failed");
+    expect(response.status).toBe(200);
+    expect(payload.status).toBe("completed_with_warnings");
+    expect(payload.warnings.length).toBeGreaterThan(0);
+    expect(payload.warnings[0]).toContain("Suppressed retries");
     expect(payload.detail).toContain("Suppressed retries");
     expect(writeScheduledJobRun).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         jobName: "daily_call_coaching",
         windowKey: "2026-04-12",
-        status: "failed",
+        status: "completed",
       }),
     );
   });

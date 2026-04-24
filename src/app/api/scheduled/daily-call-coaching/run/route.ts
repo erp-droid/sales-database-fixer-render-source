@@ -286,11 +286,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const missingCcItems = evidence.items.filter(
       (item) => item.status === "sent" && !item.ccConfirmed,
     );
+    const hasBlockingCoverage =
+      result.dataCoverage.status === "call_import_missing" ||
+      result.dataCoverage.status === "call_import_error" ||
+      result.dataCoverage.status === "call_import_stale";
+    const hasCoverageWarning = !result.dataCoverage.complete && !hasBlockingCoverage;
 
     if (
-      !result.dataCoverage.complete ||
+      hasBlockingCoverage ||
       failedItems.length > 0 ||
-      suppressedRetryItems.length > 0 ||
       missingCcItems.length > 0
     ) {
       const detail = [
@@ -370,6 +374,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    const warnings: string[] = [];
+    if (hasCoverageWarning) {
+      warnings.push(`Coverage is ${result.dataCoverage.status}: ${result.dataCoverage.detail}`);
+    }
+    if (suppressedRetryItems.length > 0) {
+      warnings.push(
+        `Suppressed retries (not resent): ${suppressedRetryItems.map((item) => item.recipientEmail).join(", ")}.`,
+      );
+    }
+
     const detail = [
       `Scheduled daily coaching completed for ${resolved.reportDate}.`,
       `Expected reps: ${expectedLogins.length}.`,
@@ -378,6 +392,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       `Skipped: ${evidence.skippedCount}.`,
       `Failed: ${evidence.failedCount}.`,
       `CC confirmed: ${evidence.ccConfirmedCount}.`,
+      warnings.length > 0 ? `Warnings: ${warnings.join(" ")}` : null,
     ].join(" ");
     const run = writeScheduledJobRun({
       jobName: "daily_call_coaching",
@@ -388,11 +403,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     return NextResponse.json({
       ok: true,
-      status: "completed",
+      status: warnings.length > 0 ? "completed_with_warnings" : "completed",
       reportDate: resolved.reportDate,
       detail,
       scheduledRun: run,
       evidence,
+      warnings,
       expectedLogins,
       result,
     });
