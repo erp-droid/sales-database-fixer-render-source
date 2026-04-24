@@ -20,17 +20,17 @@ import { readCallSessions } from "@/lib/call-analytics/sessionize";
 import type { CallIngestState } from "@/lib/call-analytics/types";
 import {
   buildMailProxyAssertion,
-  buildMailServiceAssertion,
   ensureMailServiceConfigured,
 } from "@/lib/mail-auth";
 import { getReadModelDb } from "@/lib/read-model/db";
-import type { MailComposePayload, MailRecipient } from "@/types/mail-compose";
+import type { MailComposePayload, MailRecipient, MailSendResponse } from "@/types/mail-compose";
 
 const DAILY_COACHING_MODEL_FALLBACK = "gpt-4o-mini";
 const MAX_MODEL_CALLS = 40;
 const MAX_TRANSCRIPT_CHARS_PER_CALL = 1_200;
 const OPENAI_COACHING_TIMEOUT_MS = 25_000;
 const MAIL_SEND_TIMEOUT_MS = 60_000;
+const DAILY_COACHING_REQUIRED_CC_EMAIL = "jserrano@meadowb.com";
 
 type DailyCallCoachingStoredStatus = "sending" | "sent" | "skipped" | "failed";
 
@@ -135,6 +135,10 @@ export type DailyCallCoachingRunItem = {
   analyzedCallCount: number;
   transcriptCallCount: number;
   subjectLine: string | null;
+  requiredCcEmail: string;
+  ccConfirmed: boolean;
+  ccConfirmationDetail: "cc_header" | "primary_recipient" | "not_sent";
+  ccRecipients: string[];
 };
 
 export type DailyCallCoachingCoverage = {
@@ -162,6 +166,13 @@ type InternalMailboxProfile = {
   displayName: string;
   email: string;
   contactId: number | null;
+};
+
+type DailyCallCoachingDeliveryConfirmation = {
+  requiredCcEmail: string;
+  ccConfirmed: true;
+  ccConfirmationDetail: "cc_header" | "primary_recipient";
+  ccRecipients: string[];
 };
 
 type StoredDailyCallCoachingRow = {
@@ -237,14 +248,37 @@ function cleanText(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
+function readBooleanFlag(value: string | null | undefined): boolean {
+  const normalized = cleanText(value).toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
 function normalizeComparable(value: string | null | undefined): string {
   return cleanText(value).toLowerCase();
+}
+
+function readRequiredDailyCoachingCcEmail(): string {
+  const normalized = normalizeComparable(DAILY_COACHING_REQUIRED_CC_EMAIL);
+  if (!normalized) {
+    throw new Error("A required daily coaching CC email must be configured.");
+  }
+  return normalized;
+}
+
+function collectRecipientEmails(recipients: MailRecipient[]): string[] {
+  return recipients
+    .map((recipient) => normalizeComparable(recipient.email))
+    .filter(Boolean);
 }
 
 function normalizeMountPath(value: string | null | undefined, fallback = "/quotes"): string {
   const raw = cleanText(value) || fallback;
   const prefixed = raw.startsWith("/") ? raw : `/${raw}`;
   return prefixed === "/" ? fallback : prefixed.replace(/\/+$/, "");
+}
+
+function buildMailMessagesSendUrl(baseUrl: string, mountPath: string): string {
+  return `${baseUrl.replace(/\/$/, "")}${mountPath}/api/mail/messages/send`;
 }
 
 function resolveEmbeddedProxyBaseUrl(appBaseUrl: string): string {
@@ -280,12 +314,37 @@ function isInternalMailboxEmail(email: string, internalDomain: string): boolean 
 export function resolveDailyCallCoachingMailSendTarget(input: {
   recipientEmail: string;
   sender: Pick<InternalMailboxProfile, "loginName" | "displayName" | "email">;
+  forceTransport?: "mail_service";
 }): {
   url: string;
   assertion: string;
   transport: "embedded_proxy" | "mail_service";
 } {
   const env = getEnv();
+  const mountPath = normalizeMountPath(process.env.MBQ_BASE_PATH, "/quotes");
+  const forceMailServiceViaEnv = readBooleanFlag(process.env.DAILY_CALL_COACHING_FORCE_MAIL_SERVICE);
+  const mailServiceTarget = (): {
+    url: string;
+    assertion: string;
+    transport: "mail_service";
+  } => {
+    const { serviceUrl } = ensureMailServiceConfigured();
+    return {
+      // The mail service routes are mounted under MBQ_BASE_PATH ("/quotes" by default).
+      url: buildMailMessagesSendUrl(serviceUrl, mountPath),
+      assertion: buildMailProxyAssertion({
+        loginName: input.sender.loginName,
+        senderEmail: input.sender.email,
+        displayName: input.sender.displayName,
+      }),
+      transport: "mail_service",
+    };
+  };
+
+  if (input.forceTransport === "mail_service" || forceMailServiceViaEnv) {
+    return mailServiceTarget();
+  }
+
   const appBaseUrl = resolveEmbeddedProxyBaseUrl(env.APP_BASE_URL ?? "");
   const hasEmbeddedProxyAssertionSecret =
     cleanText(env.MAIL_PROXY_SHARED_SECRET).length > 0 ||
@@ -296,9 +355,8 @@ export function resolveDailyCallCoachingMailSendTarget(input: {
     hasEmbeddedProxyAssertionSecret;
 
   if (canUseEmbeddedProxy) {
-    const mountPath = normalizeMountPath(process.env.MBQ_BASE_PATH, "/quotes");
     return {
-      url: `${appBaseUrl.replace(/\/$/, "")}${mountPath}/api/mail/messages/send`,
+      url: buildMailMessagesSendUrl(appBaseUrl, mountPath),
       assertion: buildMailProxyAssertion({
         loginName: input.sender.loginName,
         senderEmail: input.sender.email,
@@ -308,16 +366,7 @@ export function resolveDailyCallCoachingMailSendTarget(input: {
     };
   }
 
-  const { serviceUrl } = ensureMailServiceConfigured();
-  return {
-    url: `${serviceUrl.replace(/\/$/, "")}/api/mail/messages/send`,
-    assertion: buildMailServiceAssertion({
-      loginName: input.sender.loginName,
-      senderEmail: input.sender.email,
-      displayName: input.sender.displayName,
-    }),
-    transport: "mail_service",
-  };
+  return mailServiceTarget();
 }
 
 function escapeHtml(value: string): string {
@@ -331,6 +380,22 @@ function escapeHtml(value: string): string {
 
 function clampScore(value: number): number {
   return Math.max(1, Math.min(10, Math.round(value)));
+}
+
+function buildMailSendBodyPreview(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "(empty)";
+  }
+  return normalized.length > 220 ? `${normalized.slice(0, 220)}...` : normalized;
+}
+
+function isMailSendResponse(payload: unknown): payload is MailSendResponse {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  const record = payload as Record<string, unknown>;
+  return record.sent === true && typeof record.threadId === "string" && typeof record.messageId === "string";
 }
 
 function readDateParts(value: string, timeZone: string): {
@@ -1186,6 +1251,20 @@ async function resolveInternalMailboxProfile(input: {
   };
 }
 
+async function resolveRequiredDailyCoachingCcRecipient(
+  requiredCcEmail: string,
+): Promise<InternalMailboxProfile> {
+  const requiredCcLoginName = extractLoginNameFromEmail(requiredCcEmail);
+  if (!requiredCcLoginName) {
+    throw new Error(`Invalid daily coaching required CC email: ${requiredCcEmail}`);
+  }
+
+  return resolveInternalMailboxProfile({
+    loginName: requiredCcLoginName,
+    email: requiredCcEmail,
+  });
+}
+
 function buildDailyCallList(
   subjectLoginName: string,
   reportDate: string,
@@ -1916,8 +1995,16 @@ export function buildDailyCallCoachingMailPayload(
   report: DailyCallCoachingReport,
   recipient: InternalMailboxProfile,
   fallbackRecipientContactId: number | null = null,
+  ccRecipient: InternalMailboxProfile | null = null,
 ): MailComposePayload {
   const resolvedRecipientContactId = recipient.contactId ?? fallbackRecipientContactId ?? null;
+  const normalizedRecipientEmail = normalizeComparable(recipient.email);
+  const normalizedCcEmail = normalizeComparable(ccRecipient?.email);
+  const shouldCcRecipient = Boolean(
+    ccRecipient &&
+      normalizedCcEmail &&
+      normalizedCcEmail !== normalizedRecipientEmail,
+  );
   const previewBanner = report.previewMode
     ? `
       <div style="margin-bottom:20px; padding:14px 16px; border-radius:14px; background:#fff4e5; color:#9a3412; font-weight:600;">
@@ -2045,7 +2132,9 @@ export function buildDailyCallCoachingMailPayload(
     htmlBody,
     textBody,
     to: [buildMailRecipient(recipient, fallbackRecipientContactId)],
-    cc: [],
+    cc: shouldCcRecipient && ccRecipient
+      ? [buildMailRecipient(ccRecipient, ccRecipient.contactId ?? null)]
+      : [],
     bcc: [],
     linkedContact: {
       contactId: null,
@@ -2075,32 +2164,115 @@ async function sendDailyCallCoachingEmail(
   report: DailyCallCoachingReport,
   sender: InternalMailboxProfile,
   recipient: InternalMailboxProfile,
-): Promise<void> {
+  requiredCcRecipient: InternalMailboxProfile,
+): Promise<DailyCallCoachingDeliveryConfirmation> {
   const payload = buildDailyCallCoachingMailPayload(
     report,
     recipient,
     sender.contactId ?? null,
+    requiredCcRecipient,
   );
+  const requiredCcEmail = normalizeComparable(requiredCcRecipient.email);
+  const primaryRecipients = collectRecipientEmails(payload.to);
+  const ccRecipients = collectRecipientEmails(payload.cc);
+  const ccConfirmationDetail = primaryRecipients.includes(requiredCcEmail)
+    ? "primary_recipient"
+    : ccRecipients.includes(requiredCcEmail)
+      ? "cc_header"
+      : null;
+  if (!ccConfirmationDetail) {
+    throw new Error(
+      `Required coaching CC recipient ${requiredCcEmail} is missing from the outbound message.`,
+    );
+  }
+
+  const deliveryConfirmation: DailyCallCoachingDeliveryConfirmation = {
+    requiredCcEmail,
+    ccConfirmed: true,
+    ccConfirmationDetail,
+    ccRecipients,
+  };
+
   const target = resolveDailyCallCoachingMailSendTarget({
     recipientEmail: recipient.email,
     sender,
   });
 
-  const response = await fetchWithTimeout(target.url, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${target.assertion}`,
-      "Content-Type": "application/json",
-      "x-mb-skip-activity-sync": "1",
-    },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  }, MAIL_SEND_TIMEOUT_MS);
+  const sendThroughTarget = async (
+    activeTarget: ReturnType<typeof resolveDailyCallCoachingMailSendTarget>,
+  ): Promise<void> => {
+    const response = await fetchWithTimeout(activeTarget.url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${activeTarget.assertion}`,
+        "Content-Type": "application/json",
+        "x-mb-skip-activity-sync": "1",
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    }, MAIL_SEND_TIMEOUT_MS);
+    const rawBody = await response.text();
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Coaching email send failed (${response.status}): ${body || "Unknown error"}`);
+    if (!response.ok) {
+      throw new Error(
+        `Coaching email send failed (${response.status}, ${activeTarget.transport}): ${
+          buildMailSendBodyPreview(rawBody)
+        }`,
+      );
+    }
+
+    let parsedBody: unknown = null;
+    if (rawBody.trim().length > 0) {
+      try {
+        parsedBody = JSON.parse(rawBody);
+      } catch {
+        throw new Error(
+          `Coaching email send returned non-JSON success (${response.status}, ${activeTarget.transport}): ${
+            buildMailSendBodyPreview(rawBody)
+          }`,
+        );
+      }
+    }
+
+    if (!isMailSendResponse(parsedBody)) {
+      throw new Error(
+        `Coaching email send returned unexpected success payload (${response.status}, ${activeTarget.transport}): ${
+          buildMailSendBodyPreview(rawBody)
+        }`,
+      );
+    }
+
+    if (parsedBody.activitySyncStatus === "failed") {
+      throw new Error(
+        `Coaching email send reported activity sync failed (${activeTarget.transport}): ${
+          cleanText(parsedBody.activityError) || "Unknown activity sync error"
+        }`,
+      );
+    }
+  };
+
+  try {
+    await sendThroughTarget(target);
+    return deliveryConfirmation;
+  } catch (primaryError) {
+    if (target.transport !== "embedded_proxy") {
+      throw primaryError;
+    }
+
+    const fallbackTarget = resolveDailyCallCoachingMailSendTarget({
+      recipientEmail: recipient.email,
+      sender,
+      forceTransport: "mail_service",
+    });
+    try {
+      await sendThroughTarget(fallbackTarget);
+      return deliveryConfirmation;
+    } catch (fallbackError) {
+      throw new Error(
+        `Coaching email delivery failed after embedded proxy + mail service fallback. Primary: ${getErrorMessage(primaryError)} Fallback: ${getErrorMessage(fallbackError)}`,
+      );
+    }
   }
 }
 
@@ -2176,6 +2348,8 @@ export async function runDailyCallCoaching(options?: {
   const sender = await resolveInternalMailboxProfile({
     loginName: env.DAILY_CALL_COACHING_SENDER_LOGIN,
   });
+  const requiredCcEmail = readRequiredDailyCoachingCcEmail();
+  const requiredCcRecipient = await resolveRequiredDailyCoachingCcRecipient(requiredCcEmail);
   const snapshotState = readCallIngestState();
   const dataCoverage = buildDailyCallCoachingCoverage(
     reportDate,
@@ -2237,6 +2411,10 @@ export async function runDailyCallCoaching(options?: {
         analyzedCallCount: existingForRecipient?.analyzed_call_count ?? 0,
         transcriptCallCount: existingForRecipient?.transcript_call_count ?? 0,
         subjectLine: existingForRecipient?.subject_line ?? null,
+        requiredCcEmail,
+        ccConfirmed: false,
+        ccConfirmationDetail: "not_sent",
+        ccRecipients: [],
       });
       continue;
     }
@@ -2278,6 +2456,10 @@ export async function runDailyCallCoaching(options?: {
           analyzedCallCount: 0,
           transcriptCallCount: 0,
           subjectLine: null,
+          requiredCcEmail,
+          ccConfirmed: false,
+          ccConfirmationDetail: "not_sent",
+          ccRecipients: [],
         });
         continue;
       }
@@ -2298,7 +2480,12 @@ export async function runDailyCallCoaching(options?: {
         sentAt: null,
       });
 
-      await sendDailyCallCoachingEmail(report, sender, targetRecipient);
+      const deliveryConfirmation = await sendDailyCallCoachingEmail(
+        report,
+        sender,
+        targetRecipient,
+        requiredCcRecipient,
+      );
       writeDailyCallCoachingRow({
         reportDate,
         subjectLoginName,
@@ -2324,6 +2511,10 @@ export async function runDailyCallCoaching(options?: {
         analyzedCallCount: report.calls.length,
         transcriptCallCount: report.calls.filter((call) => call.analysisSource === "transcript").length,
         subjectLine: report.subjectLine,
+        requiredCcEmail: deliveryConfirmation.requiredCcEmail,
+        ccConfirmed: deliveryConfirmation.ccConfirmed,
+        ccConfirmationDetail: deliveryConfirmation.ccConfirmationDetail,
+        ccRecipients: deliveryConfirmation.ccRecipients,
       });
     } catch (error) {
       const message = getErrorMessage(error);
@@ -2354,6 +2545,10 @@ export async function runDailyCallCoaching(options?: {
         transcriptCallCount:
           report?.calls.filter((call) => call.analysisSource === "transcript").length ?? 0,
         subjectLine: report?.subjectLine ?? null,
+        requiredCcEmail,
+        ccConfirmed: false,
+        ccConfirmationDetail: "not_sent",
+        ccRecipients: [],
       });
     }
   }

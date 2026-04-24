@@ -13,13 +13,56 @@ import {
   writeScheduledJobRun,
 } from "@/lib/scheduled-jobs";
 
+type DeliveryEvidenceItem = {
+  subjectLoginName: string;
+  recipientEmail: string;
+  status: "sent" | "skipped" | "failed";
+  detail: string;
+  idempotencyKey: string;
+  deduped: boolean;
+  requiredCcEmail: string;
+  ccConfirmed: boolean;
+  ccConfirmationDetail: "cc_header" | "primary_recipient" | "not_sent";
+  ccRecipients: string[];
+};
+
+type DeliveryEvidence = {
+  reportDate: string;
+  recipientsTargeted: string[];
+  deliveredCount: number;
+  dedupedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  ccRequiredEmail: string | null;
+  ccConfirmedCount: number;
+  ccMissingCount: number;
+  ccMissingRecipients: Array<{
+    recipientEmail: string;
+    subjectLoginName: string;
+    idempotencyKey: string;
+    detail: string;
+  }>;
+  errors: Array<{
+    recipientEmail: string;
+    subjectLoginName: string;
+    idempotencyKey: string;
+    detail: string;
+  }>;
+  items: DeliveryEvidenceItem[];
+};
+
 function isInternalHost(request: NextRequest): boolean {
   const host = (request.headers.get("host") ?? "").trim().toLowerCase();
   return host.startsWith("127.0.0.1:") || host.startsWith("localhost:") || host === "127.0.0.1" || host === "localhost";
 }
 
+function readRuntimeEnv(name: string): string {
+  const runtimeProcess = globalThis.process as NodeJS.Process | undefined;
+  return String(runtimeProcess?.env?.[name] ?? "").trim();
+}
+
 function hasValidSecret(request: NextRequest): boolean {
-  const secret = process.env.DAILY_CALL_COACHING_SECRET?.trim() ?? "";
+  const secret = readRuntimeEnv("DAILY_CALL_COACHING_SECRET");
   if (!secret) {
     return false;
   }
@@ -56,6 +99,76 @@ function readOptionalReportDate(request: NextRequest): string | null {
 function readForceFlag(request: NextRequest): boolean {
   const raw = request.nextUrl.searchParams.get("force")?.trim().toLowerCase() ?? "";
   return raw === "1" || raw === "true" || raw === "yes";
+}
+
+function buildDailyCoachIdempotencyKey(reportDate: string, recipientEmail: string): string {
+  return `daily-coach:${reportDate}:${recipientEmail.trim().toLowerCase()}`;
+}
+
+function isDedupedItem(detail: string): boolean {
+  return (
+    /Already sent for this date and recipient\./i.test(detail) ||
+    /Already processed for this date and recipient\./i.test(detail)
+  );
+}
+
+function buildDeliveryEvidence(input: {
+  reportDate: string;
+  recipientsTargeted: string[];
+  items: Array<{
+    subjectLoginName: string;
+    recipientEmail: string;
+    status: "sent" | "skipped" | "failed";
+    detail: string;
+    requiredCcEmail: string;
+    ccConfirmed: boolean;
+    ccConfirmationDetail: "cc_header" | "primary_recipient" | "not_sent";
+    ccRecipients: string[];
+  }>;
+}): DeliveryEvidence {
+  const items: DeliveryEvidenceItem[] = input.items.map((item) => ({
+    subjectLoginName: item.subjectLoginName,
+    recipientEmail: item.recipientEmail,
+    status: item.status,
+    detail: item.detail,
+    idempotencyKey: buildDailyCoachIdempotencyKey(input.reportDate, item.recipientEmail),
+    deduped: item.status === "skipped" ? isDedupedItem(item.detail) : false,
+    requiredCcEmail: item.requiredCcEmail.trim().toLowerCase(),
+    ccConfirmed: item.status === "sent" ? item.ccConfirmed : false,
+    ccConfirmationDetail: item.status === "sent" ? item.ccConfirmationDetail : "not_sent",
+    ccRecipients: item.ccRecipients.map((email) => email.trim().toLowerCase()).filter(Boolean),
+  }));
+  const sentItems = items.filter((item) => item.status === "sent");
+  const ccMissingRecipients = sentItems
+    .filter((item) => !item.ccConfirmed)
+    .map((item) => ({
+      recipientEmail: item.recipientEmail,
+      subjectLoginName: item.subjectLoginName,
+      idempotencyKey: item.idempotencyKey,
+      detail: item.detail,
+    }));
+
+  return {
+    reportDate: input.reportDate,
+    recipientsTargeted: input.recipientsTargeted,
+    deliveredCount: sentItems.length,
+    dedupedCount: items.filter((item) => item.deduped).length,
+    skippedCount: items.filter((item) => item.status === "skipped").length,
+    failedCount: items.filter((item) => item.status === "failed").length,
+    ccRequiredEmail: items[0]?.requiredCcEmail ?? null,
+    ccConfirmedCount: sentItems.filter((item) => item.ccConfirmed).length,
+    ccMissingCount: ccMissingRecipients.length,
+    ccMissingRecipients,
+    errors: items
+      .filter((item) => item.status === "failed")
+      .map((item) => ({
+        recipientEmail: item.recipientEmail,
+        subjectLoginName: item.subjectLoginName,
+        idempotencyKey: item.idempotencyKey,
+        detail: item.detail,
+      })),
+    items,
+  };
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -105,6 +218,37 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       });
     }
 
+    const finalizedImport = force ? null : readScheduledJobRun("call_activity_sync", resolved.reportDate);
+    if (!force && finalizedImport?.status !== "completed") {
+      const detail = [
+        `Scheduled daily coaching is blocked for ${resolved.reportDate}.`,
+        "Prior-day 5:00 PM call-activity finalization is missing or incomplete.",
+      ].join(" ");
+      const scheduledRun = writeScheduledJobRun({
+        jobName: "daily_call_coaching",
+        windowKey: resolved.reportDate,
+        status: "failed",
+        detail,
+      });
+      return NextResponse.json(
+        {
+          ok: false,
+          status: "failed",
+          reportDate: resolved.reportDate,
+          detail,
+          scheduledRun,
+          prerequisite: {
+            callActivityFinalization: finalizedImport,
+          },
+          remediationSteps: [
+            `Run POST /api/scheduled/call-activity-sync/run?dateKey=${resolved.reportDate} and wait for status=completed.`,
+            `After finalization is completed, rerun POST /api/scheduled/daily-call-coaching/run?reportDate=${resolved.reportDate}.`,
+          ],
+        },
+        { status: 503 },
+      );
+    }
+
     writeScheduledJobRun({
       jobName: "daily_call_coaching",
       windowKey: resolved.reportDate,
@@ -121,12 +265,34 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const uniqueRecipients = new Set(
       result.items.map((item) => item.recipientEmail.trim().toLowerCase()).filter(Boolean),
     );
-    const failedItems = result.items.filter((item) => item.status === "failed");
-    const suppressedRetryItems = result.items.filter(
+    const evidence = buildDeliveryEvidence({
+      reportDate: resolved.reportDate,
+      recipientsTargeted: expectedLogins,
+      items: result.items.map((item) => ({
+        subjectLoginName: item.subjectLoginName,
+        recipientEmail: item.recipientEmail,
+        status: item.status,
+        detail: item.detail,
+        requiredCcEmail: item.requiredCcEmail,
+        ccConfirmed: item.ccConfirmed,
+        ccConfirmationDetail: item.ccConfirmationDetail,
+        ccRecipients: item.ccRecipients,
+      })),
+    });
+    const failedItems = evidence.items.filter((item) => item.status === "failed");
+    const suppressedRetryItems = evidence.items.filter(
       (item) => item.status === "skipped" && /Automatic retry is suppressed/i.test(item.detail),
     );
+    const missingCcItems = evidence.items.filter(
+      (item) => item.status === "sent" && !item.ccConfirmed,
+    );
 
-    if (!result.dataCoverage.complete || failedItems.length > 0 || suppressedRetryItems.length > 0) {
+    if (
+      !result.dataCoverage.complete ||
+      failedItems.length > 0 ||
+      suppressedRetryItems.length > 0 ||
+      missingCcItems.length > 0
+    ) {
       const detail = [
         `Scheduled daily coaching failed for ${resolved.reportDate}.`,
         `Coverage status: ${result.dataCoverage.status}.`,
@@ -134,8 +300,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         failedItems.length > 0
           ? `Failed recipients: ${failedItems.map((item) => item.recipientEmail).join(", ")}.`
           : null,
+        `Delivered: ${evidence.deliveredCount}.`,
+        `Deduped: ${evidence.dedupedCount}.`,
+        `CC confirmed: ${evidence.ccConfirmedCount}.`,
         suppressedRetryItems.length > 0
           ? `Suppressed retries: ${suppressedRetryItems.map((item) => item.recipientEmail).join(", ")}.`
+          : null,
+        missingCcItems.length > 0
+          ? `Required CC missing for: ${missingCcItems.map((item) => item.recipientEmail).join(", ")}.`
           : null,
       ]
         .filter(Boolean)
@@ -152,6 +324,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           status: "failed",
           reportDate: resolved.reportDate,
           detail,
+          evidence,
+          remediationSteps: [
+            `Inspect failed recipients using evidence.items/idempotency keys for ${resolved.reportDate}.`,
+            `Run npm run recover:daily-call-coaching -- --report-date ${resolved.reportDate} to rebuild and preview reports before retry.`,
+            `Confirm required CC (${evidence.ccRequiredEmail ?? "jserrano@meadowb.com"}) on all delivered messages before rerun.`,
+            `Rerun POST /api/scheduled/daily-call-coaching/run?reportDate=${resolved.reportDate}&force=1 once failures are resolved.`,
+          ],
           result,
         },
         { status: 500 },
@@ -164,6 +343,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         `Expected reps: ${expectedLogins.length}.`,
         `Reported items: ${result.items.length}.`,
         `Unique recipients: ${uniqueRecipients.size}.`,
+        `Delivered: ${evidence.deliveredCount}.`,
+        `Deduped: ${evidence.dedupedCount}.`,
       ].join(" ");
       writeScheduledJobRun({
         jobName: "daily_call_coaching",
@@ -177,6 +358,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           status: "failed",
           reportDate: resolved.reportDate,
           detail,
+          evidence,
+          remediationSteps: [
+            `Compare recipientsTargeted vs evidence.items for ${resolved.reportDate} and correct any roster mismatch.`,
+            `Rerun POST /api/scheduled/daily-call-coaching/run?reportDate=${resolved.reportDate}&force=1 after roster correction.`,
+          ],
           result,
           expectedLogins,
         },
@@ -187,8 +373,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const detail = [
       `Scheduled daily coaching completed for ${resolved.reportDate}.`,
       `Expected reps: ${expectedLogins.length}.`,
-      `Sent: ${result.items.filter((item) => item.status === "sent").length}.`,
-      `Skipped: ${result.items.filter((item) => item.status === "skipped").length}.`,
+      `Sent: ${evidence.deliveredCount}.`,
+      `Deduped: ${evidence.dedupedCount}.`,
+      `Skipped: ${evidence.skippedCount}.`,
+      `Failed: ${evidence.failedCount}.`,
+      `CC confirmed: ${evidence.ccConfirmedCount}.`,
     ].join(" ");
     const run = writeScheduledJobRun({
       jobName: "daily_call_coaching",
@@ -203,6 +392,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       reportDate: resolved.reportDate,
       detail,
       scheduledRun: run,
+      evidence,
       expectedLogins,
       result,
     });

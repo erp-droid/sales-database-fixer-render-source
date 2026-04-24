@@ -7,7 +7,6 @@ import {
   authenticateDashboardRefreshRequest,
   finalizeDashboardResponse,
 } from "@/lib/call-analytics/request";
-import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 
 type CallActivityRouteAuth =
@@ -24,8 +23,13 @@ function isInternalHost(request: NextRequest): boolean {
   return host.startsWith("127.0.0.1:") || host.startsWith("localhost:") || host === "127.0.0.1" || host === "localhost";
 }
 
+function readRuntimeEnv(name: string): string {
+  const runtimeProcess = globalThis.process as NodeJS.Process | undefined;
+  return String(runtimeProcess?.env?.[name] ?? "").trim();
+}
+
 function hasValidCallActivitySecret(request: NextRequest): boolean {
-  const secret = getEnv().CALL_ACTIVITY_SYNC_SECRET;
+  const secret = readRuntimeEnv("CALL_ACTIVITY_SYNC_SECRET");
   if (!secret) {
     return false;
   }

@@ -7,7 +7,6 @@ import {
   finalizeDashboardResponse,
 } from "@/lib/call-analytics/request";
 import { runDailyCallCoaching } from "@/lib/daily-call-coaching";
-import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { getReadModelDb } from "@/lib/read-model/db";
 
@@ -25,8 +24,13 @@ function isInternalHost(request: NextRequest): boolean {
   return host.startsWith("127.0.0.1:") || host.startsWith("localhost:") || host === "127.0.0.1" || host === "localhost";
 }
 
+function readRuntimeEnv(name: string): string {
+  const runtimeProcess = globalThis.process as NodeJS.Process | undefined;
+  return String(runtimeProcess?.env?.[name] ?? "").trim();
+}
+
 function hasValidDailyCallCoachingSecret(request: NextRequest): boolean {
-  const secret = getEnv().DAILY_CALL_COACHING_SECRET;
+  const secret = readRuntimeEnv("DAILY_CALL_COACHING_SECRET");
   if (!secret) {
     return false;
   }

@@ -18,8 +18,13 @@ function isInternalHost(request: NextRequest): boolean {
   return host.startsWith("127.0.0.1:") || host.startsWith("localhost:") || host === "127.0.0.1" || host === "localhost";
 }
 
+function readRuntimeEnv(name: string): string {
+  const runtimeProcess = globalThis.process as NodeJS.Process | undefined;
+  return String(runtimeProcess?.env?.[name] ?? "").trim();
+}
+
 function hasValidSecret(request: NextRequest): boolean {
-  const secret = process.env.CALL_ACTIVITY_SYNC_SECRET?.trim() ?? "";
+  const secret = readRuntimeEnv("CALL_ACTIVITY_SYNC_SECRET");
   if (!secret) {
     return false;
   }

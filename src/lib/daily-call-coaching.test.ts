@@ -466,6 +466,90 @@ describe("daily-call-coaching", () => {
     expect(payload.matchedContacts[0]?.email).toBe("stita@meadowb.com");
   });
 
+  it("adds the required CC recipient when the coach report goes to another rep", () => {
+    const report: DailyCallCoachingReport = {
+      reportDate: "2026-03-26",
+      subjectLoginName: "stita",
+      subjectDisplayName: "Samuel Tita",
+      recipientEmail: "stita@meadowb.com",
+      previewMode: false,
+      senderLoginName: "jserrano",
+      stats: buildDailyCallCoachingStats(SAMPLE_CALLS),
+      calls: SAMPLE_CALLS,
+      content: buildFallbackDailyCallCoachingContent({
+        subjectDisplayName: "Samuel Tita",
+        stats: buildDailyCallCoachingStats(SAMPLE_CALLS),
+        transcriptCallCount: 1,
+        calls: SAMPLE_CALLS,
+      }),
+      subjectLine: "Daily Call Coaching for Samuel Tita · Mar 26, 2026",
+    };
+
+    const payload = buildDailyCallCoachingMailPayload(
+      report,
+      {
+        loginName: "stita",
+        displayName: "Samuel Tita",
+        email: "stita@meadowb.com",
+        contactId: 147123,
+      },
+      null,
+      {
+        loginName: "jserrano",
+        displayName: "Jorge Serrano",
+        email: "jserrano@meadowb.com",
+        contactId: 157497,
+      },
+    );
+
+    expect(payload.to[0]?.email).toBe("stita@meadowb.com");
+    expect(payload.cc).toEqual([
+      expect.objectContaining({
+        email: "jserrano@meadowb.com",
+      }),
+    ]);
+  });
+
+  it("does not duplicate CC when the required CC mailbox is already the primary recipient", () => {
+    const report: DailyCallCoachingReport = {
+      reportDate: "2026-03-26",
+      subjectLoginName: "stita",
+      subjectDisplayName: "Samuel Tita",
+      recipientEmail: "jserrano@meadowb.com",
+      previewMode: true,
+      senderLoginName: "jserrano",
+      stats: buildDailyCallCoachingStats(SAMPLE_CALLS),
+      calls: SAMPLE_CALLS,
+      content: buildFallbackDailyCallCoachingContent({
+        subjectDisplayName: "Samuel Tita",
+        stats: buildDailyCallCoachingStats(SAMPLE_CALLS),
+        transcriptCallCount: 1,
+        calls: SAMPLE_CALLS,
+      }),
+      subjectLine: "[Preview] Daily Call Coaching for Samuel Tita · Mar 26, 2026",
+    };
+
+    const payload = buildDailyCallCoachingMailPayload(
+      report,
+      {
+        loginName: "jserrano",
+        displayName: "Jorge Serrano",
+        email: "jserrano@meadowb.com",
+        contactId: 157497,
+      },
+      null,
+      {
+        loginName: "jserrano",
+        displayName: "Jorge Serrano",
+        email: "jserrano@meadowb.com",
+        contactId: 157497,
+      },
+    );
+
+    expect(payload.to[0]?.email).toBe("jserrano@meadowb.com");
+    expect(payload.cc).toHaveLength(0);
+  });
+
   it("routes internal coaching email through the embedded mail proxy when available", () => {
     const target = resolveDailyCallCoachingMailSendTarget({
       recipientEmail: "stita@meadowb.com",
@@ -479,6 +563,32 @@ describe("daily-call-coaching", () => {
     expect(target.transport).toBe("embedded_proxy");
     expect(target.url).toBe("https://sales-meadowb.example.com/quotes/api/mail/messages/send");
     expect(target.assertion.startsWith("mbmail.v1.")).toBe(true);
+  });
+
+  it("can force daily coaching email through mail service for internal recipients", () => {
+    const priorForceValue = process.env.DAILY_CALL_COACHING_FORCE_MAIL_SERVICE;
+    process.env.DAILY_CALL_COACHING_FORCE_MAIL_SERVICE = "true";
+
+    try {
+      const target = resolveDailyCallCoachingMailSendTarget({
+        recipientEmail: "stita@meadowb.com",
+        sender: {
+          loginName: "jserrano",
+          displayName: "Jorge Serrano",
+          email: "jserrano@meadowb.com",
+        },
+      });
+
+      expect(target.transport).toBe("mail_service");
+      expect(target.url).toBe("https://mail-service.example.com/quotes/api/mail/messages/send");
+      expect(target.assertion.startsWith("mbmail.v1.")).toBe(true);
+    } finally {
+      if (priorForceValue === undefined) {
+        delete process.env.DAILY_CALL_COACHING_FORCE_MAIL_SERVICE;
+      } else {
+        process.env.DAILY_CALL_COACHING_FORCE_MAIL_SERVICE = priorForceValue;
+      }
+    }
   });
 
   it("routes internal coaching email through embedded proxy using runtime port when APP_BASE_URL is missing", () => {
@@ -563,7 +673,7 @@ describe("daily-call-coaching", () => {
     });
 
     expect(target.transport).toBe("mail_service");
-    expect(target.url).toBe("https://mail-service.example.com/api/mail/messages/send");
+    expect(target.url).toBe("https://mail-service.example.com/quotes/api/mail/messages/send");
     expect(target.assertion.startsWith("mbmail.v1.")).toBe(true);
   });
 
@@ -752,6 +862,10 @@ describe("daily-call-coaching", () => {
         status: "skipped",
         detail: "Already sent for this date and recipient.",
         sessionCount: 2,
+        requiredCcEmail: "jserrano@meadowb.com",
+        ccConfirmed: false,
+        ccConfirmationDetail: "not_sent",
+        ccRecipients: [],
       }),
     );
     expect(mockDbRun).not.toHaveBeenCalled();
