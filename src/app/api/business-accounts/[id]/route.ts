@@ -107,19 +107,37 @@ function requestBodyHasOwnField(requestBody: unknown, key: string): boolean {
   );
 }
 
-function selectDetailRow(
+function mergeDetailRowIntoRows(
   rows: BusinessAccountRow[],
+  detailRow: BusinessAccountRow,
   requestedContactId: number | null,
-  fallbackRow: BusinessAccountRow | null,
-): BusinessAccountRow | null {
-  if (requestedContactId !== null) {
-    const requestedRow = rows.find((row) => row.contactId === requestedContactId);
-    if (requestedRow) {
-      return requestedRow;
-    }
+): BusinessAccountRow[] {
+  if (!isUsableContactId(requestedContactId)) {
+    return rows;
   }
 
-  return rows.find((row) => row.isPrimaryContact) ?? fallbackRow ?? rows[0] ?? null;
+  const matchIndex = rows.findIndex(
+    (row) =>
+      row.contactId !== null &&
+      row.contactId !== undefined &&
+      row.contactId === requestedContactId,
+  );
+
+  if (matchIndex === -1) {
+    return [detailRow, ...rows];
+  }
+
+  const nextRows = [...rows];
+  const matched = nextRows[matchIndex];
+  nextRows[matchIndex] = {
+    ...matched,
+    ...detailRow,
+    rowKey: matched.rowKey ?? detailRow.rowKey,
+    contactId: matched.contactId ?? detailRow.contactId ?? requestedContactId,
+    isPrimaryContact: matched.isPrimaryContact ?? detailRow.isPrimaryContact,
+  };
+
+  return nextRows;
 }
 
 function schedulePostSyncAccountRefresh(
@@ -747,35 +765,38 @@ async function buildResponseRowFromRawAccount(
         contactId: targetContactRow.contactId ?? targetContactId,
         primaryContactId: targetContactRow.primaryContactId ?? refreshedAccountRow.primaryContactId,
       };
-    } else {
-      try {
-        const refreshedTargetContact = await fetchContactById(
-          cookieValue,
-          targetContactId,
-          authCookieRefresh,
-        );
-        const normalizedTargetRow = normalizeBusinessAccount(
-          withPrimaryContact(rawAccount, refreshedTargetContact),
-        );
-        responseRow = {
-          ...refreshedAccountRow,
-          ...normalizedTargetRow,
-          id: refreshedAccountRow.id,
-          accountRecordId: refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id,
-          rowKey: `${refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id}:contact:${targetContactId}`,
-          contactId: targetContactId,
-          isPrimaryContact:
-            refreshedAccountRow.primaryContactId !== null &&
-            refreshedAccountRow.primaryContactId === targetContactId,
-          primaryContactId: refreshedAccountRow.primaryContactId,
-        };
-      } catch (contactError) {
-        if (
-          contactError instanceof HttpError &&
-          (contactError.status === 401 || contactError.status === 403)
-        ) {
-          throw contactError;
-        }
+    }
+
+    try {
+      const refreshedTargetContact = await fetchContactById(
+        cookieValue,
+        targetContactId,
+        authCookieRefresh,
+      );
+      const normalizedTargetRow = normalizeBusinessAccount(
+        withPrimaryContact(rawAccount, refreshedTargetContact),
+      );
+      responseRow = {
+        ...responseRow,
+        ...normalizedTargetRow,
+        id: refreshedAccountRow.id,
+        accountRecordId: refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id,
+        rowKey:
+          targetContactRow?.rowKey ??
+          responseRow.rowKey ??
+          `${refreshedAccountRow.accountRecordId ?? refreshedAccountRow.id}:contact:${targetContactId}`,
+        contactId: targetContactId,
+        isPrimaryContact:
+          refreshedAccountRow.primaryContactId !== null &&
+          refreshedAccountRow.primaryContactId === targetContactId,
+        primaryContactId: refreshedAccountRow.primaryContactId,
+      };
+    } catch (contactError) {
+      if (
+        contactError instanceof HttpError &&
+        (contactError.status === 401 || contactError.status === 403)
+      ) {
+        throw contactError;
       }
     }
   }
@@ -862,26 +883,31 @@ export async function GET(
     }
 
     const rawAccount = await fetchBusinessAccountById(cookieValue, id, authCookieRefresh);
-    const normalized = await normalizeWithContactNotes(
+    const { refreshedAccountRow, responseRow } = await buildResponseRowFromRawAccount(
       cookieValue,
       rawAccount,
+      requestedContactId,
       authCookieRefresh,
     );
-    if (isAlwaysExcludedBusinessAccountRow(normalized)) {
+    if (isAlwaysExcludedBusinessAccountRow(refreshedAccountRow)) {
       throw new HttpError(404, "Business account not found.");
     }
 
     const normalizedRows = normalizeBusinessAccountRows(rawAccount);
     const rowsWithCallHistory = applyLastCalledAtToBusinessAccountRows(normalizedRows);
-    const detailRow = selectDetailRow(rowsWithCallHistory, requestedContactId, normalized);
+    const responseRows = mergeDetailRowIntoRows(
+      rowsWithCallHistory,
+      responseRow,
+      requestedContactId,
+    );
 
     if (getEnv().READ_MODEL_ENABLED) {
       replaceReadModelAccountRows(id, normalizedRows);
     }
 
     const response = NextResponse.json({
-      row: applyLocalAccountMetadataToRow(detailRow) ?? detailRow,
-      rows: applyLocalAccountMetadataToRows(rowsWithCallHistory),
+      row: applyLocalAccountMetadataToRow(responseRow) ?? responseRow,
+      rows: applyLocalAccountMetadataToRows(responseRows),
       accountLocation: readAccountLocation(rawAccount),
     });
     if (authCookieRefresh.value) {
@@ -908,22 +934,27 @@ export async function GET(
           id,
           retryAuthCookieRefresh,
         );
-        const normalized = await normalizeWithContactNotes(
+        const { refreshedAccountRow, responseRow } = await buildResponseRowFromRawAccount(
           retryCookieValue,
           rawAccount,
+          requestedContactId,
           retryAuthCookieRefresh,
         );
-        if (isAlwaysExcludedBusinessAccountRow(normalized)) {
+        if (isAlwaysExcludedBusinessAccountRow(refreshedAccountRow)) {
           throw new HttpError(404, "Business account not found.");
         }
 
         const normalizedRows = normalizeBusinessAccountRows(rawAccount);
         const rowsWithCallHistory = applyLastCalledAtToBusinessAccountRows(normalizedRows);
-        const detailRow = selectDetailRow(rowsWithCallHistory, requestedContactId, normalized);
+        const responseRows = mergeDetailRowIntoRows(
+          rowsWithCallHistory,
+          responseRow,
+          requestedContactId,
+        );
 
         const response = NextResponse.json({
-          row: applyLocalAccountMetadataToRow(detailRow) ?? detailRow,
-          rows: applyLocalAccountMetadataToRows(rowsWithCallHistory),
+          row: applyLocalAccountMetadataToRow(responseRow) ?? responseRow,
+          rows: applyLocalAccountMetadataToRows(responseRows),
           accountLocation: readAccountLocation(rawAccount),
         });
         if (retryAuthCookieRefresh.value) {

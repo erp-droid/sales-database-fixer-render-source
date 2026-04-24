@@ -23,6 +23,7 @@ const updateContact = vi.fn();
 const readBusinessAccountDetailFromReadModel = vi.fn();
 const readStoredBusinessAccountRowsFromReadModel = vi.fn();
 const replaceReadModelAccountRows = vi.fn();
+const applyLastCalledAtToBusinessAccountRows = vi.fn((rows) => rows);
 const maybeTriggerReadModelSync = vi.fn();
 const readSyncStatus = vi.fn(() => ({
   status: "idle",
@@ -66,6 +67,10 @@ vi.mock("@/lib/read-model/accounts", () => ({
   readBusinessAccountDetailFromReadModel,
   readStoredBusinessAccountRowsFromReadModel,
   replaceReadModelAccountRows,
+}));
+
+vi.mock("@/lib/business-account-call-history", () => ({
+  applyLastCalledAtToBusinessAccountRows,
 }));
 
 vi.mock("@/lib/read-model/account-local-metadata", () => ({
@@ -152,6 +157,8 @@ function buildNoopPutPayload(row: BusinessAccountRow): Record<string, unknown> {
 describe("GET /api/business-accounts/[id]", () => {
   beforeEach(() => {
     vi.resetModules();
+    applyLastCalledAtToBusinessAccountRows.mockReset();
+    applyLastCalledAtToBusinessAccountRows.mockImplementation((rows) => rows);
     requireAuthCookieValue.mockReset();
     requireAuthCookieValue.mockReturnValue("cookie");
     setAuthCookie.mockReset();
@@ -266,11 +273,112 @@ describe("GET /api/business-accounts/[id]", () => {
       error: "Business account is not in the local SQLite snapshot. Click Sync records to refresh.",
     });
   });
+
+  it("hydrates requested contact phone and extension on live detail reads", async () => {
+    readBusinessAccountDetailFromReadModel.mockReturnValue(null);
+    fetchBusinessAccountById.mockResolvedValue({
+      id: "record-1",
+      BusinessAccountID: { value: "B200000003" },
+      Name: { value: "Alpha Inc" },
+      MainAddress: {
+        value: {
+          AddressLine1: { value: "5579 McAdam Road" },
+          City: { value: "Mississauga" },
+          State: { value: "ON" },
+          PostalCode: { value: "L4Z 1N4" },
+          Country: { value: "CA" },
+        },
+      },
+      Contacts: [
+        {
+          ContactID: { value: 157252 },
+          DisplayName: { value: "Jorge Serrano" },
+          EMail: { value: "jorge@example.com" },
+        },
+        {
+          ContactID: { value: 999001 },
+          DisplayName: { value: "Simon Doal" },
+          EMail: { value: "simon@example.com" },
+        },
+      ],
+      PrimaryContact: {
+        value: {
+          ContactID: { value: 157252 },
+          DisplayName: { value: "Jorge Serrano" },
+          EMail: { value: "jorge@example.com" },
+        },
+      },
+    });
+    fetchContactById.mockImplementation(async (_cookie: string, contactId: number) => {
+      if (contactId === 157252) {
+        return {
+          ContactID: { value: 157252 },
+          DisplayName: { value: "Jorge Serrano" },
+          Phone1: { value: "4162304681" },
+          EMail: { value: "jorge@example.com" },
+        };
+      }
+
+      if (contactId === 999001) {
+        return {
+          ContactID: { value: 999001 },
+          DisplayName: { value: "Simon Doal" },
+          JobTitle: { value: "Sales Manager" },
+          Phone1: { value: "9055551234" },
+          Phone2: { value: "321" },
+          EMail: { value: "simon@example.com" },
+        };
+      }
+
+      throw new Error(`Unexpected contact id ${contactId}`);
+    });
+
+    const { GET } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await GET(
+      new NextRequest(
+        "http://localhost/api/business-accounts/record-1?contactId=999001&live=1",
+      ),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    const payload = await response.json();
+    expect(response.status).toBe(200);
+
+    expect(payload.row).toMatchObject({
+      contactId: 999001,
+      primaryContactName: "Simon Doal",
+      primaryContactJobTitle: "Sales Manager",
+      primaryContactPhone: "905-555-1234",
+      primaryContactExtension: "321",
+      primaryContactEmail: "simon@example.com",
+    });
+
+    const selectedRow =
+      Array.isArray(payload.rows) &&
+      payload.rows.find(
+        (row) =>
+          row &&
+          typeof row === "object" &&
+          "contactId" in row &&
+          (row as { contactId?: number | null }).contactId === 999001,
+      );
+    expect(selectedRow).toMatchObject({
+      contactId: 999001,
+      primaryContactPhone: "905-555-1234",
+      primaryContactExtension: "321",
+    });
+  });
 });
 
 describe("DELETE /api/business-accounts/[id]", () => {
   beforeEach(() => {
     vi.resetModules();
+    applyLastCalledAtToBusinessAccountRows.mockReset();
+    applyLastCalledAtToBusinessAccountRows.mockImplementation((rows) => rows);
     requireAuthCookieValue.mockReset();
     requireAuthCookieValue.mockReturnValue("cookie");
     setAuthCookie.mockReset();
@@ -471,6 +579,8 @@ describe("DELETE /api/business-accounts/[id]", () => {
 describe("PUT /api/business-accounts/[id]", () => {
   beforeEach(() => {
     vi.resetModules();
+    applyLastCalledAtToBusinessAccountRows.mockReset();
+    applyLastCalledAtToBusinessAccountRows.mockImplementation((rows) => rows);
     requireAuthCookieValue.mockReset();
     requireAuthCookieValue.mockReturnValue("cookie");
     setAuthCookie.mockReset();
