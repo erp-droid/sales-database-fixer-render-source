@@ -219,35 +219,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     const finalizedImport = force ? null : readScheduledJobRun("call_activity_sync", resolved.reportDate);
-    if (!force && finalizedImport?.status !== "completed") {
-      const detail = [
-        `Scheduled daily coaching is blocked for ${resolved.reportDate}.`,
-        "Prior-day 5:00 PM call-activity finalization is missing or incomplete.",
-      ].join(" ");
-      const scheduledRun = writeScheduledJobRun({
-        jobName: "daily_call_coaching",
-        windowKey: resolved.reportDate,
-        status: "failed",
-        detail,
-      });
-      return NextResponse.json(
-        {
-          ok: false,
-          status: "failed",
-          reportDate: resolved.reportDate,
-          detail,
-          scheduledRun,
-          prerequisite: {
-            callActivityFinalization: finalizedImport,
-          },
-          remediationSteps: [
-            `Run POST /api/scheduled/call-activity-sync/run?dateKey=${resolved.reportDate} and wait for status=completed.`,
-            `After finalization is completed, rerun POST /api/scheduled/daily-call-coaching/run?reportDate=${resolved.reportDate}.`,
-          ],
-        },
-        { status: 503 },
-      );
-    }
 
     writeScheduledJobRun({
       jobName: "daily_call_coaching",
@@ -375,6 +346,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     const warnings: string[] = [];
+    if (!force && finalizedImport?.status !== "completed") {
+      warnings.push(
+        `Call-activity finalization status is ${finalizedImport?.status ?? "missing"}; coaching ran with available data fallback.`,
+      );
+    }
     if (hasCoverageWarning) {
       warnings.push(`Coverage is ${result.dataCoverage.status}: ${result.dataCoverage.detail}`);
     }
@@ -409,6 +385,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       scheduledRun: run,
       evidence,
       warnings,
+      prerequisite: {
+        callActivityFinalization: finalizedImport,
+      },
       expectedLogins,
       result,
     });

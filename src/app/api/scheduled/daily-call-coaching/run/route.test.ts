@@ -208,7 +208,7 @@ describe("POST /api/scheduled/daily-call-coaching/run", () => {
     expect(writeScheduledJobRun).not.toHaveBeenCalled();
   });
 
-  it("blocks when prior-day 5:00 PM call-activity finalization is missing", async () => {
+  it("continues with warnings when prior-day 5:00 PM call-activity finalization is missing", async () => {
     vi.setSystemTime(new Date("2026-04-13T11:30:00.000Z"));
     readScheduledJobRun.mockImplementation((jobName: string) => {
       if (jobName === "call_activity_sync") {
@@ -222,19 +222,23 @@ describe("POST /api/scheduled/daily-call-coaching/run", () => {
     const payload = (await response.json()) as {
       status: string;
       detail: string;
-      remediationSteps: string[];
+      warnings: string[];
     };
 
-    expect(response.status).toBe(503);
-    expect(payload.status).toBe("failed");
-    expect(payload.detail).toContain("Prior-day 5:00 PM call-activity finalization is missing");
-    expect(payload.remediationSteps[0]).toContain("/api/scheduled/call-activity-sync/run");
-    expect(runDailyCallCoaching).not.toHaveBeenCalled();
-    expect(writeScheduledJobRun).toHaveBeenCalledWith(
+    expect(response.status).toBe(200);
+    expect(payload.status).toBe("completed_with_warnings");
+    expect(payload.warnings.length).toBeGreaterThan(0);
+    expect(payload.warnings[0]).toContain("Call-activity finalization status is missing");
+    expect(runDailyCallCoaching).toHaveBeenCalledWith({
+      reportDate: "2026-04-12",
+      retryFailedOnly: true,
+    });
+    expect(writeScheduledJobRun).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         jobName: "daily_call_coaching",
         windowKey: "2026-04-12",
-        status: "failed",
+        status: "completed",
       }),
     );
   });
