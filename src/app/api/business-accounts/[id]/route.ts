@@ -514,6 +514,7 @@ function buildContactOnlyUpdateRequestFromCurrentRow(
     category: currentRow.category,
     notes: currentRow.notes,
     expectedLastModified: currentRow.lastModifiedIso,
+    baseSnapshot: parsedRequest.baseSnapshot ?? null,
   };
 
   if (requestBodyHasOwnField(requestBody, "primaryContactName")) {
@@ -539,6 +540,9 @@ function buildContactOnlyUpdateRequestFromCurrentRow(
   }
   if (requestBodyHasOwnField(requestBody, "expectedLastModified")) {
     nextRequest.expectedLastModified = parsedRequest.expectedLastModified;
+  }
+  if (requestBodyHasOwnField(requestBody, "baseSnapshot")) {
+    nextRequest.baseSnapshot = parsedRequest.baseSnapshot ?? null;
   }
 
   return nextRequest;

@@ -1,7 +1,10 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BusinessAccountRow } from "@/types/business-account";
+import type {
+  BusinessAccountConcurrencySnapshot,
+  BusinessAccountRow,
+} from "@/types/business-account";
 
 const requireAuthCookieValue = vi.fn(() => "cookie");
 const setAuthCookie = vi.fn();
@@ -151,6 +154,59 @@ function buildNoopPutPayload(row: BusinessAccountRow): Record<string, unknown> {
     category: row.category,
     notes: row.notes,
     expectedLastModified: row.lastModifiedIso,
+  };
+}
+
+function buildConcurrencySnapshot(row: BusinessAccountRow): BusinessAccountConcurrencySnapshot {
+  return {
+    companyName: row.companyName,
+    companyDescription: row.companyDescription ?? null,
+    assignedBusinessAccountRecordId:
+      row.businessAccountId.trim().length > 0 ? (row.accountRecordId ?? row.id) : null,
+    assignedBusinessAccountId: row.businessAccountId.trim() || null,
+    addressLine1: row.addressLine1,
+    addressLine2: row.addressLine2,
+    city: row.city,
+    state: row.state,
+    postalCode: row.postalCode,
+    country: row.country,
+    targetContactId: row.contactId ?? row.primaryContactId ?? null,
+    salesRepId: row.salesRepId,
+    salesRepName: row.salesRepName,
+    industryType: row.industryType,
+    subCategory: row.subCategory,
+    companyRegion: row.companyRegion,
+    week: row.week,
+    companyPhone: row.companyPhone ?? row.phoneNumber ?? null,
+    primaryContactName: row.primaryContactName,
+    primaryContactJobTitle: row.primaryContactJobTitle ?? null,
+    primaryContactPhone: row.primaryContactPhone,
+    primaryContactExtension: row.primaryContactExtension ?? null,
+    primaryContactEmail: row.primaryContactEmail,
+    category: row.category,
+    notes: row.notes,
+    primaryContactId: row.primaryContactId,
+    lastModifiedIso: row.lastModifiedIso,
+  };
+}
+
+function buildRawContact(
+  row: BusinessAccountRow,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ContactID: { value: row.contactId ?? row.primaryContactId ?? 157252 },
+    NoteID: { value: "contact-note-1" },
+    BusinessAccountID: { value: row.businessAccountId },
+    CompanyName: { value: row.companyName },
+    DisplayName: { value: row.primaryContactName ?? "" },
+    JobTitle: { value: row.primaryContactJobTitle ?? "" },
+    Phone1: { value: row.primaryContactPhone ?? "" },
+    Extension: { value: row.primaryContactExtension ?? "" },
+    Email: { value: row.primaryContactEmail ?? "" },
+    note: { value: row.notes ?? "" },
+    LastModifiedDateTime: { value: row.lastModifiedIso ?? "2026-04-01T10:00:00.000Z" },
+    ...overrides,
   };
 }
 
@@ -586,6 +642,7 @@ describe("PUT /api/business-accounts/[id]", () => {
     setAuthCookie.mockReset();
     publishBusinessAccountChanged.mockReset();
     fetchBusinessAccountById.mockReset();
+    fetchContactById.mockReset();
     updateBusinessAccount.mockReset();
     updateContact.mockReset();
     readBusinessAccountDetailFromReadModel.mockReset();
@@ -736,5 +793,75 @@ describe("PUT /api/business-accounts/[id]", () => {
     expect(fetchBusinessAccountById).not.toHaveBeenCalled();
     expect(updateBusinessAccount).not.toHaveBeenCalled();
     expect(updateContact).not.toHaveBeenCalled();
+  });
+
+  it("rebases contact-only note saves when contact last-modified differs but no fields conflict", async () => {
+    const cachedRow = buildRow({
+      notes: "Original note",
+      lastModifiedIso: "2026-04-01T10:00:00.000Z",
+    });
+    const contactId = cachedRow.contactId as number;
+
+    readBusinessAccountDetailFromReadModel.mockImplementation(
+      (_id: string, requestedContactId?: number) => {
+        if (requestedContactId !== undefined && requestedContactId !== contactId) {
+          return null;
+        }
+
+        return {
+          row: cachedRow,
+          rows: [cachedRow],
+          accountLocation: null,
+        };
+      },
+    );
+
+    fetchContactById
+      .mockResolvedValueOnce(
+        buildRawContact(cachedRow, {
+          LastModifiedDateTime: { value: "2026-04-02T11:00:00.000Z" },
+          note: { value: "Original note" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        buildRawContact(cachedRow, {
+          LastModifiedDateTime: { value: "2026-04-03T12:00:00.000Z" },
+          note: { value: "Updated from drawer" },
+        }),
+      );
+
+    const { PUT } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/business-accounts/record-1", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ...buildNoopPutPayload(cachedRow),
+          targetContactId: contactId,
+          contactOnlyIntent: true,
+          notes: "Updated from drawer",
+          baseSnapshot: buildConcurrencySnapshot(cachedRow),
+        }),
+      }),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    const responseBody = await response.json();
+    expect(response.status, JSON.stringify(responseBody)).toBe(200);
+    expect(responseBody).toMatchObject({
+      notes: "Updated from drawer",
+      contactId,
+      accountRecordId: cachedRow.accountRecordId,
+    });
+    expect(fetchBusinessAccountById).not.toHaveBeenCalled();
+    expect(updateBusinessAccount).not.toHaveBeenCalled();
+    expect(updateContact).toHaveBeenCalledTimes(1);
+    expect(fetchContactById).toHaveBeenCalledTimes(2);
   });
 });

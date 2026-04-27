@@ -886,6 +886,7 @@ export function parseContactOnlyUpdatePayload(
     category: parsed.category ?? fallback?.category ?? null,
     notes: parsed.notes ?? fallback?.notes ?? null,
     expectedLastModified: parsed.expectedLastModified,
+    baseSnapshot: parsed.baseSnapshot ?? fallback?.baseSnapshot ?? null,
   };
 }
 
