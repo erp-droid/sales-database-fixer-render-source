@@ -5,6 +5,8 @@ import type {
   BusinessAccountConcurrencySnapshot,
   BusinessAccountRow,
 } from "@/types/business-account";
+import { collectUpdatedConcurrencyFields } from "@/lib/business-account-concurrency";
+import { parseUpdatePayload } from "@/lib/validation";
 
 const requireAuthCookieValue = vi.fn(() => "cookie");
 const setAuthCookie = vi.fn();
@@ -795,12 +797,16 @@ describe("PUT /api/business-accounts/[id]", () => {
     expect(updateContact).not.toHaveBeenCalled();
   });
 
-  it("rebases contact-only note saves when contact last-modified differs but no fields conflict", async () => {
-    const cachedRow = buildRow({
+  it("treats snapshot-only note edits as contact-only even when account fields drift", async () => {
+    const snapshotRow = buildRow({
       notes: "Original note",
       lastModifiedIso: "2026-04-01T10:00:00.000Z",
     });
-    const contactId = cachedRow.contactId as number;
+    const cachedRow = buildRow({
+      ...snapshotRow,
+      salesRepName: "Updated Rep Name",
+    });
+    const contactId = snapshotRow.contactId as number;
 
     readBusinessAccountDetailFromReadModel.mockImplementation(
       (_id: string, requestedContactId?: number) => {
@@ -818,32 +824,39 @@ describe("PUT /api/business-accounts/[id]", () => {
 
     fetchContactById
       .mockResolvedValueOnce(
-        buildRawContact(cachedRow, {
+        buildRawContact(snapshotRow, {
           LastModifiedDateTime: { value: "2026-04-02T11:00:00.000Z" },
           note: { value: "Original note" },
         }),
       )
       .mockResolvedValueOnce(
-        buildRawContact(cachedRow, {
+        buildRawContact(snapshotRow, {
           LastModifiedDateTime: { value: "2026-04-03T12:00:00.000Z" },
           note: { value: "Updated from drawer" },
         }),
       );
 
     const { PUT } = await import("@/app/api/business-accounts/[id]/route");
+    const debugPayload = {
+      ...buildNoopPutPayload(snapshotRow),
+      targetContactId: contactId,
+      notes: "Updated from drawer",
+      baseSnapshot: buildConcurrencySnapshot(snapshotRow),
+    };
+    const parsedDebugPayload = parseUpdatePayload(debugPayload);
+    expect([...collectUpdatedConcurrencyFields(parsedDebugPayload)]).toEqual([
+      "assignedBusinessAccountRecordId",
+      "assignedBusinessAccountId",
+      "notes",
+    ]);
+
     const response = await PUT(
       new NextRequest("http://localhost/api/business-accounts/record-1", {
         method: "PUT",
         headers: {
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          ...buildNoopPutPayload(cachedRow),
-          targetContactId: contactId,
-          contactOnlyIntent: true,
-          notes: "Updated from drawer",
-          baseSnapshot: buildConcurrencySnapshot(cachedRow),
-        }),
+        body: JSON.stringify(debugPayload),
       }),
       {
         params: Promise.resolve({

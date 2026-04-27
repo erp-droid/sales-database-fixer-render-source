@@ -34,6 +34,7 @@ import {
 import {
   buildRebasedUpdateRequest,
   collectConflictingConcurrencyFields,
+  collectUpdatedConcurrencyFields,
   formatConcurrencyConflictFields,
 } from "@/lib/business-account-concurrency";
 import {
@@ -89,6 +90,21 @@ type RouteContext = {
   }>;
 };
 
+const SNAPSHOT_CONTACT_ONLY_FIELDS = new Set([
+  "targetContactId",
+  "primaryContactName",
+  "primaryContactJobTitle",
+  "primaryContactPhone",
+  "primaryContactExtension",
+  "primaryContactEmail",
+  "notes",
+]);
+
+const SNAPSHOT_LEGACY_OPTIONAL_ACCOUNT_FIELDS = new Set([
+  "assignedBusinessAccountRecordId",
+  "assignedBusinessAccountId",
+]);
+
 function readRequestedContactId(request: NextRequest): number | null {
   const raw = request.nextUrl.searchParams.get("contactId")?.trim() ?? "";
   if (!raw) {
@@ -105,6 +121,34 @@ function requestBodyHasOwnField(requestBody: unknown, key: string): boolean {
       typeof requestBody === "object" &&
       Object.prototype.hasOwnProperty.call(requestBody, key),
   );
+}
+
+function isSnapshotOnlyContactEditRequest(
+  updateRequest: ReturnType<typeof parseUpdatePayload>,
+): boolean {
+  if (!updateRequest.baseSnapshot || updateRequest.setAsPrimaryContact) {
+    return false;
+  }
+
+  const updatedFields = collectUpdatedConcurrencyFields(updateRequest);
+  if (updatedFields.size === 0) {
+    return false;
+  }
+
+  for (const field of updatedFields) {
+    if (!SNAPSHOT_CONTACT_ONLY_FIELDS.has(field)) {
+      if (
+        SNAPSHOT_LEGACY_OPTIONAL_ACCOUNT_FIELDS.has(field) &&
+        updateRequest[field] === null
+      ) {
+        continue;
+      }
+
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function mergeDetailRowIntoRows(
@@ -484,34 +528,40 @@ function buildContactOnlyUpdateRequestFromCurrentRow(
   parsedRequest: ReturnType<typeof parseUpdatePayload>,
   requestBody: unknown,
 ): ReturnType<typeof parseUpdatePayload> {
+  const snapshot = parsedRequest.baseSnapshot;
+
   const nextRequest: ReturnType<typeof parseUpdatePayload> = {
-    companyName: currentRow.companyName,
-    companyDescription: currentRow.companyDescription ?? null,
-    assignedBusinessAccountRecordId: currentRow.accountRecordId ?? currentRow.id,
-    assignedBusinessAccountId: currentRow.businessAccountId,
-    addressLine1: currentRow.addressLine1,
-    addressLine2: currentRow.addressLine2,
-    city: currentRow.city,
-    state: currentRow.state,
-    postalCode: currentRow.postalCode,
-    country: currentRow.country,
+    companyName: snapshot?.companyName ?? currentRow.companyName,
+    companyDescription: snapshot?.companyDescription ?? currentRow.companyDescription ?? null,
+    assignedBusinessAccountRecordId:
+      snapshot?.assignedBusinessAccountRecordId ??
+      currentRow.accountRecordId ??
+      currentRow.id,
+    assignedBusinessAccountId:
+      snapshot?.assignedBusinessAccountId ?? currentRow.businessAccountId,
+    addressLine1: snapshot?.addressLine1 ?? currentRow.addressLine1,
+    addressLine2: snapshot?.addressLine2 ?? currentRow.addressLine2,
+    city: snapshot?.city ?? currentRow.city,
+    state: snapshot?.state ?? currentRow.state,
+    postalCode: snapshot?.postalCode ?? currentRow.postalCode,
+    country: snapshot?.country ?? currentRow.country,
     targetContactId,
     setAsPrimaryContact: false,
     primaryOnlyIntent: false,
     contactOnlyIntent: true,
-    salesRepId: currentRow.salesRepId,
-    salesRepName: currentRow.salesRepName,
-    industryType: currentRow.industryType,
-    subCategory: currentRow.subCategory,
-    companyRegion: currentRow.companyRegion,
-    week: currentRow.week,
-    companyPhone: resolveCompanyPhone(currentRow),
+    salesRepId: snapshot?.salesRepId ?? currentRow.salesRepId,
+    salesRepName: snapshot?.salesRepName ?? currentRow.salesRepName,
+    industryType: snapshot?.industryType ?? currentRow.industryType,
+    subCategory: snapshot?.subCategory ?? currentRow.subCategory,
+    companyRegion: snapshot?.companyRegion ?? currentRow.companyRegion,
+    week: snapshot?.week ?? currentRow.week,
+    companyPhone: snapshot?.companyPhone ?? resolveCompanyPhone(currentRow),
     primaryContactName: currentRow.primaryContactName,
     primaryContactJobTitle: currentRow.primaryContactJobTitle ?? null,
     primaryContactPhone: currentRow.primaryContactPhone,
     primaryContactExtension: currentRow.primaryContactExtension ?? null,
     primaryContactEmail: currentRow.primaryContactEmail,
-    category: currentRow.category,
+    category: snapshot?.category ?? currentRow.category,
     notes: currentRow.notes,
     expectedLastModified: currentRow.lastModifiedIso,
     baseSnapshot: parsedRequest.baseSnapshot ?? null,
@@ -1065,7 +1115,10 @@ export async function PUT(
     const implicitContactOnlyIntent =
       cachedCurrentRow !== null &&
       cachedTargetContactId !== null &&
-      isContactOnlyUpdate(cachedCurrentRow, updateRequest);
+      (
+        isContactOnlyUpdate(cachedCurrentRow, updateRequest) ||
+        isSnapshotOnlyContactEditRequest(updateRequest)
+      );
     const requestedAssignedBusinessAccountId = sanitizeNullableInput(
       updateRequest.assignedBusinessAccountId,
     );
