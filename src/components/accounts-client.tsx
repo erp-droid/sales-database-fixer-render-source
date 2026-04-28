@@ -1186,6 +1186,10 @@ function mergeSyncedRows(
       existing.primaryContactExtension,
       incoming.primaryContactExtension,
     ),
+    primaryContactRawPhone: pickPreferredText(
+      existing.primaryContactRawPhone,
+      incoming.primaryContactRawPhone,
+    ),
     primaryContactEmail: pickPreferredText(
       existing.primaryContactEmail,
       incoming.primaryContactEmail,
@@ -5313,37 +5317,19 @@ export function AccountsClient({
     const refreshedRows = readDetailResponseRows(payload);
     const canonicalAccountRecordId =
       refreshedRow.accountRecordId ?? refreshedRow.id ?? accountRecordId;
-    const refreshedPrimaryContactExtension = Object.prototype.hasOwnProperty.call(
-      refreshedRow,
-      "primaryContactExtension",
-    )
-      ? refreshedRow.primaryContactExtension ?? null
-      : row.primaryContactExtension ?? null;
-    const refreshedPrimaryContactRawPhone = Object.prototype.hasOwnProperty.call(
-      refreshedRow,
-      "primaryContactRawPhone",
-    )
-      ? refreshedRow.primaryContactRawPhone ?? null
-      : row.primaryContactRawPhone ?? null;
+    const mergedSyncedRow = mergeSyncedRows(row, refreshedRow);
     const mergedRow =
       row.isPrimaryContact === false
         ? {
-            ...row,
-            ...refreshedRow,
+            ...mergedSyncedRow,
             accountRecordId: canonicalAccountRecordId,
             rowKey: refreshedRow.rowKey ?? row.rowKey,
             contactId: refreshedRow.contactId ?? row.contactId,
             isPrimaryContact: refreshedRow.isPrimaryContact ?? row.isPrimaryContact,
-            companyPhone: refreshedRow.companyPhone ?? row.companyPhone,
-            phoneNumber: refreshedRow.phoneNumber ?? row.phoneNumber,
-            primaryContactExtension: refreshedPrimaryContactExtension,
-            primaryContactRawPhone: refreshedPrimaryContactRawPhone,
           }
         : {
-            ...refreshedRow,
+            ...mergedSyncedRow,
             accountRecordId: canonicalAccountRecordId,
-            primaryContactExtension: refreshedPrimaryContactExtension,
-            primaryContactRawPhone: refreshedPrimaryContactRawPhone,
           };
 
     if (refreshedRows && refreshedRows.length > 0) {
