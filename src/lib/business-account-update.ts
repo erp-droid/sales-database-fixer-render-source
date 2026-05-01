@@ -51,14 +51,6 @@ export function isContactOnlyUpdate(
 
   return (
     sameRequiredText(currentAccountRow.companyName, updateRequest.companyName) &&
-    sameNullableText(
-      currentAccountRow.accountRecordId ?? currentAccountRow.id,
-      updateRequest.assignedBusinessAccountRecordId,
-    ) &&
-    sameNullableText(
-      currentAccountRow.businessAccountId,
-      updateRequest.assignedBusinessAccountId,
-    ) &&
     sameRequiredText(currentAccountRow.addressLine1, updateRequest.addressLine1) &&
     sameRequiredText(currentAccountRow.addressLine2, updateRequest.addressLine2) &&
     sameRequiredText(currentAccountRow.city, updateRequest.city) &&

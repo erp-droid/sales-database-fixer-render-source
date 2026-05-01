@@ -113,6 +113,16 @@ describe("business-account primary-only helpers", () => {
     expect(isContactOnlyUpdate(currentAccountRow, request)).toBe(false);
   });
 
+  it("treats moving a contact to another business account as contact-only", () => {
+    const request = buildRequest({
+      setAsPrimaryContact: false,
+      assignedBusinessAccountRecordId: "account-2",
+      assignedBusinessAccountId: "VAC-200",
+    });
+
+    expect(isContactOnlyUpdate(currentAccountRow, request)).toBe(true);
+  });
+
   it("recognizes a primary-only update when the submitted values match the latest rows", () => {
     const request = buildRequest();
 
