@@ -121,6 +121,60 @@ describe("normalizeBusinessAccount", () => {
     expect(row.primaryContactEmail).toBe("rayo@chemcorpinc.com");
   });
 
+  it("resolves the primary contact id from a PrimaryContact NoteID match when ContactID is absent", () => {
+    expect(
+      readRawBusinessAccountPrimaryContactId(
+        makePayload({
+          PrimaryContact: {
+            id: "target-note-id",
+            NoteID: { value: "target-note-id" },
+            DisplayName: { value: "Rob Geisel" },
+            Email: { value: "rob@example.com" },
+          },
+          Contacts: [
+            {
+              id: "contact-1",
+              ContactID: { value: 157497 },
+              DisplayName: { value: "Jorge Serrano" },
+              Email: { value: "jorge@example.com" },
+            },
+            {
+              id: "target-note-id",
+              ContactID: { value: 158410 },
+              DisplayName: { value: "Rob Geisel" },
+              Email: { value: "rob@example.com" },
+            },
+          ],
+        }),
+      ),
+    ).toBe(158410);
+  });
+
+  it("resolves the primary contact id from primary name/email hints when ContactID is absent", () => {
+    expect(
+      readRawBusinessAccountPrimaryContactId(
+        makePayload({
+          PrimaryContact: {
+            DisplayName: { value: "Rob Geisel" },
+            Email: { value: "rob@example.com" },
+          },
+          Contacts: [
+            {
+              ContactID: { value: 157497 },
+              DisplayName: { value: "Jorge Serrano" },
+              Email: { value: "jorge@example.com" },
+            },
+            {
+              ContactID: { value: 158410 },
+              DisplayName: { value: "Rob Geisel" },
+              Email: { value: "rob@example.com" },
+            },
+          ],
+        }),
+      ),
+    ).toBe(158410);
+  });
+
   it("maps values from payload and formats address", () => {
     const row = normalizeBusinessAccount(makePayload());
 

@@ -1966,13 +1966,43 @@ export function readRawBusinessAccountPrimaryContactId(rawAccount: unknown): num
     return null;
   }
 
-  const primary = rawAccount.PrimaryContact;
+  const primary = unwrapRecordValue(getField(rawAccount, "PrimaryContact"));
   const resolved =
     readNullableNumber(primary, "ContactID") ??
     readNullableNumber(rawAccount, "PrimaryContactID") ??
     readNullableNumber(rawAccount, "MainContactID");
 
-  return isUsableContactId(resolved) ? resolved : null;
+  if (isUsableContactId(resolved)) {
+    return resolved;
+  }
+
+  const contacts = readArrayField(rawAccount, "Contacts");
+  if (contacts.length === 0) {
+    return null;
+  }
+
+  const primaryHint: PrimaryContactHint = {
+    contactId: readNullableNumber(primary, "ContactID"),
+    recordId: readRecordIdentity(primary),
+    email: readFirstString(primary, ["Email", "EMail"]) || null,
+    name: composeContactName(primary),
+  };
+  const primaryCandidates: PrimaryContactCandidate[] = contacts.map((contact, index) => ({
+    contactId: readNullableNumber(contact, "ContactID"),
+    recordId: readRecordIdentity(contact),
+    email: readFirstString(contact, ["Email", "EMail"]) || null,
+    name: composeContactName(contact),
+    rowNumber: readNullableNumber(contact, "rowNumber"),
+    index,
+  }));
+  const selectedPrimaryIndex = selectPrimaryContactIndex(primaryCandidates, primaryHint);
+
+  if (selectedPrimaryIndex === null) {
+    return null;
+  }
+
+  const selectedContactId = primaryCandidates[selectedPrimaryIndex]?.contactId ?? null;
+  return isUsableContactId(selectedContactId) ? selectedContactId : null;
 }
 
 export function resolveBusinessAccountRecordId(
