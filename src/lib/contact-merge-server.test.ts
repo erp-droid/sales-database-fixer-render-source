@@ -226,4 +226,58 @@ describe("contact merge server helpers", () => {
 
     expect(updateBusinessAccountMock).toHaveBeenCalledTimes(2);
   });
+
+  it("tries the combined ContactID + PrimaryContactID fallback before simpler variants", async () => {
+    const baseAccount = makeRawAccount({
+      Contacts: [makeRawContact(157497), makeRawContact(158410)],
+    });
+    const switchedAccount = makeRawAccount({
+      PrimaryContact: {
+        ContactID: { value: 158410 },
+        DisplayName: { value: "Jorge Serrano" },
+      },
+      Contacts: [makeRawContact(157497), makeRawContact(158410)],
+    });
+
+    fetchBusinessAccountByIdMock
+      .mockResolvedValueOnce(baseAccount)
+      .mockResolvedValueOnce(switchedAccount);
+    updateCustomerMock.mockRejectedValueOnce(new Error("Customer update rejected"));
+    invokeBusinessAccountActionMock.mockRejectedValueOnce(new Error("Action rejected"));
+    updateBusinessAccountMock.mockResolvedValueOnce(undefined);
+
+    await setBusinessAccountPrimaryContact(
+      "cookie",
+      {
+        rawAccount: baseAccount,
+        rawAccountWithContacts: baseAccount,
+        resolvedRecordId: "account-1",
+        updateIdentifiers: ["AC-100", "account-1"],
+        identityPayload: {
+          id: "account-1",
+          BusinessAccountID: { value: "AC-100" },
+        },
+      },
+      158410,
+      { value: null },
+      makeRawContact(158410),
+    );
+
+    expect(updateBusinessAccountMock).toHaveBeenCalledWith(
+      "cookie",
+      ["AC-100", "account-1"],
+      expect.objectContaining({
+        ContactID: { value: 158410 },
+        PrimaryContactID: { value: 158410 },
+        PrimaryContact: expect.objectContaining({
+          ContactID: { value: 158410 },
+        }),
+      }),
+      { value: null },
+      {
+        strategy: "body-first",
+      },
+    );
+    expect(updateBusinessAccountMock).toHaveBeenCalledTimes(1);
+  });
 });

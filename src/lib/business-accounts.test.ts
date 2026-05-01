@@ -1477,15 +1477,28 @@ describe("business account merge helpers", () => {
       ContactID: {
         value: 158410,
       },
-    });
-    expect(payloads[1]).toEqual({
+      PrimaryContactID: {
+        value: 158410,
+      },
       PrimaryContact: {
         ContactID: {
           value: 158410,
         },
       },
     });
-    expect(payloads).toHaveLength(7);
+    expect(payloads[1]).toEqual({
+      ContactID: {
+        value: 158410,
+      },
+    });
+    expect(payloads[2]).toEqual({
+      PrimaryContact: {
+        ContactID: {
+          value: 158410,
+        },
+      },
+    });
+    expect(payloads).toHaveLength(8);
   });
 
   it("writes company phone to the existing Business1 field when requested", () => {

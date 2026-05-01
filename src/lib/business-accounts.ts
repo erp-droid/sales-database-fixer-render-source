@@ -2062,6 +2062,20 @@ export function buildPrimaryContactFallbackPayloads(
       ContactID: {
         value: targetContactId,
       },
+      PrimaryContactID: {
+        value: targetContactId,
+      },
+      PrimaryContact: {
+        ...(primaryRecordId ? { id: primaryRecordId } : {}),
+        ContactID: {
+          value: targetContactId,
+        },
+      },
+    },
+    {
+      ContactID: {
+        value: targetContactId,
+      },
     },
     {
       PrimaryContact: {
