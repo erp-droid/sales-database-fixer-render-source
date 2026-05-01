@@ -86,6 +86,29 @@ function readWrappedString(record: unknown, key: string): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+async function ensureAccountHasContacts(
+  cookieValue: string,
+  rawAccount: RawBusinessAccount,
+  businessAccountId: string | null,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawBusinessAccount> {
+  if (readAccountContacts(rawAccount).length > 0 || !businessAccountId) {
+    return rawAccount;
+  }
+
+  const accountContacts = await fetchContactsByBusinessAccountIds(
+    cookieValue,
+    [businessAccountId],
+    authCookieRefresh,
+  );
+
+  if (accountContacts.length === 0) {
+    return rawAccount;
+  }
+
+  return withAccountContacts(rawAccount, accountContacts) as RawBusinessAccount;
+}
+
 export type ContactMergeServerContext = {
   rawAccount: RawBusinessAccount;
   rawAccountWithContacts: RawBusinessAccount;
@@ -275,6 +298,16 @@ export async function setBusinessAccountPrimaryContact(
     context.resolvedRecordId,
     authCookieRefresh,
   );
+  const customerId =
+    readWrappedString(verificationRaw, "BusinessAccountID") ??
+    readWrappedString(context.rawAccountWithContacts, "BusinessAccountID") ??
+    readWrappedString(context.rawAccount, "BusinessAccountID");
+  verificationRaw = await ensureAccountHasContacts(
+    cookieValue,
+    verificationRaw,
+    customerId,
+    authCookieRefresh,
+  );
   let verifiedPrimaryContactId = readRawBusinessAccountPrimaryContactId(verificationRaw);
   const accountScopedTargetRawContact =
     findAccountScopedContact(verificationRaw, targetContactId) ??
@@ -282,10 +315,6 @@ export async function setBusinessAccountPrimaryContact(
     findAccountScopedContact(context.rawAccount, targetContactId) ??
     targetRawContact ??
     null;
-  const customerId =
-    readWrappedString(verificationRaw, "BusinessAccountID") ??
-    readWrappedString(context.rawAccountWithContacts, "BusinessAccountID") ??
-    readWrappedString(context.rawAccount, "BusinessAccountID");
 
   if (verifiedPrimaryContactId !== targetContactId && customerId) {
     try {
@@ -305,6 +334,12 @@ export async function setBusinessAccountPrimaryContact(
       verificationRaw = await fetchBusinessAccountById(
         cookieValue,
         context.resolvedRecordId,
+        authCookieRefresh,
+      );
+      verificationRaw = await ensureAccountHasContacts(
+        cookieValue,
+        verificationRaw,
+        customerId,
         authCookieRefresh,
       );
       verifiedPrimaryContactId = readRawBusinessAccountPrimaryContactId(verificationRaw);
@@ -347,6 +382,12 @@ export async function setBusinessAccountPrimaryContact(
         context.resolvedRecordId,
         authCookieRefresh,
       );
+      verificationRaw = await ensureAccountHasContacts(
+        cookieValue,
+        verificationRaw,
+        customerId,
+        authCookieRefresh,
+      );
       verifiedPrimaryContactId = readRawBusinessAccountPrimaryContactId(verificationRaw);
     } catch (error) {
       if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
@@ -386,6 +427,12 @@ export async function setBusinessAccountPrimaryContact(
       verificationRaw = await fetchBusinessAccountById(
         cookieValue,
         context.resolvedRecordId,
+        authCookieRefresh,
+      );
+      verificationRaw = await ensureAccountHasContacts(
+        cookieValue,
+        verificationRaw,
+        customerId,
         authCookieRefresh,
       );
       verifiedPrimaryContactId = readRawBusinessAccountPrimaryContactId(verificationRaw);

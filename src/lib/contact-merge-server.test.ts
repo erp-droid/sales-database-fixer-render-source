@@ -12,12 +12,14 @@ import { HttpError } from "@/lib/errors";
 const {
   fetchBusinessAccountByIdMock,
   fetchContactByIdMock,
+  fetchContactsByBusinessAccountIdsMock,
   invokeBusinessAccountActionMock,
   updateBusinessAccountMock,
   updateCustomerMock,
 } = vi.hoisted(() => ({
   fetchBusinessAccountByIdMock: vi.fn(),
   fetchContactByIdMock: vi.fn(),
+  fetchContactsByBusinessAccountIdsMock: vi.fn(),
   invokeBusinessAccountActionMock: vi.fn(),
   updateBusinessAccountMock: vi.fn(),
   updateCustomerMock: vi.fn(),
@@ -29,6 +31,7 @@ vi.mock("@/lib/acumatica", async () => {
     ...actual,
     fetchBusinessAccountById: fetchBusinessAccountByIdMock,
     fetchContactById: fetchContactByIdMock,
+    fetchContactsByBusinessAccountIds: fetchContactsByBusinessAccountIdsMock,
     invokeBusinessAccountAction: invokeBusinessAccountActionMock,
     updateBusinessAccount: updateBusinessAccountMock,
     updateCustomer: updateCustomerMock,
@@ -279,5 +282,55 @@ describe("contact merge server helpers", () => {
       },
     );
     expect(updateBusinessAccountMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("hydrates missing account contacts before verifying a primary-contact switch", async () => {
+    const contact157497 = makeRawContact(157497);
+    const targetContact = makeRawContact(158410, {
+      id: "target-note-id",
+      DisplayName: { value: "Peter Noel" },
+      Email: { value: "peter.noel@example.com" },
+    });
+    const accountWithoutContacts = makeRawAccount({
+      PrimaryContact: {
+        id: "target-note-id",
+        NoteID: { value: "target-note-id" },
+        DisplayName: { value: "Peter Noel" },
+        Email: { value: "peter.noel@example.com" },
+      },
+      Contacts: [],
+    });
+
+    fetchBusinessAccountByIdMock.mockResolvedValueOnce(accountWithoutContacts);
+    fetchContactsByBusinessAccountIdsMock.mockResolvedValueOnce([contact157497, targetContact]);
+
+    const result = await setBusinessAccountPrimaryContact(
+      "cookie",
+      {
+        rawAccount: accountWithoutContacts,
+        rawAccountWithContacts: accountWithoutContacts,
+        resolvedRecordId: "account-1",
+        updateIdentifiers: ["AC-100", "account-1"],
+        identityPayload: {
+          id: "account-1",
+          BusinessAccountID: { value: "AC-100" },
+        },
+      },
+      158410,
+      { value: null },
+      targetContact,
+    );
+
+    expect(fetchContactsByBusinessAccountIdsMock).toHaveBeenCalledWith(
+      "cookie",
+      ["AC-100"],
+      { value: null },
+    );
+    expect(updateCustomerMock).not.toHaveBeenCalled();
+    expect(invokeBusinessAccountActionMock).not.toHaveBeenCalled();
+    expect(updateBusinessAccountMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      Contacts: [contact157497, targetContact],
+    });
   });
 });
