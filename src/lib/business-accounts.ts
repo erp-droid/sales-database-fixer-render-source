@@ -186,6 +186,10 @@ function readPrimaryContactPhone(record: unknown): {
     phone1: readNullableString(record, "Phone1"),
     phone2: readNullableString(record, "Phone2"),
     phone3: readNullableString(record, "Phone3"),
+    extension:
+      readNullableString(record, "Extension") ??
+      readNullableString(record, "Phone1Ext") ??
+      readNullableString(record, "extension"),
   });
 
   return {
@@ -1862,9 +1866,13 @@ export function buildBusinessAccountUpdatePayload(
     Name: {
       value: update.companyName,
     },
-    Owner: {
-      value: update.salesRepId ?? "",
-    },
+    ...(update.salesRepId && update.salesRepId.trim()
+      ? {
+          Owner: {
+            value: update.salesRepId,
+          },
+        }
+      : {}),
     MainAddress: {
       AddressLine1: {
         value: update.addressLine1,

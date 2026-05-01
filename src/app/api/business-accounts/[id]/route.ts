@@ -573,6 +573,13 @@ function buildContactOnlyUpdateRequestFromCurrentRow(
   if (requestBodyHasOwnField(requestBody, "companyDescription")) {
     nextRequest.companyDescription = parsedRequest.companyDescription ?? null;
   }
+  if (requestBodyHasOwnField(requestBody, "assignedBusinessAccountRecordId")) {
+    nextRequest.assignedBusinessAccountRecordId =
+      parsedRequest.assignedBusinessAccountRecordId;
+  }
+  if (requestBodyHasOwnField(requestBody, "assignedBusinessAccountId")) {
+    nextRequest.assignedBusinessAccountId = parsedRequest.assignedBusinessAccountId;
+  }
   if (requestBodyHasOwnField(requestBody, "primaryContactJobTitle")) {
     nextRequest.primaryContactJobTitle = parsedRequest.primaryContactJobTitle ?? null;
   }
@@ -1138,9 +1145,15 @@ export async function PUT(
     );
     const requestedUnknownTargetContact =
       cachedTargetContactId !== null && cachedTargetRow === null;
+    const isCachedContactReassignment =
+      cachedCurrentRow !== null &&
+      cachedTargetContactId !== null &&
+      sanitizeNullableInput(updateRequest.assignedBusinessAccountId) !==
+        sanitizeNullableInput(cachedCurrentRow.businessAccountId);
     const isNoopSaveAgainstCachedRow =
       cachedCurrentRow !== null &&
       !isOrphanContactAssignment &&
+      !isCachedContactReassignment &&
       !requestedUnknownTargetContact &&
       !updateRequest.setAsPrimaryContact &&
       !hasBusinessAccountChanges(cachedCurrentRow, updateRequest) &&
@@ -1296,9 +1309,19 @@ export async function PUT(
         }
       }
 
-      const contactPayload = buildPrimaryContactUpdatePayload(
-        effectiveContactOnlyUpdateRequest,
+      const requestedAssignedBusinessAccountId = sanitizeNullableInput(
+        effectiveContactOnlyUpdateRequest.assignedBusinessAccountId,
       );
+      const currentAssignedBusinessAccountId = sanitizeNullableInput(
+        currentTargetRow.businessAccountId,
+      );
+      const isCrossAccountReassignment =
+        requestedAssignedBusinessAccountId !== null &&
+        requestedAssignedBusinessAccountId !== currentAssignedBusinessAccountId;
+
+      const contactPayload = isCrossAccountReassignment
+        ? buildContactAccountAssignmentPayload(effectiveContactOnlyUpdateRequest)
+        : buildPrimaryContactUpdatePayload(effectiveContactOnlyUpdateRequest);
       await updateContact(
         activeCookieValue,
         cachedTargetContactId,
@@ -1316,6 +1339,44 @@ export async function PUT(
         id,
         currentTargetRow,
       );
+
+      if (isCrossAccountReassignment) {
+        const targetIdentifier =
+          sanitizeNullableInput(effectiveContactOnlyUpdateRequest.assignedBusinessAccountRecordId) ??
+          requestedAssignedBusinessAccountId;
+
+        if (targetIdentifier) {
+          const refreshedTargetRaw = await fetchBusinessAccountById(
+            activeCookieValue,
+            targetIdentifier,
+            activeAuthCookieRefresh,
+          );
+          const refreshedTargetRows = normalizeBusinessAccountRows(refreshedTargetRaw);
+          const refreshedTargetRecordId = resolveBusinessAccountRecordId(
+            refreshedTargetRaw,
+            targetIdentifier,
+          );
+          const matchedTargetRow =
+            refreshedTargetRows.find((row) => row.contactId === cachedTargetContactId) ??
+            refreshedTargetRows.find((row) => row.isPrimaryContact) ??
+            refreshedRow;
+
+          if (getEnv().READ_MODEL_ENABLED) {
+            const previousRows = cachedTargetDetail?.rows ?? cachedDetail?.rows ?? [currentTargetRow];
+            replaceReadModelAccountRows(
+              id,
+              previousRows.filter((row) => row.contactId !== cachedTargetContactId),
+            );
+            replaceReadModelAccountRows(refreshedTargetRecordId, refreshedTargetRows);
+          }
+
+          return withLocalCompanyDescription(
+            matchedTargetRow,
+            updateRequest,
+            submittedCompanyDescription,
+          );
+        }
+      }
 
       if (getEnv().READ_MODEL_ENABLED) {
         replaceReadModelAccountRows(

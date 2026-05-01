@@ -225,6 +225,24 @@ describe("normalizeBusinessAccount", () => {
     expect(row.primaryContactEmail).toBe("jorge@example.com");
   });
 
+  it("uses explicit Extension fields for primary contact normalization", () => {
+    const row = normalizeBusinessAccount(
+      makePayload({
+        PrimaryContact: {
+          ContactID: { value: 157497 },
+          DisplayName: { value: "Jorge Serrano" },
+          Phone1: { value: "4162304681" },
+          Phone2: { value: "9055550100" },
+          Extension: { value: "3008" },
+          Email: { value: "jorge@example.com" },
+        },
+      }),
+    );
+
+    expect(row.primaryContactPhone).toBe("416-230-4681");
+    expect(row.primaryContactExtension).toBe("3008");
+  });
+
   it("derives company phone from hidden blank-name contacts when account phone is missing", () => {
     const row = normalizeBusinessAccount(
       makePayload({
@@ -345,6 +363,39 @@ describe("normalizeBusinessAccountRows", () => {
     expect(secondaryRow?.primaryContactEmail).toBe("derek@example.com");
     expect(secondaryRow?.contactId).toBe(158410);
     expect(secondaryRow?.companyPhone).toBe("905-555-0100");
+  });
+
+  it("preserves contact extensions from explicit Extension fields on reload rows", () => {
+    const rows = normalizeBusinessAccountRows(
+      makePayload({
+        PrimaryContact: {
+          ContactID: { value: 157497 },
+          DisplayName: { value: "Jorge Serrano" },
+          Phone1: { value: "4162304681" },
+          Phone2: { value: "9055550100" },
+          Extension: { value: "3008" },
+          Email: { value: "jorge@example.com" },
+        },
+        Contacts: [
+          {
+            ContactID: { value: 157497 },
+            Active: { value: true },
+            DisplayName: { value: "Jorge Serrano" },
+            Email: { value: "jorge@example.com" },
+            Phone1: { value: "4162304681" },
+            Phone2: { value: "9055550100" },
+            Extension: { value: "3008" },
+          },
+        ],
+      }),
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      primaryContactPhone: "416-230-4681",
+      primaryContactExtension: "3008",
+      phoneNumber: "416-230-4681",
+    });
   });
 
   it("returns a single account row when the business account has no contacts", () => {
@@ -1477,6 +1528,38 @@ describe("business account merge helpers", () => {
         value: "905-555-2222",
       },
     });
+  });
+
+  it("omits Owner from account updates when no sales rep id is present", () => {
+    const payload = buildBusinessAccountUpdatePayload(makePayload(), {
+      companyName: "Alpha Inc",
+      assignedBusinessAccountRecordId: "a1",
+      assignedBusinessAccountId: "AC-100",
+      addressLine1: "5579 McAdam Road",
+      addressLine2: "",
+      city: "Mississauga",
+      state: "ON",
+      postalCode: "L4Z 1N4",
+      country: "CA",
+      targetContactId: null,
+      setAsPrimaryContact: false,
+      primaryOnlyIntent: false,
+      salesRepId: null,
+      salesRepName: null,
+      industryType: "Distribution",
+      subCategory: "Pharmaceuticals",
+      companyRegion: "Region 1",
+      week: "Week 1",
+      companyPhone: "905-555-0100",
+      primaryContactName: "Jorge Serrano",
+      primaryContactPhone: "416-230-4681",
+      primaryContactEmail: "jorge@example.com",
+      category: "A",
+      notes: "Contact-level note",
+      expectedLastModified: "2026-03-04T16:39:08.13+00:00",
+    });
+
+    expect(payload).not.toHaveProperty("Owner");
   });
 
   it("canonicalizes Region 10 when building business-account updates", () => {

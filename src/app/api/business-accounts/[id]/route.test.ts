@@ -877,4 +877,126 @@ describe("PUT /api/business-accounts/[id]", () => {
     expect(updateContact).toHaveBeenCalledTimes(1);
     expect(fetchContactById).toHaveBeenCalledTimes(2);
   });
+
+  it("reassigns contact-only saves to a different business account when the assigned account changes", async () => {
+    const sourceRow = buildRow({
+      id: "lead-record-1",
+      accountRecordId: "lead-record-1",
+      rowKey: "lead-record-1:contact:157252",
+      businessAccountId: "LEAD-100",
+      companyName: "Vac Aero Lead",
+      primaryContactName: "Val Cowen",
+      primaryContactEmail: "val@vacaero.com",
+      notes: "Original note",
+    });
+    const targetContactId = sourceRow.contactId as number;
+
+    readBusinessAccountDetailFromReadModel.mockImplementation(
+      (_id: string, requestedContactId?: number) => {
+        if (requestedContactId !== undefined && requestedContactId !== targetContactId) {
+          return null;
+        }
+
+        return {
+          row: sourceRow,
+          rows: [sourceRow],
+          accountLocation: null,
+        };
+      },
+    );
+
+    fetchContactById
+      .mockResolvedValueOnce(buildRawContact(sourceRow))
+      .mockResolvedValueOnce(
+        buildRawContact(sourceRow, {
+          BusinessAccountID: { value: "VAC-200" },
+          BusinessAccount: { value: "VAC-200" },
+          CompanyName: { value: "Vac Aero International" },
+        }),
+      );
+
+    fetchBusinessAccountById.mockResolvedValueOnce({
+      id: "customer-record-1",
+      BusinessAccountID: { value: "VAC-200" },
+      Name: { value: "Vac Aero International" },
+      MainAddress: {
+        value: {
+          AddressLine1: { value: "1 Customer Way" },
+          City: { value: "Toronto" },
+          State: { value: "ON" },
+          PostalCode: { value: "M5V 1A1" },
+          Country: { value: "CA" },
+        },
+      },
+      Contacts: [
+        {
+          ContactID: { value: targetContactId },
+          BusinessAccountID: { value: "VAC-200" },
+          DisplayName: { value: "Val Cowen" },
+          Email: { value: "val@vacaero.com" },
+          note: { value: "Original note" },
+        },
+      ],
+      PrimaryContact: {
+        ContactID: { value: targetContactId },
+        DisplayName: { value: "Val Cowen" },
+        Email: { value: "val@vacaero.com" },
+      },
+    });
+
+    const { PUT } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/business-accounts/lead-record-1", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ...buildNoopPutPayload(sourceRow),
+          targetContactId,
+          assignedBusinessAccountRecordId: "customer-record-1",
+          assignedBusinessAccountId: "VAC-200",
+          baseSnapshot: buildConcurrencySnapshot(sourceRow),
+        }),
+      }),
+      {
+        params: Promise.resolve({
+          id: "lead-record-1",
+        }),
+      },
+    );
+
+    const responseBody = await response.json();
+    expect(response.status, JSON.stringify(responseBody)).toBe(200);
+    expect(updateContact).toHaveBeenCalledWith(
+      "cookie",
+      targetContactId,
+      expect.objectContaining({
+        BusinessAccount: {
+          value: "VAC-200",
+        },
+      }),
+      expect.any(Object),
+    );
+    expect(fetchBusinessAccountById).toHaveBeenCalledWith(
+      "cookie",
+      "customer-record-1",
+      expect.any(Object),
+    );
+    expect(replaceReadModelAccountRows).toHaveBeenNthCalledWith(1, "lead-record-1", []);
+    expect(replaceReadModelAccountRows).toHaveBeenNthCalledWith(
+      2,
+      "customer-record-1",
+      expect.arrayContaining([
+        expect.objectContaining({
+          contactId: targetContactId,
+          businessAccountId: "VAC-200",
+        }),
+      ]),
+    );
+    expect(responseBody).toMatchObject({
+      contactId: targetContactId,
+      businessAccountId: "VAC-200",
+    });
+  });
 });
