@@ -1155,7 +1155,8 @@ export async function PUT(
       !isOrphanContactAssignment &&
       !isCachedContactReassignment &&
       !requestedUnknownTargetContact &&
-      !updateRequest.setAsPrimaryContact &&
+      (!updateRequest.setAsPrimaryContact ||
+        cachedCurrentRow.primaryContactId === cachedTargetContactId) &&
       !hasBusinessAccountChanges(cachedCurrentRow, updateRequest) &&
       !hasPrimaryContactChanges(
         cachedContactComparisonRow ?? cachedCurrentRow,

@@ -712,6 +712,69 @@ describe("PUT /api/business-accounts/[id]", () => {
     expect(publishBusinessAccountChanged).toHaveBeenCalledTimes(1);
   });
 
+  it("short-circuits already-primary saves without writing to Acumatica", async () => {
+    const cachedRow = buildRow({
+      contactId: 157252,
+      primaryContactId: 157252,
+      isPrimaryContact: true,
+      rowKey: "record-1:contact:157252",
+      primaryContactName: "Harvey Tamber",
+      primaryContactJobTitle: null,
+      primaryContactPhone: null,
+      primaryContactExtension: null,
+      primaryContactRawPhone: null,
+      primaryContactEmail: null,
+      notes: "Confirmed Decision Maker",
+    });
+
+    readBusinessAccountDetailFromReadModel.mockImplementation(
+      (_id: string, contactId?: number) => {
+        if (contactId !== undefined && contactId !== 157252) {
+          return null;
+        }
+
+        return {
+          row: cachedRow,
+          rows: [cachedRow],
+          accountLocation: null,
+        };
+      },
+    );
+
+    const { PUT } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/business-accounts/record-1", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ...buildNoopPutPayload(cachedRow),
+          targetContactId: 157252,
+          assignedBusinessAccountId: cachedRow.businessAccountId,
+          assignedBusinessAccountRecordId: cachedRow.accountRecordId,
+          setAsPrimaryContact: true,
+        }),
+      }),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: cachedRow.id,
+      primaryContactId: cachedRow.primaryContactId,
+      primaryContactName: cachedRow.primaryContactName,
+    });
+    expect(fetchBusinessAccountById).not.toHaveBeenCalled();
+    expect(updateBusinessAccount).not.toHaveBeenCalled();
+    expect(updateContact).not.toHaveBeenCalled();
+    expect(publishBusinessAccountChanged).toHaveBeenCalledTimes(1);
+  });
+
   it("treats sparse no-op payloads as unchanged by preserving cached optional fields", async () => {
     const cachedRow = buildRow({
       contactId: null,
