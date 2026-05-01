@@ -25,6 +25,7 @@ const fetchBusinessAccountById = vi.fn();
 const fetchContactById = vi.fn();
 const updateBusinessAccount = vi.fn();
 const updateContact = vi.fn();
+const setBusinessAccountPrimaryContact = vi.fn();
 const readBusinessAccountDetailFromReadModel = vi.fn();
 const readStoredBusinessAccountRowsFromReadModel = vi.fn();
 const replaceReadModelAccountRows = vi.fn();
@@ -43,6 +44,8 @@ const readSyncStatus = vi.fn(() => ({
 }));
 const waitForReadModelSync = vi.fn();
 const publishBusinessAccountChanged = vi.fn();
+const shouldValidateWithAddressComplete = vi.fn(() => false);
+const validateCanadianAddress = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
   requireAuthCookieValue,
@@ -92,6 +95,15 @@ vi.mock("@/lib/read-model/sync", () => ({
 
 vi.mock("@/lib/business-account-live", () => ({
   publishBusinessAccountChanged,
+}));
+
+vi.mock("@/lib/contact-merge-server", () => ({
+  setBusinessAccountPrimaryContact,
+}));
+
+vi.mock("@/lib/address-complete", () => ({
+  shouldValidateWithAddressComplete,
+  validateCanadianAddress,
 }));
 
 function buildRow(overrides?: Partial<BusinessAccountRow>): BusinessAccountRow {
@@ -643,10 +655,15 @@ describe("PUT /api/business-accounts/[id]", () => {
     requireAuthCookieValue.mockReturnValue("cookie");
     setAuthCookie.mockReset();
     publishBusinessAccountChanged.mockReset();
+    shouldValidateWithAddressComplete.mockReset();
+    shouldValidateWithAddressComplete.mockReturnValue(false);
+    validateCanadianAddress.mockReset();
     fetchBusinessAccountById.mockReset();
     fetchContactById.mockReset();
     updateBusinessAccount.mockReset();
     updateContact.mockReset();
+    setBusinessAccountPrimaryContact.mockReset();
+    setBusinessAccountPrimaryContact.mockImplementation(async () => undefined);
     readBusinessAccountDetailFromReadModel.mockReset();
     replaceReadModelAccountRows.mockReset();
   });
@@ -773,6 +790,163 @@ describe("PUT /api/business-accounts/[id]", () => {
     expect(updateBusinessAccount).not.toHaveBeenCalled();
     expect(updateContact).not.toHaveBeenCalled();
     expect(publishBusinessAccountChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the cached target row for a primary-only switch when fetching the contact details fails", async () => {
+    const currentPrimaryRow = buildRow({
+      contactId: 157252,
+      primaryContactId: 157252,
+      isPrimaryContact: true,
+      rowKey: "record-1:contact:157252",
+      salesRepId: null,
+      salesRepName: null,
+      category: null,
+      primaryContactName: "Harvey Tamber",
+      primaryContactEmail: "harvey@example.com",
+    });
+    const targetRow = buildRow({
+      contactId: 157253,
+      primaryContactId: 157252,
+      isPrimaryContact: false,
+      rowKey: "record-1:contact:157253",
+      salesRepId: null,
+      salesRepName: null,
+      category: null,
+      primaryContactName: "Satman Gill",
+      primaryContactEmail: "satman@example.com",
+      primaryContactPhone: "647-555-0101",
+      notes: "Target contact",
+    });
+
+    readBusinessAccountDetailFromReadModel.mockImplementation(
+      (_id: string, contactId?: number) => {
+        if (contactId === 157253) {
+          return {
+            row: targetRow,
+            rows: [currentPrimaryRow, targetRow],
+            accountLocation: null,
+          };
+        }
+
+        return {
+          row: currentPrimaryRow,
+          rows: [currentPrimaryRow, targetRow],
+          accountLocation: null,
+        };
+      },
+    );
+
+    fetchBusinessAccountById
+      .mockResolvedValueOnce({
+        id: "record-1",
+        BusinessAccountID: { value: currentPrimaryRow.businessAccountId },
+        Name: { value: currentPrimaryRow.companyName },
+        MainAddress: {
+          value: {
+            AddressLine1: { value: currentPrimaryRow.addressLine1 },
+            AddressLine2: { value: currentPrimaryRow.addressLine2 },
+            City: { value: currentPrimaryRow.city },
+            State: { value: currentPrimaryRow.state },
+            PostalCode: { value: currentPrimaryRow.postalCode },
+            Country: { value: currentPrimaryRow.country },
+          },
+        },
+        Contacts: [
+          {
+            ContactID: { value: 157252 },
+            DisplayName: { value: "Harvey Tamber" },
+            Email: { value: "harvey@example.com" },
+          },
+          {
+            ContactID: { value: 157253 },
+            DisplayName: { value: "Satman Gill" },
+            Email: { value: "satman@example.com" },
+            Phone1: { value: "647-555-0101" },
+            note: { value: "Target contact" },
+          },
+        ],
+        PrimaryContact: {
+          ContactID: { value: 157252 },
+          DisplayName: { value: "Harvey Tamber" },
+          Email: { value: "harvey@example.com" },
+        },
+      })
+      .mockResolvedValueOnce({
+        id: "record-1",
+        BusinessAccountID: { value: currentPrimaryRow.businessAccountId },
+        Name: { value: currentPrimaryRow.companyName },
+        MainAddress: {
+          value: {
+            AddressLine1: { value: currentPrimaryRow.addressLine1 },
+            AddressLine2: { value: currentPrimaryRow.addressLine2 },
+            City: { value: currentPrimaryRow.city },
+            State: { value: currentPrimaryRow.state },
+            PostalCode: { value: currentPrimaryRow.postalCode },
+            Country: { value: currentPrimaryRow.country },
+          },
+        },
+        Contacts: [
+          {
+            ContactID: { value: 157252 },
+            DisplayName: { value: "Harvey Tamber" },
+            Email: { value: "harvey@example.com" },
+          },
+          {
+            ContactID: { value: 157253 },
+            DisplayName: { value: "Satman Gill" },
+            Email: { value: "satman@example.com" },
+            Phone1: { value: "647-555-0101" },
+            note: { value: "Target contact" },
+          },
+        ],
+        PrimaryContact: {
+          ContactID: { value: 157253 },
+          DisplayName: { value: "Satman Gill" },
+          Email: { value: "satman@example.com" },
+        },
+      });
+
+    fetchContactById
+      .mockRejectedValueOnce(new Error("temporary contact lookup failure"))
+      .mockResolvedValue(
+        buildRawContact(targetRow, {
+          LastModifiedDateTime: { value: "2026-04-02T11:00:00.000Z" },
+        }),
+      );
+
+    const { PUT } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/business-accounts/record-1", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ...buildNoopPutPayload(targetRow),
+          targetContactId: 157253,
+          assignedBusinessAccountId: targetRow.businessAccountId,
+          assignedBusinessAccountRecordId: targetRow.accountRecordId,
+          setAsPrimaryContact: true,
+        }),
+      }),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    const responseBody = await response.json();
+    expect(response.status, JSON.stringify(responseBody)).toBe(200);
+    expect(updateBusinessAccount).not.toHaveBeenCalled();
+    expect(updateContact).not.toHaveBeenCalled();
+    expect(setBusinessAccountPrimaryContact).toHaveBeenCalledTimes(1);
+    expect(responseBody).toMatchObject({
+      contactId: 157253,
+      primaryContactId: 157253,
+      primaryContactName: "Satman Gill",
+      isPrimaryContact: true,
+    });
   });
 
   it("treats sparse no-op payloads as unchanged by preserving cached optional fields", async () => {

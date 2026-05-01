@@ -1423,7 +1423,8 @@ export async function PUT(
       currentAccountRow.contactId ??
       currentAccountRow.primaryContactId;
 
-    let currentRowForContactComparison = currentAccountRow;
+    const fallbackComparisonRow = cachedContactComparisonRow ?? currentAccountRow;
+    let currentRowForContactComparison = fallbackComparisonRow;
     let currentTargetContactRaw: unknown = null;
     if (effectiveTargetContactId !== null) {
       try {
@@ -1437,7 +1438,7 @@ export async function PUT(
           withPrimaryContact(currentRaw, currentTargetContact),
         );
         currentRowForContactComparison = {
-          ...currentAccountRow,
+          ...fallbackComparisonRow,
           ...normalizedTargetRow,
           id: currentAccountRow.id,
           accountRecordId: currentAccountRow.accountRecordId ?? currentAccountRow.id,
