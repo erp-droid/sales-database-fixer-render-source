@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withServiceAcumaticaSession } from "@/lib/acumatica-service-auth";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { getReadModelDb } from "@/lib/read-model/db";
 import {
   readManualSyncBlockedReason,
   readSyncStatus,
@@ -69,6 +70,67 @@ function readBoundedInteger(value: string | null | undefined, fallback: number, 
   return Math.min(max, Math.max(min, parsed));
 }
 
+function normalizeOptionalLoginName(value: string | null | undefined): string | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized || null;
+}
+
+function readStoredCredentialLoginNames(limit = 25): string[] {
+  const db = getReadModelDb();
+  const rows = db
+    .prepare(
+      `
+      SELECT login_name
+      FROM user_auth_credentials
+      ORDER BY updated_at DESC
+      LIMIT ?
+      `,
+    )
+    .all(Math.max(1, Math.min(limit, 200))) as Array<{ login_name?: string | null }>;
+
+  const deduped = new Set<string>();
+  for (const row of rows) {
+    const loginName = normalizeOptionalLoginName(row.login_name);
+    if (loginName) {
+      deduped.add(loginName);
+    }
+  }
+
+  return Array.from(deduped);
+}
+
+function buildCredentialCandidates(input: {
+  preferredLoginName: string | null;
+  includeStoredFallback: boolean;
+}): Array<string | null> {
+  const candidates: Array<string | null> = [];
+  const pushCandidate = (candidate: string | null): void => {
+    if (candidate === null) {
+      if (!candidates.includes(null)) {
+        candidates.push(null);
+      }
+      return;
+    }
+    if (!candidates.includes(candidate)) {
+      candidates.push(candidate);
+    }
+  };
+
+  if (input.preferredLoginName) {
+    pushCandidate(input.preferredLoginName);
+  }
+
+  pushCandidate(null);
+
+  if (input.includeStoredFallback) {
+    for (const storedLoginName of readStoredCredentialLoginNames()) {
+      pushCandidate(storedLoginName);
+    }
+  }
+
+  return candidates;
+}
+
 function timeoutAfter(ms: number): Promise<"timeout"> {
   return new Promise((resolve) => {
     setTimeout(() => {
@@ -83,6 +145,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const forceUnlock = readBooleanFlag(request.nextUrl.searchParams.get("forceUnlock"), false);
     const waitForCompletion = readBooleanFlag(request.nextUrl.searchParams.get("wait"), true);
+    const preferredLoginName = normalizeOptionalLoginName(
+      request.nextUrl.searchParams.get("loginName"),
+    );
+    const includeStoredFallback = readBooleanFlag(
+      request.nextUrl.searchParams.get("tryStoredCredentials"),
+      true,
+    );
     const timeoutMs = readBoundedInteger(
       request.nextUrl.searchParams.get("timeoutMs"),
       55 * 60_000,
@@ -100,12 +169,42 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       throw new HttpError(409, blockedReason);
     }
 
-    const triggered = await withServiceAcumaticaSession(null, (cookieValue, authCookieRefresh) =>
-      triggerReadModelSync(cookieValue, {
-        authCookieRefresh,
-        force: true,
-      }),
-    );
+    let triggered: Awaited<ReturnType<typeof triggerReadModelSync>> | null = null;
+    let credentialSource: string | null = null;
+    const credentialErrors: string[] = [];
+    const candidates = buildCredentialCandidates({
+      preferredLoginName,
+      includeStoredFallback,
+    });
+
+    for (const candidate of candidates) {
+      try {
+        const response = await withServiceAcumaticaSession(
+          candidate,
+          (cookieValue, authCookieRefresh) =>
+            triggerReadModelSync(cookieValue, {
+              authCookieRefresh,
+              force: true,
+            }),
+        );
+        triggered = response;
+        credentialSource = candidate;
+        break;
+      } catch (error) {
+        credentialErrors.push(
+          `${candidate ?? "__service__"}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    if (!triggered) {
+      throw new HttpError(
+        500,
+        `Unable to establish an Acumatica session for full sync. ${credentialErrors.join(" | ")}`,
+      );
+    }
 
     if (triggered.alreadyRunning) {
       throw new HttpError(409, "A full account sync is already running.");
@@ -115,6 +214,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({
         ok: true,
         status: "started",
+        credentialSource: credentialSource ?? "__service__",
         sync: triggered.status,
       });
     }
@@ -137,6 +237,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       {
         ok: completed.status !== "failed",
         status: completed.status,
+        credentialSource: credentialSource ?? "__service__",
         sync: completed,
       },
       { status: statusCode },
