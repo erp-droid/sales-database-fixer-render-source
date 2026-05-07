@@ -1,6 +1,10 @@
 import { invalidateReadModelCaches } from "@/lib/read-model/cache";
 import { getReadModelDb } from "@/lib/read-model/db";
-import type { BusinessAccountRow } from "@/types/business-account";
+import {
+  CATEGORY_VALUES,
+  type BusinessAccountRow,
+  type Category,
+} from "@/types/business-account";
 
 type StoredAccountLocalMetadataRow = {
   account_record_id: string;
@@ -19,7 +23,7 @@ type AccountLocalMetadataInput = {
 
 type StoredAccountLocalMetadata = {
   companyDescription: string | null;
-  category: string | null;
+  category: Category | null;
   marketingEligible: boolean;
 };
 
@@ -38,6 +42,15 @@ function normalizeMarketingEligible(value: boolean | null | undefined): boolean 
 
 function normalizeStoredMarketingEligible(value: number | null | undefined): boolean {
   return value !== 0;
+}
+
+function normalizeCategory(value: string | null | undefined): Category | null {
+  const normalized = normalizeText(value)?.toUpperCase() ?? null;
+  if (!normalized) {
+    return null;
+  }
+
+  return CATEGORY_VALUES.includes(normalized as Category) ? (normalized as Category) : null;
 }
 
 function buildMetadataMap(accountRecordIds: string[]): Map<string, StoredAccountLocalMetadata> {
@@ -62,7 +75,7 @@ function buildMetadataMap(accountRecordIds: string[]): Map<string, StoredAccount
       row.account_record_id,
       {
         companyDescription: normalizeText(row.company_description),
-        category: normalizeText(row.category),
+        category: normalizeCategory(row.category),
         marketingEligible: normalizeStoredMarketingEligible(row.marketing_eligible),
       },
     ]),
@@ -73,7 +86,7 @@ export function saveAccountCompanyDescription(input: AccountLocalMetadataInput):
   const accountRecordId = normalizeText(input.accountRecordId);
   const businessAccountId = normalizeText(input.businessAccountId);
   const companyDescription = normalizeText(input.companyDescription);
-  const category = normalizeText(input.category);
+  const category = normalizeCategory(input.category);
   const marketingEligible = normalizeMarketingEligible(input.marketingEligible);
   if (!accountRecordId) {
     return;
@@ -146,7 +159,7 @@ export function applyLocalAccountMetadataToRows(
     const category = metadata?.category ?? (row.category ?? null);
     const marketingEligible = metadata?.marketingEligible ?? true;
     const currentDescription = normalizeText(row.companyDescription);
-    const currentCategory = normalizeText(row.category);
+    const currentCategory = normalizeCategory(row.category);
     const currentMarketingEligible = normalizeMarketingEligible(row.marketingEligible);
     const hasExplicitDescription = row.companyDescription !== undefined;
     const hasExplicitCategory = row.category !== undefined;
