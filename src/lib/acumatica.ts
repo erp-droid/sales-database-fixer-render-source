@@ -988,14 +988,9 @@ const BUSINESS_ACCOUNT_PROFILE_SELECTS: Record<
     "OwnerEmployeeName",
     "LastModifiedDateTime",
   ],
-  quality: [
-    "id",
-    "BusinessAccountID",
-    "NoteID",
-    "Owner",
-    "OwnerEmployeeName",
-    "LastModifiedDateTime",
-  ],
+  // Some tenants reject these selected fields on BusinessAccount queries.
+  // Keep quality profile broad enough for sync, but without $select.
+  quality: undefined,
 };
 
 const BUSINESS_ACCOUNT_PROFILE_EXPANDS: Record<
