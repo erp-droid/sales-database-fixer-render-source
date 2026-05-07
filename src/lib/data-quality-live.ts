@@ -625,9 +625,8 @@ export async function fetchAllSyncRows(
   const includeInternal = Boolean(options?.includeInternal);
   const includeOpportunityCounts = options?.includeOpportunityCounts !== false;
   const includeContacts = options?.includeContacts !== false;
-  // Full read-model sync skips contact hydration and uses a lighter account shape to
-  // keep Acumatica fetches responsive while still refreshing account visibility.
-  const accountProfile = includeContacts ? "quality" : "list";
+  // Full read-model sync skips contact hydration, so attribute hydration is optional.
+  // Keeping the quality profile avoids fragile $select combinations on some tenants.
   const ensureAttributes = includeContacts;
   const rawContacts = includeContacts
     ? await fetchContacts(
@@ -645,7 +644,7 @@ export async function fetchAllSyncRows(
       cookieValue,
       {
         batchSize: 250,
-        profile: accountProfile,
+        profile: "quality",
         ensureMainAddress: true,
         ensurePrimaryContact: true,
         ensureAttributes,

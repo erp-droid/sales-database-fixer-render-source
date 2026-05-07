@@ -1002,7 +1002,7 @@ const BUSINESS_ACCOUNT_PROFILE_EXPANDS: Record<
   detail: ["Attributes", "Contacts", "MainAddress", "PrimaryContact"],
   list: ["MainAddress", "PrimaryContact"],
   map: ["MainAddress", "PrimaryContact"],
-  quality: ["Attributes", "MainAddress", "PrimaryContact"],
+  quality: ["MainAddress", "PrimaryContact"],
 };
 
 const resolvedExpandByProfile = new Map<BusinessAccountProfile, string>();
