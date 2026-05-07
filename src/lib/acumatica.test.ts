@@ -404,6 +404,100 @@ describe("Acumatica endpoint resolution", () => {
     );
   });
 
+  it("hydrates missing attributes from detail when collection attribute supplement fails", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ status: 200, body: [] }));
+
+    const { fetchBusinessAccounts, validateSessionWithAcumatica } = await import(
+      "@/lib/acumatica"
+    );
+
+    await validateSessionWithAcumatica("cookie");
+    fetchMock.mockReset();
+
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Attributes expand is not available on this endpoint." },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Contacts expand is not available on this endpoint." },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Attributes expand is not available on this endpoint." },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: 200, body: [] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: [
+            {
+              id: "acct-1",
+              BusinessAccountID: { value: "B200000001" },
+              Name: { value: "Alpha Inc" },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 500,
+          body: { message: "Attributes expand is not available on this endpoint." },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: 200, body: [] }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: 200,
+          body: {
+            id: "acct-1",
+            BusinessAccountID: { value: "B200000001" },
+            Attributes: [
+              {
+                AttributeID: { value: "CLIENTTYPE" },
+                Value: { value: "D" },
+              },
+            ],
+          },
+        }),
+      );
+
+    const rows = await fetchBusinessAccounts("cookie", {
+      maxRecords: 1,
+      batchSize: 1,
+      ensureAttributes: true,
+      ensureContacts: false,
+      ensureMainAddress: false,
+      ensurePrimaryContact: false,
+      profile: "sync",
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: "acct-1",
+      Attributes: [
+        {
+          AttributeID: { value: "CLIENTTYPE" },
+          Value: { value: "D" },
+        },
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(8);
+    expect(String(fetchMock.mock.calls[5]?.[0])).toContain(
+      "/BusinessAccount?%24top=1&%24skip=0&%24expand=Attributes",
+    );
+    expect(String(fetchMock.mock.calls[7]?.[0])).toContain(
+      "/BusinessAccount/acct-1?%24expand=Attributes%2CContacts%2CMainAddress%2CPrimaryContact",
+    );
+  });
+
   it("supplements missing detail attributes when the endpoint only accepts a lighter detail expand", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ status: 200, body: [] }));
 

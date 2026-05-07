@@ -1347,6 +1347,88 @@ function mergeMainAddressFromSupplement(
   });
 }
 
+function readBusinessAccountArrayField(
+  record: RawBusinessAccount,
+  key: string,
+): unknown[] {
+  const field = record[key];
+  if (Array.isArray(field)) {
+    return field;
+  }
+
+  if (!field || typeof field !== "object") {
+    return [];
+  }
+
+  const wrapped = field as Record<string, unknown>;
+  if (Array.isArray(wrapped.value)) {
+    return wrapped.value;
+  }
+  if (Array.isArray(wrapped.Items)) {
+    return wrapped.Items;
+  }
+
+  return [];
+}
+
+function hasBusinessAccountAttributes(record: RawBusinessAccount): boolean {
+  return readBusinessAccountArrayField(record, "Attributes").length > 0;
+}
+
+async function hydrateMissingBusinessAccountAttributesFromDetail(
+  cookieValue: string,
+  rows: RawBusinessAccount[],
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawBusinessAccount[]> {
+  const missingIdentities = [
+    ...new Set(
+      rows
+        .filter((row) => !hasBusinessAccountAttributes(row))
+        .map((row) => readBusinessAccountIdentity(row))
+        .filter((identity): identity is string => Boolean(identity)),
+    ),
+  ];
+  if (missingIdentities.length === 0) {
+    return rows;
+  }
+
+  const supplementRows: RawBusinessAccount[] = [];
+  for (const detailChunk of chunkArray(missingIdentities, 4)) {
+    const settled = await Promise.allSettled(
+      detailChunk.map((identity) =>
+        fetchBusinessAccountById(
+          cookieValue,
+          identity,
+          authCookieRefresh,
+        ),
+      ),
+    );
+
+    for (const result of settled) {
+      if (result.status === "fulfilled") {
+        if (hasBusinessAccountAttributes(result.value)) {
+          supplementRows.push(result.value);
+        }
+        continue;
+      }
+
+      const error = result.reason;
+      if (
+        error instanceof HttpError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  if (supplementRows.length === 0) {
+    return rows;
+  }
+
+  return mergeAttributesFromSupplement(rows, supplementRows);
+}
+
 function readMissingBusinessAccountDetailExpandParts(expand: string): string[] {
   const selectedParts = new Set(
     expand
@@ -1497,6 +1579,14 @@ export async function fetchBusinessAccounts(
           throw error;
         }
       }
+    }
+
+    if (options?.ensureAttributes && !selectedExpand.includes("Attributes")) {
+      effectiveRows = await hydrateMissingBusinessAccountAttributesFromDetail(
+        cookieValue,
+        effectiveRows,
+        authCookieRefresh,
+      );
     }
 
     if (rows.length === 0) {
