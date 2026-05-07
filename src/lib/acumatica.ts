@@ -1376,6 +1376,35 @@ function hasBusinessAccountAttributes(record: RawBusinessAccount): boolean {
 }
 
 const ATTRIBUTE_DETAIL_HYDRATION_CONCURRENCY = 20;
+const ATTRIBUTE_DETAIL_HYDRATION_REQUEST_TIMEOUT_MS = 25_000;
+
+async function fetchBusinessAccountByIdWithTimeout(
+  cookieValue: string,
+  identity: string,
+  authCookieRefresh?: AuthCookieRefreshState,
+): Promise<RawBusinessAccount> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(
+        new Error(
+          `Timed out hydrating business account detail attributes for '${identity}'.`,
+        ),
+      );
+    }, ATTRIBUTE_DETAIL_HYDRATION_REQUEST_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([
+      fetchBusinessAccountById(cookieValue, identity, authCookieRefresh),
+      timeoutPromise,
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 async function hydrateMissingBusinessAccountAttributesFromDetail(
   cookieValue: string,
@@ -1401,7 +1430,7 @@ async function hydrateMissingBusinessAccountAttributesFromDetail(
   )) {
     const settled = await Promise.allSettled(
       detailChunk.map((identity) =>
-        fetchBusinessAccountById(
+        fetchBusinessAccountByIdWithTimeout(
           cookieValue,
           identity,
           authCookieRefresh,
