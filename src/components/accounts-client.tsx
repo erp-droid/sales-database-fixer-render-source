@@ -407,7 +407,6 @@ type HeaderFilters = {
 };
 
 type AccountsFilterView = "allCompanies" | "marketingOnly";
-type CategoryFilterViewMode = "singleCategory" | "multiCategory";
 
 const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   companyName: "",
@@ -2448,8 +2447,6 @@ export function AccountsClient({
   const allRowsRef = useRef<BusinessAccountRow[]>([]);
   const [cacheHydrated, setCacheHydrated] = useState(false);
   const [activeFilterView, setActiveFilterView] = useState<AccountsFilterView>("allCompanies");
-  const [categoryFilterViewMode, setCategoryFilterViewMode] =
-    useState<CategoryFilterViewMode>("singleCategory");
   const [selectedCategoryFilters, setSelectedCategoryFilters] = useState<Category[]>([]);
   const [q, setQ] = useState("");
   const [headerFilters, setHeaderFilters] = useState<HeaderFilters>(
@@ -4594,36 +4591,13 @@ export function AccountsClient({
     }));
   }
 
-  function applyCategoryFilterMode(mode: CategoryFilterViewMode) {
-    if (categoryFilterViewMode === mode) {
-      return;
-    }
-
-    setPage(1);
-    setCategoryFilterViewMode(mode);
-    setSelectedCategoryFilters((current) => {
-      if (mode !== "singleCategory" || current.length <= 1) {
-        return current;
-      }
-      const nextSingleCategory = CATEGORY_VALUES.find((category) => current.includes(category));
-      return nextSingleCategory ? [nextSingleCategory] : [];
-    });
-  }
-
   function toggleCategoryFilter(category: Category) {
     setPage(1);
     setSelectedCategoryFilters((current) => {
-      if (categoryFilterViewMode === "multiCategory") {
-        if (current.includes(category)) {
-          return current.filter((currentCategory) => currentCategory !== category);
-        }
-        return [...current, category];
+      if (current.includes(category)) {
+        return current.filter((currentCategory) => currentCategory !== category);
       }
-
-      if (current.length === 1 && current[0] === category) {
-        return [];
-      }
-      return [category];
+      return [...current, category];
     });
   }
 
@@ -4631,7 +4605,6 @@ export function AccountsClient({
     setPage(1);
     setQ("");
     setHeaderFilters(DEFAULT_HEADER_FILTERS);
-    setCategoryFilterViewMode("singleCategory");
     setSelectedCategoryFilters([]);
   }
 
@@ -7052,27 +7025,7 @@ export function AccountsClient({
         </div>
       </section>
       <section className={styles.categoryFilterViewsRow}>
-        <span className={styles.filterViewsLabel}>Category views</span>
-        <div className={styles.filterViews}>
-          <button
-            className={`${styles.filterViewButton} ${
-              categoryFilterViewMode === "singleCategory" ? styles.filterViewButtonActive : ""
-            }`}
-            onClick={() => applyCategoryFilterMode("singleCategory")}
-            type="button"
-          >
-            Category Filter
-          </button>
-          <button
-            className={`${styles.filterViewButton} ${
-              categoryFilterViewMode === "multiCategory" ? styles.filterViewButtonActive : ""
-            }`}
-            onClick={() => applyCategoryFilterMode("multiCategory")}
-            type="button"
-          >
-            Category Multi-Select
-          </button>
-        </div>
+        <span className={styles.filterViewsLabel}>Category multi-select</span>
         <div className={styles.categoryFilterOptions}>
           {CATEGORY_VALUES.map((category) => {
             const isActive = selectedCategoryFilterSet.has(category);
