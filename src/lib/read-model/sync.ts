@@ -389,7 +389,7 @@ async function runFullSync(
     const rows = await fetchAllSyncRows(
       cookieValue,
       authCookieRefresh ?? { value: null },
-      { includeInternal: true },
+      { includeInternal: true, includeOpportunityCounts: false },
     );
     const counts = computeCounts(rows);
     currentPhase = "persist";

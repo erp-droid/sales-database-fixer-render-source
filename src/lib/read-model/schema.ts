@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS account_local_metadata (
   account_record_id TEXT PRIMARY KEY,
   business_account_id TEXT,
   company_description TEXT,
+  category TEXT,
   marketing_eligible INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL
 );
@@ -529,6 +530,12 @@ export function ensureReadModelSchema(db: Database.Database): void {
     db.exec(
       "ALTER TABLE account_local_metadata ADD COLUMN marketing_eligible INTEGER NOT NULL DEFAULT 1",
     );
+  }
+  const hasCategoryColumn = accountLocalMetadataColumns.some(
+    (column) => column.name === "category",
+  );
+  if (!hasCategoryColumn) {
+    db.exec("ALTER TABLE account_local_metadata ADD COLUMN category TEXT");
   }
   db.prepare(
     `

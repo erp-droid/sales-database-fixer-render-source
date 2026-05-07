@@ -205,6 +205,7 @@ describe("ensureReadModelSchema", () => {
         "account_record_id",
         "business_account_id",
         "company_description",
+        "category",
         "marketing_eligible",
         "updated_at",
       ]),
@@ -229,6 +230,27 @@ describe("ensureReadModelSchema", () => {
       .all() as Array<{ name: string }>;
 
     expect(columns.map((column) => column.name)).toContain("marketing_eligible");
+  });
+
+  it("adds account_local_metadata category column to legacy tables", () => {
+    db.exec(`
+      DROP TABLE IF EXISTS account_local_metadata;
+      CREATE TABLE account_local_metadata (
+        account_record_id TEXT PRIMARY KEY,
+        business_account_id TEXT,
+        company_description TEXT,
+        marketing_eligible INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(account_local_metadata)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toContain("category");
   });
 
   it("creates the rich employee_directory columns", () => {

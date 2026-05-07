@@ -888,6 +888,7 @@ function persistLocalAccountMetadata(
     accountRecordId: row.accountRecordId ?? row.id,
     businessAccountId: row.businessAccountId,
     companyDescription: updateRequest.companyDescription,
+    category: updateRequest.category,
     marketingEligible: updateRequest.marketingEligible,
   });
 }
@@ -1113,8 +1114,12 @@ export async function PUT(
       requestBody,
       "marketingEligible",
     );
+    const submittedCategory = requestBodyHasOwnField(
+      requestBody,
+      "category",
+    );
     const shouldPersistLocalMetadata =
-      submittedCompanyDescription || submittedMarketingEligible;
+      submittedCompanyDescription || submittedMarketingEligible || submittedCategory;
 
     const cachedTargetContactId =
       updateRequest.targetContactId ??

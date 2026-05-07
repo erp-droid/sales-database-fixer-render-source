@@ -139,6 +139,31 @@ describe("account-local-metadata", () => {
     expect(rows[0]?.marketingEligible).toBe(false);
   });
 
+  it("overlays saved category onto account rows", async () => {
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const {
+      applyLocalAccountMetadataToRow,
+      saveAccountCompanyDescription,
+    } = await import("@/lib/read-model/account-local-metadata");
+    closeDb = () => getReadModelDb().close();
+
+    saveAccountCompanyDescription({
+      accountRecordId: "account-1",
+      businessAccountId: "BA-1",
+      category: "D",
+    });
+
+    const row = applyLocalAccountMetadataToRow(
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+        category: "A",
+      }),
+    );
+
+    expect(row?.category).toBe("D");
+  });
+
   it("removes company descriptions when the saved value is cleared", async () => {
     const { getReadModelDb } = await import("@/lib/read-model/db");
     const {

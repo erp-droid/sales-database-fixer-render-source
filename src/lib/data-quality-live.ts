@@ -618,9 +618,11 @@ export async function fetchAllSyncRows(
   authCookieRefresh: AuthCookieRefreshState,
   options?: {
     includeInternal?: boolean;
+    includeOpportunityCounts?: boolean;
   },
 ): Promise<BusinessAccountRow[]> {
   const includeInternal = Boolean(options?.includeInternal);
+  const includeOpportunityCounts = options?.includeOpportunityCounts !== false;
   const rawContacts = await fetchContacts(
     cookieValue,
     {
@@ -638,7 +640,7 @@ export async function fetchAllSyncRows(
         ensureMainAddress: true,
         ensurePrimaryContact: true,
         ensureAttributes: true,
-        ensureContacts: true,
+        ensureContacts: false,
       },
       authCookieRefresh,
     );
@@ -673,16 +675,18 @@ export async function fetchAllSyncRows(
   );
   let opportunityCountByBusinessId: Map<string, number> | null = null;
 
-  try {
-    opportunityCountByBusinessId = await readOpportunityCountByBusinessAccountId(
-      cookieValue,
-      authCookieRefresh,
-    );
-  } catch (error) {
-    console.warn("[accounts-sync]", {
-      event: "opportunity-counts-unavailable",
-      error: error instanceof Error ? error.message : String(error),
-    });
+  if (includeOpportunityCounts) {
+    try {
+      opportunityCountByBusinessId = await readOpportunityCountByBusinessAccountId(
+        cookieValue,
+        authCookieRefresh,
+      );
+    } catch (error) {
+      console.warn("[accounts-sync]", {
+        event: "opportunity-counts-unavailable",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   const normalizedContactRows = buildSyncRowsFromContacts(

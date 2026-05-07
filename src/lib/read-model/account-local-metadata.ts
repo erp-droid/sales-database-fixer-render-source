@@ -5,6 +5,7 @@ import type { BusinessAccountRow } from "@/types/business-account";
 type StoredAccountLocalMetadataRow = {
   account_record_id: string;
   company_description: string | null;
+  category: string | null;
   marketing_eligible: number | null;
 };
 
@@ -12,11 +13,13 @@ type AccountLocalMetadataInput = {
   accountRecordId: string | null | undefined;
   businessAccountId?: string | null | undefined;
   companyDescription?: string | null | undefined;
+  category?: string | null | undefined;
   marketingEligible?: boolean | null | undefined;
 };
 
 type StoredAccountLocalMetadata = {
   companyDescription: string | null;
+  category: string | null;
   marketingEligible: boolean;
 };
 
@@ -47,7 +50,7 @@ function buildMetadataMap(accountRecordIds: string[]): Map<string, StoredAccount
   const rows = db
     .prepare(
       `
-      SELECT account_record_id, company_description, marketing_eligible
+      SELECT account_record_id, company_description, category, marketing_eligible
       FROM account_local_metadata
       WHERE account_record_id IN (${placeholders})
       `,
@@ -59,6 +62,7 @@ function buildMetadataMap(accountRecordIds: string[]): Map<string, StoredAccount
       row.account_record_id,
       {
         companyDescription: normalizeText(row.company_description),
+        category: normalizeText(row.category),
         marketingEligible: normalizeStoredMarketingEligible(row.marketing_eligible),
       },
     ]),
@@ -69,13 +73,14 @@ export function saveAccountCompanyDescription(input: AccountLocalMetadataInput):
   const accountRecordId = normalizeText(input.accountRecordId);
   const businessAccountId = normalizeText(input.businessAccountId);
   const companyDescription = normalizeText(input.companyDescription);
+  const category = normalizeText(input.category);
   const marketingEligible = normalizeMarketingEligible(input.marketingEligible);
   if (!accountRecordId) {
     return;
   }
 
   const db = getReadModelDb();
-  if (!companyDescription && marketingEligible) {
+  if (!companyDescription && !category && marketingEligible) {
     db.prepare(
       `
       DELETE FROM account_local_metadata
@@ -92,18 +97,21 @@ export function saveAccountCompanyDescription(input: AccountLocalMetadataInput):
       account_record_id,
       business_account_id,
       company_description,
+      category,
       marketing_eligible,
       updated_at
     ) VALUES (
       @account_record_id,
       @business_account_id,
       @company_description,
+      @category,
       @marketing_eligible,
       @updated_at
     )
     ON CONFLICT(account_record_id) DO UPDATE SET
       business_account_id = excluded.business_account_id,
       company_description = excluded.company_description,
+      category = excluded.category,
       marketing_eligible = excluded.marketing_eligible,
       updated_at = excluded.updated_at
     `,
@@ -111,6 +119,7 @@ export function saveAccountCompanyDescription(input: AccountLocalMetadataInput):
     account_record_id: accountRecordId,
     business_account_id: businessAccountId,
     company_description: companyDescription,
+    category,
     marketing_eligible: marketingEligible ? 1 : 0,
     updated_at: new Date().toISOString(),
   });
@@ -134,15 +143,20 @@ export function applyLocalAccountMetadataToRows(
     const metadata =
       accountRecordId !== null ? metadataByAccountRecordId.get(accountRecordId) : undefined;
     const companyDescription = metadata?.companyDescription ?? null;
+    const category = metadata?.category ?? (row.category ?? null);
     const marketingEligible = metadata?.marketingEligible ?? true;
     const currentDescription = normalizeText(row.companyDescription);
+    const currentCategory = normalizeText(row.category);
     const currentMarketingEligible = normalizeMarketingEligible(row.marketingEligible);
     const hasExplicitDescription = row.companyDescription !== undefined;
+    const hasExplicitCategory = row.category !== undefined;
     const hasExplicitMarketingEligible = typeof row.marketingEligible === "boolean";
     if (
       currentDescription === companyDescription &&
+      currentCategory === category &&
       currentMarketingEligible === marketingEligible &&
       hasExplicitDescription &&
+      hasExplicitCategory &&
       hasExplicitMarketingEligible
     ) {
       return row;
@@ -152,6 +166,7 @@ export function applyLocalAccountMetadataToRows(
     return {
       ...row,
       companyDescription,
+      category,
       marketingEligible,
     };
   });

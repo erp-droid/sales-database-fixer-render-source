@@ -1139,6 +1139,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       accountRecordId: responseBody.businessAccountRecordId,
       businessAccountId: responseBody.businessAccountId,
       companyDescription: createRequest.companyDescription,
+      category: createRequest.category,
     });
 
     const responseRows = applyLocalAccountMetadataToRows(responseBody.accountRows);

@@ -7,6 +7,9 @@ import { getReadModelDb } from "@/lib/read-model/db";
 
 type StoredAccountRow = {
   row_key: string;
+  id: string;
+  account_record_id: string | null;
+  business_account_id: string;
   company_name: string;
   payload_json: string;
 };
@@ -90,7 +93,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const rows = db
       .prepare(
         `
-        SELECT row_key, company_name, payload_json
+        SELECT row_key, id, account_record_id, business_account_id, company_name, payload_json
         FROM account_rows
         `,
       )
@@ -107,6 +110,27 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           payload_json = ?,
           updated_at = ?
       WHERE row_key = ?
+      `,
+    );
+    const updateLocalMetadata = db.prepare(
+      `
+      UPDATE account_local_metadata
+      SET business_account_id = COALESCE(?, business_account_id),
+          category = ?,
+          updated_at = ?
+      WHERE account_record_id = ?
+      `,
+    );
+    const insertLocalMetadata = db.prepare(
+      `
+      INSERT INTO account_local_metadata (
+        account_record_id,
+        business_account_id,
+        company_description,
+        category,
+        marketing_eligible,
+        updated_at
+      ) VALUES (?, ?, NULL, ?, 1, ?)
       `,
     );
 
@@ -126,6 +150,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
         payload.category = category;
         update.run(category, JSON.stringify(payload), now, row.row_key);
+        const accountRecordId = row.account_record_id?.trim() || row.id.trim();
+        if (accountRecordId) {
+          const metadataResult = updateLocalMetadata.run(
+            row.business_account_id?.trim() || null,
+            category,
+            now,
+            accountRecordId,
+          );
+          if ((metadataResult.changes ?? 0) === 0) {
+            insertLocalMetadata.run(
+              accountRecordId,
+              row.business_account_id?.trim() || null,
+              category,
+              now,
+            );
+          }
+        }
         matchedRows += 1;
         matchedCompanies.add(normalizedCompanyName);
       }
