@@ -619,17 +619,21 @@ export async function fetchAllSyncRows(
   options?: {
     includeInternal?: boolean;
     includeOpportunityCounts?: boolean;
+    includeContacts?: boolean;
   },
 ): Promise<BusinessAccountRow[]> {
   const includeInternal = Boolean(options?.includeInternal);
   const includeOpportunityCounts = options?.includeOpportunityCounts !== false;
-  const rawContacts = await fetchContacts(
-    cookieValue,
-    {
-      batchSize: 250,
-    },
-    authCookieRefresh,
-  );
+  const includeContacts = options?.includeContacts !== false;
+  const rawContacts = includeContacts
+    ? await fetchContacts(
+        cookieValue,
+        {
+          batchSize: 250,
+        },
+        authCookieRefresh,
+      )
+    : [];
   let rawAccounts: unknown[] = [];
 
   try {
@@ -656,13 +660,15 @@ export async function fetchAllSyncRows(
       authCookieRefresh,
     );
   }
-  const filteredContacts = rawContacts.filter(
-    (contact) =>
-      !shouldExcludeContactByApToken(contact) &&
-      (includeInternal || !isExcludedInternalContactEmail(readContactEmail(contact))) &&
-      (includeInternal ||
-        !isExcludedInternalCompanyName(readContactCompanyName(contact, readWrappedString))),
-  );
+  const filteredContacts = includeContacts
+    ? rawContacts.filter(
+        (contact) =>
+          !shouldExcludeContactByApToken(contact) &&
+          (includeInternal || !isExcludedInternalContactEmail(readContactEmail(contact))) &&
+          (includeInternal ||
+            !isExcludedInternalCompanyName(readContactCompanyName(contact, readWrappedString))),
+      )
+    : [];
   const allowedRawAccounts = rawAccounts.filter(
     (account) =>
       isAllowedBusinessAccountType(account) &&
@@ -690,17 +696,16 @@ export async function fetchAllSyncRows(
     }
   }
 
-  const normalizedContactRows = buildSyncRowsFromContacts(
-    filteredContacts,
-    allowedRawAccounts,
-  ).filter((row) => {
-    const normalizedBusinessId = normalizeBusinessAccountCode(row.businessAccountId);
-    if (!normalizedBusinessId) {
-      return true;
-    }
+  const normalizedContactRows = includeContacts
+    ? buildSyncRowsFromContacts(filteredContacts, allowedRawAccounts).filter((row) => {
+        const normalizedBusinessId = normalizeBusinessAccountCode(row.businessAccountId);
+        if (!normalizedBusinessId) {
+          return true;
+        }
 
-    return allowedBusinessIds.has(normalizedBusinessId);
-  });
+        return allowedBusinessIds.has(normalizedBusinessId);
+      })
+    : [];
   const normalizedAccountRows = allowedRawAccounts
     .flatMap((account) => normalizeBusinessAccountRows(account))
     .filter((row) =>
