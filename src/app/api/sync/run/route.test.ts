@@ -22,6 +22,9 @@ const triggerReadModelSync = vi.fn(async () => ({
   },
 }));
 const readManualSyncBlockedReason = vi.fn(() => null);
+const getEnv = vi.fn(() => ({
+  READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: 1_800_000,
+}));
 
 vi.mock("@/lib/auth", () => ({
   requireAuthCookieValue,
@@ -37,11 +40,38 @@ vi.mock("@/lib/read-model/sync", () => ({
   readManualSyncBlockedReason,
 }));
 
+vi.mock("@/lib/env", () => ({
+  getEnv,
+}));
+
 describe("POST /api/sync/run", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requireAuthCookieValue.mockReturnValue("cookie");
     readManualSyncBlockedReason.mockReturnValue(null);
+  });
+
+  it("optionally force-unlocks a stale running lock before checking safeguards", async () => {
+    readManualSyncBlockedReason
+      .mockReturnValueOnce("A full account sync is already running.")
+      .mockReturnValueOnce(null);
+
+    const { POST } = await import("@/app/api/sync/run/route");
+    const response = await POST(
+      new NextRequest("http://localhost/api/sync/run?forceUnlock=1", {
+        method: "POST",
+        headers: {
+          cookie: ".ASPXAUTH=existing-cookie",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(readManualSyncBlockedReason).toHaveBeenNthCalledWith(
+      1,
+      expect.any(Number),
+    );
+    expect(readManualSyncBlockedReason).toHaveBeenCalledTimes(2);
   });
 
   it("rejects sync attempts during a blocked window", async () => {

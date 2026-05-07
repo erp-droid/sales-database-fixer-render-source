@@ -4,17 +4,26 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
 import { validateSessionWithAcumatica } from "@/lib/acumatica";
+import { getEnv } from "@/lib/env";
 import { getErrorMessage, HttpError } from "@/lib/errors";
-import { readManualSyncBlockedReason, triggerReadModelSync } from "@/lib/read-model/sync";
+import {
+  readManualSyncBlockedReason,
+  triggerReadModelSync,
+} from "@/lib/read-model/sync";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh = {
     value: null as string | null,
   };
+  const forceUnlock = request.nextUrl.searchParams.get("forceUnlock") === "1";
 
   try {
     const cookieValue = requireAuthCookieValue(request);
     await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
+    if (forceUnlock) {
+      const staleRunningAfterMs = getEnv().READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS;
+      readManualSyncBlockedReason(Date.now() + staleRunningAfterMs + 1);
+    }
     const blockedReason = readManualSyncBlockedReason();
     if (blockedReason) {
       throw new HttpError(409, blockedReason);
