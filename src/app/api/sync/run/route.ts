@@ -18,13 +18,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const forceUnlock = request.nextUrl.searchParams.get("forceUnlock") === "1";
 
   try {
-    if (!getEnv().READ_MODEL_AUTO_SYNC_ENABLED) {
-      throw new HttpError(
-        409,
-        "Full sync is disabled while SQLite-only mode is active.",
-      );
-    }
-
     const cookieValue = requireAuthCookieValue(request);
     await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
     if (forceUnlock) {

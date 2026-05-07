@@ -23,7 +23,6 @@ const triggerReadModelSync = vi.fn(async () => ({
 }));
 const readManualSyncBlockedReason = vi.fn(() => null);
 const getEnv = vi.fn(() => ({
-  READ_MODEL_AUTO_SYNC_ENABLED: true,
   READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: 1_800_000,
 }));
 
