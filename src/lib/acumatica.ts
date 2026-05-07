@@ -17,7 +17,8 @@ type ResolvedAcumaticaEndpoint = {
 };
 
 const resolvedAcumaticaEndpointCache = new Map<string, ResolvedAcumaticaEndpoint>();
-const ACUMATICA_REQUEST_TIMEOUT_MS = 8 * 60 * 1000;
+// Keep upstream timeouts bounded so sync jobs fail fast instead of hanging.
+const ACUMATICA_REQUEST_TIMEOUT_MS = 90 * 1000;
 
 function getActiveCookieValue(
   cookieValue: string,
