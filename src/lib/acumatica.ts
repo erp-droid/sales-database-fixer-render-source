@@ -17,6 +17,7 @@ type ResolvedAcumaticaEndpoint = {
 };
 
 const resolvedAcumaticaEndpointCache = new Map<string, ResolvedAcumaticaEndpoint>();
+const ACUMATICA_REQUEST_TIMEOUT_MS = 8 * 60 * 1000;
 
 function getActiveCookieValue(
   cookieValue: string,
@@ -364,6 +365,35 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  context: string,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new HttpError(
+        504,
+        `Acumatica request timed out after ${Math.round(timeoutMs / 1000)} seconds while ${context}.`,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function parseRetryAfterMs(value: string | null): number | null {
   if (!value) {
     return null;
@@ -435,11 +465,16 @@ async function performAcumaticaFetchAtEntityPath(
   try {
     for (let attempt = 0; ; attempt += 1) {
       attempts = attempt + 1;
-      const response = await fetch(buildAcumaticaUrl(resourcePath, entityPath), {
-        ...requestInit,
-        headers,
-        cache: "no-store",
-      });
+      const response = await fetchWithTimeout(
+        buildAcumaticaUrl(resourcePath, entityPath),
+        {
+          ...requestInit,
+          headers,
+          cache: "no-store",
+        },
+        ACUMATICA_REQUEST_TIMEOUT_MS,
+        `requesting '${resourcePath}'`,
+      );
       finalStatus = response.status;
 
       if (authCookieRefresh) {
