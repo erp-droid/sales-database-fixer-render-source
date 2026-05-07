@@ -508,6 +508,10 @@ function hasAnyCanonicalAddressField(row: BusinessAccountRow): boolean {
   ].some((part) => hasText(part));
 }
 
+function hasUsableAddress(row: BusinessAccountRow): boolean {
+  return hasText(row.address) || hasAnyCanonicalAddressField(row);
+}
+
 function isContactlessUnidentifiedCompanyRow(row: BusinessAccountRow): boolean {
   if (hasText(row.businessAccountId)) {
     return false;
@@ -1641,6 +1645,10 @@ export function queryBusinessAccounts(
   const effectiveCategory = options.filterCategory ?? options.category;
 
   const filtered = sourceRows.filter((row) => {
+    if (!hasUsableAddress(row)) {
+      return false;
+    }
+
     if (effectiveCategory && row.category !== effectiveCategory) {
       return false;
     }

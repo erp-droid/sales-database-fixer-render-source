@@ -1142,7 +1142,7 @@ describe("queryBusinessAccounts", () => {
     expect(result.items[0]?.companyName).toBe("Beta Ltd");
   });
 
-  it("collapses duplicate contactless shell rows without business account ids", () => {
+  it("hides contactless shell rows when no address is present", () => {
     const result = queryBusinessAccounts(
       [
         {
@@ -1210,9 +1210,8 @@ describe("queryBusinessAccounts", () => {
       },
     );
 
-    expect(result.total).toBe(1);
-    expect(result.items[0]?.companyName).toBe("Bailey Metal Products Ltd");
-    expect(result.items[0]?.accountRecordId).toBe("bailey-shell-1");
+    expect(result.total).toBe(0);
+    expect(result.items).toEqual([]);
   });
 
   it("suppresses MeadowBrook business accounts from results", () => {
