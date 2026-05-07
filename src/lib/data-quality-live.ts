@@ -649,7 +649,11 @@ export async function fetchAllSyncRows(
       },
       authCookieRefresh,
     );
-  } catch {
+  } catch (error) {
+    if (!includeContacts) {
+      throw error;
+    }
+
     const contactBusinessIds = rawContacts
       .map((contact) => readContactBusinessAccountCode(contact, readWrappedString))
       .filter((value): value is string => Boolean(value));
