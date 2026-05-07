@@ -637,6 +637,7 @@ export async function fetchAllSyncRows(
       cookieValue,
       {
         batchSize: 250,
+        profile: "quality",
         ensureMainAddress: true,
         ensurePrimaryContact: true,
         ensureAttributes: true,
