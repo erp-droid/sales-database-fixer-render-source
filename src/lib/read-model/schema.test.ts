@@ -205,9 +205,30 @@ describe("ensureReadModelSchema", () => {
         "account_record_id",
         "business_account_id",
         "company_description",
+        "marketing_eligible",
         "updated_at",
       ]),
     );
+  });
+
+  it("adds account_local_metadata marketing eligibility column to legacy tables", () => {
+    db.exec(`
+      DROP TABLE IF EXISTS account_local_metadata;
+      CREATE TABLE account_local_metadata (
+        account_record_id TEXT PRIMARY KEY,
+        business_account_id TEXT,
+        company_description TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(account_local_metadata)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toContain("marketing_eligible");
   });
 
   it("creates the rich employee_directory columns", () => {
@@ -290,5 +311,15 @@ describe("ensureReadModelSchema", () => {
         "updated_at",
       ]),
     );
+  });
+
+  it("creates the call_sessions active lookup index", () => {
+    ensureReadModelSchema(db);
+
+    const indexes = db.prepare("PRAGMA index_list(call_sessions)").all() as Array<{
+      name: string;
+    }>;
+
+    expect(indexes.map((index) => index.name)).toContain("idx_call_sessions_ended_at_outcome");
   });
 });

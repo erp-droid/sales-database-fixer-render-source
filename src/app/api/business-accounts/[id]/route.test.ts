@@ -30,6 +30,7 @@ const readBusinessAccountDetailFromReadModel = vi.fn();
 const readStoredBusinessAccountRowsFromReadModel = vi.fn();
 const replaceReadModelAccountRows = vi.fn();
 const applyLastCalledAtToBusinessAccountRows = vi.fn((rows) => rows);
+const saveAccountCompanyDescription = vi.fn();
 const maybeTriggerReadModelSync = vi.fn();
 const readSyncStatus = vi.fn(() => ({
   status: "idle",
@@ -84,7 +85,7 @@ vi.mock("@/lib/business-account-call-history", () => ({
 vi.mock("@/lib/read-model/account-local-metadata", () => ({
   applyLocalAccountMetadataToRow: vi.fn((row) => row),
   applyLocalAccountMetadataToRows: vi.fn((rows) => rows),
-  saveAccountCompanyDescription: vi.fn(),
+  saveAccountCompanyDescription,
 }));
 
 vi.mock("@/lib/read-model/sync", () => ({
@@ -113,6 +114,7 @@ function buildRow(overrides?: Partial<BusinessAccountRow>): BusinessAccountRow {
     rowKey: "record-1:contact:157252",
     contactId: 157252,
     isPrimaryContact: true,
+    marketingEligible: true,
     companyPhone: null,
     companyPhoneSource: null,
     phoneNumber: null,
@@ -151,6 +153,7 @@ function buildNoopPutPayload(row: BusinessAccountRow): Record<string, unknown> {
   return {
     companyName: row.companyName,
     companyDescription: row.companyDescription,
+    marketingEligible: row.marketingEligible ?? true,
     addressLine1: row.addressLine1,
     addressLine2: row.addressLine2,
     city: row.city,
@@ -175,6 +178,7 @@ function buildConcurrencySnapshot(row: BusinessAccountRow): BusinessAccountConcu
   return {
     companyName: row.companyName,
     companyDescription: row.companyDescription ?? null,
+    marketingEligible: row.marketingEligible ?? true,
     assignedBusinessAccountRecordId:
       row.businessAccountId.trim().length > 0 ? (row.accountRecordId ?? row.id) : null,
     assignedBusinessAccountId: row.businessAccountId.trim() || null,
@@ -663,6 +667,7 @@ describe("PUT /api/business-accounts/[id]", () => {
     updateBusinessAccount.mockReset();
     updateContact.mockReset();
     setBusinessAccountPrimaryContact.mockReset();
+    saveAccountCompanyDescription.mockReset();
     setBusinessAccountPrimaryContact.mockImplementation(async () => undefined);
     readBusinessAccountDetailFromReadModel.mockReset();
     replaceReadModelAccountRows.mockReset();
@@ -727,6 +732,59 @@ describe("PUT /api/business-accounts/[id]", () => {
     expect(updateBusinessAccount).not.toHaveBeenCalled();
     expect(updateContact).not.toHaveBeenCalled();
     expect(publishBusinessAccountChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists local marketing eligibility updates without writing to Acumatica", async () => {
+    const cachedRow = buildRow({
+      contactId: null,
+      primaryContactId: null,
+      rowKey: "record-1:primary",
+      marketingEligible: true,
+    });
+
+    readBusinessAccountDetailFromReadModel.mockImplementation(
+      (_id: string, contactId?: number) => {
+        if (contactId !== undefined) {
+          return null;
+        }
+
+        return {
+          row: cachedRow,
+          rows: [cachedRow],
+          accountLocation: null,
+        };
+      },
+    );
+
+    const { PUT } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await PUT(
+      new NextRequest("http://localhost/api/business-accounts/record-1", {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ...buildNoopPutPayload(cachedRow),
+          marketingEligible: false,
+        }),
+      }),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateBusinessAccount).not.toHaveBeenCalled();
+    expect(updateContact).not.toHaveBeenCalled();
+    expect(saveAccountCompanyDescription).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountRecordId: "record-1",
+        businessAccountId: "B200000003",
+        marketingEligible: false,
+      }),
+    );
   });
 
   it("short-circuits already-primary saves without writing to Acumatica", async () => {

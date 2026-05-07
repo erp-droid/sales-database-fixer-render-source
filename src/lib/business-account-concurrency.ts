@@ -13,6 +13,7 @@ import {
 const TRACKED_CONCURRENCY_FIELDS = [
   "companyName",
   "companyDescription",
+  "marketingEligible",
   "assignedBusinessAccountRecordId",
   "assignedBusinessAccountId",
   "addressLine1",
@@ -43,6 +44,7 @@ type BusinessAccountConcurrencyField = (typeof TRACKED_CONCURRENCY_FIELDS)[numbe
 const CONFLICT_LABELS: Record<BusinessAccountConcurrencyField, string> = {
   companyName: "Company Name",
   companyDescription: "Company Description",
+  marketingEligible: "Marketing Eligible",
   assignedBusinessAccountRecordId: "Assigned Account",
   assignedBusinessAccountId: "Assigned Account",
   addressLine1: "Address",
@@ -74,6 +76,10 @@ function normalizeRequiredText(value: string | null | undefined): string {
 
 function normalizeCountryCode(value: string | null | undefined): string {
   return value?.trim().toUpperCase() ?? "";
+}
+
+function normalizeMarketingEligibleValue(value: unknown): boolean {
+  return value !== false;
 }
 
 const SIMPLE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -110,6 +116,10 @@ function valuesEquivalent(
   left: unknown,
   right: unknown,
 ): boolean {
+  if (field === "marketingEligible") {
+    return normalizeMarketingEligibleValue(left) === normalizeMarketingEligibleValue(right);
+  }
+
   if (field === "category" || field === "targetContactId") {
     return left === right;
   }
@@ -149,14 +159,22 @@ function valuesEquivalent(
 function readSnapshotValue(
   snapshot: BusinessAccountConcurrencySnapshot,
   field: BusinessAccountConcurrencyField,
-): string | number | null {
+): string | number | boolean | null {
+  if (field === "marketingEligible") {
+    return normalizeMarketingEligibleValue(snapshot.marketingEligible);
+  }
+
   return snapshot[field] ?? null;
 }
 
 function readUpdateValue(
   updateRequest: BusinessAccountUpdateRequest,
   field: BusinessAccountConcurrencyField,
-): string | number | null {
+): string | number | boolean | null {
+  if (field === "marketingEligible") {
+    return normalizeMarketingEligibleValue(updateRequest.marketingEligible);
+  }
+
   return updateRequest[field] ?? null;
 }
 
@@ -164,12 +182,14 @@ function readCurrentValue(
   currentAccountRow: BusinessAccountRow,
   currentRowForContactComparison: BusinessAccountRow,
   field: BusinessAccountConcurrencyField,
-): string | number | null {
+): string | number | boolean | null {
   switch (field) {
     case "companyName":
       return currentAccountRow.companyName;
     case "companyDescription":
       return currentAccountRow.companyDescription ?? null;
+    case "marketingEligible":
+      return currentAccountRow.marketingEligible ?? true;
     case "assignedBusinessAccountRecordId":
       return currentAccountRow.businessAccountId.trim().length > 0
         ? (currentAccountRow.accountRecordId ?? currentAccountRow.id)
@@ -227,6 +247,7 @@ export function buildBusinessAccountConcurrencySnapshot(
   return {
     companyName: row.companyName,
     companyDescription: row.companyDescription ?? null,
+    marketingEligible: row.marketingEligible ?? true,
     assignedBusinessAccountRecordId:
       row.businessAccountId.trim().length > 0 ? (row.accountRecordId ?? row.id) : null,
     assignedBusinessAccountId: row.businessAccountId.trim() || null,

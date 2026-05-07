@@ -4,6 +4,7 @@ import {
   buildBusinessAccountConcurrencySnapshot,
   buildRebasedUpdateRequest,
   collectConflictingConcurrencyFields,
+  collectUpdatedConcurrencyFields,
   formatConcurrencyConflictFields,
 } from "@/lib/business-account-concurrency";
 import type {
@@ -29,6 +30,7 @@ function buildRow(
       `${overrides.accountRecordId ?? overrides.id}:contact:${overrides.contactId ?? "row"}`,
     contactId: overrides.contactId ?? 100,
     isPrimaryContact: overrides.isPrimaryContact ?? true,
+    marketingEligible: overrides.marketingEligible,
     companyPhone: hasOverride("companyPhone") ? overrides.companyPhone ?? null : "905-555-0100",
     companyPhoneSource: overrides.companyPhoneSource ?? "account",
     phoneNumber: hasOverride("phoneNumber")
@@ -145,6 +147,23 @@ describe("business account concurrency", () => {
 
     expect(snapshot.companyPhone).toBeNull();
     expect(snapshot.primaryContactPhone).toBe("416-555-0100");
+  });
+
+  it("tracks marketing eligibility changes in the draft concurrency fields", () => {
+    const row = buildRow({
+      id: "acct-marketing",
+      businessAccountId: "BA-205",
+      companyName: "Jones DesLauriers",
+    });
+    const updateRequest = buildUpdateRequest(row, {
+      marketingEligible: false,
+    });
+
+    const snapshot = buildBusinessAccountConcurrencySnapshot(row);
+    expect(snapshot.marketingEligible).toBe(true);
+
+    const updatedFields = collectUpdatedConcurrencyFields(updateRequest);
+    expect(updatedFields.has("marketingEligible")).toBe(true);
   });
 
   it("rebases a stale save when only untouched fields changed on the server", () => {

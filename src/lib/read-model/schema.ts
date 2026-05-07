@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS account_local_metadata (
   account_record_id TEXT PRIMARY KEY,
   business_account_id TEXT,
   company_description TEXT,
+  marketing_eligible INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL
 );
 
@@ -250,6 +251,8 @@ CREATE INDEX IF NOT EXISTS idx_call_sessions_answered
   ON call_sessions(answered);
 CREATE INDEX IF NOT EXISTS idx_call_sessions_outcome
   ON call_sessions(outcome);
+CREATE INDEX IF NOT EXISTS idx_call_sessions_ended_at_outcome
+  ON call_sessions(ended_at, outcome);
 CREATE INDEX IF NOT EXISTS idx_call_sessions_matched_business_account_id
   ON call_sessions(matched_business_account_id);
 CREATE INDEX IF NOT EXISTS idx_call_sessions_target_phone
@@ -515,6 +518,25 @@ CREATE INDEX IF NOT EXISTS idx_audit_event_links_contact_id
 
 export function ensureReadModelSchema(db: Database.Database): void {
   db.exec(SCHEMA_SQL);
+
+  const accountLocalMetadataColumns = db
+    .prepare("PRAGMA table_info(account_local_metadata)")
+    .all() as Array<{ name: string }>;
+  const hasMarketingEligibleColumn = accountLocalMetadataColumns.some(
+    (column) => column.name === "marketing_eligible",
+  );
+  if (!hasMarketingEligibleColumn) {
+    db.exec(
+      "ALTER TABLE account_local_metadata ADD COLUMN marketing_eligible INTEGER NOT NULL DEFAULT 1",
+    );
+  }
+  db.prepare(
+    `
+    UPDATE account_local_metadata
+    SET marketing_eligible = 1
+    WHERE marketing_eligible IS NULL
+    `,
+  ).run();
 
   const employeeDirectoryColumns = db
     .prepare("PRAGMA table_info(employee_directory)")

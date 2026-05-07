@@ -18,6 +18,7 @@ function buildRow(
     rowKey: overrides.rowKey ?? `${overrides.accountRecordId ?? overrides.id}:contact:row`,
     contactId: overrides.contactId ?? null,
     isPrimaryContact: overrides.isPrimaryContact ?? false,
+    marketingEligible: overrides.marketingEligible,
     companyPhone: overrides.companyPhone ?? null,
     companyPhoneSource: overrides.companyPhoneSource ?? null,
     phoneNumber: overrides.phoneNumber ?? null,
@@ -94,6 +95,48 @@ describe("account-local-metadata", () => {
     expect(rows[0]?.companyDescription).toBe(
       "Industrial controls and automation services provider.",
     );
+    expect(rows[0]?.marketingEligible).toBe(true);
+  });
+
+  it("defaults marketing eligibility to true when no local metadata exists", async () => {
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const {
+      applyLocalAccountMetadataToRow,
+    } = await import("@/lib/read-model/account-local-metadata");
+    closeDb = () => getReadModelDb().close();
+
+    const row = applyLocalAccountMetadataToRow(
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+      }),
+    );
+
+    expect(row?.marketingEligible).toBe(true);
+  });
+
+  it("overlays saved marketing eligibility onto account rows", async () => {
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const {
+      applyLocalAccountMetadataToRows,
+      saveAccountCompanyDescription,
+    } = await import("@/lib/read-model/account-local-metadata");
+    closeDb = () => getReadModelDb().close();
+
+    saveAccountCompanyDescription({
+      accountRecordId: "account-1",
+      businessAccountId: "BA-1",
+      marketingEligible: false,
+    });
+
+    const rows = applyLocalAccountMetadataToRows([
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+      }),
+    ]);
+
+    expect(rows[0]?.marketingEligible).toBe(false);
   });
 
   it("removes company descriptions when the saved value is cleared", async () => {
@@ -124,5 +167,38 @@ describe("account-local-metadata", () => {
     );
 
     expect(row?.companyDescription).toBeNull();
+    expect(row?.marketingEligible).toBe(true);
+  });
+
+  it("removes local metadata row when values reset to defaults", async () => {
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const {
+      applyLocalAccountMetadataToRow,
+      saveAccountCompanyDescription,
+    } = await import("@/lib/read-model/account-local-metadata");
+    closeDb = () => getReadModelDb().close();
+
+    saveAccountCompanyDescription({
+      accountRecordId: "account-1",
+      businessAccountId: "BA-1",
+      companyDescription: "Industrial controls and automation services provider.",
+      marketingEligible: false,
+    });
+    saveAccountCompanyDescription({
+      accountRecordId: "account-1",
+      businessAccountId: "BA-1",
+      companyDescription: null,
+      marketingEligible: true,
+    });
+
+    const row = applyLocalAccountMetadataToRow(
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+      }),
+    );
+
+    expect(row?.companyDescription).toBeNull();
+    expect(row?.marketingEligible).toBe(true);
   });
 });

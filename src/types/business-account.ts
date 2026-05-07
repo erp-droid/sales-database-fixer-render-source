@@ -35,6 +35,7 @@ export type BusinessAccountRow = {
   rowKey?: string;
   contactId?: number | null;
   isPrimaryContact?: boolean;
+  marketingEligible?: boolean;
   companyPhone?: string | null;
   companyPhoneSource?: CompanyPhoneSource | null;
   phoneNumber?: string | null;
@@ -73,6 +74,7 @@ export type BusinessAccountRow = {
 export type BusinessAccountConcurrencySnapshot = {
   companyName: string;
   companyDescription?: string | null;
+  marketingEligible?: boolean;
   assignedBusinessAccountRecordId: string | null;
   assignedBusinessAccountId: string | null;
   addressLine1: string;
@@ -103,6 +105,7 @@ export type BusinessAccountConcurrencySnapshot = {
 export type BusinessAccountUpdateRequest = {
   companyName: string;
   companyDescription?: string | null;
+  marketingEligible?: boolean;
   assignedBusinessAccountRecordId: string | null;
   assignedBusinessAccountId: string | null;
   addressLine1: string;

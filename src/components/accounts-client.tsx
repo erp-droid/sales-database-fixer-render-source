@@ -1013,6 +1013,7 @@ function buildDraft(row: BusinessAccountRow): BusinessAccountUpdateRequest {
   return {
     companyName: row.companyName,
     companyDescription: row.companyDescription ?? null,
+    marketingEligible: row.marketingEligible ?? true,
     assignedBusinessAccountRecordId:
       row.businessAccountId.trim().length > 0
         ? (row.accountRecordId ?? row.id)
@@ -1157,6 +1158,10 @@ function mergeSyncedRows(
     contactId: incoming.contactId ?? existing.contactId,
     primaryContactId: incoming.primaryContactId ?? existing.primaryContactId,
     isPrimaryContact: mergedIsPrimary,
+    marketingEligible:
+      existing.marketingEligible === false || incoming.marketingEligible === false
+        ? false
+        : true,
     salesRepId: pickPreferredText(existing.salesRepId, incoming.salesRepId),
     salesRepName: pickPreferredText(existing.salesRepName, incoming.salesRepName),
     accountType: incoming.accountType ?? existing.accountType ?? null,
@@ -5690,6 +5695,8 @@ export function AccountsClient({
               companyName: sameAccount ? updatedRow.companyName : row.companyName,
               companyDescription:
                 sameAccount ? updatedRow.companyDescription ?? null : row.companyDescription ?? null,
+              marketingEligible:
+                sameAccount ? updatedRow.marketingEligible ?? true : row.marketingEligible ?? true,
               salesRepId: sameAccount ? updatedRow.salesRepId : row.salesRepId,
               salesRepName: sameAccount ? updatedRow.salesRepName : row.salesRepName,
               industryType: sameAccount ? updatedRow.industryType : row.industryType,
@@ -5783,6 +5790,7 @@ export function AccountsClient({
               : sourceRow.isPrimaryContact,
           companyName: updatedRow.companyName,
           companyDescription: updatedRow.companyDescription ?? null,
+          marketingEligible: updatedRow.marketingEligible ?? true,
           salesRepId: updatedRow.salesRepId,
           salesRepName: updatedRow.salesRepName,
           industryType: updatedRow.industryType,
@@ -7728,6 +7736,24 @@ export function AccountsClient({
               <span className={styles.lookupHint}>
                 This description stays in the app only. Save stores it locally and does not push it to Acumatica.
               </span>
+            </label>
+
+            <label className={styles.inlineCheckbox}>
+              <input
+                checked={draft.marketingEligible !== false}
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          marketingEligible: event.target.checked,
+                        }
+                      : current,
+                  )
+                }
+                type="checkbox"
+              />
+              Marketing Eligible
             </label>
 
             <h3>Sales Rep</h3>

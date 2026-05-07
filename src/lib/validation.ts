@@ -207,6 +207,7 @@ const businessAccountConcurrencySnapshotSchema = z.object({
   // can fill missing address/company fields without the snapshot itself failing validation.
   companyName: hiddenSnapshotRequiredTextSchema(255),
   companyDescription: nullableStringSchema.default(null),
+  marketingEligible: z.boolean().default(true),
   assignedBusinessAccountRecordId: nullableStringSchema.default(null),
   assignedBusinessAccountId: nullableStringSchema.default(null),
   addressLine1: hiddenSnapshotRequiredTextSchema(255),
@@ -265,6 +266,7 @@ const businessAccountConcurrencySnapshotSchema = z.object({
 export const updateRequestSchema = z.object({
   companyName: z.string().trim().min(1, "Company name is required").max(255),
   companyDescription: nullableStringSchema.default(null),
+  marketingEligible: z.boolean().default(true),
   assignedBusinessAccountRecordId: nullableStringSchema.default(null),
   assignedBusinessAccountId: nullableStringSchema.default(null),
   addressLine1: z.string().trim().min(1, "Address line 1 is required").max(255),
@@ -316,6 +318,7 @@ export const updateRequestSchema = z.object({
 const contactOnlyUpdateRequestSchema = z.object({
   companyName: nullableStringSchema.default(null),
   companyDescription: nullableStringSchema.default(null),
+  marketingEligible: z.boolean().default(true),
   assignedBusinessAccountRecordId: nullableStringSchema.default(null),
   assignedBusinessAccountId: nullableStringSchema.default(null),
   addressLine1: nullableStringSchema.default(null),
@@ -857,6 +860,7 @@ export function parseContactOnlyUpdatePayload(
   return {
     companyName: parsed.companyName ?? fallback?.companyName ?? "",
     companyDescription: parsed.companyDescription ?? fallback?.companyDescription ?? null,
+    marketingEligible: parsed.marketingEligible ?? fallback?.marketingEligible ?? true,
     assignedBusinessAccountRecordId: parsed.assignedBusinessAccountRecordId,
     assignedBusinessAccountId: parsed.assignedBusinessAccountId,
     addressLine1: parsed.addressLine1 ?? fallback?.addressLine1 ?? "",

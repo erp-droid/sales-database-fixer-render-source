@@ -5,12 +5,19 @@ import type { BusinessAccountRow } from "@/types/business-account";
 type StoredAccountLocalMetadataRow = {
   account_record_id: string;
   company_description: string | null;
+  marketing_eligible: number | null;
 };
 
 type AccountLocalMetadataInput = {
   accountRecordId: string | null | undefined;
   businessAccountId?: string | null | undefined;
-  companyDescription: string | null | undefined;
+  companyDescription?: string | null | undefined;
+  marketingEligible?: boolean | null | undefined;
+};
+
+type StoredAccountLocalMetadata = {
+  companyDescription: string | null;
+  marketingEligible: boolean;
 };
 
 function normalizeText(value: string | null | undefined): string | null {
@@ -22,7 +29,15 @@ function resolveAccountRecordId(row: BusinessAccountRow): string | null {
   return normalizeText(row.accountRecordId ?? row.id);
 }
 
-function buildDescriptionMap(accountRecordIds: string[]): Map<string, string | null> {
+function normalizeMarketingEligible(value: boolean | null | undefined): boolean {
+  return value !== false;
+}
+
+function normalizeStoredMarketingEligible(value: number | null | undefined): boolean {
+  return value !== 0;
+}
+
+function buildMetadataMap(accountRecordIds: string[]): Map<string, StoredAccountLocalMetadata> {
   if (accountRecordIds.length === 0) {
     return new Map();
   }
@@ -32,7 +47,7 @@ function buildDescriptionMap(accountRecordIds: string[]): Map<string, string | n
   const rows = db
     .prepare(
       `
-      SELECT account_record_id, company_description
+      SELECT account_record_id, company_description, marketing_eligible
       FROM account_local_metadata
       WHERE account_record_id IN (${placeholders})
       `,
@@ -42,7 +57,10 @@ function buildDescriptionMap(accountRecordIds: string[]): Map<string, string | n
   return new Map(
     rows.map((row) => [
       row.account_record_id,
-      normalizeText(row.company_description),
+      {
+        companyDescription: normalizeText(row.company_description),
+        marketingEligible: normalizeStoredMarketingEligible(row.marketing_eligible),
+      },
     ]),
   );
 }
@@ -51,12 +69,13 @@ export function saveAccountCompanyDescription(input: AccountLocalMetadataInput):
   const accountRecordId = normalizeText(input.accountRecordId);
   const businessAccountId = normalizeText(input.businessAccountId);
   const companyDescription = normalizeText(input.companyDescription);
+  const marketingEligible = normalizeMarketingEligible(input.marketingEligible);
   if (!accountRecordId) {
     return;
   }
 
   const db = getReadModelDb();
-  if (!companyDescription) {
+  if (!companyDescription && marketingEligible) {
     db.prepare(
       `
       DELETE FROM account_local_metadata
@@ -73,22 +92,26 @@ export function saveAccountCompanyDescription(input: AccountLocalMetadataInput):
       account_record_id,
       business_account_id,
       company_description,
+      marketing_eligible,
       updated_at
     ) VALUES (
       @account_record_id,
       @business_account_id,
       @company_description,
+      @marketing_eligible,
       @updated_at
     )
     ON CONFLICT(account_record_id) DO UPDATE SET
       business_account_id = excluded.business_account_id,
       company_description = excluded.company_description,
+      marketing_eligible = excluded.marketing_eligible,
       updated_at = excluded.updated_at
     `,
   ).run({
     account_record_id: accountRecordId,
     business_account_id: businessAccountId,
     company_description: companyDescription,
+    marketing_eligible: marketingEligible ? 1 : 0,
     updated_at: new Date().toISOString(),
   });
   invalidateReadModelCaches();
@@ -104,16 +127,24 @@ export function applyLocalAccountMetadataToRows(
     return rows;
   }
 
-  const descriptionByAccountRecordId = buildDescriptionMap(accountRecordIds);
+  const metadataByAccountRecordId = buildMetadataMap(accountRecordIds);
   let changed = false;
   const nextRows = rows.map((row) => {
     const accountRecordId = resolveAccountRecordId(row);
-    const companyDescription =
-      accountRecordId !== null
-        ? (descriptionByAccountRecordId.get(accountRecordId) ?? null)
-        : null;
+    const metadata =
+      accountRecordId !== null ? metadataByAccountRecordId.get(accountRecordId) : undefined;
+    const companyDescription = metadata?.companyDescription ?? null;
+    const marketingEligible = metadata?.marketingEligible ?? true;
     const currentDescription = normalizeText(row.companyDescription);
-    if (currentDescription === companyDescription) {
+    const currentMarketingEligible = normalizeMarketingEligible(row.marketingEligible);
+    const hasExplicitDescription = row.companyDescription !== undefined;
+    const hasExplicitMarketingEligible = typeof row.marketingEligible === "boolean";
+    if (
+      currentDescription === companyDescription &&
+      currentMarketingEligible === marketingEligible &&
+      hasExplicitDescription &&
+      hasExplicitMarketingEligible
+    ) {
       return row;
     }
 
@@ -121,6 +152,7 @@ export function applyLocalAccountMetadataToRows(
     return {
       ...row,
       companyDescription,
+      marketingEligible,
     };
   });
 

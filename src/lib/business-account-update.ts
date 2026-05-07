@@ -26,6 +26,13 @@ function sameNullableText(
   return sanitizeNullableInput(left) === sanitizeNullableInput(right);
 }
 
+function sameMarketingEligible(
+  left: boolean | null | undefined,
+  right: boolean | null | undefined,
+): boolean {
+  return (left !== false) === (right !== false);
+}
+
 export function isPrimaryOnlyConflictRetryAllowed(
   updateRequest: BusinessAccountUpdateRequest,
   effectiveTargetContactId: number | null,
@@ -65,6 +72,7 @@ export function isContactOnlyUpdate(
     sameNullableText(currentAccountRow.companyRegion, updateRequest.companyRegion) &&
     sameNullableText(currentAccountRow.week, updateRequest.week) &&
     currentAccountRow.category === updateRequest.category &&
+    sameMarketingEligible(currentAccountRow.marketingEligible, updateRequest.marketingEligible) &&
     sameNullableText(resolveCompanyPhone(currentAccountRow), updateRequest.companyPhone)
   );
 }
@@ -106,6 +114,7 @@ export function isPrimaryOnlyUpdate(
     sameNullableText(currentAccountRow.companyRegion, updateRequest.companyRegion) &&
     sameNullableText(currentAccountRow.week, updateRequest.week) &&
     currentAccountRow.category === updateRequest.category &&
+    sameMarketingEligible(currentAccountRow.marketingEligible, updateRequest.marketingEligible) &&
     sameNullableText(resolveCompanyPhone(currentAccountRow), updateRequest.companyPhone) &&
     sameNullableText(
       currentRowForContactComparison.primaryContactName,
@@ -138,6 +147,7 @@ export function buildPrimaryOnlyUpdateRequest(
 ): BusinessAccountUpdateRequest {
   return {
     companyName: currentAccountRow.companyName,
+    marketingEligible: currentAccountRow.marketingEligible ?? true,
     assignedBusinessAccountRecordId:
       currentAccountRow.accountRecordId ?? currentAccountRow.id,
     assignedBusinessAccountId: currentAccountRow.businessAccountId,

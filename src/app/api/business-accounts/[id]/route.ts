@@ -321,6 +321,7 @@ function buildStandaloneContactFallback(
   return {
     companyName: row.companyName,
     companyDescription: row.companyDescription ?? null,
+    marketingEligible: row.marketingEligible ?? true,
     assignedBusinessAccountRecordId: null,
     assignedBusinessAccountId: row.businessAccountId.trim() || null,
     addressLine1: row.addressLine1,
@@ -471,6 +472,7 @@ function buildFallbackRowFromContact(
       readContactCompanyName(contact, readWrappedString) ??
       "",
     companyDescription: existingRow?.companyDescription ?? null,
+    marketingEligible: existingRow?.marketingEligible ?? true,
     address: existingRow?.address ?? "",
     addressLine1: existingRow?.addressLine1 ?? "",
     addressLine2: existingRow?.addressLine2 ?? "",
@@ -533,6 +535,7 @@ function buildContactOnlyUpdateRequestFromCurrentRow(
   const nextRequest: ReturnType<typeof parseUpdatePayload> = {
     companyName: snapshot?.companyName ?? currentRow.companyName,
     companyDescription: snapshot?.companyDescription ?? currentRow.companyDescription ?? null,
+    marketingEligible: snapshot?.marketingEligible ?? currentRow.marketingEligible ?? true,
     assignedBusinessAccountRecordId:
       snapshot?.assignedBusinessAccountRecordId ??
       currentRow.accountRecordId ??
@@ -572,6 +575,9 @@ function buildContactOnlyUpdateRequestFromCurrentRow(
   }
   if (requestBodyHasOwnField(requestBody, "companyDescription")) {
     nextRequest.companyDescription = parsedRequest.companyDescription ?? null;
+  }
+  if (requestBodyHasOwnField(requestBody, "marketingEligible")) {
+    nextRequest.marketingEligible = parsedRequest.marketingEligible ?? true;
   }
   if (requestBodyHasOwnField(requestBody, "assignedBusinessAccountRecordId")) {
     nextRequest.assignedBusinessAccountRecordId =
@@ -738,6 +744,7 @@ function hydrateSparseUpdateRequestFromCachedRow(
 
   // Preserve optional account/contact values when callers submit sparse payloads.
   applyIfMissing("companyDescription", fallbackRow.companyDescription ?? null);
+  applyIfMissing("marketingEligible", fallbackRow.marketingEligible ?? true);
   applyIfMissing("salesRepId", fallbackRow.salesRepId ?? null);
   applyIfMissing("salesRepName", fallbackRow.salesRepName ?? null);
   applyIfMissing("industryType", fallbackRow.industryType ?? null);
@@ -868,7 +875,7 @@ async function buildResponseRowFromRawAccount(
   };
 }
 
-function persistLocalCompanyDescription(
+function persistLocalAccountMetadata(
   row: BusinessAccountRow,
   updateRequest: ReturnType<typeof parseUpdatePayload>,
   shouldPersist: boolean,
@@ -881,15 +888,16 @@ function persistLocalCompanyDescription(
     accountRecordId: row.accountRecordId ?? row.id,
     businessAccountId: row.businessAccountId,
     companyDescription: updateRequest.companyDescription,
+    marketingEligible: updateRequest.marketingEligible,
   });
 }
 
-function withLocalCompanyDescription(
+function withLocalAccountMetadata(
   row: BusinessAccountRow,
   updateRequest: ReturnType<typeof parseUpdatePayload>,
   shouldPersist: boolean,
 ): BusinessAccountRow {
-  persistLocalCompanyDescription(row, updateRequest, shouldPersist);
+  persistLocalAccountMetadata(row, updateRequest, shouldPersist);
   return applyLocalAccountMetadataToRow(row) ?? row;
 }
 
@@ -1101,6 +1109,12 @@ export async function PUT(
       requestBody,
       "companyDescription",
     );
+    const submittedMarketingEligible = requestBodyHasOwnField(
+      requestBody,
+      "marketingEligible",
+    );
+    const shouldPersistLocalMetadata =
+      submittedCompanyDescription || submittedMarketingEligible;
 
     const cachedTargetContactId =
       updateRequest.targetContactId ??
@@ -1164,10 +1178,10 @@ export async function PUT(
       );
 
     if (isNoopSaveAgainstCachedRow) {
-      return withLocalCompanyDescription(
+      return withLocalAccountMetadata(
         cachedContactComparisonRow ?? cachedCurrentRow,
         updateRequest,
-        submittedCompanyDescription,
+        shouldPersistLocalMetadata,
       );
     }
 
@@ -1216,10 +1230,10 @@ export async function PUT(
         replaceReadModelAccountRows(refreshedTargetRecordId, refreshedTargetRows);
       }
 
-      return withLocalCompanyDescription(
+      return withLocalAccountMetadata(
         matchedTargetRow,
         updateRequest,
-        submittedCompanyDescription,
+        shouldPersistLocalMetadata,
       );
     }
 
@@ -1256,10 +1270,10 @@ export async function PUT(
         replaceReadModelAccountRows(id, [refreshedRow]);
       }
 
-      return withLocalCompanyDescription(
+      return withLocalAccountMetadata(
         refreshedRow,
         updateRequest,
-        submittedCompanyDescription,
+        shouldPersistLocalMetadata,
       );
     }
 
@@ -1371,10 +1385,10 @@ export async function PUT(
             replaceReadModelAccountRows(refreshedTargetRecordId, refreshedTargetRows);
           }
 
-          return withLocalCompanyDescription(
+          return withLocalAccountMetadata(
             matchedTargetRow,
             updateRequest,
-            submittedCompanyDescription,
+            shouldPersistLocalMetadata,
           );
         }
       }
@@ -1394,10 +1408,10 @@ export async function PUT(
         );
       }
 
-      return withLocalCompanyDescription(
+      return withLocalAccountMetadata(
         refreshedRow,
         updateRequest,
-        submittedCompanyDescription,
+        shouldPersistLocalMetadata,
       );
     }
 
@@ -1492,6 +1506,7 @@ export async function PUT(
       normalizedUpdateRequest = {
         ...normalizedUpdateRequest,
         companyName: currentAccountRow.companyName,
+        marketingEligible: currentAccountRow.marketingEligible ?? true,
         assignedBusinessAccountRecordId:
           currentAccountRow.accountRecordId ?? currentAccountRow.id,
         assignedBusinessAccountId: currentAccountRow.businessAccountId,
@@ -1518,17 +1533,21 @@ export async function PUT(
       submittedCompanyDescription &&
       sanitizeNullableInput(normalizedUpdateRequest.companyDescription) !==
       sanitizeNullableInput(currentAccountRow.companyDescription);
-    const isLocalDescriptionOnlySave =
-      companyDescriptionChanged &&
+    const marketingEligibleChanged =
+      submittedMarketingEligible &&
+      (normalizedUpdateRequest.marketingEligible ?? true) !==
+        (currentAccountRow.marketingEligible ?? true);
+    const isLocalMetadataOnlySave =
+      (companyDescriptionChanged || marketingEligibleChanged) &&
       !hasBusinessAccountChanges(currentAccountRow, normalizedUpdateRequest) &&
       !hasPrimaryContactChanges(currentRowForContactComparison, normalizedUpdateRequest) &&
       !normalizedUpdateRequest.setAsPrimaryContact;
 
-    if (isLocalDescriptionOnlySave) {
-      return withLocalCompanyDescription(
+    if (isLocalMetadataOnlySave) {
+      return withLocalAccountMetadata(
         currentRowForContactComparison,
         normalizedUpdateRequest,
-        submittedCompanyDescription,
+        shouldPersistLocalMetadata,
       );
     }
 
@@ -1781,10 +1800,10 @@ export async function PUT(
         );
       }
 
-      return withLocalCompanyDescription(
+      return withLocalAccountMetadata(
         responseRow,
         effectiveUpdateRequest,
-        submittedCompanyDescription,
+        shouldPersistLocalMetadata,
       );
     }
 
@@ -1801,10 +1820,10 @@ export async function PUT(
       );
     }
 
-    return withLocalCompanyDescription(
+    return withLocalAccountMetadata(
       responseRow,
       effectiveUpdateRequest,
-      submittedCompanyDescription,
+      shouldPersistLocalMetadata,
     );
   };
 

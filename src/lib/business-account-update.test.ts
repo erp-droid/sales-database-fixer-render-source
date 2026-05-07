@@ -153,6 +153,7 @@ describe("business-account primary-only helpers", () => {
 
     expect(rebuilt).toEqual({
       companyName: currentAccountRow.companyName,
+      marketingEligible: currentAccountRow.marketingEligible ?? true,
       assignedBusinessAccountRecordId: currentAccountRow.accountRecordId,
       assignedBusinessAccountId: currentAccountRow.businessAccountId,
       addressLine1: currentAccountRow.addressLine1,
