@@ -1375,6 +1375,8 @@ function hasBusinessAccountAttributes(record: RawBusinessAccount): boolean {
   return readBusinessAccountArrayField(record, "Attributes").length > 0;
 }
 
+const ATTRIBUTE_DETAIL_HYDRATION_CONCURRENCY = 20;
+
 async function hydrateMissingBusinessAccountAttributesFromDetail(
   cookieValue: string,
   rows: RawBusinessAccount[],
@@ -1393,7 +1395,10 @@ async function hydrateMissingBusinessAccountAttributesFromDetail(
   }
 
   const supplementRows: RawBusinessAccount[] = [];
-  for (const detailChunk of chunkArray(missingIdentities, 4)) {
+  for (const detailChunk of chunkArray(
+    missingIdentities,
+    ATTRIBUTE_DETAIL_HYDRATION_CONCURRENCY,
+  )) {
     const settled = await Promise.allSettled(
       detailChunk.map((identity) =>
         fetchBusinessAccountById(
