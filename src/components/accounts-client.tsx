@@ -15,15 +15,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { AppChrome } from "@/components/app-chrome";
-import type {
-  BusinessAccountDetailResponse,
-  BusinessAccountLiveEvent,
-  BusinessAccountRow,
-  BusinessAccountsResponse,
-  BusinessAccountUpdateRequest,
-  Category,
-  SortBy,
-  SortDir,
+import {
+  CATEGORY_VALUES,
+  type BusinessAccountDetailResponse,
+  type BusinessAccountLiveEvent,
+  type BusinessAccountRow,
+  type BusinessAccountsResponse,
+  type BusinessAccountUpdateRequest,
+  type Category,
+  type SortBy,
+  type SortDir,
 } from "@/types/business-account";
 import type {
   BusinessAccountCallHistoryItem,
@@ -406,6 +407,7 @@ type HeaderFilters = {
 };
 
 type AccountsFilterView = "allCompanies" | "marketingOnly";
+type CategoryFilterViewMode = "singleCategory" | "multiCategory";
 
 const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   companyName: "",
@@ -2446,6 +2448,9 @@ export function AccountsClient({
   const allRowsRef = useRef<BusinessAccountRow[]>([]);
   const [cacheHydrated, setCacheHydrated] = useState(false);
   const [activeFilterView, setActiveFilterView] = useState<AccountsFilterView>("allCompanies");
+  const [categoryFilterViewMode, setCategoryFilterViewMode] =
+    useState<CategoryFilterViewMode>("singleCategory");
+  const [selectedCategoryFilters, setSelectedCategoryFilters] = useState<Category[]>([]);
   const [q, setQ] = useState("");
   const [headerFilters, setHeaderFilters] = useState<HeaderFilters>(
     DEFAULT_HEADER_FILTERS,
@@ -3011,20 +3016,35 @@ export function AccountsClient({
         : deferredDisplayRows,
     [activeFilterView, deferredDisplayRows],
   );
+  const selectedCategoryFilterSet = useMemo(
+    () => new Set(selectedCategoryFilters),
+    [selectedCategoryFilters],
+  );
+  const categoryViewFilteredRows = useMemo(() => {
+    if (selectedCategoryFilterSet.size === 0) {
+      return viewFilteredRows;
+    }
+
+    return viewFilteredRows.filter(
+      (row) => row.category !== null && selectedCategoryFilterSet.has(row.category),
+    );
+  }, [selectedCategoryFilterSet, viewFilteredRows]);
 
   useEffect(() => {
     const validRowKeys = new Set(
-      viewFilteredRows.filter((row) => isContactSelectableRow(row)).map((row) => getRowKey(row)),
+      categoryViewFilteredRows
+        .filter((row) => isContactSelectableRow(row))
+        .map((row) => getRowKey(row)),
     );
     setSelectedContactRowKeys((current) => {
       const next = current.filter((rowKey) => validRowKeys.has(rowKey));
       return next.length === current.length ? current : next;
     });
-  }, [viewFilteredRows]);
+  }, [categoryViewFilteredRows]);
 
   const queryResult = useMemo(
     () =>
-      queryBusinessAccounts(viewFilteredRows, {
+      queryBusinessAccounts(categoryViewFilteredRows, {
         includeInternalRows: true,
         q: debouncedQ,
         filterCompanyName: debouncedHeaderFilters.companyName,
@@ -3053,9 +3073,9 @@ export function AccountsClient({
         pageSize: PAGE_SIZE,
       }),
     [
+      categoryViewFilteredRows,
       debouncedHeaderFilters,
       debouncedQ,
-      viewFilteredRows,
       page,
       sortBy,
       sortDir,
@@ -3081,10 +3101,10 @@ export function AccountsClient({
   const total = queryResult.total;
   const selectedContactRows = useMemo(() => {
     const selectedRowKeySet = new Set(selectedContactRowKeys);
-    return viewFilteredRows.filter(
+    return categoryViewFilteredRows.filter(
       (row) => selectedRowKeySet.has(getRowKey(row)) && isContactSelectableRow(row),
     );
-  }, [selectedContactRowKeys, viewFilteredRows]);
+  }, [categoryViewFilteredRows, selectedContactRowKeys]);
   const visibleColumnOrder = useMemo(
     () => columnOrder.filter((columnId) => visibleColumns.includes(columnId)),
     [columnOrder, visibleColumns],
@@ -3104,7 +3124,8 @@ export function AccountsClient({
       ).length,
     [headerFilters],
   );
-  const hasActiveWorkbenchFilters = q.trim().length > 0 || activeFilterCount > 0;
+  const hasActiveWorkbenchFilters =
+    q.trim().length > 0 || activeFilterCount > 0 || selectedCategoryFilters.length > 0;
   const syncUpdatedLabel = useMemo(() => formatRelativeTime(lastSyncedAt), [lastSyncedAt]);
   const hasSnapshot = Boolean(lastSyncedAt) || allRows.length > 0;
   const companyRegionOptions = useMemo(() => {
@@ -4573,10 +4594,45 @@ export function AccountsClient({
     }));
   }
 
+  function applyCategoryFilterMode(mode: CategoryFilterViewMode) {
+    if (categoryFilterViewMode === mode) {
+      return;
+    }
+
+    setPage(1);
+    setCategoryFilterViewMode(mode);
+    setSelectedCategoryFilters((current) => {
+      if (mode !== "singleCategory" || current.length <= 1) {
+        return current;
+      }
+      const nextSingleCategory = CATEGORY_VALUES.find((category) => current.includes(category));
+      return nextSingleCategory ? [nextSingleCategory] : [];
+    });
+  }
+
+  function toggleCategoryFilter(category: Category) {
+    setPage(1);
+    setSelectedCategoryFilters((current) => {
+      if (categoryFilterViewMode === "multiCategory") {
+        if (current.includes(category)) {
+          return current.filter((currentCategory) => currentCategory !== category);
+        }
+        return [...current, category];
+      }
+
+      if (current.length === 1 && current[0] === category) {
+        return [];
+      }
+      return [category];
+    });
+  }
+
   function clearAllFilters() {
     setPage(1);
     setQ("");
     setHeaderFilters(DEFAULT_HEADER_FILTERS);
+    setCategoryFilterViewMode("singleCategory");
+    setSelectedCategoryFilters([]);
   }
 
   async function handleSyncRecords() {
@@ -6992,6 +7048,57 @@ export function AccountsClient({
             type="button"
           >
             Marketing Only
+          </button>
+        </div>
+      </section>
+      <section className={styles.categoryFilterViewsRow}>
+        <span className={styles.filterViewsLabel}>Category views</span>
+        <div className={styles.filterViews}>
+          <button
+            className={`${styles.filterViewButton} ${
+              categoryFilterViewMode === "singleCategory" ? styles.filterViewButtonActive : ""
+            }`}
+            onClick={() => applyCategoryFilterMode("singleCategory")}
+            type="button"
+          >
+            Category Filter
+          </button>
+          <button
+            className={`${styles.filterViewButton} ${
+              categoryFilterViewMode === "multiCategory" ? styles.filterViewButtonActive : ""
+            }`}
+            onClick={() => applyCategoryFilterMode("multiCategory")}
+            type="button"
+          >
+            Category Multi-Select
+          </button>
+        </div>
+        <div className={styles.categoryFilterOptions}>
+          {CATEGORY_VALUES.map((category) => {
+            const isActive = selectedCategoryFilterSet.has(category);
+            return (
+              <button
+                className={`${styles.categoryFilterOptionButton} ${
+                  isActive ? styles.categoryFilterOptionButtonActive : ""
+                }`}
+                key={category}
+                onClick={() => toggleCategoryFilter(category)}
+                type="button"
+              >
+                {category}
+              </button>
+            );
+          })}
+          <button
+            className={styles.categoryFilterClearButton}
+            disabled={selectedCategoryFilters.length === 0}
+            onClick={() => {
+              setPage(1);
+              setSelectedCategoryFilters([]);
+            }}
+            type="button"
+          >
+            Clear categories
           </button>
         </div>
       </section>
