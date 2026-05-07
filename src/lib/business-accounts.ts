@@ -497,11 +497,54 @@ function buildCanonicalAddressKey(row: BusinessAccountRow): string {
     .join("|");
 }
 
+function hasAnyCanonicalAddressField(row: BusinessAccountRow): boolean {
+  return [
+    row.addressLine1,
+    row.addressLine2,
+    row.city,
+    row.state,
+    row.postalCode,
+    row.country,
+  ].some((part) => hasText(part));
+}
+
+function isContactlessUnidentifiedCompanyRow(row: BusinessAccountRow): boolean {
+  if (hasText(row.businessAccountId)) {
+    return false;
+  }
+
+  if (hasAnyCanonicalAddressField(row)) {
+    return false;
+  }
+
+  if (isUsableContactRow(row)) {
+    return false;
+  }
+
+  if (row.contactId !== null || row.primaryContactId !== null) {
+    return false;
+  }
+
+  return hasText(row.companyName);
+}
+
 export function buildCanonicalCompanyPhoneGroupKey(row: BusinessAccountRow): string {
   const addressKey = buildCanonicalAddressKey(row);
   const normalizedBusinessAccountId = normalizeComparable(row.businessAccountId);
   if (normalizedBusinessAccountId) {
     return `business-account:${normalizedBusinessAccountId}|address:${addressKey}`;
+  }
+
+  if (isContactlessUnidentifiedCompanyRow(row)) {
+    const resolvedCompanyPhone = resolveCompanyPhone(row);
+    const normalizedCompanyPhone =
+      normalizePhoneForSave(resolvedCompanyPhone) ??
+      normalizeComparable(resolvedCompanyPhone);
+    return [
+      `contactless-company:${normalizeComparable(row.companyName)}`,
+      `phone:${normalizedCompanyPhone}`,
+      `address:${addressKey}`,
+    ].join("|");
   }
 
   const normalizedAccountRecordId = normalizeComparable(row.accountRecordId ?? row.id);

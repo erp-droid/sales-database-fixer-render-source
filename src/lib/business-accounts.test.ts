@@ -1142,6 +1142,79 @@ describe("queryBusinessAccounts", () => {
     expect(result.items[0]?.companyName).toBe("Beta Ltd");
   });
 
+  it("collapses duplicate contactless shell rows without business account ids", () => {
+    const result = queryBusinessAccounts(
+      [
+        {
+          ...rows[0],
+          accountRecordId: "bailey-shell-1",
+          id: "bailey-shell-1",
+          rowKey: "bailey-shell-1:primary",
+          businessAccountId: "",
+          companyName: "Bailey Metal Products Ltd",
+          address: "",
+          addressLine1: "",
+          addressLine2: "",
+          city: "",
+          state: "",
+          postalCode: "",
+          country: "",
+          companyPhone: "905-738-9267",
+          companyPhoneSource: "placeholder",
+          phoneNumber: "905-738-9267",
+          primaryContactName: null,
+          primaryContactJobTitle: null,
+          primaryContactPhone: null,
+          primaryContactRawPhone: null,
+          primaryContactExtension: null,
+          primaryContactEmail: null,
+          primaryContactId: null,
+          contactId: null,
+          isPrimaryContact: false,
+          notes: null,
+        },
+        {
+          ...rows[0],
+          accountRecordId: "bailey-shell-2",
+          id: "bailey-shell-2",
+          rowKey: "bailey-shell-2:primary",
+          businessAccountId: "",
+          companyName: "Bailey Metal Products Ltd",
+          address: "",
+          addressLine1: "",
+          addressLine2: "",
+          city: "",
+          state: "",
+          postalCode: "",
+          country: "",
+          companyPhone: "9057389267",
+          companyPhoneSource: "placeholder",
+          phoneNumber: "9057389267",
+          primaryContactName: null,
+          primaryContactJobTitle: null,
+          primaryContactPhone: null,
+          primaryContactRawPhone: null,
+          primaryContactExtension: null,
+          primaryContactEmail: null,
+          primaryContactId: null,
+          contactId: null,
+          isPrimaryContact: false,
+          notes: null,
+        },
+      ],
+      {
+        page: 1,
+        pageSize: 25,
+        sortBy: "companyName",
+        sortDir: "asc",
+      },
+    );
+
+    expect(result.total).toBe(1);
+    expect(result.items[0]?.companyName).toBe("Bailey Metal Products Ltd");
+    expect(result.items[0]?.accountRecordId).toBe("bailey-shell-1");
+  });
+
   it("suppresses MeadowBrook business accounts from results", () => {
     const result = queryBusinessAccounts(
       [
