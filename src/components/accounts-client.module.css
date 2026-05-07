@@ -425,6 +425,55 @@
   box-shadow: 0 10px 18px rgba(47, 143, 99, 0.18);
 }
 
+.filterViewsRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.filterViewsLabel {
+  color: var(--accounts-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.filterViews {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 999px;
+  background: var(--accounts-surface);
+}
+
+.filterViewButton {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accounts-text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 14px;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease;
+}
+
+.filterViewButton:hover {
+  background: #f4f7fb;
+  color: var(--accounts-text);
+}
+
+.filterViewButtonActive {
+  background: var(--accounts-green-soft);
+  color: var(--accounts-green);
+}
+
 .toolbar {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) auto;
@@ -1660,6 +1709,17 @@
 
   .appNav {
     order: 3;
+  }
+
+  .filterViews {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-radius: 14px;
+  }
+
+  .filterViewButton {
+    width: 100%;
   }
 
   .pageHeaderActions,

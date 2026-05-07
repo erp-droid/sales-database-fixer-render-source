@@ -405,6 +405,8 @@ type HeaderFilters = {
   lastModified: string;
 };
 
+type AccountsFilterView = "allCompanies" | "marketingOnly";
+
 const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   companyName: "",
   accountType: "",
@@ -2443,6 +2445,7 @@ export function AccountsClient({
   const [allRows, setAllRows] = useState<BusinessAccountRow[]>([]);
   const allRowsRef = useRef<BusinessAccountRow[]>([]);
   const [cacheHydrated, setCacheHydrated] = useState(false);
+  const [activeFilterView, setActiveFilterView] = useState<AccountsFilterView>("allCompanies");
   const [q, setQ] = useState("");
   const [headerFilters, setHeaderFilters] = useState<HeaderFilters>(
     DEFAULT_HEADER_FILTERS,
@@ -3001,10 +3004,27 @@ export function AccountsClient({
   }, [allRows]);
 
   const deferredDisplayRows = useDeferredValue(displayRows);
+  const viewFilteredRows = useMemo(
+    () =>
+      activeFilterView === "marketingOnly"
+        ? deferredDisplayRows.filter((row) => row.marketingEligible !== false)
+        : deferredDisplayRows,
+    [activeFilterView, deferredDisplayRows],
+  );
+
+  useEffect(() => {
+    const validRowKeys = new Set(
+      viewFilteredRows.filter((row) => isContactSelectableRow(row)).map((row) => getRowKey(row)),
+    );
+    setSelectedContactRowKeys((current) => {
+      const next = current.filter((rowKey) => validRowKeys.has(rowKey));
+      return next.length === current.length ? current : next;
+    });
+  }, [viewFilteredRows]);
 
   const queryResult = useMemo(
     () =>
-      queryBusinessAccounts(deferredDisplayRows, {
+      queryBusinessAccounts(viewFilteredRows, {
         includeInternalRows: true,
         q: debouncedQ,
         filterCompanyName: debouncedHeaderFilters.companyName,
@@ -3035,7 +3055,7 @@ export function AccountsClient({
     [
       debouncedHeaderFilters,
       debouncedQ,
-      deferredDisplayRows,
+      viewFilteredRows,
       page,
       sortBy,
       sortDir,
@@ -3061,10 +3081,10 @@ export function AccountsClient({
   const total = queryResult.total;
   const selectedContactRows = useMemo(() => {
     const selectedRowKeySet = new Set(selectedContactRowKeys);
-    return displayRows.filter(
+    return viewFilteredRows.filter(
       (row) => selectedRowKeySet.has(getRowKey(row)) && isContactSelectableRow(row),
     );
-  }, [displayRows, selectedContactRowKeys]);
+  }, [selectedContactRowKeys, viewFilteredRows]);
   const visibleColumnOrder = useMemo(
     () => columnOrder.filter((columnId) => visibleColumns.includes(columnId)),
     [columnOrder, visibleColumns],
@@ -6940,6 +6960,41 @@ export function AccountsClient({
       title="Sales MeadowBrook"
       userName={session?.user?.name ?? "Signed in"}
     >
+      <section className={styles.filterViewsRow}>
+        <span className={styles.filterViewsLabel}>Filter views</span>
+        <div className={styles.filterViews}>
+          <button
+            className={`${styles.filterViewButton} ${
+              activeFilterView === "allCompanies" ? styles.filterViewButtonActive : ""
+            }`}
+            onClick={() => {
+              if (activeFilterView === "allCompanies") {
+                return;
+              }
+              setPage(1);
+              setActiveFilterView("allCompanies");
+            }}
+            type="button"
+          >
+            All Companies
+          </button>
+          <button
+            className={`${styles.filterViewButton} ${
+              activeFilterView === "marketingOnly" ? styles.filterViewButtonActive : ""
+            }`}
+            onClick={() => {
+              if (activeFilterView === "marketingOnly") {
+                return;
+              }
+              setPage(1);
+              setActiveFilterView("marketingOnly");
+            }}
+            type="button"
+          >
+            Marketing Only
+          </button>
+        </div>
+      </section>
 
       <section className={styles.toolbar}>
         <label className={styles.searchField}>
