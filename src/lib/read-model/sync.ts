@@ -392,7 +392,7 @@ async function runFullSync(
       {
         includeInternal: true,
         includeOpportunityCounts: false,
-        includeContacts: true,
+        includeContacts: false,
       },
     );
     const counts = computeCounts(rows);

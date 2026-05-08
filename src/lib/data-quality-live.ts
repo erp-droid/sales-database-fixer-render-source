@@ -628,6 +628,9 @@ export async function fetchAllSyncRows(
   // Full read-model sync skips contact hydration, so attribute hydration is optional.
   // Keeping the quality profile avoids fragile $select combinations on some tenants.
   const ensureAttributes = includeContacts;
+  // Always request account-level Contacts so we can keep one-row-per-contact output
+  // even when we skip the separate global Contacts crawl.
+  const ensureContacts = true;
   const rawContacts = includeContacts
     ? await fetchContacts(
         cookieValue,
@@ -648,7 +651,7 @@ export async function fetchAllSyncRows(
         ensureMainAddress: true,
         ensurePrimaryContact: true,
         ensureAttributes,
-        ensureContacts: false,
+        ensureContacts,
       },
       authCookieRefresh,
     );
