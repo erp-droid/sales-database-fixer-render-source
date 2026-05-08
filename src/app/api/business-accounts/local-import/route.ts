@@ -67,7 +67,7 @@ const payloadSchema = z.object({
 function coerceRows(rows: z.infer<typeof rowSchema>[]): BusinessAccountRow[] {
   return rows.map((row) => ({
     id: row.id,
-    accountRecordId: row.accountRecordId ?? null,
+    accountRecordId: row.accountRecordId ?? undefined,
     businessAccountId: row.businessAccountId,
     companyName: row.companyName,
     address: row.address ?? "",
@@ -80,7 +80,9 @@ function coerceRows(rows: z.infer<typeof rowSchema>[]): BusinessAccountRow[] {
     phoneNumber: row.phoneNumber ?? null,
     companyPhone: row.companyPhone ?? null,
     companyPhoneSource:
-      row.companyPhoneSource === "contact" || row.companyPhoneSource === "account"
+      row.companyPhoneSource === "account" ||
+      row.companyPhoneSource === "placeholder" ||
+      row.companyPhoneSource === "fallback"
         ? row.companyPhoneSource
         : null,
     salesRepId: row.salesRepId ?? null,
