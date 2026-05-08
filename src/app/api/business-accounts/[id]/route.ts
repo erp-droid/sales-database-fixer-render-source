@@ -928,7 +928,24 @@ function saveReadModelFallbackUpdate(
   updateRequest: ReturnType<typeof parseUpdatePayload>,
   shouldPersistLocalMetadata: boolean,
 ): BusinessAccountRow {
-  const nextRows = applyOptimisticSavedUpdateToRows(rows, updateRequest);
+  const currentRow =
+    selectLocalResponseRow(rows, updateRequest.targetContactId ?? null) ?? rows[0] ?? null;
+  if (!currentRow) {
+    throw new HttpError(404, "No SQLite rows were available for this account.");
+  }
+
+  const effectiveTargetContactId =
+    updateRequest.targetContactId ??
+    currentRow.contactId ??
+    currentRow.primaryContactId ??
+    null;
+
+  const nextRows = applyOptimisticSavedUpdateToRows(
+    rows,
+    currentRow,
+    updateRequest,
+    effectiveTargetContactId,
+  );
   if (nextRows.length === 0) {
     throw new HttpError(404, "No SQLite rows were available for this account.");
   }
