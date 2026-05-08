@@ -27,6 +27,8 @@ import {
   withPrimaryContact,
 } from "@/lib/business-accounts";
 import { applyLastCalledAtToBusinessAccountRows } from "@/lib/business-account-call-history";
+import { applyLocalBusinessAccountUpdate } from "@/lib/local-account-rows";
+import { enqueueOutboundSync } from "@/lib/outbound-sync-queue";
 import {
   readContactBusinessAccountCode,
   readContactCompanyName,
@@ -65,6 +67,7 @@ import {
 import {
   readBusinessAccountDetailFromReadModel,
   readStoredBusinessAccountRowsFromReadModel,
+  replaceLocalReadModelAccountRows,
   replaceReadModelAccountRows,
 } from "@/lib/read-model/accounts";
 import {
@@ -888,7 +891,6 @@ function persistLocalAccountMetadata(
     accountRecordId: row.accountRecordId ?? row.id,
     businessAccountId: row.businessAccountId,
     companyDescription: updateRequest.companyDescription,
-    category: updateRequest.category,
     marketingEligible: updateRequest.marketingEligible,
   });
 }
@@ -900,6 +902,57 @@ function withLocalAccountMetadata(
 ): BusinessAccountRow {
   persistLocalAccountMetadata(row, updateRequest, shouldPersist);
   return applyLocalAccountMetadataToRow(row) ?? row;
+}
+
+function selectLocalResponseRow(
+  rows: BusinessAccountRow[],
+  targetContactId: number | null,
+): BusinessAccountRow | null {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  if (targetContactId !== null) {
+    const matched = rows.find(
+      (row) => (row.contactId ?? row.primaryContactId ?? null) === targetContactId,
+    );
+    if (matched) {
+      return matched;
+    }
+  }
+
+  return rows.find((row) => row.isPrimaryContact) ?? rows[0] ?? null;
+}
+
+function saveQueuedLocalBusinessAccountUpdate(
+  accountRecordId: string,
+  rows: BusinessAccountRow[],
+  updateRequest: ReturnType<typeof parseUpdatePayload>,
+  shouldPersistLocalMetadata: boolean,
+): BusinessAccountRow {
+  const nextRows = applyLocalBusinessAccountUpdate(rows, updateRequest);
+  if (nextRows.length === 0) {
+    throw new HttpError(404, "No SQLite rows were available for this account.");
+  }
+
+  replaceLocalReadModelAccountRows(accountRecordId, nextRows);
+  const responseRow = selectLocalResponseRow(nextRows, updateRequest.targetContactId ?? null);
+  if (!responseRow) {
+    throw new HttpError(500, "Updated SQLite rows were saved, but no response row could be selected.");
+  }
+
+  enqueueOutboundSync({
+    entityType: "business_account",
+    entityKey: accountRecordId,
+    operation: "update_business_account",
+    payload: {
+      businessAccountRecordId: accountRecordId,
+      businessAccountId: responseRow.businessAccountId,
+      request: updateRequest,
+    },
+  });
+
+  return withLocalAccountMetadata(responseRow, updateRequest, shouldPersistLocalMetadata);
 }
 
 function buildConcurrencyConflictMessage(conflictingFields: string[]): string {
@@ -1114,12 +1167,8 @@ export async function PUT(
       requestBody,
       "marketingEligible",
     );
-    const submittedCategory = requestBodyHasOwnField(
-      requestBody,
-      "category",
-    );
     const shouldPersistLocalMetadata =
-      submittedCompanyDescription || submittedMarketingEligible || submittedCategory;
+      submittedCompanyDescription || submittedMarketingEligible;
 
     const cachedTargetContactId =
       updateRequest.targetContactId ??
@@ -1138,6 +1187,17 @@ export async function PUT(
         cachedTargetRow,
       );
     }
+
+    const storedRows = readStoredBusinessAccountRowsFromReadModel(id);
+    if (storedRows.length > 0) {
+      return saveQueuedLocalBusinessAccountUpdate(
+        id,
+        storedRows,
+        updateRequest,
+        shouldPersistLocalMetadata,
+      );
+    }
+
     const implicitContactOnlyIntent =
       cachedCurrentRow !== null &&
       cachedTargetContactId !== null &&
