@@ -27,8 +27,6 @@ import {
   withPrimaryContact,
 } from "@/lib/business-accounts";
 import { applyLastCalledAtToBusinessAccountRows } from "@/lib/business-account-call-history";
-import { applyLocalBusinessAccountUpdate } from "@/lib/local-account-rows";
-import { enqueueOutboundSync } from "@/lib/outbound-sync-queue";
 import {
   readContactBusinessAccountCode,
   readContactCompanyName,
@@ -67,7 +65,6 @@ import {
 import {
   readBusinessAccountDetailFromReadModel,
   readStoredBusinessAccountRowsFromReadModel,
-  replaceLocalReadModelAccountRows,
   replaceReadModelAccountRows,
 } from "@/lib/read-model/accounts";
 import {
@@ -891,6 +888,7 @@ function persistLocalAccountMetadata(
     accountRecordId: row.accountRecordId ?? row.id,
     businessAccountId: row.businessAccountId,
     companyDescription: updateRequest.companyDescription,
+    category: updateRequest.category,
     marketingEligible: updateRequest.marketingEligible,
   });
 }
@@ -924,33 +922,22 @@ function selectLocalResponseRow(
   return rows.find((row) => row.isPrimaryContact) ?? rows[0] ?? null;
 }
 
-function saveQueuedLocalBusinessAccountUpdate(
+function saveReadModelFallbackUpdate(
   accountRecordId: string,
   rows: BusinessAccountRow[],
   updateRequest: ReturnType<typeof parseUpdatePayload>,
   shouldPersistLocalMetadata: boolean,
 ): BusinessAccountRow {
-  const nextRows = applyLocalBusinessAccountUpdate(rows, updateRequest);
+  const nextRows = applyOptimisticSavedUpdateToRows(rows, updateRequest);
   if (nextRows.length === 0) {
     throw new HttpError(404, "No SQLite rows were available for this account.");
   }
 
-  replaceLocalReadModelAccountRows(accountRecordId, nextRows);
+  replaceReadModelAccountRows(accountRecordId, nextRows);
   const responseRow = selectLocalResponseRow(nextRows, updateRequest.targetContactId ?? null);
   if (!responseRow) {
     throw new HttpError(500, "Updated SQLite rows were saved, but no response row could be selected.");
   }
-
-  enqueueOutboundSync({
-    entityType: "business_account",
-    entityKey: accountRecordId,
-    operation: "update_business_account",
-    payload: {
-      businessAccountRecordId: accountRecordId,
-      businessAccountId: responseRow.businessAccountId,
-      request: updateRequest,
-    },
-  });
 
   return withLocalAccountMetadata(responseRow, updateRequest, shouldPersistLocalMetadata);
 }
@@ -1167,8 +1154,12 @@ export async function PUT(
       requestBody,
       "marketingEligible",
     );
+    const submittedCategory = requestBodyHasOwnField(
+      requestBody,
+      "category",
+    );
     const shouldPersistLocalMetadata =
-      submittedCompanyDescription || submittedMarketingEligible;
+      submittedCompanyDescription || submittedMarketingEligible || submittedCategory;
 
     const cachedTargetContactId =
       updateRequest.targetContactId ??
@@ -1187,17 +1178,7 @@ export async function PUT(
         cachedTargetRow,
       );
     }
-
     const storedRows = readStoredBusinessAccountRowsFromReadModel(id);
-    if (storedRows.length > 0) {
-      return saveQueuedLocalBusinessAccountUpdate(
-        id,
-        storedRows,
-        updateRequest,
-        shouldPersistLocalMetadata,
-      );
-    }
-
     const implicitContactOnlyIntent =
       cachedCurrentRow !== null &&
       cachedTargetContactId !== null &&
@@ -1480,11 +1461,30 @@ export async function PUT(
       );
     }
 
-    const currentRaw = await fetchBusinessAccountById(
-      activeCookieValue,
-      id,
-      activeAuthCookieRefresh,
-    );
+    let currentRaw: unknown;
+    try {
+      currentRaw = await fetchBusinessAccountById(
+        activeCookieValue,
+        id,
+        activeAuthCookieRefresh,
+      );
+    } catch (currentFetchError) {
+      const errorMessage = getErrorMessage(currentFetchError).toLowerCase();
+      const isLookupFailure =
+        (currentFetchError instanceof HttpError &&
+          (currentFetchError.status === 401 || currentFetchError.status === 404)) ||
+        errorMessage.includes("invalid uri structure") ||
+        errorMessage.includes("acumatica request failed with status 401");
+      if (storedRows.length > 0 && isLookupFailure) {
+        return saveReadModelFallbackUpdate(
+          id,
+          storedRows,
+          updateRequest,
+          shouldPersistLocalMetadata,
+        );
+      }
+      throw currentFetchError;
+    }
     const resolvedRecordId = resolveBusinessAccountRecordId(currentRaw, id);
     const updateIdentifiers = buildBusinessAccountUpdateIdentifiers(currentRaw, id);
     const normalizedCurrentAccountRow = await normalizeWithContactNotes(
