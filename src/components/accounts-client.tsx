@@ -2387,6 +2387,23 @@ function replaceRowsForAccount(
   return enforceSinglePrimaryPerAccountRows([...incomingRows, ...nextRows]);
 }
 
+function mergeIncomingRowsForAccount(
+  currentRows: BusinessAccountRow[],
+  incomingRows: BusinessAccountRow[],
+  businessAccountRecordId: string,
+  businessAccountId: string,
+): BusinessAccountRow[] {
+  const existingRows = currentRows.filter((row) => {
+    const rowAccountRecordId = row.accountRecordId ?? row.id;
+    return (
+      rowAccountRecordId === businessAccountRecordId ||
+      (businessAccountId.length > 0 && row.businessAccountId === businessAccountId)
+    );
+  });
+
+  return mergeSnapshotRowsPreservingFields(existingRows, incomingRows);
+}
+
 function canAddContactToRow(row: BusinessAccountRow): boolean {
   return row.businessAccountId.trim().length > 0;
 }
@@ -3515,7 +3532,9 @@ export function AccountsClient({
             ? resolveRowContactId(selectedRow)
             : event.targetContactId;
         const response = await fetch(
-          buildBusinessAccountDetailUrl(event.accountRecordId, preferredContactId),
+          buildBusinessAccountDetailUrl(event.accountRecordId, preferredContactId, {
+            live: true,
+          }),
           {
             cache: "no-store",
           },
@@ -3541,7 +3560,12 @@ export function AccountsClient({
         setAllRows((rows) =>
           replaceRowsForAccount(
             rows,
-            refreshedRows,
+            mergeIncomingRowsForAccount(
+              rows,
+              refreshedRows,
+              event.accountRecordId,
+              responseRow.businessAccountId,
+            ),
             event.accountRecordId,
             responseRow.businessAccountId,
           ),
@@ -5390,7 +5414,12 @@ export function AccountsClient({
       setAllRows((currentRows) =>
         replaceRowsForAccount(
           currentRows,
-          refreshedRows,
+          mergeIncomingRowsForAccount(
+            currentRows,
+            refreshedRows,
+            canonicalAccountRecordId,
+            refreshedRow.businessAccountId,
+          ),
           canonicalAccountRecordId,
           refreshedRow.businessAccountId,
         ),
@@ -5585,7 +5614,9 @@ export function AccountsClient({
       if (accountWasReassigned) {
         try {
           const refreshResponse = await fetch(
-            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId),
+            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId, {
+              live: true,
+            }),
             {
               cache: "no-store",
             },
@@ -5613,7 +5644,9 @@ export function AccountsClient({
       if (!accountWasReassigned) {
         try {
           const refreshResponse = await fetch(
-            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId),
+            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId, {
+              live: true,
+            }),
             {
               cache: "no-store",
             },
@@ -5651,7 +5684,12 @@ export function AccountsClient({
           if (reassignedAccountRows && reassignedAccountRows.length > 0) {
             return replaceRowsForAccount(
               withoutSourceAccount,
-              reassignedAccountRows,
+              mergeIncomingRowsForAccount(
+                withoutSourceAccount,
+                reassignedAccountRows,
+                updatedAccountRecordId,
+                updatedRow.businessAccountId,
+              ),
               updatedAccountRecordId,
               updatedRow.businessAccountId,
             );
@@ -5697,7 +5735,12 @@ export function AccountsClient({
         setAllRows((currentRows) =>
           replaceRowsForAccount(
             currentRows,
-            refreshedSavedAccountRows,
+            mergeIncomingRowsForAccount(
+              currentRows,
+              refreshedSavedAccountRows,
+              updatedAccountRecordId,
+              updatedRow.businessAccountId,
+            ),
             updatedAccountRecordId,
             updatedRow.businessAccountId,
           ),

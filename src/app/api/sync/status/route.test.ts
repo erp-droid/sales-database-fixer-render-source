@@ -16,6 +16,7 @@ describe("GET /api/sync/status", () => {
       startedAt: "2026-04-21T04:29:14.764Z",
       completedAt: "2026-04-21T04:32:40.256Z",
       lastSuccessfulSyncAt: "2026-04-21T04:32:40.256Z",
+      snapshotVersion: "3630|2026-04-21T04:32:40.256Z|0|",
       deferredVisibilityVersion: "541|2026-04-20T15:26:38.531Z",
       lastError: null,
       rowsCount: 3630,

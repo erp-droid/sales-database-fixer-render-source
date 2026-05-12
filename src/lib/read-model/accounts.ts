@@ -134,7 +134,7 @@ function parseStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
     .filter((row): row is BusinessAccountRow => row !== null);
 }
 
-function readAccountRowsVersion(): string {
+export function readReadModelRowsSnapshotVersion(): string {
   const db = getReadModelDb();
   const accountRow = db
     .prepare(
@@ -173,7 +173,7 @@ function readAccountRowsVersion(): string {
 }
 
 export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
-  const nextVersion = readAccountRowsVersion();
+  const nextVersion = readReadModelRowsSnapshotVersion();
   if (allRowsCache && allRowsCacheVersion === nextVersion) {
     return allRowsCache;
   }

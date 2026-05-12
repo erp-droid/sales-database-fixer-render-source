@@ -13,7 +13,11 @@ import {
 } from "@/lib/read-model/sales-reps";
 import { geocodePendingAddresses, queueGeocodesForRows } from "@/lib/read-model/geocodes";
 import { getReadModelDb } from "@/lib/read-model/db";
-import { replaceAllAccountRows, readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
+import {
+  replaceAllAccountRows,
+  readAllAccountRowsFromReadModel,
+  readReadModelRowsSnapshotVersion,
+} from "@/lib/read-model/accounts";
 import { invalidateReadModelCaches } from "@/lib/read-model/cache";
 import { syncCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
 import { readCallIngestState } from "@/lib/call-analytics/ingest";
@@ -73,6 +77,7 @@ function toSyncStatusResponse(record: StoredSyncState | undefined): SyncStatusRe
     startedAt: record?.started_at ?? null,
     completedAt: record?.completed_at ?? null,
     lastSuccessfulSyncAt: record?.last_successful_sync_at ?? null,
+    snapshotVersion: null,
     deferredVisibilityVersion: null,
     lastError: record?.last_error ?? null,
     rowsCount: record?.rows_count ?? 0,
@@ -580,6 +585,7 @@ async function runFullSync(
 
 export function readSyncStatus(): SyncStatusResponse {
   const status = toSyncStatusResponse(readStoredSyncStateWithRecovery());
+  status.snapshotVersion = readReadModelRowsSnapshotVersion();
   status.deferredVisibilityVersion = readDeferredVisibilityVersion();
   status.manualSyncBlockedReason = readManualSyncBlockedReason();
   return status;
