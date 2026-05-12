@@ -50,6 +50,13 @@ const {
       return baseState.callCountRow;
     }
 
+    if (sql.includes("FROM deferred_actions")) {
+      return {
+        active_count: 0,
+        latest_updated_at: "",
+      };
+    }
+
     throw new Error(`Unexpected SQL in sync.test.ts: ${sql}`);
   });
 

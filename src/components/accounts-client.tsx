@@ -375,6 +375,9 @@ function isSyncStatusResponse(value: unknown): value is SyncStatusResponse {
       record.status === "running" ||
       record.status === "failed") &&
     (record.phase === null || typeof record.phase === "string") &&
+    (record.snapshotVersion === undefined ||
+      record.snapshotVersion === null ||
+      typeof record.snapshotVersion === "string") &&
     (record.deferredVisibilityVersion === undefined ||
       record.deferredVisibilityVersion === null ||
       typeof record.deferredVisibilityVersion === "string") &&
@@ -1710,6 +1713,12 @@ function canUseCachedSnapshot(
     return false;
   }
 
+  const cachedSnapshotVersion = normalizeCachedSyncTimestamp(cachedDataset.snapshotVersion);
+  const remoteSnapshotVersion = normalizeCachedSyncTimestamp(status.snapshotVersion);
+  if (remoteSnapshotVersion && cachedSnapshotVersion !== remoteSnapshotVersion) {
+    return false;
+  }
+
   const cachedDeferredVisibilityVersion = normalizeDeferredVisibilityVersion(
     cachedDataset.deferredVisibilityVersion,
   );
@@ -2485,6 +2494,7 @@ export function AccountsClient({
   const [remoteSyncRunning, setRemoteSyncRunning] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [snapshotVersion, setSnapshotVersion] = useState<string | null>(null);
   const [deferredVisibilityVersion, setDeferredVisibilityVersion] = useState<string | null>(null);
   const [pageInput, setPageInput] = useState("1");
   const [error, setError] = useState<string | null>(null);
@@ -2695,6 +2705,7 @@ export function AccountsClient({
       if (statusResponse.ok && isSyncStatusResponse(nextStatusPayload)) {
         statusPayload = nextStatusPayload;
         setLastSyncedAt(nextStatusPayload.lastSuccessfulSyncAt);
+        setSnapshotVersion(normalizeCachedSyncTimestamp(nextStatusPayload.snapshotVersion));
         setDeferredVisibilityVersion(
           normalizeDeferredVisibilityVersion(nextStatusPayload.deferredVisibilityVersion),
         );
@@ -2708,6 +2719,7 @@ export function AccountsClient({
     } catch {
       if (cachedDataset && isBusinessAccountRows(cachedDataset.rows) && cachedDataset.rows.length > 0) {
         setLastSyncedAt(cachedDataset.lastSyncedAt);
+        setSnapshotVersion(cachedDataset.snapshotVersion);
         return cachedDataset.rows;
       }
     }
@@ -3447,11 +3459,13 @@ export function AccountsClient({
       allRowsCountRef.current = cachedDataset.rows.length;
       setAllRows(enforceSinglePrimaryPerAccountRows(cachedDataset.rows));
       setLastSyncedAt(cachedDataset.lastSyncedAt);
+      setSnapshotVersion(cachedDataset.snapshotVersion ?? null);
       setDeferredVisibilityVersion(cachedDataset.deferredVisibilityVersion ?? null);
       setLoading(false);
     } else {
       const cachedSyncMeta = readCachedSyncMeta();
       setLastSyncedAt(cachedSyncMeta.lastSyncedAt);
+      setSnapshotVersion(cachedSyncMeta.snapshotVersion ?? null);
       setDeferredVisibilityVersion(cachedSyncMeta.deferredVisibilityVersion ?? null);
     }
 
@@ -3470,11 +3484,12 @@ export function AccountsClient({
     const payload: CachedDataset = {
       rows: allRows,
       lastSyncedAt,
+      snapshotVersion,
       deferredVisibilityVersion,
     };
 
     writeCachedDatasetToStorage(payload);
-  }, [allRows, cacheHydrated, deferredVisibilityVersion, isSyncing, lastSyncedAt]);
+  }, [allRows, cacheHydrated, deferredVisibilityVersion, isSyncing, lastSyncedAt, snapshotVersion]);
 
   useEffect(() => {
     async function fetchSession() {
@@ -4690,6 +4705,7 @@ export function AccountsClient({
 
         setSyncBlockedReason(statusPayload.manualSyncBlockedReason ?? null);
         setRemoteSyncRunning(statusPayload.status === "running");
+        setSnapshotVersion(normalizeCachedSyncTimestamp(statusPayload.snapshotVersion));
 
         setSyncProgress({
           fetchedAccounts: statusPayload.progress?.fetchedAccounts ?? statusPayload.accountsCount,
