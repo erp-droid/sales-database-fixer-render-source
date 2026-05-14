@@ -1023,21 +1023,6 @@ if (runtimeStallMonitorEnabled && runtimeEventLoopLagHistogram) {
   }
 }
 
-try {
-  const repairResult = await applyBrockAbSqliteRepair();
-  if (repairResult?.status === "applied") {
-    console.log("[startup] Brock A/B SQLite repair applied", repairResult);
-  } else if (repairResult?.status === "already_applied") {
-    console.log("[startup] Brock A/B SQLite repair already applied", repairResult);
-  } else if (repairResult?.status === "disabled") {
-    console.log("[startup] Brock A/B SQLite repair disabled", repairResult);
-  }
-} catch (error) {
-  console.error("[startup] Brock A/B SQLite repair failed", {
-    message: error instanceof Error ? error.message : String(error),
-  });
-}
-
 server.listen(port, hostname, () => {
   console.log("[startup] listener opened", {
     host: hostname,
@@ -1066,6 +1051,21 @@ server.listen(port, hostname, () => {
 
   console.log(`sales-meadowb listening on http://${hostname}:${port}`);
   console.log(`embedded pricing-book-app mounted at ${quotesMountPath}`);
+  void applyBrockAbSqliteRepair()
+    .then((repairResult) => {
+      if (repairResult?.status === "applied") {
+        console.log("[startup] Brock A/B SQLite repair applied", repairResult);
+      } else if (repairResult?.status === "already_applied") {
+        console.log("[startup] Brock A/B SQLite repair already applied", repairResult);
+      } else if (repairResult?.status === "disabled") {
+        console.log("[startup] Brock A/B SQLite repair disabled", repairResult);
+      }
+    })
+    .catch((error) => {
+      console.error("[startup] Brock A/B SQLite repair failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
   if (pricingBookAutoSyncEnabled) {
     startPricingBookAutoSync(console);
     console.log("[pricing-book-auto-sync] enabled");
