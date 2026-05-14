@@ -77,6 +77,7 @@ describe("client dataset cache", () => {
     cache.writeCachedDatasetToStorage({
       rows: [SAMPLE_ROW],
       lastSyncedAt: "2026-03-13T21:36:00.592Z",
+      snapshotVersion: "3630|2026-04-21T04:32:40.256Z|0|",
       deferredVisibilityVersion: "0|",
     });
 
@@ -86,6 +87,7 @@ describe("client dataset cache", () => {
     expect(reloadedCache.readCachedDatasetFromStorage()).toEqual({
       rows: [SAMPLE_ROW],
       lastSyncedAt: "2026-03-13T21:36:00.592Z",
+      snapshotVersion: "3630|2026-04-21T04:32:40.256Z|0|",
       deferredVisibilityVersion: "0|",
     });
   });

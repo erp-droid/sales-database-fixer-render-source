@@ -3,6 +3,7 @@
 import type { BusinessAccountRow } from "@/types/business-account";
 
 const LEGACY_DATASET_STORAGE_KEYS = [
+  "businessAccounts.dataset.v7",
   "businessAccounts.dataset.v6",
   "businessAccounts.dataset.v5",
   "businessAccounts.dataset.v4",
@@ -11,7 +12,7 @@ const LEGACY_DATASET_STORAGE_KEYS = [
   "businessAccounts.dataset.v1",
 ] as const;
 
-export const DATASET_STORAGE_KEYS = ["businessAccounts.dataset.v7"] as const;
+export const DATASET_STORAGE_KEYS = ["businessAccounts.dataset.v8"] as const;
 
 const CURRENT_DATASET_STORAGE_KEY = DATASET_STORAGE_KEYS[0];
 const SYNC_META_STORAGE_KEY = "businessAccounts.syncMeta.v1";
@@ -19,11 +20,13 @@ const SYNC_META_STORAGE_KEY = "businessAccounts.syncMeta.v1";
 export type CachedDataset = {
   rows: BusinessAccountRow[];
   lastSyncedAt: string | null;
+  snapshotVersion: string | null;
   deferredVisibilityVersion: string | null;
 };
 
 export type CachedSyncMeta = {
   lastSyncedAt: string | null;
+  snapshotVersion: string | null;
   deferredVisibilityVersion: string | null;
 };
 
@@ -98,6 +101,7 @@ export function readCachedDatasetFromStorage(): CachedDataset | null {
       const parsed = JSON.parse(raw) as {
         rows?: unknown;
         lastSyncedAt?: unknown;
+        snapshotVersion?: unknown;
         deferredVisibilityVersion?: unknown;
       };
       if (Array.isArray(parsed.rows) && parsed.rows.every((row) => isBusinessAccountRow(row))) {
@@ -105,6 +109,8 @@ export function readCachedDatasetFromStorage(): CachedDataset | null {
           rows: parsed.rows,
           lastSyncedAt:
             typeof parsed.lastSyncedAt === "string" ? parsed.lastSyncedAt : null,
+          snapshotVersion:
+            typeof parsed.snapshotVersion === "string" ? parsed.snapshotVersion : null,
           deferredVisibilityVersion:
             typeof parsed.deferredVisibilityVersion === "string"
               ? parsed.deferredVisibilityVersion
@@ -133,22 +139,25 @@ export function readCachedSyncMeta(): CachedSyncMeta {
   try {
     const raw = window.localStorage.getItem(SYNC_META_STORAGE_KEY);
     if (!raw) {
-      return { lastSyncedAt: null, deferredVisibilityVersion: null };
+      return { lastSyncedAt: null, snapshotVersion: null, deferredVisibilityVersion: null };
     }
 
     const parsed = JSON.parse(raw) as {
       lastSyncedAt?: unknown;
+      snapshotVersion?: unknown;
       deferredVisibilityVersion?: unknown;
     };
     return {
       lastSyncedAt: typeof parsed.lastSyncedAt === "string" ? parsed.lastSyncedAt : null,
+      snapshotVersion:
+        typeof parsed.snapshotVersion === "string" ? parsed.snapshotVersion : null,
       deferredVisibilityVersion:
         typeof parsed.deferredVisibilityVersion === "string"
           ? parsed.deferredVisibilityVersion
           : null,
     };
   } catch {
-    return { lastSyncedAt: null, deferredVisibilityVersion: null };
+    return { lastSyncedAt: null, snapshotVersion: null, deferredVisibilityVersion: null };
   }
 }
 
@@ -174,6 +183,7 @@ export function writeCachedDatasetToStorage(dataset: CachedDataset): void {
   }
   writeCachedSyncMeta({
     lastSyncedAt: dataset.lastSyncedAt,
+    snapshotVersion: dataset.snapshotVersion,
     deferredVisibilityVersion: dataset.deferredVisibilityVersion,
   });
   emitDatasetUpdated();

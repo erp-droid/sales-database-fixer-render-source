@@ -375,6 +375,9 @@ function isSyncStatusResponse(value: unknown): value is SyncStatusResponse {
       record.status === "running" ||
       record.status === "failed") &&
     (record.phase === null || typeof record.phase === "string") &&
+    (record.snapshotVersion === undefined ||
+      record.snapshotVersion === null ||
+      typeof record.snapshotVersion === "string") &&
     (record.deferredVisibilityVersion === undefined ||
       record.deferredVisibilityVersion === null ||
       typeof record.deferredVisibilityVersion === "string") &&
@@ -1710,6 +1713,12 @@ function canUseCachedSnapshot(
     return false;
   }
 
+  const cachedSnapshotVersion = normalizeCachedSyncTimestamp(cachedDataset.snapshotVersion);
+  const remoteSnapshotVersion = normalizeCachedSyncTimestamp(status.snapshotVersion);
+  if (remoteSnapshotVersion && cachedSnapshotVersion !== remoteSnapshotVersion) {
+    return false;
+  }
+
   const cachedDeferredVisibilityVersion = normalizeDeferredVisibilityVersion(
     cachedDataset.deferredVisibilityVersion,
   );
@@ -2387,6 +2396,23 @@ function replaceRowsForAccount(
   return enforceSinglePrimaryPerAccountRows([...incomingRows, ...nextRows]);
 }
 
+function mergeIncomingRowsForAccount(
+  currentRows: BusinessAccountRow[],
+  incomingRows: BusinessAccountRow[],
+  businessAccountRecordId: string,
+  businessAccountId: string,
+): BusinessAccountRow[] {
+  const existingRows = currentRows.filter((row) => {
+    const rowAccountRecordId = row.accountRecordId ?? row.id;
+    return (
+      rowAccountRecordId === businessAccountRecordId ||
+      (businessAccountId.length > 0 && row.businessAccountId === businessAccountId)
+    );
+  });
+
+  return mergeSnapshotRowsPreservingFields(existingRows, incomingRows);
+}
+
 function canAddContactToRow(row: BusinessAccountRow): boolean {
   return row.businessAccountId.trim().length > 0;
 }
@@ -2468,6 +2494,7 @@ export function AccountsClient({
   const [remoteSyncRunning, setRemoteSyncRunning] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [snapshotVersion, setSnapshotVersion] = useState<string | null>(null);
   const [deferredVisibilityVersion, setDeferredVisibilityVersion] = useState<string | null>(null);
   const [pageInput, setPageInput] = useState("1");
   const [error, setError] = useState<string | null>(null);
@@ -2678,6 +2705,7 @@ export function AccountsClient({
       if (statusResponse.ok && isSyncStatusResponse(nextStatusPayload)) {
         statusPayload = nextStatusPayload;
         setLastSyncedAt(nextStatusPayload.lastSuccessfulSyncAt);
+        setSnapshotVersion(normalizeCachedSyncTimestamp(nextStatusPayload.snapshotVersion));
         setDeferredVisibilityVersion(
           normalizeDeferredVisibilityVersion(nextStatusPayload.deferredVisibilityVersion),
         );
@@ -2691,6 +2719,7 @@ export function AccountsClient({
     } catch {
       if (cachedDataset && isBusinessAccountRows(cachedDataset.rows) && cachedDataset.rows.length > 0) {
         setLastSyncedAt(cachedDataset.lastSyncedAt);
+        setSnapshotVersion(cachedDataset.snapshotVersion);
         return cachedDataset.rows;
       }
     }
@@ -3430,11 +3459,13 @@ export function AccountsClient({
       allRowsCountRef.current = cachedDataset.rows.length;
       setAllRows(enforceSinglePrimaryPerAccountRows(cachedDataset.rows));
       setLastSyncedAt(cachedDataset.lastSyncedAt);
+      setSnapshotVersion(cachedDataset.snapshotVersion ?? null);
       setDeferredVisibilityVersion(cachedDataset.deferredVisibilityVersion ?? null);
       setLoading(false);
     } else {
       const cachedSyncMeta = readCachedSyncMeta();
       setLastSyncedAt(cachedSyncMeta.lastSyncedAt);
+      setSnapshotVersion(cachedSyncMeta.snapshotVersion ?? null);
       setDeferredVisibilityVersion(cachedSyncMeta.deferredVisibilityVersion ?? null);
     }
 
@@ -3453,11 +3484,12 @@ export function AccountsClient({
     const payload: CachedDataset = {
       rows: allRows,
       lastSyncedAt,
+      snapshotVersion,
       deferredVisibilityVersion,
     };
 
     writeCachedDatasetToStorage(payload);
-  }, [allRows, cacheHydrated, deferredVisibilityVersion, isSyncing, lastSyncedAt]);
+  }, [allRows, cacheHydrated, deferredVisibilityVersion, isSyncing, lastSyncedAt, snapshotVersion]);
 
   useEffect(() => {
     async function fetchSession() {
@@ -3515,7 +3547,9 @@ export function AccountsClient({
             ? resolveRowContactId(selectedRow)
             : event.targetContactId;
         const response = await fetch(
-          buildBusinessAccountDetailUrl(event.accountRecordId, preferredContactId),
+          buildBusinessAccountDetailUrl(event.accountRecordId, preferredContactId, {
+            live: true,
+          }),
           {
             cache: "no-store",
           },
@@ -3541,7 +3575,12 @@ export function AccountsClient({
         setAllRows((rows) =>
           replaceRowsForAccount(
             rows,
-            refreshedRows,
+            mergeIncomingRowsForAccount(
+              rows,
+              refreshedRows,
+              event.accountRecordId,
+              responseRow.businessAccountId,
+            ),
             event.accountRecordId,
             responseRow.businessAccountId,
           ),
@@ -4666,6 +4705,7 @@ export function AccountsClient({
 
         setSyncBlockedReason(statusPayload.manualSyncBlockedReason ?? null);
         setRemoteSyncRunning(statusPayload.status === "running");
+        setSnapshotVersion(normalizeCachedSyncTimestamp(statusPayload.snapshotVersion));
 
         setSyncProgress({
           fetchedAccounts: statusPayload.progress?.fetchedAccounts ?? statusPayload.accountsCount,
@@ -5390,7 +5430,12 @@ export function AccountsClient({
       setAllRows((currentRows) =>
         replaceRowsForAccount(
           currentRows,
-          refreshedRows,
+          mergeIncomingRowsForAccount(
+            currentRows,
+            refreshedRows,
+            canonicalAccountRecordId,
+            refreshedRow.businessAccountId,
+          ),
           canonicalAccountRecordId,
           refreshedRow.businessAccountId,
         ),
@@ -5585,7 +5630,9 @@ export function AccountsClient({
       if (accountWasReassigned) {
         try {
           const refreshResponse = await fetch(
-            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId),
+            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId, {
+              live: true,
+            }),
             {
               cache: "no-store",
             },
@@ -5613,7 +5660,9 @@ export function AccountsClient({
       if (!accountWasReassigned) {
         try {
           const refreshResponse = await fetch(
-            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId),
+            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId, {
+              live: true,
+            }),
             {
               cache: "no-store",
             },
@@ -5651,7 +5700,12 @@ export function AccountsClient({
           if (reassignedAccountRows && reassignedAccountRows.length > 0) {
             return replaceRowsForAccount(
               withoutSourceAccount,
-              reassignedAccountRows,
+              mergeIncomingRowsForAccount(
+                withoutSourceAccount,
+                reassignedAccountRows,
+                updatedAccountRecordId,
+                updatedRow.businessAccountId,
+              ),
               updatedAccountRecordId,
               updatedRow.businessAccountId,
             );
@@ -5697,7 +5751,12 @@ export function AccountsClient({
         setAllRows((currentRows) =>
           replaceRowsForAccount(
             currentRows,
-            refreshedSavedAccountRows,
+            mergeIncomingRowsForAccount(
+              currentRows,
+              refreshedSavedAccountRows,
+              updatedAccountRecordId,
+              updatedRow.businessAccountId,
+            ),
             updatedAccountRecordId,
             updatedRow.businessAccountId,
           ),

@@ -50,6 +50,13 @@ const {
       return baseState.callCountRow;
     }
 
+    if (sql.includes("FROM deferred_actions")) {
+      return {
+        active_count: 0,
+        latest_updated_at: "",
+      };
+    }
+
     throw new Error(`Unexpected SQL in sync.test.ts: ${sql}`);
   });
 
@@ -91,6 +98,7 @@ vi.mock("@/lib/read-model/db", () => ({
 vi.mock("@/lib/read-model/accounts", () => ({
   replaceAllAccountRows: vi.fn(),
   readAllAccountRowsFromReadModel: vi.fn(() => []),
+  readReadModelRowsSnapshotVersion: vi.fn(() => "100|2026-04-20T11:57:00.000Z|0|"),
 }));
 
 vi.mock("@/lib/read-model/cache", () => ({
@@ -123,7 +131,7 @@ vi.mock("@/lib/meeting-bookings", () => ({
   syncMeetingBookings: vi.fn(async () => undefined),
 }));
 
-import { readManualSyncBlockedReason } from "@/lib/read-model/sync";
+import { readManualSyncBlockedReason, readSyncStatus } from "@/lib/read-model/sync";
 
 const NOW_MS = Date.parse("2026-04-20T12:00:00.000Z");
 
@@ -211,5 +219,11 @@ describe("readManualSyncBlockedReason", () => {
     expect(
       mockDbGet.mock.calls.some((call) => String(call[0]).includes("FROM call_sessions")),
     ).toBe(false);
+  });
+
+  it("includes the snapshot version in sync status", () => {
+    const status = readSyncStatus();
+
+    expect(status.snapshotVersion).toBe("100|2026-04-20T11:57:00.000Z|0|");
   });
 });
