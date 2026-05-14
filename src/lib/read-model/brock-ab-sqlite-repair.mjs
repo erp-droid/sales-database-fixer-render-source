@@ -49,6 +49,11 @@ function readRepairSpecs() {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function buildBackupPath(sqlitePath) {
+  const parsed = path.parse(sqlitePath);
+  return path.join(parsed.dir, `${parsed.name}.${REPAIR_KEY}.${REPAIR_VERSION}.backup${parsed.ext || ".sqlite"}`);
+}
+
 function buildAddress(row) {
   const parts = [
     normalizeText(row.addressLine1),
@@ -428,7 +433,7 @@ function insertAccountRow(db, row, nowIso) {
   });
 }
 
-export function applyBrockAbSqliteRepair(options = {}) {
+export async function applyBrockAbSqliteRepair(options = {}) {
   const enabled = readFeatureEnabled(
     options.enabled ?? process.env.BROCK_AB_SQLITE_REPAIR_ENABLED,
     process.env.NODE_ENV === "production",
@@ -464,6 +469,7 @@ export function applyBrockAbSqliteRepair(options = {}) {
   }
 
   const repairSpecs = readRepairSpecs();
+  const backupPath = buildBackupPath(sqlitePath);
   const selectRows = db.prepare(
     `
     SELECT payload_json
@@ -501,6 +507,7 @@ export function applyBrockAbSqliteRepair(options = {}) {
     repairKey: REPAIR_KEY,
     repairVersion: REPAIR_VERSION,
     sqlitePath,
+    backupPath,
     totalSpecs: repairSpecs.length,
     matchedAccounts: 0,
     patchedRows: 0,
@@ -509,54 +516,59 @@ export function applyBrockAbSqliteRepair(options = {}) {
     appliedAt: null,
   };
 
-  const transaction = db.transaction(() => {
-    const nowIso = new Date().toISOString();
-    summary.appliedAt = nowIso;
-
-    for (const repair of repairSpecs) {
-      const accountRecordId = normalizeNullableText(repair.accountRecordId) ?? "";
-      const businessAccountId = normalizeNullableText(repair.businessAccountId) ?? "";
-      const storedRows = selectRows
-        .all(accountRecordId, businessAccountId)
-        .map((entry) => parseStoredRow(entry.payload_json))
-        .filter((row) => row !== null);
-
-      if (storedRows.length === 0) {
-        summary.missingAccounts.push({
-          accountRecordId,
-          businessAccountId,
-          companyName: repair.companyName,
-        });
-        continue;
-      }
-
-      const nextRows = storedRows.map((row) => buildPatchedRow(row, repair));
-      deleteRows.run(accountRecordId, businessAccountId);
-      for (const row of nextRows) {
-        insertAccountRow(db, row, nowIso);
-      }
-
-      upsertCategoryMetadata(db, repair, nowIso);
-      summary.matchedAccounts += 1;
-      summary.patchedRows += nextRows.length;
-      summary.metadataUpserts += 1;
+  try {
+    if (!fs.existsSync(backupPath)) {
+      await db.backup(backupPath);
     }
 
-    rebuildSalesRepDirectory(db, nowIso);
-    upsertRepairState.run(
-      REPAIR_KEY,
-      REPAIR_VERSION,
-      nowIso,
-      JSON.stringify({
-        matchedAccounts: summary.matchedAccounts,
-        patchedRows: summary.patchedRows,
-        metadataUpserts: summary.metadataUpserts,
-        missingAccounts: summary.missingAccounts,
-      }),
-    );
-  });
+    const transaction = db.transaction(() => {
+      const nowIso = new Date().toISOString();
+      summary.appliedAt = nowIso;
 
-  try {
+      for (const repair of repairSpecs) {
+        const accountRecordId = normalizeNullableText(repair.accountRecordId) ?? "";
+        const businessAccountId = normalizeNullableText(repair.businessAccountId) ?? "";
+        const storedRows = selectRows
+          .all(accountRecordId, businessAccountId)
+          .map((entry) => parseStoredRow(entry.payload_json))
+          .filter((row) => row !== null);
+
+        if (storedRows.length === 0) {
+          summary.missingAccounts.push({
+            accountRecordId,
+            businessAccountId,
+            companyName: repair.companyName,
+          });
+          continue;
+        }
+
+        const nextRows = storedRows.map((row) => buildPatchedRow(row, repair));
+        deleteRows.run(accountRecordId, businessAccountId);
+        for (const row of nextRows) {
+          insertAccountRow(db, row, nowIso);
+        }
+
+        upsertCategoryMetadata(db, repair, nowIso);
+        summary.matchedAccounts += 1;
+        summary.patchedRows += nextRows.length;
+        summary.metadataUpserts += 1;
+      }
+
+      rebuildSalesRepDirectory(db, nowIso);
+      upsertRepairState.run(
+        REPAIR_KEY,
+        REPAIR_VERSION,
+        nowIso,
+        JSON.stringify({
+          backupPath,
+          matchedAccounts: summary.matchedAccounts,
+          patchedRows: summary.patchedRows,
+          metadataUpserts: summary.metadataUpserts,
+          missingAccounts: summary.missingAccounts,
+        }),
+      );
+    });
+
     transaction();
     return summary;
   } finally {
@@ -566,7 +578,7 @@ export function applyBrockAbSqliteRepair(options = {}) {
 
 const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url);
 if (isDirectRun) {
-  const result = applyBrockAbSqliteRepair({
+  const result = await applyBrockAbSqliteRepair({
     enabled: true,
     sqlitePath: process.argv[2],
   });

@@ -1024,7 +1024,7 @@ if (runtimeStallMonitorEnabled && runtimeEventLoopLagHistogram) {
 }
 
 try {
-  const repairResult = applyBrockAbSqliteRepair();
+  const repairResult = await applyBrockAbSqliteRepair();
   if (repairResult?.status === "applied") {
     console.log("[startup] Brock A/B SQLite repair applied", repairResult);
   } else if (repairResult?.status === "already_applied") {
