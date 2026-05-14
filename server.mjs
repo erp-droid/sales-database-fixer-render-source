@@ -4,6 +4,7 @@ import next from "next";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 
 import { app as pricingBookApp, startPricingBookAutoSync } from "./embedded/pricing-book-app/src/index.js";
+import { applyBrockAbSqliteRepair } from "./src/lib/read-model/brock-ab-sqlite-repair.mjs";
 
 function normalizeMountPath(value, fallback = "/quotes") {
   const raw = String(value || "").trim();
@@ -1020,6 +1021,21 @@ if (runtimeStallMonitorEnabled && runtimeEventLoopLagHistogram) {
   if (typeof runtimeMonitorTimer.unref === "function") {
     runtimeMonitorTimer.unref();
   }
+}
+
+try {
+  const repairResult = applyBrockAbSqliteRepair();
+  if (repairResult?.status === "applied") {
+    console.log("[startup] Brock A/B SQLite repair applied", repairResult);
+  } else if (repairResult?.status === "already_applied") {
+    console.log("[startup] Brock A/B SQLite repair already applied", repairResult);
+  } else if (repairResult?.status === "disabled") {
+    console.log("[startup] Brock A/B SQLite repair disabled", repairResult);
+  }
+} catch (error) {
+  console.error("[startup] Brock A/B SQLite repair failed", {
+    message: error instanceof Error ? error.message : String(error),
+  });
 }
 
 server.listen(port, hostname, () => {
