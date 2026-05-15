@@ -4,7 +4,6 @@ import next from "next";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 
 import { app as pricingBookApp, startPricingBookAutoSync } from "./embedded/pricing-book-app/src/index.js";
-import { applyBrockAbSqliteRepair } from "./src/lib/read-model/brock-ab-sqlite-repair.mjs";
 
 function normalizeMountPath(value, fallback = "/quotes") {
   const raw = String(value || "").trim();
@@ -42,6 +41,21 @@ function readFeatureEnabled(value, fallback) {
   }
 
   return fallback;
+}
+
+async function applyOptionalBrockAbSqliteRepair() {
+  try {
+    const repairModule = await import("./src/lib/read-model/brock-ab-sqlite-repair.mjs");
+    return repairModule.applyBrockAbSqliteRepair();
+  } catch (error) {
+    if (error?.code === "ERR_MODULE_NOT_FOUND") {
+      console.warn("[startup] Brock A/B SQLite repair module unavailable; continuing startup", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return { status: "disabled", reason: "module_unavailable" };
+    }
+    throw error;
+  }
 }
 
 function readLocalDateParts(date, timeZone) {
@@ -1051,7 +1065,7 @@ server.listen(port, hostname, () => {
 
   console.log(`sales-meadowb listening on http://${hostname}:${port}`);
   console.log(`embedded pricing-book-app mounted at ${quotesMountPath}`);
-  void applyBrockAbSqliteRepair()
+  void applyOptionalBrockAbSqliteRepair()
     .then((repairResult) => {
       if (repairResult?.status === "applied") {
         console.log("[startup] Brock A/B SQLite repair applied", repairResult);
