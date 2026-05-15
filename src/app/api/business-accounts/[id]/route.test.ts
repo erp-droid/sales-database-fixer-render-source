@@ -9,7 +9,11 @@ import { collectUpdatedConcurrencyFields } from "@/lib/business-account-concurre
 import { parseUpdatePayload } from "@/lib/validation";
 
 const requireAuthCookieValue = vi.fn(() => "cookie");
+const getStoredLoginName = vi.fn(() => "jserrano");
 const setAuthCookie = vi.fn();
+const createAuditActor = vi.fn((actor) => actor);
+const logBusinessAccountUpdateAudit = vi.fn();
+const logContactUpdateAudit = vi.fn();
 const resolveDeferredActionActor = vi.fn(async () => ({
   loginName: "jserrano",
   name: "Jorge Serrano",
@@ -49,8 +53,15 @@ const shouldValidateWithAddressComplete = vi.fn(() => false);
 const validateCanadianAddress = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
+  getStoredLoginName,
   requireAuthCookieValue,
   setAuthCookie,
+}));
+
+vi.mock("@/lib/audit-log-store", () => ({
+  createAuditActor,
+  logBusinessAccountUpdateAudit,
+  logContactUpdateAudit,
 }));
 
 vi.mock("@/lib/deferred-action-actor", () => ({
@@ -235,7 +246,12 @@ describe("GET /api/business-accounts/[id]", () => {
     applyLastCalledAtToBusinessAccountRows.mockImplementation((rows) => rows);
     requireAuthCookieValue.mockReset();
     requireAuthCookieValue.mockReturnValue("cookie");
+    getStoredLoginName.mockReset();
+    getStoredLoginName.mockReturnValue("jserrano");
     setAuthCookie.mockReset();
+    createAuditActor.mockClear();
+    logBusinessAccountUpdateAudit.mockClear();
+    logContactUpdateAudit.mockClear();
     getEnv.mockReset();
     getEnv.mockReturnValue({
       READ_MODEL_ENABLED: true,

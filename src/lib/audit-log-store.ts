@@ -598,6 +598,128 @@ export function logContactCreateAudit(input: {
   );
 }
 
+function summarizeBusinessAccountUpdate(
+  resultCode: AuditResultCode,
+  companyName: string | null,
+): string {
+  const label = companyName ?? "business account";
+  return resultCode === "failed"
+    ? `Failed to update ${label}`
+    : `Updated ${label}`;
+}
+
+export function logBusinessAccountUpdateAudit(input: {
+  actor: AuditActor;
+  row: BusinessAccountRow;
+  affectedFields: AuditAffectedField[];
+  resultCode: "succeeded" | "failed";
+  sourceSurface?: string | null;
+}): void {
+  const businessAccountRecordId = cleanString(input.row.accountRecordId) ?? cleanString(input.row.id);
+  const businessAccountId = cleanString(input.row.businessAccountId);
+  const companyName = cleanString(input.row.companyName);
+  const links = [
+    buildAccountLink("primary", {
+      businessAccountRecordId,
+      businessAccountId,
+      companyName,
+    }),
+    buildContactLink("primary", {
+      businessAccountRecordId,
+      businessAccountId,
+      companyName,
+      contactId: input.row.contactId ?? input.row.primaryContactId ?? null,
+      contactName: input.row.primaryContactName,
+    }),
+  ].filter((link): link is AuditLogLink => link !== null);
+
+  writeAuditEvent(
+    {
+      id: createAuditEventId("business-account-update"),
+      occurredAt: new Date().toISOString(),
+      itemType: "business_account",
+      actionGroup: "business_account_update",
+      resultCode: input.resultCode,
+      actorLoginName: input.actor.loginName,
+      actorName: input.actor.name,
+      sourceSurface: input.sourceSurface ?? "accounts",
+      summary: summarizeBusinessAccountUpdate(input.resultCode, companyName),
+      businessAccountRecordId,
+      businessAccountId,
+      companyName,
+      contactId: input.row.contactId ?? input.row.primaryContactId ?? null,
+      contactName: input.row.primaryContactName,
+      phoneNumber: cleanString(input.row.companyPhone) ?? cleanString(input.row.phoneNumber),
+      affectedFields: input.affectedFields,
+      links,
+    },
+    { notifyReason: "business-account-update" },
+  );
+}
+
+function summarizeContactUpdate(
+  resultCode: AuditResultCode,
+  contactName: string | null,
+  companyName: string | null,
+): string {
+  const contactLabel = contactName ?? "contact";
+  const target = companyName ? `${contactLabel} for ${companyName}` : contactLabel;
+  return resultCode === "failed"
+    ? `Failed to update ${target}`
+    : `Updated ${target}`;
+}
+
+export function logContactUpdateAudit(input: {
+  actor: AuditActor;
+  row: BusinessAccountRow;
+  affectedFields: AuditAffectedField[];
+  resultCode: "succeeded" | "failed";
+  sourceSurface?: string | null;
+}): void {
+  const businessAccountRecordId = cleanString(input.row.accountRecordId) ?? cleanString(input.row.id);
+  const businessAccountId = cleanString(input.row.businessAccountId);
+  const companyName = cleanString(input.row.companyName);
+  const contactId = input.row.contactId ?? input.row.primaryContactId ?? null;
+  const contactName = cleanString(input.row.primaryContactName);
+  const links = [
+    buildAccountLink("primary", {
+      businessAccountRecordId,
+      businessAccountId,
+      companyName,
+    }),
+    buildContactLink("primary", {
+      businessAccountRecordId,
+      businessAccountId,
+      companyName,
+      contactId,
+      contactName,
+    }),
+  ].filter((link): link is AuditLogLink => link !== null);
+
+  writeAuditEvent(
+    {
+      id: createAuditEventId("contact-update"),
+      occurredAt: new Date().toISOString(),
+      itemType: "contact",
+      actionGroup: "contact_update",
+      resultCode: input.resultCode,
+      actorLoginName: input.actor.loginName,
+      actorName: input.actor.name,
+      sourceSurface: input.sourceSurface ?? "accounts",
+      summary: summarizeContactUpdate(input.resultCode, contactName, companyName),
+      businessAccountRecordId,
+      businessAccountId,
+      companyName,
+      contactId,
+      contactName,
+      phoneNumber: cleanString(input.row.primaryContactPhone),
+      affectedFields: input.affectedFields,
+      links,
+    },
+    { notifyReason: "contact-update" },
+  );
+}
+
 function buildMailAffectedFields(payload: Partial<MailComposePayload>): AuditAffectedField[] {
   const fields: AuditAffectedField[] = [];
   if (cleanString(payload.subject)) {

@@ -9,6 +9,7 @@ const {
   getEnvMock,
   matchPhoneToAccountWithIndexMock,
   readCallActivitySyncBySessionIdMock,
+  readDataQualityFixEventsForUserDateMock,
   readCallIngestStateMock,
   readCallEmployeeDirectoryMock,
   readCallSessionsMock,
@@ -37,6 +38,7 @@ const {
     phoneMatchType: "none",
     phoneMatchAmbiguityCount: 0,
   })),
+  readDataQualityFixEventsForUserDateMock: vi.fn(async () => []),
   readCallActivitySyncBySessionIdMock: vi.fn(() => null),
   readCallIngestStateMock: vi.fn(() => ({
     scope: "voice",
@@ -56,7 +58,8 @@ const {
   serviceFindContactsByEmailSubstringMock: vi.fn(async () => []),
 }));
 
-const { mockDbGet, mockDbRun } = vi.hoisted(() => ({
+const { mockDbAll, mockDbGet, mockDbRun } = vi.hoisted(() => ({
+  mockDbAll: vi.fn(() => []),
   mockDbGet: vi.fn(() => undefined),
   mockDbRun: vi.fn(() => undefined),
 }));
@@ -94,9 +97,14 @@ vi.mock("@/lib/env", () => ({
   getEnv: getEnvMock,
 }));
 
+vi.mock("@/lib/data-quality-history", () => ({
+  readDataQualityFixEventsForUserDate: readDataQualityFixEventsForUserDateMock,
+}));
+
 vi.mock("@/lib/read-model/db", () => ({
   getReadModelDb: () => ({
     prepare: (sql: string) => ({
+      all: (...args: unknown[]) => mockDbAll(sql, ...args),
       get: (...args: unknown[]) => mockDbGet(sql, ...args),
       run: (...args: unknown[]) => mockDbRun(sql, ...args),
     }),
@@ -212,8 +220,12 @@ describe("daily-call-coaching", () => {
     readCallEmployeeDirectoryMock.mockReturnValue([]);
     readCallSessionsMock.mockReset();
     readCallSessionsMock.mockReturnValue([]);
+    readDataQualityFixEventsForUserDateMock.mockReset();
+    readDataQualityFixEventsForUserDateMock.mockResolvedValue([]);
     serviceFindContactsByEmailSubstringMock.mockReset();
     serviceFindContactsByEmailSubstringMock.mockResolvedValue([]);
+    mockDbAll.mockReset();
+    mockDbAll.mockReturnValue([]);
     mockDbGet.mockReset();
     mockDbGet.mockReturnValue(undefined);
     mockDbRun.mockReset();
@@ -677,13 +689,13 @@ describe("daily-call-coaching", () => {
     expect(target.assertion.startsWith("mbmail.v1.")).toBe(true);
   });
 
-  it("aggregates aliased rep login names into one daily report", async () => {
+  it("aggregates aliased rep login names into one daily sales report", async () => {
     readCallEmployeeDirectoryMock.mockReturnValue([
       {
-        loginName: "kpareek",
+        loginName: "jsettle",
         contactId: null,
-        displayName: "Krishna Pareek",
-        email: "kpareek@meadowb.com",
+        displayName: "Justin Settle",
+        email: "jsettle@meadowb.com",
         normalizedPhone: null,
         callerIdPhone: null,
         isActive: true,
@@ -696,8 +708,8 @@ describe("daily-call-coaching", () => {
         startedAt: "2026-04-08T14:00:00.000Z",
         updatedAt: "2026-04-08T14:05:00.000Z",
         direction: "outbound",
-        employeeLoginName: "kpareek",
-        employeeDisplayName: "Krishna Pareek",
+        employeeLoginName: "jsettle",
+        employeeDisplayName: "Justin Settle",
         employeeContactId: null,
         matchedContactName: "Mandeep Sunner",
         matchedCompanyName: "Brenntag",
@@ -713,8 +725,8 @@ describe("daily-call-coaching", () => {
         startedAt: "2026-04-08T15:00:00.000Z",
         updatedAt: "2026-04-08T15:04:00.000Z",
         direction: "outbound",
-        employeeLoginName: "Krishna Pareek",
-        employeeDisplayName: "Krishna Pareek",
+        employeeLoginName: "Justin Settle",
+        employeeDisplayName: "Justin Settle",
         employeeContactId: null,
         matchedContactName: "Jeremy Benns",
         matchedCompanyName: "Lake City Foods",
@@ -725,7 +737,7 @@ describe("daily-call-coaching", () => {
         talkDurationSeconds: 86,
         metadataJson: JSON.stringify({
           appContext: {
-            displayName: "Krishna Pareek",
+            displayName: "Justin Settle",
           },
         }),
       },
@@ -746,6 +758,64 @@ describe("daily-call-coaching", () => {
 
     const report = await buildDailyCallCoachingReport({
       reportDate: "2026-04-08",
+      subjectLoginName: "jsettle",
+      recipientEmail: "jsettle@meadowb.com",
+      previewMode: false,
+      senderLoginName: "jserrano",
+      timeZone: "America/Toronto",
+    });
+
+    expect(report).not.toBeNull();
+    expect(report?.subjectDisplayName).toBe("Justin Settle");
+    expect(report?.calls).toHaveLength(2);
+    expect(report?.stats.totalCalls).toBe(2);
+    expect(report?.calls.map((call) => call.contactName)).toEqual([
+      "Mandeep Sunner",
+      "Jeremy Benns",
+    ]);
+  });
+
+  it("builds database-quality coaching for Krishna instead of call coaching", async () => {
+    readCallEmployeeDirectoryMock.mockReturnValue([
+      {
+        loginName: "kpareek",
+        contactId: null,
+        displayName: "Krishna Pareek",
+        email: "kpareek@meadowb.com",
+        normalizedPhone: null,
+        callerIdPhone: null,
+        isActive: true,
+        updatedAt: "2026-04-09T00:00:00.000Z",
+      },
+    ]);
+    mockDbAll.mockReturnValue([
+      {
+        id: "audit-1",
+        occurred_at: "2026-04-08T15:00:00.000Z",
+        action_group: "contact_update",
+        result_code: "succeeded",
+        summary: "Updated contact Mandeep Sunner for Brenntag",
+        business_account_record_id: "record-1",
+        business_account_id: "C0001",
+        company_name: "Brenntag",
+        contact_id: 157252,
+        contact_name: "Mandeep Sunner",
+        fields: "primaryContactEmail\u001fEmail\u001eprimaryContactPhone\u001fPhone",
+      },
+    ]);
+    readDataQualityFixEventsForUserDateMock.mockResolvedValue([
+      {
+        issueKey: "missingContactEmail|row|record-1",
+        metric: "missingContactEmail",
+        basis: "row",
+        fixedAt: "2026-04-08T16:00:00.000Z",
+        userId: "kpareek",
+        userName: "Krishna Pareek",
+      },
+    ]);
+
+    const report = await buildDailyCallCoachingReport({
+      reportDate: "2026-04-08",
       subjectLoginName: "kpareek",
       recipientEmail: "kpareek@meadowb.com",
       previewMode: false,
@@ -754,13 +824,19 @@ describe("daily-call-coaching", () => {
     });
 
     expect(report).not.toBeNull();
-    expect(report?.subjectDisplayName).toBe("Krishna Pareek");
-    expect(report?.calls).toHaveLength(2);
-    expect(report?.stats.totalCalls).toBe(2);
-    expect(report?.calls.map((call) => call.contactName)).toEqual([
-      "Mandeep Sunner",
-      "Jeremy Benns",
-    ]);
+    expect(report?.coachingKind).toBe("database_quality");
+    expect(report?.subjectDisplayName).toBe("Krishna");
+    expect(report?.subjectLine).toBe("Daily Database Quality Coaching for Krishna · Apr 8, 2026");
+    expect(report?.calls).toHaveLength(0);
+    expect(report?.databaseQualityStats).toEqual(
+      expect.objectContaining({
+        totalActions: 2,
+        contactsUpdated: 1,
+        dataQualityFixes: 1,
+        emailPhoneTouches: 2,
+      }),
+    );
+    expect(report?.content.confidenceNote).toContain("does not score calls or talk time");
   });
 
   it("skips duplicate live sends when a row already exists for the same rep and date", async () => {

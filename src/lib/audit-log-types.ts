@@ -13,9 +13,11 @@ export const AUDIT_ACTION_GROUPS = [
   "email_send",
   "meeting_create",
   "contact_create",
+  "contact_update",
   "contact_delete",
   "contact_merge",
   "business_account_create",
+  "business_account_update",
   "business_account_delete",
 ] as const;
 

@@ -4,7 +4,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 import type { BusinessAccountRow } from "@/types/business-account";
 
-import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import { getStoredLoginName, requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import {
+  createAuditActor,
+  logBusinessAccountUpdateAudit,
+  logContactUpdateAudit,
+} from "@/lib/audit-log-store";
+import type { AuditAffectedField } from "@/lib/audit-log-types";
 import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
 import { enqueueDeferredBusinessAccountDeleteAction } from "@/lib/deferred-actions-store";
 import {
@@ -105,6 +111,39 @@ const SNAPSHOT_LEGACY_OPTIONAL_ACCOUNT_FIELDS = new Set([
   "assignedBusinessAccountId",
 ]);
 
+const ACCOUNT_UPDATE_AUDIT_LABELS: Record<string, string> = {
+  companyName: "Company name",
+  companyDescription: "Company description",
+  marketingEligible: "Marketing eligible",
+  assignedBusinessAccountRecordId: "Assigned account",
+  assignedBusinessAccountId: "Assigned account",
+  addressLine1: "Address line 1",
+  addressLine2: "Unit number",
+  city: "City",
+  state: "Province/State",
+  postalCode: "Postal code",
+  country: "Country",
+  salesRepId: "Sales rep",
+  salesRepName: "Sales rep",
+  industryType: "Industry type",
+  subCategory: "Sub-category",
+  companyRegion: "Company region",
+  week: "Week",
+  companyPhone: "Company phone",
+  category: "Category",
+};
+
+const CONTACT_UPDATE_AUDIT_LABELS: Record<string, string> = {
+  targetContactId: "Contact",
+  primaryContactName: "Contact name",
+  primaryContactJobTitle: "Job title",
+  primaryContactPhone: "Contact phone",
+  primaryContactExtension: "Extension",
+  primaryContactEmail: "Email",
+  notes: "Notes",
+  setAsPrimaryContact: "Primary contact",
+};
+
 function readRequestedContactId(request: NextRequest): number | null {
   const raw = request.nextUrl.searchParams.get("contactId")?.trim() ?? "";
   if (!raw) {
@@ -121,6 +160,76 @@ function requestBodyHasOwnField(requestBody: unknown, key: string): boolean {
       typeof requestBody === "object" &&
       Object.prototype.hasOwnProperty.call(requestBody, key),
   );
+}
+
+function buildUpdateAuditFields(
+  updateRequest: ReturnType<typeof parseUpdatePayload> | null,
+  requestBody: unknown,
+  labels: Record<string, string>,
+): AuditAffectedField[] {
+  const keys = new Set<string>();
+  if (updateRequest?.baseSnapshot) {
+    for (const field of collectUpdatedConcurrencyFields(updateRequest)) {
+      if (labels[String(field)]) {
+        keys.add(String(field));
+      }
+    }
+  }
+
+  if (keys.size === 0 && requestBody && typeof requestBody === "object") {
+    for (const key of Object.keys(labels)) {
+      if (requestBodyHasOwnField(requestBody, key)) {
+        keys.add(key);
+      }
+    }
+  }
+
+  return [...keys].map((key) => ({
+    key,
+    label: labels[key] ?? key,
+  }));
+}
+
+function writeBusinessAccountUpdateAuditEvents(input: {
+  actorLoginName: string | null;
+  responseRow: BusinessAccountRow;
+  updateRequest: ReturnType<typeof parseUpdatePayload> | null;
+  requestBody: unknown;
+}): void {
+  const actor = createAuditActor({
+    loginName: input.actorLoginName,
+    name: input.actorLoginName,
+  });
+  const accountFields = buildUpdateAuditFields(
+    input.updateRequest,
+    input.requestBody,
+    ACCOUNT_UPDATE_AUDIT_LABELS,
+  );
+  const contactFields = buildUpdateAuditFields(
+    input.updateRequest,
+    input.requestBody,
+    CONTACT_UPDATE_AUDIT_LABELS,
+  );
+
+  if (accountFields.length > 0) {
+    logBusinessAccountUpdateAudit({
+      actor,
+      row: input.responseRow,
+      affectedFields: accountFields,
+      resultCode: "succeeded",
+      sourceSurface: "accounts",
+    });
+  }
+
+  if (contactFields.length > 0) {
+    logContactUpdateAudit({
+      actor,
+      row: input.responseRow,
+      affectedFields: contactFields,
+      resultCode: "succeeded",
+      sourceSurface: "accounts",
+    });
+  }
 }
 
 function isSnapshotOnlyContactEditRequest(
@@ -1128,6 +1237,7 @@ export async function PUT(
     value: null as string | null,
   };
   let cookieValue: string | null = null;
+  let actorLoginName: string | null = null;
   let requestBody: unknown;
   let updateRequest: ReturnType<typeof parseUpdatePayload> | null = null;
 
@@ -1911,11 +2021,25 @@ export async function PUT(
 
   try {
     cookieValue = requireAuthCookieValue(request);
+    actorLoginName = getStoredLoginName(request);
     requestBody = await request.json().catch(() => {
       throw new HttpError(400, "Request body must be valid JSON.");
     });
 
     const responseRow = await executePutWithCookie(cookieValue, authCookieRefresh);
+    try {
+      writeBusinessAccountUpdateAuditEvents({
+        actorLoginName,
+        responseRow,
+        updateRequest,
+        requestBody,
+      });
+    } catch (auditError) {
+      console.warn("[business-account-update]", {
+        event: "audit-write-failed",
+        error: getErrorMessage(auditError),
+      });
+    }
     publishBusinessAccountChanged({
       accountRecordId: responseRow.accountRecordId ?? responseRow.id,
       businessAccountId: responseRow.businessAccountId || null,
@@ -1947,6 +2071,19 @@ export async function PUT(
           retryCookieValue,
           retryAuthCookieRefresh,
         );
+        try {
+          writeBusinessAccountUpdateAuditEvents({
+            actorLoginName,
+            responseRow,
+            updateRequest,
+            requestBody,
+          });
+        } catch (auditError) {
+          console.warn("[business-account-update]", {
+            event: "audit-write-failed",
+            error: getErrorMessage(auditError),
+          });
+        }
         publishBusinessAccountChanged({
           accountRecordId: responseRow.accountRecordId ?? responseRow.id,
           businessAccountId: responseRow.businessAccountId || null,

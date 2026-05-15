@@ -83,6 +83,8 @@ export type DataQualityFixActor = {
   userName: string;
 };
 
+export type DataQualityFixEventRecord = IssueFixEvent;
+
 const TIMEZONE = "America/Toronto";
 const BASIS_VALUES: DataQualityBasis[] = ["account", "row"];
 
@@ -996,6 +998,29 @@ export async function recordFixedIssues(
       });
     });
   });
+}
+
+export async function readDataQualityFixEventsForUserDate(input: {
+  userIds: string[];
+  reportDate: string;
+}): Promise<DataQualityFixEventRecord[]> {
+  const normalizedUserIds = new Set(input.userIds.map(normalizeComparable).filter(Boolean));
+  if (normalizedUserIds.size === 0) {
+    return [];
+  }
+
+  return withStore((store) =>
+    store.fixEvents
+      .filter((event) => {
+        const normalizedUserId = normalizeComparable(event.userId);
+        const normalizedUserName = normalizeComparable(event.userName);
+        return (
+          dateKey(event.fixedAt) === input.reportDate &&
+          (normalizedUserIds.has(normalizedUserId) || normalizedUserIds.has(normalizedUserName))
+        );
+      })
+      .sort((left, right) => right.fixedAt.localeCompare(left.fixedAt)),
+  );
 }
 
 export async function buildDataQualityExpandedSummary(

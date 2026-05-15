@@ -23,6 +23,7 @@ import {
   ensureMailServiceConfigured,
 } from "@/lib/mail-auth";
 import { getReadModelDb } from "@/lib/read-model/db";
+import { readDataQualityFixEventsForUserDate } from "@/lib/data-quality-history";
 import type { MailComposePayload, MailRecipient, MailSendResponse } from "@/types/mail-compose";
 
 const DAILY_COACHING_MODEL_FALLBACK = "gpt-4o-mini";
@@ -61,6 +62,39 @@ export type DailyCallCoachingStats = {
   mediumCalls: number;
   longCalls: number;
   matchedCalls: number;
+};
+
+export type DailyCoachingKind = "sales_calls" | "database_quality";
+
+export type DailyDatabaseQualityStats = {
+  totalActions: number;
+  successfulActions: number;
+  failedActions: number;
+  contactsUpdated: number;
+  contactsCreated: number;
+  contactsMerged: number;
+  contactsDeleted: number;
+  accountsUpdated: number;
+  accountsCreated: number;
+  accountsDeleted: number;
+  accountsTouched: number;
+  dataQualityFixes: number;
+  rowQualityFixes: number;
+  accountQualityFixes: number;
+  fieldTouches: number;
+  emailPhoneTouches: number;
+};
+
+export type DailyDatabaseQualityActivity = {
+  occurredAt: string;
+  localTimeLabel: string;
+  label: string;
+  detail: string;
+  resultCode: string;
+  actionGroup: string;
+  companyName: string | null;
+  contactName: string | null;
+  fieldLabels: string[];
 };
 
 type DailyCallCoachingScorecard = {
@@ -119,8 +153,11 @@ export type DailyCallCoachingReport = {
   recipientEmail: string;
   previewMode: boolean;
   senderLoginName: string;
+  coachingKind?: DailyCoachingKind;
   stats: DailyCallCoachingStats;
   calls: DailyCallCoachingCall[];
+  databaseQualityStats?: DailyDatabaseQualityStats;
+  databaseQualityActivities?: DailyDatabaseQualityActivity[];
   content: DailyCallCoachingContent;
   subjectLine: string;
 };
@@ -242,6 +279,71 @@ type ParsedCallSessionMetadata = {
     linkedContactName?: string | null;
     linkedCompanyName?: string | null;
   } | null;
+};
+
+type DatabaseQualityCoachingProfile = {
+  loginName: string;
+  displayName: string;
+  aliases: string[];
+};
+
+const DATABASE_QUALITY_COACHING_PROFILES: DatabaseQualityCoachingProfile[] = [
+  {
+    loginName: "kpareek",
+    displayName: "Krishna",
+    aliases: ["kpareek", "krishna", "krishna pareek", "krishna@meadowb.com", "kpareek@meadowb.com"],
+  },
+  {
+    loginName: "smessih",
+    displayName: "Sarah",
+    aliases: ["smessih", "sarah", "sarah messih", "sarah@meadowb.com", "smessih@meadowb.com"],
+  },
+];
+
+const DATABASE_QUALITY_AUDIT_ACTION_GROUPS = [
+  "contact_create",
+  "contact_update",
+  "contact_delete",
+  "contact_merge",
+  "business_account_create",
+  "business_account_update",
+  "business_account_delete",
+] as const;
+
+const DATABASE_QUALITY_SUCCESS_RESULTS = new Set([
+  "succeeded",
+  "partial",
+  "queued",
+  "approved",
+  "executed",
+]);
+
+const DATABASE_QUALITY_FIELD_FOCUS_KEYS = new Set([
+  "email",
+  "primaryContactEmail",
+  "primary_contact_email",
+  "phone",
+  "phone1",
+  "companyPhone",
+  "company_phone",
+  "primaryContactPhone",
+  "primary_contact_phone",
+  "primaryContactExtension",
+  "primary_contact_extension",
+]);
+
+const DATA_QUALITY_METRIC_LABELS: Record<string, string> = {
+  missingCompany: "Contact assignment",
+  missingContact: "Primary contact",
+  invalidPhone: "Phone number",
+  missingContactEmail: "Email address",
+  missingSalesRep: "Sales rep",
+  missingCategory: "Category",
+  missingRegion: "Region",
+  missingSubCategory: "Sub-category",
+  missingIndustry: "Industry",
+  duplicateBusinessAccount: "Duplicate account",
+  duplicateContact: "Duplicate contact",
 };
 
 function cleanText(value: string | null | undefined): string {
@@ -555,6 +657,50 @@ function extractLoginNameFromEmail(value: string | null | undefined): string | n
   return localPart || null;
 }
 
+function resolveDatabaseQualityCoachingProfile(
+  value: string | null | undefined,
+): DatabaseQualityCoachingProfile | null {
+  const normalized = normalizeComparable(value);
+  const normalizedEmailLogin = normalizeComparable(extractLoginNameFromEmail(value));
+  if (!normalized && !normalizedEmailLogin) {
+    return null;
+  }
+
+  return (
+    DATABASE_QUALITY_COACHING_PROFILES.find((profile) => {
+      const aliases = [profile.loginName, profile.displayName, ...profile.aliases]
+        .map(normalizeComparable)
+        .filter(Boolean);
+      return aliases.includes(normalized) || aliases.includes(normalizedEmailLogin);
+    }) ?? null
+  );
+}
+
+function resolveDatabaseQualityProfileAliases(
+  profile: DatabaseQualityCoachingProfile,
+): string[] {
+  return [
+    ...new Set(
+      [profile.loginName, profile.displayName, ...profile.aliases]
+        .map(normalizeComparable)
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function applyDatabaseQualityDisplayName(
+  mailboxProfile: InternalMailboxProfile,
+  profile: DatabaseQualityCoachingProfile | null,
+): InternalMailboxProfile {
+  return profile ? { ...mailboxProfile, displayName: profile.displayName } : mailboxProfile;
+}
+
+function readDailyCoachingKind(
+  report: Pick<DailyCallCoachingReport, "coachingKind">,
+): DailyCoachingKind {
+  return report.coachingKind ?? "sales_calls";
+}
+
 function buildSpecificityReason(call: DailyCallCoachingCall): string | null {
   const context = normalizeComparable(readCallContext(call));
   if (!context) {
@@ -830,6 +976,20 @@ export function pickSubjectLogins(
     normalizeComparable(specificDirectoryProfile?.loginName) || specificNormalized || null;
 
   const logins = new Set<string>();
+  for (const profile of DATABASE_QUALITY_COACHING_PROFILES) {
+    const profileRequested =
+      !specificCanonicalLogin ||
+      profile.loginName === specificCanonicalLogin ||
+      resolveDatabaseQualityProfileAliases(profile).includes(specificCanonicalLogin);
+    const profileHasMailbox = Boolean(findDirectoryMailbox(profile.loginName));
+    if (
+      profileRequested &&
+      (specificCanonicalLogin || profileHasMailbox)
+    ) {
+      logins.add(profile.loginName);
+    }
+  }
+
   for (const session of readCallSessions()) {
     const canonicalLogin = resolveDailyCallSessionCanonicalLogin(session);
     if (!canonicalLogin || session.direction !== "outbound") {
@@ -1365,6 +1525,269 @@ export function buildDailyCallCoachingStats(calls: DailyCallCoachingCall[]): Dai
   };
 }
 
+type RawDatabaseQualityAuditRow = {
+  id: string;
+  occurred_at: string;
+  action_group: string;
+  result_code: string;
+  summary: string;
+  business_account_record_id: string | null;
+  business_account_id: string | null;
+  company_name: string | null;
+  contact_id: number | null;
+  contact_name: string | null;
+  fields: string | null;
+};
+
+function buildBroadUtcDateWindow(reportDate: string): {
+  startIso: string;
+  endIso: string;
+} {
+  const parsed = parseDateKey(reportDate);
+  if (!parsed) {
+    return {
+      startIso: `${reportDate}T00:00:00.000Z`,
+      endIso: `${reportDate}T23:59:59.999Z`,
+    };
+  }
+
+  return {
+    startIso: new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day - 1, 0, 0, 0)).toISOString(),
+    endIso: new Date(Date.UTC(parsed.year, parsed.month - 1, parsed.day + 2, 0, 0, 0)).toISOString(),
+  };
+}
+
+function parseGroupedAuditFields(value: string | null): Array<{ key: string; label: string }> {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split("\u001e")
+    .map((item) => {
+      const [key, label] = item.split("\u001f", 2);
+      const normalizedKey = cleanText(key);
+      const normalizedLabel = cleanText(label);
+      return normalizedKey && normalizedLabel
+        ? { key: normalizedKey, label: normalizedLabel }
+        : null;
+    })
+    .filter((item): item is { key: string; label: string } => item !== null);
+}
+
+function readDatabaseQualityAuditRows(input: {
+  profile: DatabaseQualityCoachingProfile;
+  reportDate: string;
+  timeZone: string;
+}): RawDatabaseQualityAuditRow[] {
+  const db = getReadModelDb();
+  const aliases = resolveDatabaseQualityProfileAliases(input.profile);
+  if (aliases.length === 0) {
+    return [];
+  }
+
+  const { startIso, endIso } = buildBroadUtcDateWindow(input.reportDate);
+  const actionPlaceholders = DATABASE_QUALITY_AUDIT_ACTION_GROUPS.map(() => "?").join(", ");
+  const aliasPlaceholders = aliases.map(() => "?").join(", ");
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        e.id,
+        e.occurred_at,
+        e.action_group,
+        e.result_code,
+        e.summary,
+        e.business_account_record_id,
+        e.business_account_id,
+        e.company_name,
+        e.contact_id,
+        e.contact_name,
+        GROUP_CONCAT(f.field_key || char(31) || f.field_label, char(30)) AS fields
+      FROM audit_events e
+      LEFT JOIN audit_event_fields f
+        ON f.audit_event_id = e.id
+      WHERE e.occurred_at >= ?
+        AND e.occurred_at < ?
+        AND e.action_group IN (${actionPlaceholders})
+        AND (
+          LOWER(COALESCE(e.actor_login_name, '')) IN (${aliasPlaceholders})
+          OR LOWER(COALESCE(e.actor_name, '')) IN (${aliasPlaceholders})
+        )
+      GROUP BY e.id
+      ORDER BY e.occurred_at DESC
+      LIMIT 250
+      `,
+    )
+    .all(
+      startIso,
+      endIso,
+      ...DATABASE_QUALITY_AUDIT_ACTION_GROUPS,
+      ...aliases,
+      ...aliases,
+    ) as RawDatabaseQualityAuditRow[];
+
+  return rows.filter(
+    (row) => formatLocalDateKey(row.occurred_at, input.timeZone) === input.reportDate,
+  );
+}
+
+function isSuccessfulDatabaseQualityResult(resultCode: string): boolean {
+  return DATABASE_QUALITY_SUCCESS_RESULTS.has(normalizeComparable(resultCode));
+}
+
+function buildDatabaseQualityActivityLabel(row: RawDatabaseQualityAuditRow): string {
+  const target = [row.contact_name, row.company_name].map(cleanText).filter(Boolean).join(" / ");
+  if (target) {
+    return target;
+  }
+
+  return cleanText(row.business_account_id) || cleanText(row.business_account_record_id) || "Database record";
+}
+
+async function buildDatabaseQualityCoachingData(input: {
+  profile: DatabaseQualityCoachingProfile;
+  reportDate: string;
+  timeZone: string;
+}): Promise<{
+  stats: DailyDatabaseQualityStats;
+  activities: DailyDatabaseQualityActivity[];
+}> {
+  const auditRows = readDatabaseQualityAuditRows(input);
+  const fixEvents = await readDataQualityFixEventsForUserDate({
+    userIds: resolveDatabaseQualityProfileAliases(input.profile),
+    reportDate: input.reportDate,
+  });
+  const successfulAuditRows = auditRows.filter((row) => isSuccessfulDatabaseQualityResult(row.result_code));
+  const failedAuditRows = auditRows.filter((row) => normalizeComparable(row.result_code) === "failed");
+  const touchedAccounts = new Set<string>();
+  let contactsUpdated = 0;
+  let contactsCreated = 0;
+  let contactsMerged = 0;
+  let contactsDeleted = 0;
+  let accountsUpdated = 0;
+  let accountsCreated = 0;
+  let accountsDeleted = 0;
+  let fieldTouches = 0;
+  let emailPhoneTouches = 0;
+
+  for (const row of successfulAuditRows) {
+    const accountKey =
+      cleanText(row.business_account_record_id) ||
+      cleanText(row.business_account_id) ||
+      cleanText(row.company_name);
+    if (accountKey) {
+      touchedAccounts.add(accountKey);
+    }
+
+    switch (row.action_group) {
+      case "contact_update":
+        contactsUpdated += 1;
+        break;
+      case "contact_create":
+        contactsCreated += 1;
+        break;
+      case "contact_merge":
+        contactsMerged += 1;
+        break;
+      case "contact_delete":
+        contactsDeleted += 1;
+        break;
+      case "business_account_update":
+        accountsUpdated += 1;
+        break;
+      case "business_account_create":
+        accountsCreated += 1;
+        break;
+      case "business_account_delete":
+        accountsDeleted += 1;
+        break;
+    }
+
+    const fields = parseGroupedAuditFields(row.fields);
+    fieldTouches += fields.length;
+    emailPhoneTouches += fields.filter((field) =>
+      DATABASE_QUALITY_FIELD_FOCUS_KEYS.has(field.key) ||
+      /email|phone|extension/i.test(field.label),
+    ).length;
+  }
+
+  const fixActivities: DailyDatabaseQualityActivity[] = fixEvents.slice(0, 30).map((event) => {
+    const label = DATA_QUALITY_METRIC_LABELS[event.metric] ?? event.metric;
+    return {
+      occurredAt: event.fixedAt,
+      localTimeLabel: formatLocalTimeLabel(event.fixedAt, input.timeZone),
+      label: `${label} fix`,
+      detail: `Marked a ${event.basis} data-quality issue as fixed.`,
+      resultCode: "succeeded",
+      actionGroup: "data_quality_fix",
+      companyName: null,
+      contactName: null,
+      fieldLabels: [label],
+    };
+  });
+
+  const auditActivities: DailyDatabaseQualityActivity[] = successfulAuditRows.slice(0, 30).map((row) => {
+    const fields = parseGroupedAuditFields(row.fields);
+    const fieldLabels = fields.map((field) => field.label);
+    return {
+      occurredAt: row.occurred_at,
+      localTimeLabel: formatLocalTimeLabel(row.occurred_at, input.timeZone),
+      label: buildDatabaseQualityActivityLabel(row),
+      detail: cleanText(row.summary) || row.action_group.replace(/_/g, " "),
+      resultCode: row.result_code,
+      actionGroup: row.action_group,
+      companyName: cleanText(row.company_name) || null,
+      contactName: cleanText(row.contact_name) || null,
+      fieldLabels,
+    };
+  });
+
+  const activities = [...auditActivities, ...fixActivities]
+    .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
+    .slice(0, 30);
+
+  return {
+    stats: {
+      totalActions: auditRows.length + fixEvents.length,
+      successfulActions: successfulAuditRows.length + fixEvents.length,
+      failedActions: failedAuditRows.length,
+      contactsUpdated,
+      contactsCreated,
+      contactsMerged,
+      contactsDeleted,
+      accountsUpdated,
+      accountsCreated,
+      accountsDeleted,
+      accountsTouched: touchedAccounts.size,
+      dataQualityFixes: fixEvents.length,
+      rowQualityFixes: fixEvents.filter((event) => event.basis === "row").length,
+      accountQualityFixes: fixEvents.filter((event) => event.basis === "account").length,
+      fieldTouches,
+      emailPhoneTouches,
+    },
+    activities,
+  };
+}
+
+function buildLegacyStatsFromDatabaseQualityStats(
+  stats: DailyDatabaseQualityStats,
+): DailyCallCoachingStats {
+  return {
+    totalCalls: stats.totalActions,
+    answeredCalls: stats.successfulActions,
+    unansweredCalls: stats.failedActions,
+    totalTalkSeconds: 0,
+    averageTalkSeconds: 0,
+    uniqueNamedContacts: stats.accountsTouched,
+    unresolvedCalls: stats.failedActions,
+    shortCalls: 0,
+    mediumCalls: 0,
+    longCalls: 0,
+    matchedCalls: stats.accountsTouched,
+  };
+}
+
 function buildCallRosterForModel(calls: DailyCallCoachingCall[]): string {
   return calls
     .slice(0, MAX_MODEL_CALLS)
@@ -1567,6 +1990,157 @@ export function buildFallbackDailyCallCoachingContent(input: {
       input.transcriptCallCount > 0
         ? `This summary used ${input.transcriptCallCount} recorded conversation transcript(s) plus overall call patterns.`
         : "This summary is metadata-driven because no call transcripts were available for this day.",
+  };
+}
+
+function buildFallbackDatabaseQualityCoachingContent(input: {
+  subjectDisplayName: string;
+  stats: DailyDatabaseQualityStats;
+  activities: DailyDatabaseQualityActivity[];
+}): DailyCallCoachingContent {
+  const mostRecentActivities = input.activities.slice(0, 4);
+  const contactWorkTotal =
+    input.stats.contactsUpdated +
+    input.stats.contactsCreated +
+    input.stats.contactsMerged +
+    input.stats.contactsDeleted;
+  const accountWorkTotal =
+    input.stats.accountsUpdated +
+    input.stats.accountsCreated +
+    input.stats.accountsDeleted;
+  const strengths: string[] = [
+    `${input.subjectDisplayName} improved the shared database in a way that makes tomorrow's sales work cleaner and faster.`,
+  ];
+
+  if (contactWorkTotal > 0) {
+    strengths.push(`You completed ${contactWorkTotal} contact-focused update${contactWorkTotal === 1 ? "" : "s"}, which is the work that keeps reps from calling stale or incomplete records.`);
+  }
+  if (input.stats.dataQualityFixes > 0) {
+    strengths.push(`You marked ${input.stats.dataQualityFixes} data-quality issue${input.stats.dataQualityFixes === 1 ? "" : "s"} fixed, so the cleanup work is visible instead of hidden in the background.`);
+  }
+  if (input.stats.accountsTouched > 0) {
+    strengths.push(`You touched ${input.stats.accountsTouched} account${input.stats.accountsTouched === 1 ? "" : "s"}, which means the improvement was spread across real selling records.`);
+  }
+  if (input.stats.emailPhoneTouches > 0) {
+    strengths.push("You spent time on phone, email, and extension fields, which are the fields that most directly affect whether the sales team can reach people.");
+  }
+  if (strengths.length < 2) {
+    strengths.push("The cleanup work matters because it reduces wasted sales time and protects the quality of the shared account list.");
+  }
+
+  const opportunities: DailyCallCoachingOpportunity[] = [];
+  if (input.stats.failedActions > 0) {
+    opportunities.push({
+      title: "Keep failed updates visible",
+      detail:
+        "A few database actions did not complete. Capture the record and reason so the next pass can fix the issue instead of rediscovering it.",
+    });
+  }
+  if (input.stats.emailPhoneTouches === 0) {
+    opportunities.push({
+      title: "Prioritize reachability fields",
+      detail:
+        "Phone, email, title, and extension fields have the highest impact for the sales team. Keep pulling those forward when choosing what to clean next.",
+    });
+  }
+  if (input.stats.dataQualityFixes === 0) {
+    opportunities.push({
+      title: "Tie cleanup work back to the data-quality queue",
+      detail:
+        "When an issue is fixed, mark it fixed in the data-quality view so the throughput is attributed and the open issue count comes down.",
+    });
+  }
+  opportunities.push({
+    title: "Leave uncertain records better labeled",
+    detail:
+      "If a record cannot be fully corrected, add the missing piece or next check needed so the next person does not repeat the same research.",
+  });
+
+  const actionItems: DailyCallCoachingActionItem[] = [
+    {
+      title: "Start with contacts missing reachability",
+      detail:
+        "Use the first block on contacts missing email, phone, title, or extension before moving into lower-impact cleanup.",
+      priority: "high",
+    },
+    {
+      title: "Batch duplicate and assignment issues",
+      detail:
+        "Group duplicate contacts, orphan contacts, and account-assignment fixes together so each pass improves the structure of the database.",
+      priority: "medium",
+    },
+    {
+      title: "Mark every verified fix",
+      detail:
+        "After a record is corrected, mark the matching quality issue fixed so your work is counted and the queue reflects reality.",
+      priority: "medium",
+    },
+  ];
+
+  const strongCalls = mostRecentActivities.length > 0
+    ? mostRecentActivities.map((activity) => ({
+        label: activity.label,
+        why:
+          activity.fieldLabels.length > 0
+            ? `This record was improved in ${activity.fieldLabels.join(", ")}. Evidence: ${activity.localTimeLabel} · ${activity.actionGroup.replace(/_/g, " ")}.`
+            : `This was a completed database-cleanup action. Evidence: ${activity.localTimeLabel} · ${activity.actionGroup.replace(/_/g, " ")}.`,
+      }))
+    : [
+        {
+          label: "Database cleanup",
+          why: "This report is evaluating database improvement work, not call time or conversation metrics.",
+        },
+      ];
+
+  const weakCalls: DailyCallCoachingCallReview[] =
+    input.stats.failedActions > 0
+      ? [
+          {
+            label: "Failed update follow-up",
+            why:
+              "A failed database action should be reviewed quickly so the record does not stay half-cleaned or misleading.",
+          },
+        ]
+      : [
+          {
+            label: "Next quality pass",
+            why:
+              "No failed cleanup actions were found in this report. The next useful pass is to keep reducing missing contact fields and duplicate records.",
+          },
+        ];
+
+  const followUps: DailyCallCoachingFollowUp[] = [
+    {
+      label: "Data-quality queue",
+      action: "Review the remaining missing contact, phone, email, duplicate, and assignment issues.",
+      reason: "Those fixes have the clearest impact on sales-team speed and account accuracy.",
+      priority: "high",
+    },
+    {
+      label: "Recently edited records",
+      action: "Spot-check a small sample of today's edited records for phone/email formatting and correct account assignment.",
+      reason: "A quick quality check protects the cleanup work from creating a new correction cycle later.",
+      priority: "medium",
+    },
+  ];
+
+  return {
+    headline: `${input.subjectDisplayName}'s work improved database quality for the team. This report looks at cleanup throughput, record accuracy, and contact completeness instead of call activity.`,
+    executiveSummary:
+      "This coaching summary is grounded in database actions from the app. The goal is to recognize useful cleanup work, keep the quality bar high, and make the next pass easier for the sales team.",
+    scorecard: {
+      effort: clampScore(5 + input.stats.successfulActions / 6 + input.stats.dataQualityFixes / 8),
+      conversationQuality: clampScore(5 + contactWorkTotal / 4 + input.stats.emailPhoneTouches / 5),
+      targeting: clampScore(6 + input.stats.accountsTouched / 10 - input.stats.failedActions),
+    },
+    strengths: strengths.slice(0, 4),
+    opportunities: opportunities.slice(0, 4),
+    actionItems,
+    strongCalls,
+    weakCalls,
+    followUps,
+    confidenceNote:
+      `This database-quality report used ${input.stats.totalActions} recorded cleanup action${input.stats.totalActions === 1 ? "" : "s"} from SQLite audit/data-quality history. It intentionally does not score calls or talk time.`,
   };
 }
 
@@ -1877,7 +2451,11 @@ async function generateDailyCallCoachingContent(input: {
 }
 
 function buildSubjectLine(report: DailyCallCoachingReport): string {
-  const base = `Daily Call Coaching for ${report.subjectDisplayName} · ${formatDisplayDate(report.reportDate, readDailyCallCoachingTimeZone())}`;
+  const reportTitle =
+    readDailyCoachingKind(report) === "database_quality"
+      ? "Daily Database Quality Coaching"
+      : "Daily Call Coaching";
+  const base = `${reportTitle} for ${report.subjectDisplayName} · ${formatDisplayDate(report.reportDate, readDailyCallCoachingTimeZone())}`;
   return report.previewMode ? `[Preview] ${base}` : base;
 }
 
@@ -1991,6 +2569,125 @@ function renderCallTable(calls: DailyCallCoachingCall[]): string {
     .join("");
 }
 
+function renderStatBox(label: string, value: string | number): string {
+  return `
+    <div style="background:#f8fafc; border:1px solid #e5edf5; border-radius:16px; padding:16px;">
+      <div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:6px;">${escapeHtml(label)}</div>
+      <div style="font-size:30px; font-weight:800;">${escapeHtml(String(value))}</div>
+    </div>
+  `;
+}
+
+function renderDatabaseActivityTable(activities: DailyDatabaseQualityActivity[]): string {
+  if (activities.length === 0) {
+    return `
+      <tr>
+        <td colspan="4" style="padding:10px 12px; border-top:1px solid #eef2f6; color:#667085;">No database cleanup actions were recorded for this report date.</td>
+      </tr>
+    `;
+  }
+
+  return activities
+    .slice(0, 10)
+    .map((activity) => {
+      const fieldLabel =
+        activity.fieldLabels.length > 0
+          ? activity.fieldLabels.slice(0, 4).join(", ")
+          : activity.actionGroup.replace(/_/g, " ");
+      return `
+        <tr>
+          <td style="padding:10px 12px; border-top:1px solid #eef2f6; color:#111827;">${escapeHtml(activity.localTimeLabel)}</td>
+          <td style="padding:10px 12px; border-top:1px solid #eef2f6; color:#111827;">${escapeHtml(activity.label)}</td>
+          <td style="padding:10px 12px; border-top:1px solid #eef2f6; color:#111827;">${escapeHtml(activity.detail)}</td>
+          <td style="padding:10px 12px; border-top:1px solid #eef2f6; color:#667085;">${escapeHtml(fieldLabel)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+}
+
+function renderReportStatsGrid(report: DailyCallCoachingReport): string {
+  if (readDailyCoachingKind(report) === "database_quality" && report.databaseQualityStats) {
+    const stats = report.databaseQualityStats;
+    return [
+      renderStatBox("Actions", stats.totalActions),
+      renderStatBox("Contacts Updated", stats.contactsUpdated + stats.contactsCreated + stats.contactsMerged),
+      renderStatBox("Data Fixes", stats.dataQualityFixes),
+      renderStatBox("Accounts Touched", stats.accountsTouched),
+    ].join("");
+  }
+
+  return [
+    renderStatBox("Calls", report.stats.totalCalls),
+    renderStatBox("Answered", report.stats.answeredCalls),
+    renderStatBox("Unanswered", report.stats.unansweredCalls),
+    renderStatBox("Talk Time", formatDurationLabel(report.stats.totalTalkSeconds)),
+  ].join("");
+}
+
+function readScoreCardLabels(report: DailyCallCoachingReport): {
+  effort: string;
+  conversationQuality: string;
+  targeting: string;
+} {
+  if (readDailyCoachingKind(report) === "database_quality") {
+    return {
+      effort: "Throughput",
+      conversationQuality: "Contact Quality",
+      targeting: "Accuracy",
+    };
+  }
+
+  return {
+    effort: "Effort",
+    conversationQuality: "Conversation Quality",
+    targeting: "Targeting",
+  };
+}
+
+function readReportSectionLabels(report: DailyCallCoachingReport): {
+  hero: string;
+  strong: string;
+  opportunities: string;
+  weak: string;
+  action: string;
+  followUp: string;
+  table: string;
+  tableHeaders: [string, string, string, string];
+} {
+  if (readDailyCoachingKind(report) === "database_quality") {
+    return {
+      hero: "Database Quality Coaching",
+      strong: "Records Improved",
+      opportunities: "What To Keep Tight",
+      weak: "Records To Revisit",
+      action: "Next Quality Pass",
+      followUp: "Review Next",
+      table: "Recent Cleanup Work",
+      tableHeaders: ["Time", "Record", "Update", "Evidence"],
+    };
+  }
+
+  return {
+    hero: "Daily Call Coaching",
+    strong: "Calls That Landed",
+    opportunities: "What To Tighten",
+    weak: "Calls That Missed",
+    action: "Next Things To Do",
+    followUp: "Follow Up Next",
+    table: "Longest Conversations",
+    tableHeaders: ["Time", "Conversation", "Talk", "Evidence"],
+  };
+}
+
+function renderReportActivityTable(report: DailyCallCoachingReport): string {
+  if (readDailyCoachingKind(report) === "database_quality") {
+    return renderDatabaseActivityTable(report.databaseQualityActivities ?? []);
+  }
+
+  return renderCallTable(report.calls);
+}
+
 export function buildDailyCallCoachingMailPayload(
   report: DailyCallCoachingReport,
   recipient: InternalMailboxProfile,
@@ -2012,12 +2709,14 @@ export function buildDailyCallCoachingMailPayload(
       </div>
     `
     : "";
+  const scoreLabels = readScoreCardLabels(report);
+  const sectionLabels = readReportSectionLabels(report);
 
   const htmlBody = `
     <div style="background:#f3f6fb; padding:28px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color:#101828;">
       <div style="max-width:760px; margin:0 auto; background:#ffffff; border:1px solid #d9e3ef; border-radius:24px; overflow:hidden;">
         <div style="padding:28px 32px; background:linear-gradient(135deg, #0f4c81 0%, #1768ac 52%, #49a078 100%); color:#ffffff;">
-          <div style="font-size:12px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.85; margin-bottom:8px;">Daily Call Coaching</div>
+          <div style="font-size:12px; letter-spacing:0.12em; text-transform:uppercase; opacity:0.85; margin-bottom:8px;">${escapeHtml(sectionLabels.hero)}</div>
           <div style="font-size:30px; line-height:1.2; font-weight:800; margin-bottom:10px;">${escapeHtml(report.subjectDisplayName)} · ${escapeHtml(formatDisplayDate(report.reportDate, readDailyCallCoachingTimeZone()))}</div>
           <div style="font-size:16px; line-height:1.7; max-width:620px; opacity:0.95;">${escapeHtml(report.content.headline)}</div>
         </div>
@@ -2025,64 +2724,49 @@ export function buildDailyCallCoachingMailPayload(
           ${previewBanner}
           <div style="font-size:16px; line-height:1.7; color:#344054; margin-bottom:24px;">${escapeHtml(report.content.executiveSummary)}</div>
           <div style="display:flex; flex-wrap:wrap; gap:14px; margin-bottom:28px;">
-            ${renderScoreCardBox("Effort", report.content.scorecard.effort, "#1768ac")}
-            ${renderScoreCardBox("Conversation Quality", report.content.scorecard.conversationQuality, "#0f766e")}
-            ${renderScoreCardBox("Targeting", report.content.scorecard.targeting, "#9333ea")}
+            ${renderScoreCardBox(scoreLabels.effort, report.content.scorecard.effort, "#1768ac")}
+            ${renderScoreCardBox(scoreLabels.conversationQuality, report.content.scorecard.conversationQuality, "#0f766e")}
+            ${renderScoreCardBox(scoreLabels.targeting, report.content.scorecard.targeting, "#9333ea")}
           </div>
           <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:14px; margin-bottom:28px;">
-            <div style="background:#f8fafc; border:1px solid #e5edf5; border-radius:16px; padding:16px;">
-              <div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:6px;">Calls</div>
-              <div style="font-size:30px; font-weight:800;">${report.stats.totalCalls}</div>
-            </div>
-            <div style="background:#f8fafc; border:1px solid #e5edf5; border-radius:16px; padding:16px;">
-              <div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:6px;">Answered</div>
-              <div style="font-size:30px; font-weight:800;">${report.stats.answeredCalls}</div>
-            </div>
-            <div style="background:#f8fafc; border:1px solid #e5edf5; border-radius:16px; padding:16px;">
-              <div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:6px;">Unanswered</div>
-              <div style="font-size:30px; font-weight:800;">${report.stats.unansweredCalls}</div>
-            </div>
-            <div style="background:#f8fafc; border:1px solid #e5edf5; border-radius:16px; padding:16px;">
-              <div style="font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:6px;">Talk Time</div>
-              <div style="font-size:30px; font-weight:800;">${escapeHtml(formatDurationLabel(report.stats.totalTalkSeconds))}</div>
-            </div>
+            ${renderReportStatsGrid(report)}
           </div>
           <div style="margin-bottom:28px; padding:22px; border-radius:18px; border:1px solid #dbe4ee; background:#fbfdff;">
             <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">What Went Well</div>
             <ul style="margin:0; padding-left:20px; color:#111827; line-height:1.7;">${renderBullets(report.content.strengths)}</ul>
           </div>
           <div style="margin-bottom:28px; padding:22px; border-radius:18px; border:1px solid #dbe4ee; background:#fbfdff;">
-            <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">Calls That Landed</div>
+            <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">${escapeHtml(sectionLabels.strong)}</div>
             ${renderCallReviewList(report.content.strongCalls)}
           </div>
           <div style="margin-bottom:28px; padding:22px; border-radius:18px; border:1px solid #dbe4ee; background:#fbfdff;">
-            <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">What To Tighten</div>
+            <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">${escapeHtml(sectionLabels.opportunities)}</div>
             ${renderOpportunityList(report.content.opportunities)}
           </div>
           <div style="margin-bottom:28px; padding:22px; border-radius:18px; border:1px solid #dbe4ee; background:#fbfdff;">
-            <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">Calls That Missed</div>
+            <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">${escapeHtml(sectionLabels.weak)}</div>
             ${renderCallReviewList(report.content.weakCalls)}
           </div>
           <div style="margin-bottom:28px; padding:22px; border-radius:18px; border:1px solid #dbe4ee; background:#fbfdff;">
-            <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">Next Things To Do</div>
+            <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">${escapeHtml(sectionLabels.action)}</div>
             ${renderActionList(report.content.actionItems)}
           </div>
           <div style="margin-bottom:28px; padding:22px; border-radius:18px; border:1px solid #dbe4ee; background:#fbfdff;">
-            <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">Follow Up Next</div>
+            <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">${escapeHtml(sectionLabels.followUp)}</div>
             ${renderFollowUpList(report.content.followUps)}
           </div>
           <div style="margin-bottom:28px; padding:22px; border-radius:18px; border:1px solid #dbe4ee; background:#fbfdff;">
-          <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">Longest Conversations</div>
+          <div style="font-size:14px; text-transform:uppercase; letter-spacing:0.08em; color:#667085; margin-bottom:12px;">${escapeHtml(sectionLabels.table)}</div>
             <table style="width:100%; border-collapse:collapse; font-size:14px;">
               <thead>
                 <tr>
-                  <th align="left" style="padding:0 12px 10px; color:#667085; font-weight:600;">Time</th>
-                  <th align="left" style="padding:0 12px 10px; color:#667085; font-weight:600;">Conversation</th>
-                  <th align="left" style="padding:0 12px 10px; color:#667085; font-weight:600;">Talk</th>
-                  <th align="left" style="padding:0 12px 10px; color:#667085; font-weight:600;">Evidence</th>
+                  <th align="left" style="padding:0 12px 10px; color:#667085; font-weight:600;">${escapeHtml(sectionLabels.tableHeaders[0])}</th>
+                  <th align="left" style="padding:0 12px 10px; color:#667085; font-weight:600;">${escapeHtml(sectionLabels.tableHeaders[1])}</th>
+                  <th align="left" style="padding:0 12px 10px; color:#667085; font-weight:600;">${escapeHtml(sectionLabels.tableHeaders[2])}</th>
+                  <th align="left" style="padding:0 12px 10px; color:#667085; font-weight:600;">${escapeHtml(sectionLabels.tableHeaders[3])}</th>
                 </tr>
               </thead>
-              <tbody>${renderCallTable(report.calls)}</tbody>
+              <tbody>${renderReportActivityTable(report)}</tbody>
             </table>
           </div>
           <div style="padding:16px 18px; border-radius:14px; background:#f4f7fb; color:#475467; font-size:14px; line-height:1.7;">
@@ -2100,26 +2784,26 @@ export function buildDailyCallCoachingMailPayload(
     "",
     report.content.executiveSummary,
     "",
-    `Effort: ${report.content.scorecard.effort}/10`,
-    `Conversation Quality: ${report.content.scorecard.conversationQuality}/10`,
-    `Targeting: ${report.content.scorecard.targeting}/10`,
+    `${scoreLabels.effort}: ${report.content.scorecard.effort}/10`,
+    `${scoreLabels.conversationQuality}: ${report.content.scorecard.conversationQuality}/10`,
+    `${scoreLabels.targeting}: ${report.content.scorecard.targeting}/10`,
     "",
     "What Went Well:",
     ...report.content.strengths.map((item) => `- ${item}`),
     "",
-    "Calls That Landed:",
+    `${sectionLabels.strong}:`,
     ...report.content.strongCalls.map((item) => `- ${item.label}: ${item.why}`),
     "",
-    "What To Tighten:",
+    `${sectionLabels.opportunities}:`,
     ...report.content.opportunities.map((item) => `- ${item.title}: ${item.detail}`),
     "",
-    "Calls That Missed:",
+    `${sectionLabels.weak}:`,
     ...report.content.weakCalls.map((item) => `- ${item.label}: ${item.why}`),
     "",
-    "Next Things To Do:",
+    `${sectionLabels.action}:`,
     ...report.content.actionItems.map((item) => `- [${item.priority}] ${item.title}: ${item.detail}`),
     "",
-    "Follow Up Next:",
+    `${sectionLabels.followUp}:`,
     ...report.content.followUps.map((item) => `- [${item.priority}] ${item.label}: ${item.action} ${item.reason}`),
     "",
     report.content.confidenceNote,
@@ -2276,6 +2960,25 @@ async function sendDailyCallCoachingEmail(
   }
 }
 
+function readReportSessionCount(report: DailyCallCoachingReport): number {
+  return report.databaseQualityStats?.totalActions ?? report.calls.length;
+}
+
+function readReportAnalyzedCount(report: DailyCallCoachingReport): number {
+  return report.databaseQualityStats?.successfulActions ?? report.calls.length;
+}
+
+function readReportTranscriptCount(report: DailyCallCoachingReport): number {
+  return report.databaseQualityStats?.dataQualityFixes ??
+    report.calls.filter((call) => call.analysisSource === "transcript").length;
+}
+
+function buildNoDailyCoachingActivityDetail(subjectLoginName: string): string {
+  return resolveDatabaseQualityCoachingProfile(subjectLoginName)
+    ? "No database cleanup activity was found for this day."
+    : "No outbound calls were found for this day.";
+}
+
 export async function buildDailyCallCoachingReport(input: {
   reportDate: string;
   subjectLoginName: string;
@@ -2284,9 +2987,50 @@ export async function buildDailyCallCoachingReport(input: {
   senderLoginName: string;
   timeZone: string;
 }): Promise<DailyCallCoachingReport | null> {
-  const subjectProfile = await resolveInternalMailboxProfile({
+  const databaseQualityProfile = resolveDatabaseQualityCoachingProfile(input.subjectLoginName);
+  const resolvedSubjectProfile = await resolveInternalMailboxProfile({
     loginName: input.subjectLoginName,
   });
+  const subjectProfile = applyDatabaseQualityDisplayName(
+    resolvedSubjectProfile,
+    databaseQualityProfile,
+  );
+
+  if (databaseQualityProfile) {
+    const databaseQualityData = await buildDatabaseQualityCoachingData({
+      profile: databaseQualityProfile,
+      reportDate: input.reportDate,
+      timeZone: input.timeZone,
+    });
+    if (databaseQualityData.stats.totalActions === 0) {
+      return null;
+    }
+
+    const stats = buildLegacyStatsFromDatabaseQualityStats(databaseQualityData.stats);
+    const content = buildFallbackDatabaseQualityCoachingContent({
+      subjectDisplayName: subjectProfile.displayName,
+      stats: databaseQualityData.stats,
+      activities: databaseQualityData.activities,
+    });
+    const report: DailyCallCoachingReport = {
+      reportDate: input.reportDate,
+      subjectLoginName: databaseQualityProfile.loginName,
+      subjectDisplayName: subjectProfile.displayName,
+      recipientEmail: input.recipientEmail,
+      previewMode: input.previewMode,
+      senderLoginName: input.senderLoginName,
+      coachingKind: "database_quality",
+      stats,
+      calls: [],
+      databaseQualityStats: databaseQualityData.stats,
+      databaseQualityActivities: databaseQualityData.activities,
+      content,
+      subjectLine: "",
+    };
+    report.subjectLine = buildSubjectLine(report);
+    return report;
+  }
+
   const calls = buildDailyCallList(input.subjectLoginName, input.reportDate, input.timeZone);
   if (calls.length === 0) {
     return null;
@@ -2320,6 +3064,7 @@ export async function buildDailyCallCoachingReport(input: {
     recipientEmail: input.recipientEmail,
     previewMode: input.previewMode,
     senderLoginName: input.senderLoginName,
+    coachingKind: "sales_calls",
     stats,
     calls,
     content,
@@ -2356,7 +3101,8 @@ export async function runDailyCallCoaching(options?: {
     env.DAILY_CALL_COACHING_TIME_ZONE,
     snapshotState,
   );
-  if (!dataCoverage.complete) {
+  const requestedDatabaseQualityProfile = resolveDatabaseQualityCoachingProfile(options?.loginName);
+  if (!dataCoverage.complete && !requestedDatabaseQualityProfile) {
     return {
       reportDate,
       senderLoginName: sender.loginName,
@@ -2431,6 +3177,7 @@ export async function runDailyCallCoaching(options?: {
       });
 
       if (!report) {
+        const skippedDetail = buildNoDailyCoachingActivityDetail(subjectLoginName);
         writeDailyCallCoachingRow({
           reportDate,
           subjectLoginName,
@@ -2448,10 +3195,10 @@ export async function runDailyCallCoaching(options?: {
         });
         items.push({
           subjectLoginName,
-          subjectDisplayName: subjectLoginName,
+          subjectDisplayName: resolveDatabaseQualityCoachingProfile(subjectLoginName)?.displayName ?? subjectLoginName,
           recipientEmail: targetRecipient.email,
           status: "skipped",
-          detail: "No outbound calls were found for this day.",
+          detail: skippedDetail,
           sessionCount: 0,
           analyzedCallCount: 0,
           transcriptCallCount: 0,
@@ -2471,9 +3218,9 @@ export async function runDailyCallCoaching(options?: {
         senderLoginName: sender.loginName,
         previewMode,
         status: "sending",
-        sessionCount: report.calls.length,
-        analyzedCallCount: report.calls.length,
-        transcriptCallCount: report.calls.filter((call) => call.analysisSource === "transcript").length,
+        sessionCount: readReportSessionCount(report),
+        analyzedCallCount: readReportAnalyzedCount(report),
+        transcriptCallCount: readReportTranscriptCount(report),
         subjectLine: report.subjectLine,
         reportJson: JSON.stringify(report),
         errorMessage: null,
@@ -2493,9 +3240,9 @@ export async function runDailyCallCoaching(options?: {
         senderLoginName: sender.loginName,
         previewMode,
         status: "sent",
-        sessionCount: report.calls.length,
-        analyzedCallCount: report.calls.length,
-        transcriptCallCount: report.calls.filter((call) => call.analysisSource === "transcript").length,
+        sessionCount: readReportSessionCount(report),
+        analyzedCallCount: readReportAnalyzedCount(report),
+        transcriptCallCount: readReportTranscriptCount(report),
         subjectLine: report.subjectLine,
         reportJson: JSON.stringify(report),
         errorMessage: null,
@@ -2507,9 +3254,9 @@ export async function runDailyCallCoaching(options?: {
         recipientEmail: targetRecipient.email,
         status: "sent",
         detail: "Daily coaching email sent.",
-        sessionCount: report.calls.length,
-        analyzedCallCount: report.calls.length,
-        transcriptCallCount: report.calls.filter((call) => call.analysisSource === "transcript").length,
+        sessionCount: readReportSessionCount(report),
+        analyzedCallCount: readReportAnalyzedCount(report),
+        transcriptCallCount: readReportTranscriptCount(report),
         subjectLine: report.subjectLine,
         requiredCcEmail: deliveryConfirmation.requiredCcEmail,
         ccConfirmed: deliveryConfirmation.ccConfirmed,
@@ -2525,10 +3272,9 @@ export async function runDailyCallCoaching(options?: {
         senderLoginName: sender.loginName,
         previewMode,
         status: "failed",
-        sessionCount: report?.calls.length ?? 0,
-        analyzedCallCount: report?.calls.length ?? 0,
-        transcriptCallCount:
-          report?.calls.filter((call) => call.analysisSource === "transcript").length ?? 0,
+        sessionCount: report ? readReportSessionCount(report) : 0,
+        analyzedCallCount: report ? readReportAnalyzedCount(report) : 0,
+        transcriptCallCount: report ? readReportTranscriptCount(report) : 0,
         subjectLine: report?.subjectLine ?? null,
         reportJson: report ? JSON.stringify(report) : null,
         errorMessage: message,

@@ -34,9 +34,11 @@ const ACTION_LABELS: Record<AuditActionGroup, string> = {
   email_send: "Email sent",
   meeting_create: "Meeting booked",
   contact_create: "Contact created",
+  contact_update: "Contact updated",
   contact_delete: "Contact deleted",
   contact_merge: "Contact merged",
   business_account_create: "Business account created",
+  business_account_update: "Business account updated",
   business_account_delete: "Business account deleted",
 };
 
