@@ -62,6 +62,7 @@ const accountSchema = z.object({
 const payloadSchema = z.object({
   accounts: z.array(accountSchema).min(1),
   dryRun: z.boolean().optional(),
+  preserveLocalMetadata: z.boolean().optional(),
 });
 
 function coerceRows(rows: z.infer<typeof rowSchema>[]): BusinessAccountRow[] {
@@ -126,6 +127,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     });
     const payload = payloadSchema.parse(body);
     const dryRun = payload.dryRun === true;
+    const preserveLocalMetadata = payload.preserveLocalMetadata === true;
 
     let importedAccounts = 0;
     let importedRows = 0;
@@ -135,26 +137,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const rowsToWrite = coerceRows(account.rowsToWrite);
       if (!dryRun) {
         replaceReadModelAccountRows(account.accountRecordId, rowsToWrite);
-        saveAccountCompanyDescription({
-          accountRecordId: account.accountRecordId,
-          businessAccountId: account.businessAccountId ?? rowsToWrite[0]?.businessAccountId ?? null,
-          companyDescription: account.companyDescription ?? null,
-          category: account.category ?? null,
-          marketingEligible:
-            typeof account.marketingEligible === "boolean"
-              ? account.marketingEligible
-              : undefined,
-        });
+        if (!preserveLocalMetadata) {
+          saveAccountCompanyDescription({
+            accountRecordId: account.accountRecordId,
+            businessAccountId: account.businessAccountId ?? rowsToWrite[0]?.businessAccountId ?? null,
+            companyDescription: account.companyDescription ?? null,
+            category: account.category ?? null,
+            marketingEligible:
+              typeof account.marketingEligible === "boolean"
+                ? account.marketingEligible
+                : undefined,
+          });
+        }
       }
 
       importedAccounts += 1;
       importedRows += rowsToWrite.length;
-      metadataUpserts += 1;
+      if (!preserveLocalMetadata) {
+        metadataUpserts += 1;
+      }
     }
 
     return NextResponse.json({
       ok: true,
       dryRun,
+      preserveLocalMetadata,
       importedAccounts,
       importedRows,
       metadataUpserts,
