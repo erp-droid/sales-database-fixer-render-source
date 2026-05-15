@@ -3712,9 +3712,7 @@ export function AccountsClient({
             ? resolveRowContactId(selectedRow)
             : event.targetContactId;
         const response = await fetch(
-          buildBusinessAccountDetailUrl(event.accountRecordId, preferredContactId, {
-            live: true,
-          }),
+          buildBusinessAccountDetailUrl(event.accountRecordId, preferredContactId),
           {
             cache: "no-store",
           },
@@ -5490,7 +5488,6 @@ export function AccountsClient({
 
     try {
       const reloadedRow = await reloadAccountRow(row, {
-        live: true,
         signal: requestController.signal,
       });
       if (!reloadedRow) {
@@ -5806,9 +5803,7 @@ export function AccountsClient({
       if (accountWasReassigned) {
         try {
           const refreshResponse = await fetch(
-            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId, {
-              live: true,
-            }),
+            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId),
             {
               cache: "no-store",
             },
@@ -5836,9 +5831,7 @@ export function AccountsClient({
       if (!accountWasReassigned) {
         try {
           const refreshResponse = await fetch(
-            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId, {
-              live: true,
-            }),
+            buildBusinessAccountDetailUrl(updatedAccountRecordId, updatedContactId),
             {
               cache: "no-store",
             },
