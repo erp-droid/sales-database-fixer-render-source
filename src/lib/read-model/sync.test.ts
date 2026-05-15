@@ -35,6 +35,7 @@ const {
       updatedAt: "2026-04-18T12:00:00.000Z",
     },
     env: {
+      READ_MODEL_FULL_SYNC_ENABLED: true,
       READ_MODEL_SYNC_INTERVAL_MS: 900_000,
       READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: 1_800_000,
       READ_MODEL_ACTIVE_CALL_STALE_AFTER_MS: 21_600_000,
@@ -172,6 +173,7 @@ describe("readManualSyncBlockedReason", () => {
     };
 
     state.env = {
+      READ_MODEL_FULL_SYNC_ENABLED: true,
       READ_MODEL_SYNC_INTERVAL_MS: 900_000,
       READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: 1_800_000,
       READ_MODEL_ACTIVE_CALL_STALE_AFTER_MS: 21_600_000,
@@ -216,6 +218,19 @@ describe("readManualSyncBlockedReason", () => {
     const reason = readManualSyncBlockedReason(NOW_MS);
 
     expect(reason).toBe("A full account sync is already running.");
+    expect(
+      mockDbGet.mock.calls.some((call) => String(call[0]).includes("FROM call_sessions")),
+    ).toBe(false);
+  });
+
+  it("blocks full syncs when SQLite is the local source of truth", () => {
+    state.env.READ_MODEL_FULL_SYNC_ENABLED = false;
+
+    const reason = readManualSyncBlockedReason(NOW_MS);
+
+    expect(reason).toBe(
+      "Full Acumatica read-model sync is disabled because SQLite is the source of truth for local account edits.",
+    );
     expect(
       mockDbGet.mock.calls.some((call) => String(call[0]).includes("FROM call_sessions")),
     ).toBe(false);

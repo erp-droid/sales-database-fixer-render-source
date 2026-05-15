@@ -23,6 +23,7 @@ describe("GET /api/sync/status", () => {
       accountsCount: 2412,
       contactsCount: 3144,
       progress: null,
+      fullSyncEnabled: false,
       manualSyncBlockedReason: null,
     });
   });

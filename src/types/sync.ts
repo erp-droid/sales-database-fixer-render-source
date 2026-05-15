@@ -18,6 +18,7 @@ export type SyncStatusResponse = {
   accountsCount: number;
   contactsCount: number;
   progress: SyncProgress | null;
+  fullSyncEnabled: boolean;
   manualSyncBlockedReason: string | null;
 };
 

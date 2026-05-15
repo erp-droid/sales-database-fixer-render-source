@@ -18,11 +18,13 @@ const triggerReadModelSync = vi.fn(async () => ({
     accountsCount: 90,
     contactsCount: 80,
     progress: null,
+    fullSyncEnabled: true,
     manualSyncBlockedReason: null,
   },
 }));
 const readManualSyncBlockedReason = vi.fn(() => null);
 const getEnv = vi.fn(() => ({
+  READ_MODEL_FULL_SYNC_ENABLED: true,
   READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: 1_800_000,
 }));
 
@@ -130,6 +132,7 @@ describe("POST /api/sync/run", () => {
         accountsCount: 90,
         contactsCount: 80,
         progress: null,
+        fullSyncEnabled: true,
         manualSyncBlockedReason: null,
       },
     });

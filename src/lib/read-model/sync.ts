@@ -59,6 +59,8 @@ let geocodeInFlight: Promise<void> | null = null;
 const RECENT_CALL_ACTIVITY_BLOCK_WINDOW_MS = 5 * 60 * 1000;
 const MIN_STALE_RUNNING_SYNC_AFTER_MS = 10 * 60 * 1000;
 const MIN_STALE_ACTIVE_CALL_BLOCK_AFTER_MS = 30 * 60 * 1000;
+export const FULL_READ_MODEL_SYNC_DISABLED_REASON =
+  "Full Acumatica read-model sync is disabled because SQLite is the source of truth for local account edits.";
 
 function toSyncStatusResponse(record: StoredSyncState | undefined): SyncStatusResponse {
   let progress: SyncStatusResponse["progress"] = null;
@@ -84,6 +86,7 @@ function toSyncStatusResponse(record: StoredSyncState | undefined): SyncStatusRe
     accountsCount: record?.accounts_count ?? 0,
     contactsCount: record?.contacts_count ?? 0,
     progress,
+    fullSyncEnabled: getEnv().READ_MODEL_FULL_SYNC_ENABLED,
     manualSyncBlockedReason: null,
   };
 }
@@ -210,6 +213,10 @@ function readStoredSyncStateWithRecovery(nowMs = Date.now()): StoredSyncState | 
     return record;
   }
 
+  if (!getEnv().READ_MODEL_FULL_SYNC_ENABLED) {
+    return recoverStaleRunningSyncState(record, nowMs);
+  }
+
   if (!isStaleRunningSyncState(record, nowMs)) {
     return record;
   }
@@ -243,6 +250,10 @@ export function readManualSyncBlockedReason(nowMs = Date.now()): string | null {
   const status = toSyncStatusResponse(readStoredSyncStateWithRecovery(nowMs));
   if (status.status === "running") {
     return "A full account sync is already running.";
+  }
+
+  if (!getEnv().READ_MODEL_FULL_SYNC_ENABLED) {
+    return FULL_READ_MODEL_SYNC_DISABLED_REASON;
   }
 
   const activeCallCount = readBlockingActiveCallCount(nowMs);

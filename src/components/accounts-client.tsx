@@ -2582,6 +2582,7 @@ export function AccountsClient({
   const [lastSyncDurationMs, setLastSyncDurationMs] = useState<number | null>(null);
   const [syncBlockedReason, setSyncBlockedReason] = useState<string | null>(null);
   const [remoteSyncRunning, setRemoteSyncRunning] = useState(false);
+  const [fullSyncEnabled, setFullSyncEnabled] = useState(false);
   const [syncVersion, setSyncVersion] = useState(0);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [snapshotVersion, setSnapshotVersion] = useState<string | null>(null);
@@ -2800,6 +2801,7 @@ export function AccountsClient({
           normalizeDeferredVisibilityVersion(nextStatusPayload.deferredVisibilityVersion),
         );
         setSyncBlockedReason(nextStatusPayload.manualSyncBlockedReason ?? null);
+        setFullSyncEnabled(nextStatusPayload.fullSyncEnabled);
         setRemoteSyncRunning(nextStatusPayload.status === "running");
 
         if (canUseCachedSnapshot(cachedDataset, nextStatusPayload)) {
@@ -2816,7 +2818,12 @@ export function AccountsClient({
 
     const rowsPayload = await fetchRows();
 
-    if (statusPayload && !statusPayload.lastSuccessfulSyncAt && rowsPayload.items.length === 0) {
+    if (
+      statusPayload &&
+      statusPayload.fullSyncEnabled &&
+      !statusPayload.lastSuccessfulSyncAt &&
+      rowsPayload.items.length === 0
+    ) {
       setError("No local snapshot yet. Click Sync records to build the first snapshot.");
     }
 
@@ -4871,6 +4878,7 @@ export function AccountsClient({
         }
 
         setSyncBlockedReason(statusPayload.manualSyncBlockedReason ?? null);
+        setFullSyncEnabled(statusPayload.fullSyncEnabled);
         setRemoteSyncRunning(statusPayload.status === "running");
         setSnapshotVersion(normalizeCachedSyncTimestamp(statusPayload.snapshotVersion));
 
@@ -7108,19 +7116,21 @@ export function AccountsClient({
       contentClassName={styles.pageContent}
       headerActions={
         <>
-          <button
-            className={styles.syncNowButton}
-            disabled={isSyncing || remoteSyncRunning || Boolean(syncBlockedReason)}
-            onClick={handleSyncRecords}
-            title={
-              syncBlockedReason ??
-              (remoteSyncRunning ? "A full account sync is already running." : undefined)
-            }
-            type="button"
-          >
-            <SyncIcon />
-            <span>{isSyncing || remoteSyncRunning ? "Syncing..." : "Sync now"}</span>
-          </button>
+          {fullSyncEnabled ? (
+            <button
+              className={styles.syncNowButton}
+              disabled={isSyncing || remoteSyncRunning || Boolean(syncBlockedReason)}
+              onClick={handleSyncRecords}
+              title={
+                syncBlockedReason ??
+                (remoteSyncRunning ? "A full account sync is already running." : undefined)
+              }
+              type="button"
+            >
+              <SyncIcon />
+              <span>{isSyncing || remoteSyncRunning ? "Syncing..." : "Sync now"}</span>
+            </button>
+          ) : null}
           {canExportAccountsCsv ? (
             <a className={styles.toolbarButton} href={accountsCsvExportHref}>
               Export CSV
