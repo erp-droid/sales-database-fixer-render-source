@@ -1150,6 +1150,13 @@ function isDraftDirty(draft: BusinessAccountUpdateRequest | null): boolean {
   );
 }
 
+function areDraftsEquivalent(
+  left: BusinessAccountUpdateRequest | null,
+  right: BusinessAccountUpdateRequest | null,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function rowMatchesLiveAccountEvent(
   row: BusinessAccountRow | null,
   event: BusinessAccountLiveEvent,
@@ -5464,8 +5471,10 @@ export function AccountsClient({
     setIsCreateMeetingDrawerOpen(false);
     setMeetingSource(null);
     setDrawerFocusTarget(options?.focusTarget ?? null);
+    const initialDraft = buildDraft(row);
     setSelected(row);
-    setDraft(buildDraft(row));
+    setDraft(initialDraft);
+    draftRef.current = initialDraft;
     setSaveError(null);
     setSaveFieldErrors({});
     setSaveNotice(null);
@@ -5507,14 +5516,19 @@ export function AccountsClient({
       }
 
       setSelected(reloadedRow);
-      if (shouldPreserveCurrentDraftOnServerRefresh()) {
+      if (
+        !areDraftsEquivalent(draftRef.current, initialDraft) &&
+        shouldPreserveCurrentDraftOnServerRefresh()
+      ) {
         setSaveNotice(
           "This record refreshed while you were editing. Your draft is preserved.",
         );
         return;
       }
 
-      setDraft(buildDraft(reloadedRow));
+      const reloadedDraft = buildDraft(reloadedRow);
+      setDraft(reloadedDraft);
+      draftRef.current = reloadedDraft;
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         return;
@@ -8089,6 +8103,24 @@ export function AccountsClient({
                   value={draft.companyName}
                 />
               )}
+            </label>
+
+            <label>
+              Company Phone
+              <input
+                inputMode="tel"
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current ? { ...current, companyPhone: event.target.value } : current,
+                  )
+                }
+                placeholder="905-555-0100"
+                type="tel"
+                value={draft.companyPhone ?? ""}
+              />
+              <span className={styles.lookupHint}>
+                Save writes the company phone to Acumatica and updates the local app database.
+              </span>
             </label>
 
             <label>

@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS account_rows (
   postal_code TEXT NOT NULL,
   country TEXT NOT NULL,
   phone_number TEXT,
+  company_phone TEXT,
+  company_phone_source TEXT,
   sales_rep_id TEXT,
   sales_rep_name TEXT,
   industry_type TEXT,
@@ -44,6 +46,8 @@ CREATE INDEX IF NOT EXISTS idx_account_rows_contact_id
   ON account_rows(contact_id);
 CREATE INDEX IF NOT EXISTS idx_account_rows_company_name
   ON account_rows(company_name);
+CREATE INDEX IF NOT EXISTS idx_account_rows_company_phone
+  ON account_rows(company_phone);
 CREATE INDEX IF NOT EXISTS idx_account_rows_sales_rep_name
   ON account_rows(sales_rep_name);
 CREATE INDEX IF NOT EXISTS idx_account_rows_address_key
@@ -517,8 +521,80 @@ CREATE INDEX IF NOT EXISTS idx_audit_event_links_contact_id
   ON audit_event_links(contact_id);
 `;
 
+function readPayloadText(record: unknown, key: string): string | null {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+
+  const value = (record as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function backfillAccountRowCompanyPhoneColumns(db: Database.Database): void {
+  const rows = db
+    .prepare(
+      `
+      SELECT row_key, payload_json
+      FROM account_rows
+      `,
+    )
+    .all() as Array<{ row_key: string; payload_json: string }>;
+
+  if (rows.length === 0) {
+    return;
+  }
+
+  const update = db.prepare(
+    `
+    UPDATE account_rows
+    SET company_phone = @company_phone,
+        company_phone_source = @company_phone_source
+    WHERE row_key = @row_key
+    `,
+  );
+
+  const backfill = db.transaction(() => {
+    for (const row of rows) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(row.payload_json);
+      } catch {
+        continue;
+      }
+
+      update.run({
+        row_key: row.row_key,
+        company_phone: readPayloadText(payload, "companyPhone"),
+        company_phone_source: readPayloadText(payload, "companyPhoneSource"),
+      });
+    }
+  });
+
+  backfill();
+}
+
 export function ensureReadModelSchema(db: Database.Database): void {
   db.exec(SCHEMA_SQL);
+
+  const accountRowColumns = db
+    .prepare("PRAGMA table_info(account_rows)")
+    .all() as Array<{ name: string }>;
+  const hasCompanyPhoneColumn = accountRowColumns.some(
+    (column) => column.name === "company_phone",
+  );
+  if (!hasCompanyPhoneColumn) {
+    db.exec("ALTER TABLE account_rows ADD COLUMN company_phone TEXT");
+  }
+  const hasCompanyPhoneSourceColumn = accountRowColumns.some(
+    (column) => column.name === "company_phone_source",
+  );
+  if (!hasCompanyPhoneSourceColumn) {
+    db.exec("ALTER TABLE account_rows ADD COLUMN company_phone_source TEXT");
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_account_rows_company_phone ON account_rows(company_phone)",
+  );
+  backfillAccountRowCompanyPhoneColumns(db);
 
   const accountLocalMetadataColumns = db
     .prepare("PRAGMA table_info(account_local_metadata)")
