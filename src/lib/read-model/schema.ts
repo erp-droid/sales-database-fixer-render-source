@@ -46,8 +46,6 @@ CREATE INDEX IF NOT EXISTS idx_account_rows_contact_id
   ON account_rows(contact_id);
 CREATE INDEX IF NOT EXISTS idx_account_rows_company_name
   ON account_rows(company_name);
-CREATE INDEX IF NOT EXISTS idx_account_rows_company_phone
-  ON account_rows(company_phone);
 CREATE INDEX IF NOT EXISTS idx_account_rows_sales_rep_name
   ON account_rows(sales_rep_name);
 CREATE INDEX IF NOT EXISTS idx_account_rows_address_key

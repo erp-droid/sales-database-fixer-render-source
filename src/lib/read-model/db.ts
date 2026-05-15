@@ -25,11 +25,17 @@ export function getReadModelDb(): Database.Database {
   const sqlitePath = resolveDatabasePath();
   mkdirSync(path.dirname(sqlitePath), { recursive: true });
 
-  db = new Database(sqlitePath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  db.pragma("synchronous = NORMAL");
-  ensureReadModelSchema(db);
+  const nextDb = new Database(sqlitePath);
+  try {
+    nextDb.pragma("journal_mode = WAL");
+    nextDb.pragma("foreign_keys = ON");
+    nextDb.pragma("synchronous = NORMAL");
+    ensureReadModelSchema(nextDb);
+  } catch (error) {
+    nextDb.close();
+    throw error;
+  }
 
-  return db;
+  db = nextDb;
+  return nextDb;
 }
