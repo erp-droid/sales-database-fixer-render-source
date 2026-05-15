@@ -38,6 +38,8 @@ vi.mock("@/lib/acumatica", () => ({
 }));
 
 vi.mock("@/lib/read-model/sync", () => ({
+  FULL_READ_MODEL_SYNC_DISABLED_REASON:
+    "Full Acumatica read-model sync is disabled because SQLite is the source of truth for local account edits.",
   triggerReadModelSync,
   readManualSyncBlockedReason,
 }));
@@ -51,6 +53,35 @@ describe("POST /api/sync/run", () => {
     vi.clearAllMocks();
     requireAuthCookieValue.mockReturnValue("cookie");
     readManualSyncBlockedReason.mockReturnValue(null);
+    getEnv.mockReturnValue({
+      READ_MODEL_FULL_SYNC_ENABLED: true,
+      READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: 1_800_000,
+    });
+  });
+
+  it("blocks immediately when full read-model sync is disabled", async () => {
+    getEnv.mockReturnValueOnce({
+      READ_MODEL_FULL_SYNC_ENABLED: false,
+      READ_MODEL_SYNC_STALE_RUNNING_AFTER_MS: 1_800_000,
+    });
+
+    const { POST } = await import("@/app/api/sync/run/route");
+    const response = await POST(
+      new NextRequest("http://localhost/api/sync/run", {
+        method: "POST",
+        headers: {
+          cookie: ".ASPXAUTH=existing-cookie",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error:
+        "Full Acumatica read-model sync is disabled because SQLite is the source of truth for local account edits.",
+    });
+    expect(validateSessionWithAcumatica).not.toHaveBeenCalled();
+    expect(triggerReadModelSync).not.toHaveBeenCalled();
   });
 
   it("optionally force-unlocks a stale running lock before checking safeguards", async () => {

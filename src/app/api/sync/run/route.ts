@@ -7,6 +7,7 @@ import { validateSessionWithAcumatica } from "@/lib/acumatica";
 import { getEnv } from "@/lib/env";
 import { getErrorMessage, HttpError } from "@/lib/errors";
 import {
+  FULL_READ_MODEL_SYNC_DISABLED_REASON,
   readManualSyncBlockedReason,
   triggerReadModelSync,
 } from "@/lib/read-model/sync";
@@ -18,6 +19,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const forceUnlock = request.nextUrl.searchParams.get("forceUnlock") === "1";
 
   try {
+    if (!getEnv().READ_MODEL_FULL_SYNC_ENABLED) {
+      throw new HttpError(409, FULL_READ_MODEL_SYNC_DISABLED_REASON);
+    }
+
     const cookieValue = requireAuthCookieValue(request);
     await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
     if (forceUnlock) {
