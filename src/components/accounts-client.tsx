@@ -411,6 +411,14 @@ type HeaderFilters = {
 
 type AccountsFilterView = "allCompanies" | "marketingOnly";
 
+type StoredAccountsFilterPreferences = {
+  activeFilterView?: AccountsFilterView;
+  selectedCategoryFilters?: Category[];
+  selectedSalesRepFilters?: string[];
+  q?: string;
+  headerFilters?: HeaderFilters;
+};
+
 const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   companyName: "",
   accountType: "",
@@ -433,6 +441,78 @@ const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   lastEmailed: "",
   lastModified: "",
 };
+
+function isAccountsFilterView(value: unknown): value is AccountsFilterView {
+  return value === "allCompanies" || value === "marketingOnly";
+}
+
+function isCategoryValue(value: unknown): value is Category {
+  return typeof value === "string" && CATEGORY_VALUES.includes(value as Category);
+}
+
+function normalizeStoredHeaderFilters(value: unknown): HeaderFilters {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+  return {
+    companyName: typeof record.companyName === "string" ? record.companyName : "",
+    accountType: typeof record.accountType === "string" ? record.accountType : "",
+    opportunityCount: typeof record.opportunityCount === "string" ? record.opportunityCount : "",
+    salesRepName: typeof record.salesRepName === "string" ? record.salesRepName : "",
+    industryType: typeof record.industryType === "string" ? record.industryType : "",
+    subCategory: typeof record.subCategory === "string" ? record.subCategory : "",
+    companyRegion: typeof record.companyRegion === "string" ? record.companyRegion : "",
+    week: typeof record.week === "string" ? record.week : "",
+    address: typeof record.address === "string" ? record.address : "",
+    companyPhone: typeof record.companyPhone === "string" ? record.companyPhone : "",
+    primaryContactName:
+      typeof record.primaryContactName === "string" ? record.primaryContactName : "",
+    primaryContactJobTitle:
+      typeof record.primaryContactJobTitle === "string" ? record.primaryContactJobTitle : "",
+    primaryContactPhone:
+      typeof record.primaryContactPhone === "string" ? record.primaryContactPhone : "",
+    primaryContactExtension:
+      typeof record.primaryContactExtension === "string"
+        ? record.primaryContactExtension
+        : "",
+    primaryContactEmail:
+      typeof record.primaryContactEmail === "string" ? record.primaryContactEmail : "",
+    notes: typeof record.notes === "string" ? record.notes : "",
+    category:
+      record.category === "" || isCategoryValue(record.category)
+        ? (record.category as Category | "")
+        : "",
+    lastCalled: typeof record.lastCalled === "string" ? record.lastCalled : "",
+    lastEmailed: typeof record.lastEmailed === "string" ? record.lastEmailed : "",
+    lastModified: typeof record.lastModified === "string" ? record.lastModified : "",
+  };
+}
+
+function normalizeStoredAccountsFilterPreferences(
+  value: unknown,
+): Required<StoredAccountsFilterPreferences> {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+  return {
+    activeFilterView: isAccountsFilterView(record.activeFilterView)
+      ? record.activeFilterView
+      : "allCompanies",
+    selectedCategoryFilters: Array.isArray(record.selectedCategoryFilters)
+      ? [...new Set(record.selectedCategoryFilters.filter(isCategoryValue))]
+      : [],
+    selectedSalesRepFilters: Array.isArray(record.selectedSalesRepFilters)
+      ? [
+          ...new Set(
+            record.selectedSalesRepFilters
+              .filter((item): item is string => typeof item === "string")
+              .map((item) => item.trim())
+              .filter((item) => item.length > 0),
+          ),
+        ]
+      : [],
+    q: typeof record.q === "string" ? record.q : "",
+    headerFilters: normalizeStoredHeaderFilters(record.headerFilters),
+  };
+}
 
 function buildAccountsCsvExportHref(input: {
   q: string;
@@ -487,6 +567,7 @@ const LEGACY_COLUMN_VISIBILITY_STORAGE_KEYS = [
   "businessAccounts.visibleColumns.v1",
 ] as const;
 const COLUMN_PREF_RESET_STORAGE_KEY = "businessAccounts.resetColumnsOnNextLoad.v1";
+const FILTER_PREFERENCES_STORAGE_KEY = "businessAccounts.filters.v1";
 
 type AttributeOption = {
   value: string;
@@ -2474,6 +2555,7 @@ export function AccountsClient({
   const [cacheHydrated, setCacheHydrated] = useState(false);
   const [activeFilterView, setActiveFilterView] = useState<AccountsFilterView>("allCompanies");
   const [selectedCategoryFilters, setSelectedCategoryFilters] = useState<Category[]>([]);
+  const [selectedSalesRepFilters, setSelectedSalesRepFilters] = useState<string[]>([]);
   const [q, setQ] = useState("");
   const [headerFilters, setHeaderFilters] = useState<HeaderFilters>(
     DEFAULT_HEADER_FILTERS,
@@ -2481,6 +2563,7 @@ export function AccountsClient({
   const [columnOrder, setColumnOrder] = useState<SortBy[]>(DEFAULT_COLUMN_ORDER);
   const [visibleColumns, setVisibleColumns] = useState<SortBy[]>(DEFAULT_VISIBLE_COLUMNS);
   const [columnPrefsHydrated, setColumnPrefsHydrated] = useState(false);
+  const [filterPrefsHydrated, setFilterPrefsHydrated] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>("companyName");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(1);
@@ -3046,6 +3129,10 @@ export function AccountsClient({
     () => new Set(selectedCategoryFilters),
     [selectedCategoryFilters],
   );
+  const selectedSalesRepFilterSet = useMemo(
+    () => new Set(selectedSalesRepFilters),
+    [selectedSalesRepFilters],
+  );
   const categoryViewFilteredRows = useMemo(() => {
     if (selectedCategoryFilterSet.size === 0) {
       return viewFilteredRows;
@@ -3055,10 +3142,20 @@ export function AccountsClient({
       (row) => row.category !== null && selectedCategoryFilterSet.has(row.category),
     );
   }, [selectedCategoryFilterSet, viewFilteredRows]);
+  const workbenchFilteredRows = useMemo(() => {
+    if (selectedSalesRepFilterSet.size === 0) {
+      return categoryViewFilteredRows;
+    }
+
+    return categoryViewFilteredRows.filter((row) => {
+      const salesRepName = row.salesRepName?.trim();
+      return salesRepName ? selectedSalesRepFilterSet.has(salesRepName) : false;
+    });
+  }, [categoryViewFilteredRows, selectedSalesRepFilterSet]);
 
   useEffect(() => {
     const validRowKeys = new Set(
-      categoryViewFilteredRows
+      workbenchFilteredRows
         .filter((row) => isContactSelectableRow(row))
         .map((row) => getRowKey(row)),
     );
@@ -3066,11 +3163,11 @@ export function AccountsClient({
       const next = current.filter((rowKey) => validRowKeys.has(rowKey));
       return next.length === current.length ? current : next;
     });
-  }, [categoryViewFilteredRows]);
+  }, [workbenchFilteredRows]);
 
   const queryResult = useMemo(
     () =>
-      queryBusinessAccounts(categoryViewFilteredRows, {
+      queryBusinessAccounts(workbenchFilteredRows, {
         includeInternalRows: true,
         q: debouncedQ,
         filterCompanyName: debouncedHeaderFilters.companyName,
@@ -3099,7 +3196,7 @@ export function AccountsClient({
         pageSize: PAGE_SIZE,
       }),
     [
-      categoryViewFilteredRows,
+      workbenchFilteredRows,
       debouncedHeaderFilters,
       debouncedQ,
       page,
@@ -3127,10 +3224,10 @@ export function AccountsClient({
   const total = queryResult.total;
   const selectedContactRows = useMemo(() => {
     const selectedRowKeySet = new Set(selectedContactRowKeys);
-    return categoryViewFilteredRows.filter(
+    return workbenchFilteredRows.filter(
       (row) => selectedRowKeySet.has(getRowKey(row)) && isContactSelectableRow(row),
     );
-  }, [categoryViewFilteredRows, selectedContactRowKeys]);
+  }, [selectedContactRowKeys, workbenchFilteredRows]);
   const visibleColumnOrder = useMemo(
     () => columnOrder.filter((columnId) => visibleColumns.includes(columnId)),
     [columnOrder, visibleColumns],
@@ -3151,7 +3248,10 @@ export function AccountsClient({
     [headerFilters],
   );
   const hasActiveWorkbenchFilters =
-    q.trim().length > 0 || activeFilterCount > 0 || selectedCategoryFilters.length > 0;
+    q.trim().length > 0 ||
+    activeFilterCount > 0 ||
+    selectedCategoryFilters.length > 0 ||
+    selectedSalesRepFilters.length > 0;
   const syncUpdatedLabel = useMemo(() => formatRelativeTime(lastSyncedAt), [lastSyncedAt]);
   const hasSnapshot = Boolean(lastSyncedAt) || allRows.length > 0;
   const companyRegionOptions = useMemo(() => {
@@ -3255,6 +3355,22 @@ export function AccountsClient({
       }
     );
   }, [draft?.salesRepId, draft?.salesRepName, sortedEmployeeOptions]);
+  const availableSalesRepFilters = useMemo(
+    () =>
+      [
+        ...new Set(
+          displayRows
+            .map((row) => row.salesRepName?.trim())
+            .filter((salesRepName): salesRepName is string => Boolean(salesRepName)),
+        ),
+      ].sort((left, right) =>
+        left.localeCompare(right, undefined, {
+          sensitivity: "base",
+          numeric: true,
+        }),
+      ),
+    [displayRows],
+  );
 
   const totalPages = useMemo(() => {
     return Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -3452,6 +3568,50 @@ export function AccountsClient({
       JSON.stringify(visibleColumns),
     );
   }, [columnPrefsHydrated, visibleColumns]);
+
+  useEffect(() => {
+    try {
+      const storedFilterPreferences = window.localStorage.getItem(FILTER_PREFERENCES_STORAGE_KEY);
+      if (storedFilterPreferences) {
+        const parsedFilterPreferences = JSON.parse(storedFilterPreferences) as unknown;
+        const normalizedFilterPreferences =
+          normalizeStoredAccountsFilterPreferences(parsedFilterPreferences);
+        setActiveFilterView(normalizedFilterPreferences.activeFilterView);
+        setSelectedCategoryFilters(normalizedFilterPreferences.selectedCategoryFilters);
+        setSelectedSalesRepFilters(normalizedFilterPreferences.selectedSalesRepFilters);
+        setQ(normalizedFilterPreferences.q);
+        setHeaderFilters(normalizedFilterPreferences.headerFilters);
+      }
+    } catch {
+      // Ignore malformed localStorage values.
+    }
+
+    setFilterPrefsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!filterPrefsHydrated) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      FILTER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        activeFilterView,
+        selectedCategoryFilters,
+        selectedSalesRepFilters,
+        q,
+        headerFilters,
+      } satisfies StoredAccountsFilterPreferences),
+    );
+  }, [
+    activeFilterView,
+    filterPrefsHydrated,
+    headerFilters,
+    q,
+    selectedCategoryFilters,
+    selectedSalesRepFilters,
+  ]);
 
   useEffect(() => {
     const cachedDataset = readCachedDatasetFromStorage();
@@ -4640,11 +4800,22 @@ export function AccountsClient({
     });
   }
 
+  function toggleSalesRepFilter(salesRepName: string) {
+    setPage(1);
+    setSelectedSalesRepFilters((current) => {
+      if (current.includes(salesRepName)) {
+        return current.filter((currentSalesRepName) => currentSalesRepName !== salesRepName);
+      }
+      return [...current, salesRepName];
+    });
+  }
+
   function clearAllFilters() {
     setPage(1);
     setQ("");
     setHeaderFilters(DEFAULT_HEADER_FILTERS);
     setSelectedCategoryFilters([]);
+    setSelectedSalesRepFilters([]);
   }
 
   async function handleSyncRecords() {
@@ -7111,6 +7282,37 @@ export function AccountsClient({
             type="button"
           >
             Clear categories
+          </button>
+        </div>
+      </section>
+      <section className={styles.categoryFilterViewsRow}>
+        <span className={styles.filterViewsLabel}>Sales rep multi-select</span>
+        <div className={styles.categoryFilterOptions}>
+          {availableSalesRepFilters.map((salesRepName) => {
+            const isActive = selectedSalesRepFilterSet.has(salesRepName);
+            return (
+              <button
+                className={`${styles.categoryFilterOptionButton} ${
+                  isActive ? styles.categoryFilterOptionButtonActive : ""
+                }`}
+                key={salesRepName}
+                onClick={() => toggleSalesRepFilter(salesRepName)}
+                type="button"
+              >
+                {salesRepName}
+              </button>
+            );
+          })}
+          <button
+            className={styles.categoryFilterClearButton}
+            disabled={selectedSalesRepFilters.length === 0}
+            onClick={() => {
+              setPage(1);
+              setSelectedSalesRepFilters([]);
+            }}
+            type="button"
+          >
+            Clear sales reps
           </button>
         </div>
       </section>
