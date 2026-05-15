@@ -54,7 +54,6 @@ import {
 } from "@/lib/business-account-region-values";
 import {
   type CachedDataset,
-  readCachedDatasetFromStorage,
   readCachedSyncMeta,
   writeCachedDatasetToStorage,
 } from "@/lib/client-dataset-cache";
@@ -2553,6 +2552,7 @@ export function AccountsClient({
   const [allRows, setAllRows] = useState<BusinessAccountRow[]>([]);
   const allRowsRef = useRef<BusinessAccountRow[]>([]);
   const [cacheHydrated, setCacheHydrated] = useState(false);
+  const [serverSnapshotHydrated, setServerSnapshotHydrated] = useState(false);
   const [activeFilterView, setActiveFilterView] = useState<AccountsFilterView>("allCompanies");
   const [selectedCategoryFilters, setSelectedCategoryFilters] = useState<Category[]>([]);
   const [selectedSalesRepFilters, setSelectedSalesRepFilters] = useState<string[]>([]);
@@ -3614,26 +3614,16 @@ export function AccountsClient({
   ]);
 
   useEffect(() => {
-    const cachedDataset = readCachedDatasetFromStorage();
-    if (cachedDataset && isBusinessAccountRows(cachedDataset.rows)) {
-      allRowsCountRef.current = cachedDataset.rows.length;
-      setAllRows(enforceSinglePrimaryPerAccountRows(cachedDataset.rows));
-      setLastSyncedAt(cachedDataset.lastSyncedAt);
-      setSnapshotVersion(cachedDataset.snapshotVersion ?? null);
-      setDeferredVisibilityVersion(cachedDataset.deferredVisibilityVersion ?? null);
-      setLoading(false);
-    } else {
-      const cachedSyncMeta = readCachedSyncMeta();
-      setLastSyncedAt(cachedSyncMeta.lastSyncedAt);
-      setSnapshotVersion(cachedSyncMeta.snapshotVersion ?? null);
-      setDeferredVisibilityVersion(cachedSyncMeta.deferredVisibilityVersion ?? null);
-    }
+    const cachedSyncMeta = readCachedSyncMeta();
+    setLastSyncedAt(cachedSyncMeta.lastSyncedAt);
+    setSnapshotVersion(cachedSyncMeta.snapshotVersion ?? null);
+    setDeferredVisibilityVersion(cachedSyncMeta.deferredVisibilityVersion ?? null);
 
     setCacheHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (!cacheHydrated) {
+    if (!cacheHydrated || !serverSnapshotHydrated) {
       return;
     }
 
@@ -3649,7 +3639,15 @@ export function AccountsClient({
     };
 
     writeCachedDatasetToStorage(payload);
-  }, [allRows, cacheHydrated, deferredVisibilityVersion, isSyncing, lastSyncedAt, snapshotVersion]);
+  }, [
+    allRows,
+    cacheHydrated,
+    deferredVisibilityVersion,
+    isSyncing,
+    lastSyncedAt,
+    serverSnapshotHydrated,
+    snapshotVersion,
+  ]);
 
   useEffect(() => {
     async function fetchSession() {
@@ -3768,15 +3766,14 @@ export function AccountsClient({
   );
 
   const refreshSnapshotFromLive = useEffectEvent(async () => {
-    const cachedDataset = readCachedDatasetFromStorage();
-
     try {
-      const nextRows = await loadSnapshotRows(cachedDataset);
+      const nextRows = await loadSnapshotRows(null);
       setAllRows((currentRows) =>
         enforceSinglePrimaryPerAccountRows(
           mergeSnapshotRowsPreservingFields(currentRows, nextRows),
         ),
       );
+      setServerSnapshotHydrated(true);
       setError(null);
     } catch {
       // Ignore transient full-refresh failures and keep the current working set.
@@ -4160,22 +4157,16 @@ export function AccountsClient({
 
     async function loadRows() {
       const startedAt = Date.now();
-      const cachedDataset = readCachedDatasetFromStorage();
-      if (!cachedDataset || cachedDataset.rows.length === 0) {
-        setLoading(true);
-      }
+      setLoading(true);
 
       try {
-        const nextRows = await loadSnapshotRows(cachedDataset, controller.signal);
+        const nextRows = await loadSnapshotRows(null, controller.signal);
         if (controller.signal.aborted) {
           return;
         }
 
-        setAllRows((currentRows) =>
-          enforceSinglePrimaryPerAccountRows(
-            mergeSnapshotRowsPreservingFields(currentRows, nextRows),
-          ),
-        );
+        setAllRows(enforceSinglePrimaryPerAccountRows(nextRows));
+        setServerSnapshotHydrated(true);
         setLastSyncDurationMs(Date.now() - startedAt);
       } catch (fetchError) {
         if (controller.signal.aborted) {
@@ -7807,9 +7798,13 @@ export function AccountsClient({
 
         <footer className={styles.pagination}>
           <span className={styles.paginationSummary}>
-            Page {page} of {totalPages} • {total.toLocaleString()} matching • {allRows.length.toLocaleString()} loaded
-            {lastSyncedAt ? ` • Last sync ${new Date(lastSyncedAt).toLocaleTimeString()}` : ""}
-            {lastSyncedAt && lastSyncDurationMs !== null
+            {serverSnapshotHydrated
+              ? `Page ${page} of ${totalPages} • ${total.toLocaleString()} matching • ${allRows.length.toLocaleString()} loaded`
+              : "Loading current account data..."}
+            {serverSnapshotHydrated && lastSyncedAt
+              ? ` • Last sync ${new Date(lastSyncedAt).toLocaleTimeString()}`
+              : ""}
+            {serverSnapshotHydrated && lastSyncedAt && lastSyncDurationMs !== null
               ? ` • Duration ${formatElapsedDuration(lastSyncDurationMs)}`
               : ""}
           </span>
