@@ -155,7 +155,7 @@ services:
       - key: READ_MODEL_ENABLED
         value: "true"
       - key: READ_MODEL_AUTO_SYNC_ENABLED
-        value: "true"
+        value: "false"
       - key: READ_MODEL_SQLITE_PATH
         value: /app/data/read-model.sqlite
       - key: READ_MODEL_STATE_BACKEND
