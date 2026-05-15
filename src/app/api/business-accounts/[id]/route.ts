@@ -73,6 +73,7 @@ import {
   readStoredBusinessAccountRowsFromReadModel,
   replaceReadModelAccountRows,
 } from "@/lib/read-model/accounts";
+import { upsertSharedContactNotesForRow } from "@/lib/read-model/contact-identity-notes";
 import {
   applyLocalAccountMetadataToRow,
   applyLocalAccountMetadataToRows,
@@ -230,6 +231,13 @@ function writeBusinessAccountUpdateAuditEvents(input: {
       sourceSurface: "accounts",
     });
   }
+}
+
+function readSubmittedSharedContactNotes(input: {
+  updateRequest: ReturnType<typeof parseUpdatePayload> | null;
+  responseRow: BusinessAccountRow;
+}): string | null {
+  return input.updateRequest ? input.updateRequest.notes : input.responseRow.notes;
 }
 
 function isSnapshotOnlyContactEditRequest(
@@ -2026,7 +2034,14 @@ export async function PUT(
       throw new HttpError(400, "Request body must be valid JSON.");
     });
 
-    const responseRow = await executePutWithCookie(cookieValue, authCookieRefresh);
+    let responseRow = await executePutWithCookie(cookieValue, authCookieRefresh);
+    if (requestBodyHasOwnField(requestBody, "notes")) {
+      responseRow = upsertSharedContactNotesForRow({
+        row: responseRow,
+        notes: readSubmittedSharedContactNotes({ updateRequest, responseRow }),
+        updatedBy: actorLoginName,
+      });
+    }
     try {
       writeBusinessAccountUpdateAuditEvents({
         actorLoginName,
@@ -2067,10 +2082,17 @@ export async function PUT(
       const retryCookieValue = authCookieRefresh.value ?? cookieValue;
 
       try {
-        const responseRow = await executePutWithCookie(
+        let responseRow = await executePutWithCookie(
           retryCookieValue,
           retryAuthCookieRefresh,
         );
+        if (requestBodyHasOwnField(requestBody, "notes")) {
+          responseRow = upsertSharedContactNotesForRow({
+            row: responseRow,
+            notes: readSubmittedSharedContactNotes({ updateRequest, responseRow }),
+            updatedBy: actorLoginName,
+          });
+        }
         try {
           writeBusinessAccountUpdateAuditEvents({
             actorLoginName,

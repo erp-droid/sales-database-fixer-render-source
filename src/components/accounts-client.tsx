@@ -44,6 +44,7 @@ import {
   buildBusinessAccountConcurrencySnapshot,
   collectUpdatedConcurrencyFields,
 } from "@/lib/business-account-concurrency";
+import { buildContactIdentityKeyForRow } from "@/lib/contact-identity";
 import {
   buildAcumaticaBusinessAccountUrl,
   buildAcumaticaContactUrl,
@@ -1187,6 +1188,30 @@ function normalizeComparable(value: string | null | undefined): string {
   }
 
   return value.trim().toLowerCase();
+}
+
+type SharedContactNotesPatch = {
+  identityKey: string;
+  notes: string | null;
+};
+
+function cleanSharedNotesValue(value: string | null | undefined): string | null {
+  const normalized = value?.trim() ?? "";
+  return normalized.length > 0 ? normalized : null;
+}
+
+function applySharedContactNotesPatchToRow(
+  row: BusinessAccountRow,
+  patch: SharedContactNotesPatch | null,
+): BusinessAccountRow {
+  if (!patch || buildContactIdentityKeyForRow(row) !== patch.identityKey) {
+    return row;
+  }
+
+  return {
+    ...row,
+    notes: patch.notes,
+  };
 }
 
 function hasText(value: string | null | undefined): value is string {
@@ -5805,6 +5830,56 @@ export function AccountsClient({
         returnedContactId !== null &&
         selectedContactId !== null &&
         returnedContactId === selectedContactId;
+      const notesWereEdited = collectUpdatedConcurrencyFields(effectiveDraft).has("notes");
+      const sharedContactNotesIdentityRow: BusinessAccountRow = {
+        ...sourceRow,
+        companyName: updatedRow.companyName,
+        primaryContactName: responseTargetsSelectedContact
+          ? updatedRow.primaryContactName
+          : effectiveDraft.primaryContactName,
+      };
+      const sharedContactNotesIdentityKey = notesWereEdited
+        ? buildContactIdentityKeyForRow(sharedContactNotesIdentityRow)
+        : null;
+      const sharedContactNotesPatch: SharedContactNotesPatch | null =
+        notesWereEdited && sharedContactNotesIdentityKey
+          ? {
+              identityKey: sharedContactNotesIdentityKey,
+              notes: cleanSharedNotesValue(
+                responseTargetsSelectedContact ? updatedRow.notes : effectiveDraft.notes,
+              ),
+            }
+          : null;
+      const applySharedContactNotesPatchToVisibleState = () => {
+        if (!sharedContactNotesPatch) {
+          return;
+        }
+
+        setAllRows((currentRows) =>
+          currentRows.map((row) =>
+            applySharedContactNotesPatchToRow(row, sharedContactNotesPatch),
+          ),
+        );
+        setSelected((currentSelected) =>
+          currentSelected
+            ? applySharedContactNotesPatchToRow(currentSelected, sharedContactNotesPatch)
+            : currentSelected,
+        );
+        setDraft((currentDraft) => {
+          if (
+            !currentDraft ||
+            !selected ||
+            buildContactIdentityKeyForRow(selected) !== sharedContactNotesPatch.identityKey
+          ) {
+            return currentDraft;
+          }
+
+          return {
+            ...currentDraft,
+            notes: sharedContactNotesPatch.notes,
+          };
+        });
+      };
       const accountWasReassigned = updatedAccountRecordId !== accountRecordId;
       let reassignedAccountRows: BusinessAccountRow[] | null = null;
 
@@ -5918,6 +5993,7 @@ export function AccountsClient({
         }
 
         setLastSyncedAt(new Date().toISOString());
+        applySharedContactNotesPatchToVisibleState();
         clearCachedMapData();
         setSaveNotice("Saved to Acumatica.");
         saved = true;
@@ -5957,6 +6033,7 @@ export function AccountsClient({
 
         setSaveNotice("Saved to Acumatica.");
         setLastSyncedAt(new Date().toISOString());
+        applySharedContactNotesPatchToVisibleState();
         clearCachedMapData();
         saved = true;
         return saved;
@@ -6121,6 +6198,7 @@ export function AccountsClient({
 
       setSaveNotice("Saved to Acumatica.");
       setLastSyncedAt(new Date().toISOString());
+      applySharedContactNotesPatchToVisibleState();
       clearCachedMapData();
       saved = true;
     } catch (saveRequestError) {

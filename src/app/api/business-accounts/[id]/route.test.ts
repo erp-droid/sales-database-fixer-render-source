@@ -33,6 +33,7 @@ const setBusinessAccountPrimaryContact = vi.fn();
 const readBusinessAccountDetailFromReadModel = vi.fn();
 const readStoredBusinessAccountRowsFromReadModel = vi.fn();
 const replaceReadModelAccountRows = vi.fn();
+const upsertSharedContactNotesForRow = vi.fn(({ row }) => row);
 const applyLastCalledAtToBusinessAccountRows = vi.fn((rows) => rows);
 const saveAccountCompanyDescription = vi.fn();
 const maybeTriggerReadModelSync = vi.fn();
@@ -87,6 +88,10 @@ vi.mock("@/lib/read-model/accounts", () => ({
   readBusinessAccountDetailFromReadModel,
   readStoredBusinessAccountRowsFromReadModel,
   replaceReadModelAccountRows,
+}));
+
+vi.mock("@/lib/read-model/contact-identity-notes", () => ({
+  upsertSharedContactNotesForRow,
 }));
 
 vi.mock("@/lib/business-account-call-history", () => ({
@@ -259,6 +264,7 @@ describe("GET /api/business-accounts/[id]", () => {
     readBusinessAccountDetailFromReadModel.mockReset();
     readStoredBusinessAccountRowsFromReadModel.mockReset();
     replaceReadModelAccountRows.mockReset();
+    upsertSharedContactNotesForRow.mockClear();
     resolveDeferredActionActor.mockReset();
     resolveDeferredActionActor.mockResolvedValue({
       loginName: "jserrano",

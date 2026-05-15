@@ -212,6 +212,28 @@ describe("ensureReadModelSchema", () => {
     );
   });
 
+  it("creates the contact_identity_notes table", () => {
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(contact_identity_notes)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "identity_key",
+        "company_name",
+        "contact_name",
+        "notes",
+        "source_row_key",
+        "source_contact_id",
+        "updated_by",
+        "created_at",
+        "updated_at",
+      ]),
+    );
+  });
+
   it("adds account_local_metadata marketing eligibility column to legacy tables", () => {
     db.exec(`
       DROP TABLE IF EXISTS account_local_metadata;

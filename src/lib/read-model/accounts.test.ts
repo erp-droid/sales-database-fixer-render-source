@@ -465,4 +465,60 @@ describe("readBusinessAccountDetailFromReadModel", () => {
     expect(parsed?.accountType ?? null).toBeNull();
     expect(parsed?.opportunityCount ?? null).toBeNull();
   });
+
+  it("shares notes across matching company/contact identities regardless of address", async () => {
+    const readModelAccounts = await import("@/lib/read-model/accounts");
+    const { upsertSharedContactNotesForRow } = await import(
+      "@/lib/read-model/contact-identity-notes"
+    );
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    closeDb = () => getReadModelDb().close();
+
+    readModelAccounts.replaceAllAccountRows([
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+        rowKey: "account-1:contact:101",
+        contactId: 101,
+        businessAccountId: "ADV-1",
+        companyName: "Adventec",
+        address: "100 Main St",
+        addressLine1: "100 Main St",
+        primaryContactName: "Jim Campbell",
+        notes: "Initial shared note",
+      }),
+      buildRow({
+        id: "account-2",
+        accountRecordId: "account-2",
+        rowKey: "account-2:contact:202",
+        contactId: 202,
+        businessAccountId: "ADV-2",
+        companyName: "Adventec",
+        address: "200 Main St",
+        addressLine1: "200 Main St",
+        primaryContactName: "Jim Campbell",
+        notes: null,
+      }),
+    ]);
+
+    const seededRows = readModelAccounts.readAllAccountRowsFromReadModel();
+    expect(seededRows.map((row) => row.notes)).toEqual([
+      "Initial shared note",
+      "Initial shared note",
+    ]);
+
+    const targetRow = seededRows.find((row) => row.contactId === 202);
+    expect(targetRow).toBeDefined();
+    upsertSharedContactNotesForRow({
+      row: targetRow as BusinessAccountRow,
+      notes: "Updated shared note",
+      updatedBy: "jserrano",
+    });
+
+    const refreshedRows = readModelAccounts.readAllAccountRowsFromReadModel();
+    expect(refreshedRows.map((row) => row.notes)).toEqual([
+      "Updated shared note",
+      "Updated shared note",
+    ]);
+  });
 });

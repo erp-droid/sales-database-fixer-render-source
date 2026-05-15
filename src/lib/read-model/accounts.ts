@@ -6,6 +6,7 @@ import { applyLastCalledAtToBusinessAccountRows } from "@/lib/business-account-c
 import { applyDeferredActionsToRows } from "@/lib/deferred-actions-store";
 import { invalidateReadModelCaches, registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import { applyLocalAccountMetadataToRows } from "@/lib/read-model/account-local-metadata";
+import { applySharedContactNotesToRows } from "@/lib/read-model/contact-identity-notes";
 import { getReadModelDb } from "@/lib/read-model/db";
 import { rebuildSalesRepDirectoryFromStoredRows } from "@/lib/read-model/sales-reps";
 import type {
@@ -164,11 +165,27 @@ export function readReadModelRowsSnapshotVersion(): string {
     latest_updated_at?: string;
   };
 
+  const contactIdentityNotesRow = db
+    .prepare(
+      `
+      SELECT
+        COUNT(*) AS row_count,
+        COALESCE(MAX(updated_at), '') AS latest_updated_at
+      FROM contact_identity_notes
+      `,
+    )
+    .get() as {
+    row_count?: number;
+    latest_updated_at?: string;
+  };
+
   return [
     Number(accountRow?.row_count ?? 0),
     accountRow?.latest_updated_at ?? "",
     Number(callSessionRow?.row_count ?? 0),
     callSessionRow?.latest_updated_at ?? "",
+    Number(contactIdentityNotesRow?.row_count ?? 0),
+    contactIdentityNotesRow?.latest_updated_at ?? "",
   ].join("|");
 }
 
@@ -193,6 +210,7 @@ export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
   allRowsCache = applyDeferredActionsToRows(allRowsCache);
   allRowsCache = applyLocalAccountMetadataToRows(allRowsCache);
   allRowsCache = applyLastCalledAtToBusinessAccountRows(allRowsCache);
+  allRowsCache = applySharedContactNotesToRows(allRowsCache);
   allRowsCacheVersion = nextVersion;
 
   return allRowsCache;

@@ -63,6 +63,23 @@ CREATE TABLE IF NOT EXISTS account_local_metadata (
 CREATE INDEX IF NOT EXISTS idx_account_local_metadata_business_account_id
   ON account_local_metadata(business_account_id);
 
+CREATE TABLE IF NOT EXISTS contact_identity_notes (
+  identity_key TEXT PRIMARY KEY,
+  company_name TEXT NOT NULL,
+  contact_name TEXT NOT NULL,
+  notes TEXT,
+  source_row_key TEXT,
+  source_contact_id INTEGER,
+  updated_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_contact_identity_notes_company_contact
+  ON contact_identity_notes(company_name, contact_name);
+CREATE INDEX IF NOT EXISTS idx_contact_identity_notes_updated_at
+  ON contact_identity_notes(updated_at);
+
 CREATE TABLE IF NOT EXISTS employee_directory (
   employee_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
