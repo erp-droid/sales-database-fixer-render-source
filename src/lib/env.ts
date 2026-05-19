@@ -506,7 +506,10 @@ export function getEnv(): AppEnv {
     READ_MODEL_FULL_SYNC_ENABLED:
       parsed.data.READ_MODEL_FULL_SYNC_ENABLED === "true",
     READ_MODEL_LOCAL_WRITES_ENABLED:
-      parsed.data.READ_MODEL_LOCAL_WRITES_ENABLED === "true",
+      parsed.data.READ_MODEL_LOCAL_WRITES_ENABLED !== undefined
+        ? parsed.data.READ_MODEL_LOCAL_WRITES_ENABLED === "true"
+        : parsed.data.READ_MODEL_ENABLED === "true" &&
+          parsed.data.READ_MODEL_FULL_SYNC_ENABLED !== "true",
     DAILY_CALL_COACHING_ENABLED:
       parsed.data.DAILY_CALL_COACHING_ENABLED !== undefined
         ? parsed.data.DAILY_CALL_COACHING_ENABLED === "true"
