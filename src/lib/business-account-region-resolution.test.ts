@@ -73,6 +73,27 @@ describe("business-account region resolution", () => {
     ).toBe(true);
   });
 
+  it("allows any explicitly non-vendor, non-customer account type as sales lead input", () => {
+    expect(
+      resolveBusinessAccountClassDecision({
+        type: "Strategic Account",
+        status: "Active",
+        classId: "DEF",
+      }),
+    ).toEqual({
+      skip: false,
+      skippedReason: null,
+      targetClassId: "LEAD",
+    });
+
+    expect(
+      isAllowedBusinessAccountType({
+        type: "Strategic Account",
+        classId: "DEF",
+      }),
+    ).toBe(true);
+  });
+
   it("normalizes Canadian FSAs and resolves exact mappings with first-listed precedence", () => {
     expect(normalizeCanadianPostalCodeFsa("l4z 1n4")).toBe("L4Z");
     expect(resolveExactBusinessAccountRegion("L3R 5H6")).toEqual({

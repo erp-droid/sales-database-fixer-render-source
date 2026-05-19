@@ -220,6 +220,30 @@ describe("normalizeBusinessAccount", () => {
     expect(prospectRow.accountType).toBe("Lead");
   });
 
+  it("classifies unknown non-vendor account types as leads", () => {
+    const row = normalizeBusinessAccount(
+      makePayload({
+        Type: { value: "Strategic Account" },
+        Status: { value: "Active" },
+        ClassID: { value: "DEF" },
+      }),
+    );
+
+    expect(row.accountType).toBe("Lead");
+  });
+
+  it("does not classify vendor account types as leads", () => {
+    const row = normalizeBusinessAccount(
+      makePayload({
+        Type: { value: "Vendor" },
+        Status: { value: "Active" },
+        ClassID: { value: "VENDOR" },
+      }),
+    );
+
+    expect(row.accountType).toBeNull();
+  });
+
   it("does not infer primary contact from active contacts when primary contact is missing", () => {
     const row = normalizeBusinessAccount(
       makePayload({
@@ -886,6 +910,95 @@ describe("queryBusinessAccounts", () => {
 
     expect(result.total).toBe(1);
     expect(result.items[0]?.businessAccountId).toBe("AC-100");
+  });
+
+  it("fills blank non-vendor account types as leads for display", () => {
+    const result = queryBusinessAccounts(
+      [
+        {
+          ...rows[0],
+          accountType: null,
+          businessAccountId: "B200123",
+          companyName: "Unclassified Account",
+          opportunityCount: 0,
+        },
+      ],
+      {
+        page: 1,
+        pageSize: 25,
+        sortBy: "companyName",
+        sortDir: "asc",
+      },
+    );
+
+    expect(result.total).toBe(1);
+    expect(result.items[0]?.accountType).toBe("Lead");
+  });
+
+  it("suppresses stored vendor-like rows even when they have opportunities", () => {
+    const result = queryBusinessAccounts(
+      [
+        {
+          ...rows[0],
+          accountType: null,
+          businessAccountId: "V000123",
+          companyName: "Quoted Vendor-Like Account",
+          opportunityCount: 2,
+        },
+      ],
+      {
+        page: 1,
+        pageSize: 25,
+        sortBy: "companyName",
+        sortDir: "asc",
+      },
+    );
+
+    expect(result.total).toBe(0);
+  });
+
+  it("suppresses stored vendor-like rows that have no customer or opportunity signal", () => {
+    const result = queryBusinessAccounts(
+      [
+        {
+          ...rows[0],
+          accountType: null,
+          businessAccountId: "V000952",
+          companyName: "1498597 Ontario Inc - Davis Fences",
+          opportunityCount: 0,
+        },
+      ],
+      {
+        page: 1,
+        pageSize: 25,
+        sortBy: "companyName",
+        sortDir: "asc",
+      },
+    );
+
+    expect(result.total).toBe(0);
+  });
+
+  it("suppresses rows explicitly marked as vendors", () => {
+    const result = queryBusinessAccounts(
+      [
+        {
+          ...rows[0],
+          accountType: "Vendor",
+          businessAccountId: "AC-100",
+          companyName: "Explicit Vendor Account",
+          opportunityCount: 0,
+        },
+      ],
+      {
+        page: 1,
+        pageSize: 25,
+        sortBy: "companyName",
+        sortDir: "asc",
+      },
+    );
+
+    expect(result.total).toBe(0);
   });
 
   it("sorts by opportunity count", () => {

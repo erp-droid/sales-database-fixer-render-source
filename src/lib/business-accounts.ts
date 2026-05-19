@@ -23,6 +23,7 @@ import {
 } from "@/lib/phone";
 import { canonicalBusinessAccountRegionValue } from "@/lib/business-account-region-values";
 import {
+  isLikelyVendorClassId,
   normalizeBusinessAccountType,
   resolveBusinessAccountClassDecision,
 } from "@/lib/business-account-region-resolution";
@@ -349,6 +350,40 @@ function pickPreferredText(
 
 function pickRequiredText(existing: string, incoming: string): string {
   return hasText(incoming) ? incoming : existing;
+}
+
+function hasPositiveOpportunityCount(row: BusinessAccountRow): boolean {
+  return typeof row.opportunityCount === "number" && row.opportunityCount > 0;
+}
+
+function isLikelyStoredVendorBusinessAccountRow(row: BusinessAccountRow): boolean {
+  if (isLikelyVendorClassId(row.accountType)) {
+    return true;
+  }
+
+  if (row.accountType) {
+    return false;
+  }
+
+  const businessAccountId = row.businessAccountId.trim().toUpperCase();
+  if (/^V\d+/.test(businessAccountId)) {
+    return true;
+  }
+
+  return /\(v\)\s*$/i.test(row.companyName.trim());
+}
+
+export function normalizeBusinessAccountRowClassification(
+  row: BusinessAccountRow,
+): BusinessAccountRow {
+  if (row.accountType || isLikelyStoredVendorBusinessAccountRow(row)) {
+    return row;
+  }
+
+  return {
+    ...row,
+    accountType: "Lead",
+  };
 }
 
 function mergeBusinessAccountRows(
@@ -764,24 +799,28 @@ export function filterSuppressedBusinessAccountRows(
   rows: BusinessAccountRow[],
   options: SuppressionOptions = {},
 ): BusinessAccountRow[] {
-  return canonicalizeBusinessAccountRows(rows).filter((row) => {
+  return canonicalizeBusinessAccountRows(rows).flatMap((row) => {
+    if (isLikelyStoredVendorBusinessAccountRow(row)) {
+      return [];
+    }
+
     if (isOrphanPlaceholderBusinessAccountRow(row)) {
-      return false;
+      return [];
     }
 
     if (isAlwaysExcludedBusinessAccountRow(row)) {
-      return false;
+      return [];
     }
 
     if (!options.includeInternalRows && isExcludedInternalBusinessAccountRow(row)) {
-      return false;
+      return [];
     }
 
     if (isApEmailMailbox(row.primaryContactEmail)) {
-      return false;
+      return [];
     }
 
-    return true;
+    return [normalizeBusinessAccountRowClassification(row)];
   });
 }
 

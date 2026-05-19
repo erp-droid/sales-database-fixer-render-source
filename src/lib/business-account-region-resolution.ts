@@ -176,11 +176,7 @@ export function isAllowedBusinessAccountType(input: {
     normalizeBusinessAccountType(input.type) ||
     normalizeBusinessAccountType(input.typeDescription);
   if (normalizedType) {
-    return (
-      normalizedType === "customer" ||
-      normalizedType === "businessaccount" ||
-      normalizedType === "prospect"
-    );
+    return !isLikelyVendorType(normalizedType);
   }
 
   return !isLikelyVendorClassId(input.classId);

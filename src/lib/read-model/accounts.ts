@@ -1,4 +1,5 @@
 import {
+  normalizeBusinessAccountRowClassification,
   queryBusinessAccounts,
   resolveCompanyPhone,
 } from "@/lib/business-accounts";
@@ -132,7 +133,8 @@ function parseStoredRow(payload: string): BusinessAccountRow | null {
 function parseStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
   return rows
     .map((row) => parseStoredRow(row.payload_json))
-    .filter((row): row is BusinessAccountRow => row !== null);
+    .filter((row): row is BusinessAccountRow => row !== null)
+    .map(normalizeBusinessAccountRowClassification);
 }
 
 export function readReadModelRowsSnapshotVersion(): string {

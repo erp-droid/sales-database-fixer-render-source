@@ -133,7 +133,7 @@ function isAllowedBusinessAccountType(record: unknown): boolean {
     normalizeAccountType(typeField) ||
     normalizeAccountType((record as Record<string, unknown>).TypeDescription);
   if (normalizedType) {
-    return normalizedType === "customer" || normalizedType === "businessaccount";
+    return !isLikelyVendorClassId(normalizedType);
   }
 
   const classId =
