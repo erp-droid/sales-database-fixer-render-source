@@ -152,7 +152,7 @@ function readRequestedContactId(request: NextRequest): number | null {
   }
 
   const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+  return Number.isInteger(parsed) && parsed !== 0 ? parsed : null;
 }
 
 function requestBodyHasOwnField(requestBody: unknown, key: string): boolean {
@@ -273,7 +273,7 @@ function mergeDetailRowIntoRows(
   detailRow: BusinessAccountRow,
   requestedContactId: number | null,
 ): BusinessAccountRow[] {
-  if (!isUsableContactId(requestedContactId)) {
+  if (!isSelectableContactId(requestedContactId)) {
     return rows;
   }
 
@@ -499,6 +499,54 @@ function readWrappedNumber(record: unknown, key: string): number | null {
 
 function isUsableContactId(contactId: number | null | undefined): contactId is number {
   return Number.isInteger(contactId) && Number(contactId) > 0;
+}
+
+function isSelectableContactId(contactId: number | null | undefined): contactId is number {
+  return Number.isInteger(contactId) && Number(contactId) !== 0;
+}
+
+function isLocalContactId(contactId: number | null | undefined): contactId is number {
+  return Number.isInteger(contactId) && Number(contactId) < 0;
+}
+
+function looksLikeLocalAccountIdentifier(value: string | null | undefined): boolean {
+  const normalized = value?.trim().toLowerCase() ?? "";
+  return normalized.startsWith("local-");
+}
+
+function isLocalOnlyStoredRow(row: BusinessAccountRow): boolean {
+  return (
+    looksLikeLocalAccountIdentifier(row.id) ||
+    looksLikeLocalAccountIdentifier(row.accountRecordId) ||
+    looksLikeLocalAccountIdentifier(row.businessAccountId) ||
+    isLocalContactId(row.contactId) ||
+    isLocalContactId(row.primaryContactId)
+  );
+}
+
+function shouldUseReadModelWritePath(input: {
+  rows: BusinessAccountRow[];
+  targetContactId: number | null;
+}): boolean {
+  if (!getEnv().READ_MODEL_ENABLED || input.rows.length === 0) {
+    return false;
+  }
+
+  return (
+    getEnv().READ_MODEL_LOCAL_WRITES_ENABLED ||
+    isLocalContactId(input.targetContactId) ||
+    input.rows.some(isLocalOnlyStoredRow)
+  );
+}
+
+function isAcumaticaLookupMiss(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return (
+    (error instanceof HttpError && (error.status === 401 || error.status === 404)) ||
+    message.includes("no entity satisfies the condition") ||
+    message.includes("invalid uri structure") ||
+    message.includes("acumatica request failed with status 401")
+  );
 }
 
 function readContactDisplayName(record: unknown): string | null {
@@ -1313,7 +1361,7 @@ export async function PUT(
         cachedTargetRow,
       );
     }
-    const storedRows = readStoredBusinessAccountRowsFromReadModel(id);
+    const storedRows = readStoredBusinessAccountRowsFromReadModel(id) ?? [];
     const implicitContactOnlyIntent =
       cachedCurrentRow !== null &&
       cachedTargetContactId !== null &&
@@ -1361,6 +1409,34 @@ export async function PUT(
     if (isNoopSaveAgainstCachedRow) {
       return withLocalAccountMetadata(
         cachedContactComparisonRow ?? cachedCurrentRow,
+        updateRequest,
+        shouldPersistLocalMetadata,
+      );
+    }
+
+    if (
+      shouldUseReadModelWritePath({
+        rows: storedRows,
+        targetContactId: cachedTargetContactId,
+      })
+    ) {
+      if (requestedUnknownTargetContact) {
+        throw new HttpError(
+          404,
+          "The selected contact is not in the local SQLite snapshot. Reload the account and try again.",
+        );
+      }
+
+      if (isOrphanContactAssignment || isCachedContactReassignment) {
+        throw new HttpError(
+          422,
+          "Contact reassignment still requires an Acumatica-backed contact. Save ordinary account and contact edits locally, or create/import the target contact first.",
+        );
+      }
+
+      return saveReadModelFallbackUpdate(
+        id,
+        storedRows,
         updateRequest,
         shouldPersistLocalMetadata,
       );
@@ -1604,13 +1680,7 @@ export async function PUT(
         activeAuthCookieRefresh,
       );
     } catch (currentFetchError) {
-      const errorMessage = getErrorMessage(currentFetchError).toLowerCase();
-      const isLookupFailure =
-        (currentFetchError instanceof HttpError &&
-          (currentFetchError.status === 401 || currentFetchError.status === 404)) ||
-        errorMessage.includes("invalid uri structure") ||
-        errorMessage.includes("acumatica request failed with status 401");
-      if (storedRows.length > 0 && isLookupFailure) {
+      if (storedRows.length > 0 && isAcumaticaLookupMiss(currentFetchError)) {
         return saveReadModelFallbackUpdate(
           id,
           storedRows,

@@ -129,6 +129,7 @@ const schema = z.object({
   READ_MODEL_ENABLED: z.enum(["true", "false"]).optional(),
   READ_MODEL_AUTO_SYNC_ENABLED: z.enum(["true", "false"]).optional(),
   READ_MODEL_FULL_SYNC_ENABLED: z.enum(["true", "false"]).optional(),
+  READ_MODEL_LOCAL_WRITES_ENABLED: z.enum(["true", "false"]).optional(),
   READ_MODEL_SQLITE_PATH: z.string().min(1).optional(),
   READ_MODEL_STATE_BACKEND: z.enum(["sqlite", "shared"]).optional(),
   DATA_QUALITY_HISTORY_PATH: z.string().min(1).optional(),
@@ -232,6 +233,7 @@ export type AppEnv = {
   READ_MODEL_ENABLED: boolean;
   READ_MODEL_AUTO_SYNC_ENABLED: boolean;
   READ_MODEL_FULL_SYNC_ENABLED: boolean;
+  READ_MODEL_LOCAL_WRITES_ENABLED: boolean;
   READ_MODEL_SQLITE_PATH: string;
   READ_MODEL_STATE_BACKEND: "sqlite" | "shared";
   DATA_QUALITY_HISTORY_PATH: string;
@@ -386,6 +388,7 @@ export function getEnv(): AppEnv {
     READ_MODEL_ENABLED: process.env.READ_MODEL_ENABLED,
     READ_MODEL_AUTO_SYNC_ENABLED: process.env.READ_MODEL_AUTO_SYNC_ENABLED,
     READ_MODEL_FULL_SYNC_ENABLED: process.env.READ_MODEL_FULL_SYNC_ENABLED,
+    READ_MODEL_LOCAL_WRITES_ENABLED: process.env.READ_MODEL_LOCAL_WRITES_ENABLED,
     READ_MODEL_SQLITE_PATH: emptyToUndefined(process.env.READ_MODEL_SQLITE_PATH),
     READ_MODEL_STATE_BACKEND: emptyToUndefined(process.env.READ_MODEL_STATE_BACKEND),
     DATA_QUALITY_HISTORY_PATH: emptyToUndefined(process.env.DATA_QUALITY_HISTORY_PATH),
@@ -502,6 +505,8 @@ export function getEnv(): AppEnv {
       parsed.data.READ_MODEL_AUTO_SYNC_ENABLED === "true",
     READ_MODEL_FULL_SYNC_ENABLED:
       parsed.data.READ_MODEL_FULL_SYNC_ENABLED === "true",
+    READ_MODEL_LOCAL_WRITES_ENABLED:
+      parsed.data.READ_MODEL_LOCAL_WRITES_ENABLED === "true",
     DAILY_CALL_COACHING_ENABLED:
       parsed.data.DAILY_CALL_COACHING_ENABLED !== undefined
         ? parsed.data.DAILY_CALL_COACHING_ENABLED === "true"

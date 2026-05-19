@@ -24,6 +24,7 @@ const enqueueDeferredBusinessAccountDeleteAction = vi.fn(() => ({
 }));
 const getEnv = vi.fn(() => ({
   READ_MODEL_ENABLED: true,
+  READ_MODEL_LOCAL_WRITES_ENABLED: false,
 }));
 const fetchBusinessAccountById = vi.fn();
 const fetchContactById = vi.fn();
@@ -247,6 +248,11 @@ function buildRawContact(
 describe("GET /api/business-accounts/[id]", () => {
   beforeEach(() => {
     vi.resetModules();
+    getEnv.mockReset();
+    getEnv.mockReturnValue({
+      READ_MODEL_ENABLED: true,
+      READ_MODEL_LOCAL_WRITES_ENABLED: false,
+    });
     applyLastCalledAtToBusinessAccountRows.mockReset();
     applyLastCalledAtToBusinessAccountRows.mockImplementation((rows) => rows);
     requireAuthCookieValue.mockReset();
@@ -368,6 +374,63 @@ describe("GET /api/business-accounts/[id]", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: "Business account is not in the local SQLite snapshot. Click Sync records to refresh.",
     });
+  });
+
+  it("uses negative local contact IDs when selecting cached detail rows", async () => {
+    const accountRecordId = "local-brock-region8-ab:sheet-row-131:75da3804a258";
+    const primaryRow = buildRow({
+      id: accountRecordId,
+      accountRecordId,
+      rowKey: `${accountRecordId}:contact:-13101`,
+      contactId: -13101,
+      primaryContactId: -13101,
+      businessAccountId: "LOCAL-BROCK-AB-131",
+      companyName: "Merit Windows & Doors",
+      primaryContactName: "Steve Scianitti",
+    });
+    const danRow = buildRow({
+      id: accountRecordId,
+      accountRecordId,
+      rowKey: `${accountRecordId}:contact:-13102`,
+      contactId: -13102,
+      isPrimaryContact: false,
+      primaryContactId: -13101,
+      businessAccountId: "LOCAL-BROCK-AB-131",
+      companyName: "Merit Windows & Doors",
+      primaryContactName: "Dan McGrath",
+    });
+
+    readBusinessAccountDetailFromReadModel.mockImplementation(
+      (_id: string, requestedContactId?: number | null) => ({
+        row: requestedContactId === -13102 ? danRow : primaryRow,
+        rows: [primaryRow, danRow],
+        accountLocation: null,
+      }),
+    );
+
+    const { GET } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await GET(
+      new NextRequest(
+        `http://localhost/api/business-accounts/${accountRecordId}?contactId=-13102`,
+      ),
+      {
+        params: Promise.resolve({
+          id: accountRecordId,
+        }),
+      },
+    );
+
+    const payload = await response.json();
+    expect(response.status).toBe(200);
+    expect(payload.row).toMatchObject({
+      contactId: -13102,
+      primaryContactName: "Dan McGrath",
+    });
+    expect(readBusinessAccountDetailFromReadModel).toHaveBeenCalledWith(
+      accountRecordId,
+      -13102,
+    );
+    expect(fetchBusinessAccountById).not.toHaveBeenCalled();
   });
 
   it("hydrates requested contact phone and extension on live detail reads", async () => {
@@ -692,6 +755,8 @@ describe("PUT /api/business-accounts/[id]", () => {
     saveAccountCompanyDescription.mockReset();
     setBusinessAccountPrimaryContact.mockImplementation(async () => undefined);
     readBusinessAccountDetailFromReadModel.mockReset();
+    readStoredBusinessAccountRowsFromReadModel.mockReset();
+    readStoredBusinessAccountRowsFromReadModel.mockReturnValue([]);
     replaceReadModelAccountRows.mockReset();
   });
 
@@ -754,6 +819,109 @@ describe("PUT /api/business-accounts/[id]", () => {
     expect(updateBusinessAccount).not.toHaveBeenCalled();
     expect(updateContact).not.toHaveBeenCalled();
     expect(publishBusinessAccountChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves local negative-ID contact edits to SQLite without Acumatica calls", async () => {
+    getEnv.mockReturnValue({
+      READ_MODEL_ENABLED: true,
+      READ_MODEL_LOCAL_WRITES_ENABLED: true,
+    });
+
+    const accountRecordId = "local-brock-region8-ab:sheet-row-131:75da3804a258";
+    const primaryRow = buildRow({
+      id: accountRecordId,
+      accountRecordId,
+      rowKey: `${accountRecordId}:contact:-13101`,
+      contactId: -13101,
+      primaryContactId: -13101,
+      businessAccountId: "LOCAL-BROCK-AB-131",
+      companyName: "Merit Windows & Doors",
+      primaryContactName: "Steve Scianitti",
+      primaryContactEmail: "steve@example.com",
+    });
+    const danRow = buildRow({
+      id: accountRecordId,
+      accountRecordId,
+      rowKey: `${accountRecordId}:contact:-13102`,
+      contactId: -13102,
+      isPrimaryContact: false,
+      primaryContactId: -13101,
+      businessAccountId: "LOCAL-BROCK-AB-131",
+      companyName: "Merit Windows & Doors",
+      primaryContactName: "Dan McGrath",
+      primaryContactJobTitle: null,
+      primaryContactPhone: null,
+      primaryContactRawPhone: null,
+      primaryContactEmail: "dan@example.com",
+    });
+    const storedRows = [primaryRow, danRow];
+
+    readBusinessAccountDetailFromReadModel.mockImplementation(
+      (_id: string, requestedContactId?: number | null) => {
+        if (requestedContactId === -13102) {
+          return {
+            row: danRow,
+            rows: storedRows,
+            accountLocation: null,
+          };
+        }
+
+        return {
+          row: primaryRow,
+          rows: storedRows,
+          accountLocation: null,
+        };
+      },
+    );
+    readStoredBusinessAccountRowsFromReadModel.mockReturnValue(storedRows);
+
+    const { PUT } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await PUT(
+      new NextRequest(`http://localhost/api/business-accounts/${accountRecordId}`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ...buildNoopPutPayload(danRow),
+          targetContactId: -13102,
+          contactOnlyIntent: true,
+          primaryContactJobTitle: "Operations Manager",
+          primaryContactPhone: "9055550188",
+          assignedBusinessAccountRecordId: accountRecordId,
+          assignedBusinessAccountId: "LOCAL-BROCK-AB-131",
+          baseSnapshot: buildConcurrencySnapshot(danRow),
+        }),
+      }),
+      {
+        params: Promise.resolve({
+          id: accountRecordId,
+        }),
+      },
+    );
+
+    const responseBody = await response.json();
+    expect(response.status, JSON.stringify(responseBody)).toBe(200);
+    expect(responseBody).toMatchObject({
+      contactId: -13102,
+      primaryContactName: "Dan McGrath",
+      primaryContactJobTitle: "Operations Manager",
+      primaryContactPhone: "905-555-0188",
+    });
+    expect(fetchBusinessAccountById).not.toHaveBeenCalled();
+    expect(fetchContactById).not.toHaveBeenCalled();
+    expect(updateBusinessAccount).not.toHaveBeenCalled();
+    expect(updateContact).not.toHaveBeenCalled();
+    expect(replaceReadModelAccountRows).toHaveBeenCalledWith(
+      accountRecordId,
+      expect.arrayContaining([
+        expect.objectContaining({
+          contactId: -13102,
+          primaryContactJobTitle: "Operations Manager",
+          primaryContactPhone: "905-555-0188",
+        }),
+      ]),
+    );
   });
 
   it("persists local marketing eligibility updates without writing to Acumatica", async () => {

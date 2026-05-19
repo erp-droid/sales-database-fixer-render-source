@@ -67,6 +67,17 @@ describe("state transfer", () => {
       )
       `,
     ).run();
+    db.prepare(
+      `
+      INSERT INTO contact_identity_notes (
+        identity_key, company_name, contact_name, notes, source_row_key,
+        source_contact_id, updated_by, created_at, updated_at
+      ) VALUES (
+        'acme:jane-doe', 'Acme', 'Jane Doe', 'Shared note', 'acc-1:contact:1',
+        1, 'jserrano', '2026-03-19T10:00:00.000Z', '2026-03-19T10:00:00.000Z'
+      )
+      `,
+    ).run();
 
     const historyPath = path.join(tempDir, "data-quality-history.json");
     const initialHistory = { version: 3, issues: { a: { status: "open" } } };
@@ -74,24 +85,31 @@ describe("state transfer", () => {
 
     const snapshot = await exportAppStateTransferSnapshot("render");
     expect(snapshot.tables.account_rows).toHaveLength(1);
+    expect(snapshot.tables.contact_identity_notes).toHaveLength(1);
     expect(snapshot.tables.audit_events).toHaveLength(1);
     expect(snapshot.dataQualityHistory).toEqual(initialHistory);
 
     db.prepare("DELETE FROM audit_events").run();
+    db.prepare("DELETE FROM contact_identity_notes").run();
     db.prepare("DELETE FROM account_rows").run();
     require("node:fs").writeFileSync(historyPath, JSON.stringify({ version: 3, issues: {} }), "utf8");
 
     const result = await importAppStateTransferSnapshot(snapshot);
     expect(result.importedTables.find((table) => table.name === "account_rows")?.rowCount).toBe(1);
+    expect(result.importedTables.find((table) => table.name === "contact_identity_notes")?.rowCount).toBe(1);
     expect(result.importedTables.find((table) => table.name === "audit_events")?.rowCount).toBe(1);
 
     const restoredAuditCount = db
       .prepare("SELECT COUNT(*) AS count FROM audit_events")
       .get() as { count: number };
+    const restoredContactIdentityNotesCount = db
+      .prepare("SELECT COUNT(*) AS count FROM contact_identity_notes")
+      .get() as { count: number };
     const restoredAccountCount = db
       .prepare("SELECT COUNT(*) AS count FROM account_rows")
       .get() as { count: number };
     expect(restoredAuditCount.count).toBe(1);
+    expect(restoredContactIdentityNotesCount.count).toBe(1);
     expect(restoredAccountCount.count).toBe(1);
 
     const restoredHistory = JSON.parse(readFileSync(historyPath, "utf8")) as unknown;
@@ -103,6 +121,7 @@ describe("state transfer", () => {
     };
     expect(backupPayload.version).toBe(1);
     expect(backupPayload.tables.account_rows).toEqual([]);
+    expect(backupPayload.tables.contact_identity_notes).toEqual([]);
     expect(backupPayload.tables.audit_events).toEqual([]);
   });
 

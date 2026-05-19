@@ -158,6 +158,8 @@ services:
         value: "false"
       - key: READ_MODEL_FULL_SYNC_ENABLED
         value: "false"
+      - key: READ_MODEL_LOCAL_WRITES_ENABLED
+        value: "true"
       - key: READ_MODEL_SQLITE_PATH
         value: /app/data/read-model.sqlite
       - key: READ_MODEL_STATE_BACKEND

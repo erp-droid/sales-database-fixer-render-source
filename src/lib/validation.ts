@@ -194,6 +194,17 @@ const nullableExpectedLastModifiedSchema = z
   .union([z.string(), z.null(), z.undefined()])
   .transform((value) => value ?? null);
 
+const nullableContactIdSchema = z
+  .union([z.number(), z.string(), z.null(), z.undefined()])
+  .transform((value) => {
+    if (value === null || value === undefined || value === "") {
+      return null;
+    }
+
+    const numeric = Number(value);
+    return Number.isInteger(numeric) && numeric !== 0 ? numeric : null;
+  });
+
 const hiddenSnapshotRequiredTextSchema = (maxLength: number) =>
   z
     .union([z.string(), z.null(), z.undefined()])
@@ -221,16 +232,7 @@ const businessAccountConcurrencySnapshotSchema = z.object({
     .refine((value) => value.length >= 2 && value.length <= 3, {
       message: "Country is required.",
     }),
-  targetContactId: z
-    .union([z.number(), z.string(), z.null(), z.undefined()])
-    .transform((value) => {
-      if (value === null || value === undefined || value === "") {
-        return null;
-      }
-      const numeric = Number(value);
-      return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
-    })
-    .default(null),
+  targetContactId: nullableContactIdSchema.default(null),
   salesRepId: nullableStringSchema.default(null),
   salesRepName: nullableStringSchema.default(null),
   industryType: nullableStringSchema.default(null),
@@ -250,16 +252,7 @@ const businessAccountConcurrencySnapshotSchema = z.object({
     .transform((value) => value as Category | null)
     .default(null),
   notes: nullableStringSchema.default(null),
-  primaryContactId: z
-    .union([z.number(), z.string(), z.null(), z.undefined()])
-    .transform((value) => {
-      if (value === null || value === undefined || value === "") {
-        return null;
-      }
-      const numeric = Number(value);
-      return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
-    })
-    .default(null),
+  primaryContactId: nullableContactIdSchema.default(null),
   lastModifiedIso: nullableExpectedLastModifiedSchema,
 });
 
@@ -280,16 +273,7 @@ export const updateRequestSchema = z.object({
     .refine((value) => value.length >= 2 && value.length <= 3, {
       message: "Country is required.",
     }),
-  targetContactId: z
-    .union([z.number(), z.string(), z.null(), z.undefined()])
-    .transform((value) => {
-      if (value === null || value === undefined || value === "") {
-        return null;
-      }
-      const numeric = Number(value);
-      return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
-    })
-    .default(null),
+  targetContactId: nullableContactIdSchema.default(null),
   setAsPrimaryContact: z.boolean().default(false),
   primaryOnlyIntent: z.boolean().default(false),
   contactOnlyIntent: z.boolean().default(false),
@@ -327,16 +311,7 @@ const contactOnlyUpdateRequestSchema = z.object({
   state: nullableStringSchema.default(null),
   postalCode: nullableStringSchema.default(null),
   country: nullableCountrySchema.default(null),
-  targetContactId: z
-    .union([z.number(), z.string(), z.null(), z.undefined()])
-    .transform((value) => {
-      if (value === null || value === undefined || value === "") {
-        return null;
-      }
-      const numeric = Number(value);
-      return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
-    })
-    .default(null),
+  targetContactId: nullableContactIdSchema.default(null),
   setAsPrimaryContact: z.boolean().default(false),
   primaryOnlyIntent: z.boolean().default(false),
   contactOnlyIntent: z.boolean().default(false),

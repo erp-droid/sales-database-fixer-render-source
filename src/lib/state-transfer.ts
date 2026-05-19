@@ -27,6 +27,7 @@ export type AppStateTransferImportResult = {
 const PORTABLE_TABLES = [
   "account_rows",
   "account_local_metadata",
+  "contact_identity_notes",
   "employee_directory",
   "sales_rep_directory",
   "address_geocodes",
@@ -67,7 +68,27 @@ function quoteIdentifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
 }
 
+function tableExists(tableName: string): boolean {
+  const db = getReadModelDb();
+  const row = db
+    .prepare(
+      `
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'table'
+        AND name = ?
+      `,
+    )
+    .get(tableName) as { name?: string } | undefined;
+
+  return row?.name === tableName;
+}
+
 function readPortableTable(tableName: string): PortableTableRow[] {
+  if (!tableExists(tableName)) {
+    return [];
+  }
+
   const db = getReadModelDb();
   return db
     .prepare(`SELECT * FROM ${quoteIdentifier(tableName)}`)
@@ -119,10 +140,22 @@ function replacePortableTables(tables: Record<string, PortableTableRow[]>): Arra
   try {
     const importTables = db.transaction(() => {
       for (const tableName of [...PORTABLE_TABLES].reverse()) {
+        if (!tableExists(tableName)) {
+          continue;
+        }
+
         db.prepare(`DELETE FROM ${quoteIdentifier(tableName)}`).run();
       }
 
       for (const tableName of PORTABLE_TABLES) {
+        if (!tableExists(tableName)) {
+          importedTables.push({
+            name: tableName,
+            rowCount: 0,
+          });
+          continue;
+        }
+
         const rows = Array.isArray(tables[tableName]) ? tables[tableName] : [];
         importedTables.push({
           name: tableName,

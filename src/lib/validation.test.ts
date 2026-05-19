@@ -180,6 +180,47 @@ describe("parseUpdatePayload", () => {
     expect(parsed.targetContactId).toBe(157315);
   });
 
+  it("preserves negative local contact IDs", () => {
+    const parsed = parseUpdatePayload({
+      ...validPayload,
+      contactOnlyIntent: true,
+      targetContactId: -13102,
+      baseSnapshot: {
+        companyName: "Merit Windows & Doors",
+        companyDescription: null,
+        assignedBusinessAccountRecordId: "local-brock-region8-ab:sheet-row-131:75da3804a258",
+        assignedBusinessAccountId: "LOCAL-BROCK-AB-131",
+        addressLine1: "5579 McAdam Road",
+        addressLine2: "",
+        city: "Mississauga",
+        state: "ON",
+        postalCode: "L4Z1N4",
+        country: "CA",
+        targetContactId: -13102,
+        salesRepId: "109343",
+        salesRepName: "Jorge Serrano",
+        industryType: null,
+        subCategory: null,
+        companyRegion: "Region 8",
+        week: "Week 2",
+        companyPhone: null,
+        primaryContactName: "Dan McGrath",
+        primaryContactJobTitle: null,
+        primaryContactPhone: null,
+        primaryContactExtension: null,
+        primaryContactEmail: null,
+        category: null,
+        notes: null,
+        primaryContactId: -13101,
+        lastModifiedIso: "2026-05-19T11:42:12.000Z",
+      },
+    });
+
+    expect(parsed.targetContactId).toBe(-13102);
+    expect(parsed.baseSnapshot?.targetContactId).toBe(-13102);
+    expect(parsed.baseSnapshot?.primaryContactId).toBe(-13101);
+  });
+
   it("tolerates legacy placeholder values inside the hidden base snapshot", () => {
     const parsed = parseUpdatePayload({
       ...validPayload,
@@ -329,6 +370,21 @@ describe("parseContactOnlyUpdatePayload", () => {
     expect(parsed.primaryContactPhone).toBe("905-878-9000");
     expect(parsed.primaryContactExtension).toBe("120");
     expect(parsed.primaryContactEmail).toBe("ashur.hanna@freshstartfoods.com");
+  });
+
+  it("preserves negative local IDs in contact-only payloads", () => {
+    const parsed = parseContactOnlyUpdatePayload(
+      {
+        targetContactId: -13102,
+        primaryContactJobTitle: "Operations Manager",
+        primaryContactPhone: "9055550188",
+      },
+      fallback,
+    );
+
+    expect(parsed.targetContactId).toBe(-13102);
+    expect(parsed.primaryContactJobTitle).toBe("Operations Manager");
+    expect(parsed.primaryContactPhone).toBe("905-555-0188");
   });
 
   it("parses and normalizes contact-only extension values", () => {
