@@ -5,7 +5,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireAuthCookieValue } from "@/lib/auth";
-import { exportAppStateTransferSnapshot } from "@/lib/state-transfer";
+import { exportAppStateTransferSnapshot, PORTABLE_TABLES } from "@/lib/state-transfer";
 
 const SYSTEM_KEY_HEADER = "x-system-key";
 
@@ -47,10 +47,31 @@ function ensureAuthorized(request: NextRequest): void {
   requireAuthCookieValue(request);
 }
 
+function parseRequestedTables(request: NextRequest): string[] {
+  const raw = request.nextUrl.searchParams.get("tables")?.trim() ?? "";
+  if (!raw) {
+    return [];
+  }
+
+  const allowed = new Set<string>(PORTABLE_TABLES);
+  return raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0 && allowed.has(value));
+}
+
+function shouldIncludeHistory(request: NextRequest): boolean {
+  const value = request.nextUrl.searchParams.get("includeHistory")?.trim().toLowerCase();
+  return value !== "false" && value !== "0" && value !== "no";
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   ensureAuthorized(request);
 
-  const snapshot = await exportAppStateTransferSnapshot(request.nextUrl.origin);
+  const snapshot = await exportAppStateTransferSnapshot(request.nextUrl.origin, {
+    includeDataQualityHistory: shouldIncludeHistory(request),
+    tableNames: parseRequestedTables(request),
+  });
   return NextResponse.json(snapshot, {
     headers: {
       "cache-control": "no-store",

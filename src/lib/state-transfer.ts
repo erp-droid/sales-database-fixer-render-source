@@ -5,7 +5,7 @@ import { getEnv } from "@/lib/env";
 import { invalidateReadModelCaches } from "@/lib/read-model/cache";
 import { getReadModelDb } from "@/lib/read-model/db";
 
-type PortableTableRow = Record<string, unknown>;
+export type PortableTableRow = Record<string, unknown>;
 
 export type AppStateTransferSnapshot = {
   version: 1;
@@ -24,7 +24,7 @@ export type AppStateTransferImportResult = {
   importedHistory: boolean;
 };
 
-const PORTABLE_TABLES = [
+export const PORTABLE_TABLES = [
   "account_rows",
   "account_local_metadata",
   "contact_identity_notes",
@@ -45,6 +45,8 @@ const PORTABLE_TABLES = [
   "audit_event_fields",
   "audit_event_links",
 ] as const;
+
+export type PortableTableName = (typeof PORTABLE_TABLES)[number];
 
 function resolveHistoryFilePath(): string {
   const { DATA_QUALITY_HISTORY_PATH } = getEnv();
@@ -219,11 +221,22 @@ async function writeDataQualityHistory(history: unknown | null): Promise<boolean
   return true;
 }
 
+type ExportSnapshotOptions = {
+  includeDataQualityHistory?: boolean;
+  tableNames?: readonly string[];
+};
+
 export async function exportAppStateTransferSnapshot(
   sourceLabel: string | null,
+  options?: ExportSnapshotOptions,
 ): Promise<AppStateTransferSnapshot> {
+  const requestedTableNames =
+    options?.tableNames?.filter((tableName): tableName is string =>
+      PORTABLE_TABLES.includes(tableName as PortableTableName),
+    ) ?? [];
+  const tableNames = requestedTableNames.length > 0 ? requestedTableNames : [...PORTABLE_TABLES];
   const tables = Object.fromEntries(
-    PORTABLE_TABLES.map((tableName) => [tableName, readPortableTable(tableName)]),
+    tableNames.map((tableName) => [tableName, readPortableTable(tableName)]),
   ) as Record<string, PortableTableRow[]>;
 
   return {
@@ -231,7 +244,8 @@ export async function exportAppStateTransferSnapshot(
     createdAt: new Date().toISOString(),
     sourceLabel,
     tables,
-    dataQualityHistory: await readDataQualityHistory(),
+    dataQualityHistory:
+      options?.includeDataQualityHistory === false ? null : await readDataQualityHistory(),
   };
 }
 
