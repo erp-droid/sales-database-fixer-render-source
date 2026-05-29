@@ -44,44 +44,148 @@ const EMPTY_CONTACT_FORM: BusinessAccountContactCreateRequest = {
   contactClass: "sales",
 };
 
+const CONTACT_FIELD_LABELS: Record<string, string> = {
+  displayName: "Name",
+  jobTitle: "Job Title",
+  email: "Email",
+  phone1: "Phone Number",
+  extension: "Extension",
+  contactClass: "Contact Class",
+};
+
 function readText(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function parseError(payload: unknown): string {
+function readFirstArrayText(value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  return value.map(readText).find(Boolean) ?? null;
+}
+
+function toHumanFieldLabel(field: string): string {
+  const compact = field.trim();
+  const key = compact.split(".").at(-1)?.replace(/\[\d+\]/g, "") ?? compact;
+  const mapped = CONTACT_FIELD_LABELS[key];
+  if (mapped) {
+    return mapped;
+  }
+
+  return key
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/^./, (value) => value.toUpperCase());
+}
+
+function summarizeText(value: string | null | undefined): string | null {
+  const text = value
+    ?.replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) {
+    return null;
+  }
+  return text.length > 260 ? `${text.slice(0, 260)}...` : text;
+}
+
+function parseError(
+  payload: unknown,
+  responseInfo?: {
+    status: number;
+    statusText: string;
+    rawText: string | null;
+  },
+): string {
   if (!payload || typeof payload !== "object") {
-    return "Request failed.";
+    const raw = summarizeText(responseInfo?.rawText);
+    if (raw) {
+      return raw;
+    }
+    return responseInfo
+      ? `Request failed (${responseInfo.status} ${responseInfo.statusText || "Unknown"}).`
+      : "Request failed.";
   }
 
   const record = payload as Record<string, unknown>;
   const errorValue = readText(record.error);
+  const messageValue = readText(record.message);
   const details = record.details;
 
   if (details && typeof details === "object") {
     const detailsRecord = details as Record<string, unknown>;
-    const modelState = detailsRecord.modelState;
-    if (modelState && typeof modelState === "object") {
-      for (const [field, value] of Object.entries(modelState as Record<string, unknown>)) {
-        if (Array.isArray(value)) {
-          const first = value.map(readText).find(Boolean);
-          if (first) {
-            return `${field}: ${first}`;
-          }
+    const fieldErrors = detailsRecord.fieldErrors;
+    if (fieldErrors && typeof fieldErrors === "object") {
+      for (const [field, value] of Object.entries(fieldErrors as Record<string, unknown>)) {
+        const first = readFirstArrayText(value);
+        if (first) {
+          return `${toHumanFieldLabel(field)}: ${first}`;
         }
       }
     }
+
+    const formErrors = readFirstArrayText(detailsRecord.formErrors);
+    if (formErrors) {
+      return formErrors;
+    }
+
+    const modelState = detailsRecord.modelState;
+    if (modelState && typeof modelState === "object") {
+      for (const [field, value] of Object.entries(modelState as Record<string, unknown>)) {
+        const first = readFirstArrayText(value);
+        if (first) {
+          return `${toHumanFieldLabel(field)}: ${first}`;
+        }
+      }
+    }
+
+    const detailMessage = readText(detailsRecord.message) ?? readText(detailsRecord.error);
+    if (detailMessage) {
+      return detailMessage;
+    }
   }
 
-  return errorValue ?? "Request failed.";
+  if (typeof details === "string" && details.trim()) {
+    return details.trim();
+  }
+
+  const raw = summarizeText(responseInfo?.rawText);
+  return (
+    errorValue ??
+    messageValue ??
+    raw ??
+    (responseInfo
+      ? `Request failed (${responseInfo.status} ${responseInfo.statusText || "Unknown"}).`
+      : "Request failed.")
+  );
 }
 
-async function readJsonResponse<T>(response: Response): Promise<T | null> {
-  const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
-  if (!contentType.includes("application/json")) {
-    return null;
+async function readResponsePayload<T>(response: Response): Promise<{
+  payload: T | null;
+  rawText: string | null;
+}> {
+  const rawText = (await response.text().catch(() => "")).trim();
+  if (!rawText) {
+    return {
+      payload: null,
+      rawText: null,
+    };
   }
 
-  return (await response.json().catch(() => null)) as T | null;
+  try {
+    return {
+      payload: JSON.parse(rawText) as T,
+      rawText,
+    };
+  } catch {
+    return {
+      payload: null,
+      rawText,
+    };
+  }
 }
 
 function isBusinessAccountContactCreateResponse(
@@ -226,6 +330,10 @@ export function CreateContactDrawer({
       setContactError("Email is required.");
       return;
     }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactForm.email.trim())) {
+      setContactError("Email must be a valid email address.");
+      return;
+    }
 
     const normalizedPhone = normalizePhoneForSave(contactForm.phone1);
     if (!normalizedPhone) {
@@ -254,12 +362,13 @@ export function CreateContactDrawer({
           },
           body: JSON.stringify({
             ...contactForm,
+            email: contactForm.email.trim(),
             extension: normalizedExtension,
             phone1: normalizedPhone,
           }),
         },
       );
-      const payload = await readJsonResponse<
+      const { payload, rawText } = await readResponsePayload<
         | BusinessAccountContactCreateResponse
         | BusinessAccountContactCreatePartialResponse
         | { error?: string }
@@ -285,7 +394,13 @@ export function CreateContactDrawer({
         return;
       }
 
-      throw new Error(parseError(payload));
+      throw new Error(
+        parseError(payload, {
+          status: response.status,
+          statusText: response.statusText,
+          rawText,
+        }),
+      );
     } catch (error) {
       setContactError(error instanceof Error ? error.message : "Unable to create contact.");
     } finally {
