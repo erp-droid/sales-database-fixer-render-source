@@ -20,7 +20,11 @@ import { logContactCreateAudit } from "@/lib/audit-log-store";
 import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { getEnv } from "@/lib/env";
-import { replaceReadModelAccountRows } from "@/lib/read-model/accounts";
+import { appendLocalContactRow } from "@/lib/local-account-rows";
+import {
+  readStoredBusinessAccountRowsFromReadModel,
+  replaceReadModelAccountRows,
+} from "@/lib/read-model/accounts";
 import {
   applyLocalAccountMetadataToRow,
   applyLocalAccountMetadataToRows,
@@ -54,6 +58,39 @@ function readBusinessAccountName(rawAccount: unknown): string {
   );
 }
 
+function includesNoEntitySatisfiesMessage(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  return value.toLowerCase().includes("no entity satisfies the condition");
+}
+
+function shouldFallbackToLocalContactCreate(error: unknown): boolean {
+  if (!(error instanceof HttpError)) {
+    return false;
+  }
+
+  if (includesNoEntitySatisfiesMessage(error.message)) {
+    return true;
+  }
+
+  const details = error.details;
+  if (!details || typeof details !== "object") {
+    return false;
+  }
+
+  const record = details as Record<string, unknown>;
+  return [
+    record.message,
+    record.Message,
+    record.error,
+    record.Error,
+    record.exceptionMessage,
+    record.ExceptionMessage,
+  ].some(includesNoEntitySatisfiesMessage);
+}
+
 export async function POST(
   request: NextRequest,
   context: RouteContext,
@@ -75,12 +112,85 @@ export async function POST(
       throw new HttpError(400, "Request body must be valid JSON.");
     });
     contactRequest = parseBusinessAccountContactCreatePayload(body);
+    const storedRows = readStoredBusinessAccountRowsFromReadModel(id);
+    const storedAnchorRow = storedRows[0] ?? null;
+    if (storedAnchorRow) {
+      auditBusinessAccountRecordId = storedAnchorRow.accountRecordId ?? storedAnchorRow.id;
+      auditBusinessAccountId = storedAnchorRow.businessAccountId;
+      auditCompanyName = storedAnchorRow.companyName;
+    }
 
-    const serverContext = await fetchContactMergeServerContext(
-      cookieValue,
-      id,
-      authCookieRefresh,
-    );
+    let serverContext: Awaited<ReturnType<typeof fetchContactMergeServerContext>>;
+    try {
+      serverContext = await fetchContactMergeServerContext(
+        cookieValue,
+        id,
+        authCookieRefresh,
+      );
+    } catch (error) {
+      const canFallback =
+        storedRows.length > 0 && shouldFallbackToLocalContactCreate(error);
+      if (!canFallback) {
+        throw error;
+      }
+
+      const fallbackBusinessAccountRecordId =
+        storedAnchorRow?.accountRecordId ?? storedAnchorRow?.id ?? id;
+      const fallbackBusinessAccountId = storedAnchorRow?.businessAccountId?.trim() ?? "";
+      if (!fallbackBusinessAccountId) {
+        throw new HttpError(
+          422,
+          "Business account ID is missing on this local account. Contact creation cannot continue.",
+        );
+      }
+
+      const localContact = appendLocalContactRow(storedRows, contactRequest);
+      const responseBody: BusinessAccountContactCreateResponse = {
+        created: true,
+        businessAccountRecordId: fallbackBusinessAccountRecordId,
+        businessAccountId: fallbackBusinessAccountId,
+        contactId: localContact.contactId,
+        accountRows: localContact.rows,
+        createdRow: localContact.createdRow,
+        setAsPrimary: true,
+        warnings: [
+          "Saved in Sales MeadowBrook only. This account is not currently available in Acumatica.",
+        ],
+      };
+
+      if (getEnv().READ_MODEL_ENABLED) {
+        replaceReadModelAccountRows(
+          fallbackBusinessAccountRecordId,
+          responseBody.accountRows,
+        );
+      }
+
+      logContactCreateAudit({
+        actor,
+        request: contactRequest,
+        resultCode: "succeeded",
+        businessAccountRecordId: responseBody.businessAccountRecordId,
+        businessAccountId: responseBody.businessAccountId,
+        companyName: responseBody.createdRow.companyName,
+        contactId: responseBody.contactId,
+        createdRow: responseBody.createdRow,
+      });
+
+      const response = NextResponse.json(
+        {
+          ...responseBody,
+          accountRows: applyLocalAccountMetadataToRows(responseBody.accountRows),
+          createdRow:
+            applyLocalAccountMetadataToRow(responseBody.createdRow) ??
+            responseBody.createdRow,
+        },
+        { status: 201 },
+      );
+      if (authCookieRefresh.value) {
+        setAuthCookie(response, authCookieRefresh.value);
+      }
+      return response;
+    }
     const currentRawAccount = serverContext.rawAccount;
     const businessAccountId = readBusinessAccountId(currentRawAccount);
     if (!businessAccountId) {

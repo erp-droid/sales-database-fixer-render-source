@@ -15,6 +15,8 @@ const resolveDeferredActionActor = vi.fn(async () => ({
   loginName: "jserrano",
   name: "Jorge Serrano",
 }));
+const appendLocalContactRow = vi.fn();
+const readStoredBusinessAccountRowsFromReadModel = vi.fn(() => []);
 const replaceReadModelAccountRows = vi.fn();
 const getEnv = vi.fn(() => ({
   READ_MODEL_ENABLED: false,
@@ -74,11 +76,16 @@ vi.mock("@/lib/deferred-action-actor", () => ({
   resolveDeferredActionActor,
 }));
 
+vi.mock("@/lib/local-account-rows", () => ({
+  appendLocalContactRow,
+}));
+
 vi.mock("@/lib/env", () => ({
   getEnv,
 }));
 
 vi.mock("@/lib/read-model/accounts", () => ({
+  readStoredBusinessAccountRowsFromReadModel,
   replaceReadModelAccountRows,
 }));
 
@@ -131,6 +138,7 @@ describe("POST /api/business-accounts/[id]/contacts", () => {
     getEnv.mockReturnValue({
       READ_MODEL_ENABLED: false,
     });
+    readStoredBusinessAccountRowsFromReadModel.mockReturnValue([]);
     fetchContactMergeServerContext.mockResolvedValue({
       rawAccount: {
         AccountCD: { value: "B200000003" },
@@ -189,6 +197,108 @@ describe("POST /api/business-accounts/[id]/contacts", () => {
       createdRow: expect.objectContaining({
         primaryContactExtension: "31",
       }),
+    });
+  });
+
+  it("falls back to local read-model contact creation when Acumatica cannot resolve the account", async () => {
+    const { HttpError } = await import("@/lib/errors");
+    fetchContactMergeServerContext.mockRejectedValue(
+      new HttpError(500, "No entity satisfies the condition.", {
+        message: "An error has occurred.",
+        exceptionMessage: "No entity satisfies the condition.",
+      }),
+    );
+    getEnv.mockReturnValue({
+      READ_MODEL_ENABLED: true,
+    });
+    const storedRows = [
+      {
+        ...buildRow(),
+        id: "record-local",
+        accountRecordId: "record-local",
+        rowKey: "record-local:primary",
+        contactId: null,
+        primaryContactId: null,
+        isPrimaryContact: false,
+        businessAccountId: "L6IMP00126",
+        companyName: "Everest Steel Ltd",
+      },
+    ];
+    readStoredBusinessAccountRowsFromReadModel.mockReturnValue(storedRows);
+    appendLocalContactRow.mockReturnValue({
+      contactId: -170001,
+      rows: [
+        {
+          ...storedRows[0],
+          primaryContactName: "Indrani",
+          primaryContactJobTitle: "CPA",
+          primaryContactPhone: "905-670-7373",
+          primaryContactEmail: "indrani@evereststeel.ca",
+          primaryContactId: -170001,
+          isPrimaryContact: false,
+        },
+        {
+          ...storedRows[0],
+          rowKey: "record-local:contact:-170001",
+          contactId: -170001,
+          primaryContactName: "Indrani",
+          primaryContactJobTitle: "CPA",
+          primaryContactPhone: "905-670-7373",
+          primaryContactEmail: "indrani@evereststeel.ca",
+          primaryContactId: -170001,
+          isPrimaryContact: true,
+        },
+      ],
+      createdRow: {
+        ...storedRows[0],
+        rowKey: "record-local:contact:-170001",
+        contactId: -170001,
+        primaryContactName: "Indrani",
+        primaryContactJobTitle: "CPA",
+        primaryContactPhone: "905-670-7373",
+        primaryContactEmail: "indrani@evereststeel.ca",
+        primaryContactId: -170001,
+        isPrimaryContact: true,
+      },
+    });
+
+    const { POST } = await import("@/app/api/business-accounts/[id]/contacts/route");
+    const response = await POST(
+      new NextRequest("http://localhost/api/business-accounts/record-local/contacts", {
+        method: "POST",
+        body: JSON.stringify({
+          displayName: "Indrani",
+          jobTitle: "CPA",
+          email: "indrani@evereststeel.ca",
+          phone1: "9056707373",
+          extension: null,
+          contactClass: "sales",
+        }),
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+      {
+        params: Promise.resolve({
+          id: "record-local",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(201);
+    expect(createContact).not.toHaveBeenCalled();
+    expect(appendLocalContactRow).toHaveBeenCalledTimes(1);
+    expect(replaceReadModelAccountRows).toHaveBeenCalledWith(
+      "record-local",
+      expect.any(Array),
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      created: true,
+      businessAccountId: "L6IMP00126",
+      contactId: -170001,
+      warnings: [
+        "Saved in Sales MeadowBrook only. This account is not currently available in Acumatica.",
+      ],
     });
   });
 });
