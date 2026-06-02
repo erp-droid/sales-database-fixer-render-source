@@ -57,6 +57,7 @@ const DATE_KEYS = new Set([
 ]);
 const NOTE_KEYS = new Set(["notes", "contactNotes"]);
 const DB_IDENTIFIER_COLUMNS = new Set(["row_key", "contact_id"]);
+const DB_DERIVED_COLUMNS = new Set(["search_text", "address_key"]);
 const DB_BOOLEAN_COLUMNS = new Set(["is_primary_contact"]);
 const DB_DATE_COLUMNS = new Set(["last_modified_iso", "updated_at"]);
 const DB_NOTE_COLUMNS = new Set(["notes"]);
@@ -262,7 +263,11 @@ function mergeRows(target, source) {
   let changed = false;
 
   for (const column of COLUMNS) {
-    if (column === "payload_json" || DB_IDENTIFIER_COLUMNS.has(column)) {
+    if (
+      column === "payload_json" ||
+      DB_IDENTIFIER_COLUMNS.has(column) ||
+      DB_DERIVED_COLUMNS.has(column)
+    ) {
       continue;
     }
 
@@ -315,6 +320,13 @@ function rowSummary(row) {
     primaryContactEmail: row.primary_contact_email,
     primaryContactPhone: row.primary_contact_phone,
   };
+}
+
+
+function isKnownVerificationRow(row) {
+  const name = normalizeComparable("primary_contact_name", row.primary_contact_name);
+  const email = normalizeComparable("primary_contact_email", row.primary_contact_email);
+  return name.startsWith("deploy verify") || email.startsWith("deploy-verify");
 }
 
 function chooseKeepRow(rows) {
@@ -443,6 +455,15 @@ try {
       const target = rowsByKey.get(item.target.row_key);
       const source = rowsByKey.get(item.source.row_key);
       if (!target || !source) {
+        continue;
+      }
+
+      if (item.type === "placeholder" && isKnownVerificationRow(source)) {
+        if (apply) {
+          deleteSource.run(source.row_key);
+        }
+        rowsByKey.delete(source.row_key);
+        report.deletedRows += 1;
         continue;
       }
 
