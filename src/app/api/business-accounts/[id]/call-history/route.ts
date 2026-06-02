@@ -17,7 +17,6 @@ import { HttpError, getErrorMessage } from "@/lib/errors";
 import {
   readBusinessAccountDetailFromReadModel,
 } from "@/lib/read-model/accounts";
-import { maybeTriggerReadModelSync } from "@/lib/read-model/sync";
 import type { BusinessAccountRow } from "@/types/business-account";
 
 type RouteContext = {
@@ -71,7 +70,6 @@ export async function GET(
     let selectedRow: BusinessAccountRow | null = null;
 
     if (getEnv().READ_MODEL_ENABLED) {
-      maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
       selectedRow = readBusinessAccountDetailFromReadModel(id, requestedContactId)?.row ?? null;
       if (!selectedRow) {
         throw new HttpError(

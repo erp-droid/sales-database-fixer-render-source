@@ -20,7 +20,8 @@ function generateLocalBusinessAccountId(): string {
 }
 
 function generateLocalContactId(): number {
-  return -Math.floor(Date.now() % 1_000_000_000);
+  const value = Number.parseInt(randomUUID().slice(0, 8), 16);
+  return -Math.max(1, value);
 }
 
 function toAccountType(classId: BusinessAccountClassCode): "Customer" | "Lead" {
@@ -191,9 +192,21 @@ export function appendLocalContactRow(
   const primaryEmail = request.email.trim() || null;
   const modifiedAt = nowIso();
 
-  const updatedRows = rows.map((row) => ({
+  const existingContactRows = rows.filter(
+    (row) => row.contactId !== null && row.contactId !== undefined,
+  );
+  const updatedRows = existingContactRows.map((row) => ({
     ...row,
     isPrimaryContact: false,
+    primaryContactId: contactId,
+    lastModifiedIso: modifiedAt,
+  }));
+
+  const createdRow: BusinessAccountRow = {
+    ...anchor,
+    rowKey: `${anchor.accountRecordId ?? anchor.id}:contact:${contactId}`,
+    contactId,
+    isPrimaryContact: true,
     primaryContactName: primaryName,
     primaryContactJobTitle: request.jobTitle.trim() || null,
     primaryContactPhone: primaryPhone,
@@ -202,21 +215,11 @@ export function appendLocalContactRow(
     primaryContactEmail: primaryEmail,
     primaryContactId: contactId,
     lastModifiedIso: modifiedAt,
-  }));
-
-  const createdRow: BusinessAccountRow = {
-    ...updatedRows[0],
-    rowKey: `${anchor.accountRecordId ?? anchor.id}:contact:${contactId}`,
-    contactId,
-    isPrimaryContact: true,
   };
 
   return {
     contactId,
-    rows: [
-      ...updatedRows,
-      createdRow,
-    ],
+    rows: [...updatedRows, createdRow],
     createdRow,
   };
 }

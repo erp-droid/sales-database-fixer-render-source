@@ -133,6 +133,41 @@ describe("readBusinessAccountDetailFromReadModel", () => {
     expect(detail?.row.primaryContactJobTitle).toBe("Owner");
   });
 
+  it("removes contactless placeholder rows when a concrete row exists for the same contact", async () => {
+    const readModelAccounts = await import("@/lib/read-model/accounts");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    closeDb = () => getReadModelDb().close();
+
+    readModelAccounts.replaceAllAccountRows([
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+        rowKey: "account-1:contact:row",
+        contactId: null,
+        primaryContactId: 202,
+        primaryContactName: "Duplicated Contact",
+        primaryContactEmail: "duplicate@example.com",
+        isPrimaryContact: false,
+      }),
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+        rowKey: "account-1:contact:202",
+        contactId: 202,
+        primaryContactId: 202,
+        primaryContactName: "Duplicated Contact",
+        primaryContactEmail: "duplicate@example.com",
+        isPrimaryContact: true,
+      }),
+    ]);
+
+    const rows = readModelAccounts.readStoredBusinessAccountRowsFromReadModel("account-1");
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.rowKey).toBe("account-1:contact:202");
+    expect(rows[0]?.contactId).toBe(202);
+  });
+
   it("reloads rows when sqlite changes outside the current process cache", async () => {
     const readModelAccounts = await import("@/lib/read-model/accounts");
     const { getReadModelDb } = await import("@/lib/read-model/db");

@@ -1445,6 +1445,80 @@ async function readJsonResponse<T>(response: Response): Promise<T | null> {
   return (await response.json().catch(() => null)) as T | null;
 }
 
+function isRetryableResponseStatus(status: number): boolean {
+  return [408, 425, 429, 500, 502, 503, 504].includes(status);
+}
+
+async function waitForRetryDelay(milliseconds: number): Promise<void> {
+  if (milliseconds <= 0) {
+    return;
+  }
+
+  await new Promise((resolve) => {
+    window.setTimeout(resolve, milliseconds);
+  });
+}
+
+async function fetchJsonResponseWithRetry<T>(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  options: {
+    retries?: number;
+    retryDelaysMs?: number[];
+  } = {},
+): Promise<{ response: Response; payload: T | null }> {
+  const retries = Math.max(0, options.retries ?? 2);
+  const retryDelaysMs = options.retryDelaysMs ?? [300, 900];
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const response = await fetch(input, init);
+      const payload = await readJsonResponse<T>(response);
+      if (
+        response.ok ||
+        !isRetryableResponseStatus(response.status) ||
+        attempt === retries
+      ) {
+        return { response, payload };
+      }
+    } catch (error) {
+      if (init.signal instanceof AbortSignal && init.signal.aborted) {
+        throw error;
+      }
+
+      lastError = error;
+      if (attempt === retries) {
+        throw error;
+      }
+    }
+
+    await waitForRetryDelay(retryDelaysMs[attempt] ?? retryDelaysMs.at(-1) ?? 0);
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Request failed.");
+}
+
+function formatResponseError(
+  response: Response,
+  payload: unknown,
+  fallbackMessage: string,
+): string {
+  const parsed = parseError(payload);
+  if (parsed !== "Request failed.") {
+    return parsed;
+  }
+
+  const statusText = response.statusText.trim();
+  if (response.status > 0) {
+    return `${fallbackMessage} Server returned HTTP ${response.status}${
+      statusText ? ` ${statusText}` : ""
+    }.`;
+  }
+
+  return fallbackMessage;
+}
+
 function isContactEnhanceCandidate(value: unknown): value is ContactEnhanceCandidate {
   if (!value || typeof value !== "object") {
     return false;
@@ -3875,7 +3949,9 @@ export function AccountsClient({
 
     async function loadCallHistory() {
       try {
-        const response = await fetch(
+        const { response, payload } = await fetchJsonResponseWithRetry<
+          BusinessAccountCallHistoryResponse | { error?: string }
+        >(
           buildBusinessAccountCallHistoryUrl(
             businessAccountRecordId,
             selectedContactId,
@@ -3885,11 +3961,10 @@ export function AccountsClient({
             signal: controller.signal,
           },
         );
-        const payload = await readJsonResponse<
-          BusinessAccountCallHistoryResponse | { error?: string }
-        >(response);
         if (!response.ok) {
-          throw new Error(parseError(payload));
+          throw new Error(
+            formatResponseError(response, payload, "Unable to load prior calls."),
+          );
         }
         if (!isBusinessAccountCallHistoryResponse(payload)) {
           throw new Error("Unexpected call history response.");
@@ -3953,16 +4028,15 @@ export function AccountsClient({
 
     async function loadAuditHistory() {
       try {
-        const response = await fetch(`/api/audit?${params.toString()}`, {
+        const { response, payload } = await fetchJsonResponseWithRetry<
+          AuditLogResponse | { error?: string }
+        >(`/api/audit?${params.toString()}`, {
           cache: "no-store",
           signal: controller.signal,
         });
-        const payload = await readJsonResponse<AuditLogResponse | { error?: string }>(response);
         if (!response.ok) {
           throw new Error(
-            payload && "error" in payload && payload.error
-              ? payload.error
-              : "Unable to load audit history.",
+            formatResponseError(response, payload, "Unable to load audit history."),
           );
         }
         if (!payload || !("items" in payload)) {

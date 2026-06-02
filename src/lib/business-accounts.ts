@@ -727,10 +727,57 @@ export function isPlaceholderCompanyPhoneRow(row: BusinessAccountRow): boolean {
   return !isAssociatedContactRow(row) && hasText(row.companyPhone);
 }
 
+export function removeContactlessPrimaryContactDuplicateRows(
+  rows: BusinessAccountRow[],
+): BusinessAccountRow[] {
+  if (rows.length <= 1) {
+    return rows;
+  }
+
+  const contactIdsByAccount = new Map<string, Set<number>>();
+  rows.forEach((row, index) => {
+    if (row.contactId === null || row.contactId === undefined) {
+      return;
+    }
+
+    const accountKey = accountPrimaryKey(row, index);
+    const existing = contactIdsByAccount.get(accountKey);
+    if (existing) {
+      existing.add(row.contactId);
+      return;
+    }
+
+    contactIdsByAccount.set(accountKey, new Set([row.contactId]));
+  });
+
+  let changed = false;
+  const nextRows = rows.filter((row, index) => {
+    if (row.contactId !== null && row.contactId !== undefined) {
+      return true;
+    }
+
+    if (row.primaryContactId === null || row.primaryContactId === undefined) {
+      return true;
+    }
+
+    const accountContactIds = contactIdsByAccount.get(accountPrimaryKey(row, index));
+    if (!accountContactIds?.has(row.primaryContactId)) {
+      return true;
+    }
+
+    changed = true;
+    return false;
+  });
+
+  return changed ? nextRows : rows;
+}
+
 export function canonicalizeBusinessAccountRows(
   rows: BusinessAccountRow[],
 ): BusinessAccountRow[] {
-  const uniqueRows = dedupeBusinessAccountRows(rows);
+  const uniqueRows = dedupeBusinessAccountRows(
+    removeContactlessPrimaryContactDuplicateRows(rows),
+  );
   if (uniqueRows.length === 0) {
     return uniqueRows;
   }

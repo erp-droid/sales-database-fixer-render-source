@@ -1,6 +1,7 @@
 import {
   normalizeBusinessAccountRowClassification,
   queryBusinessAccounts,
+  removeContactlessPrimaryContactDuplicateRows,
   resolveCompanyPhone,
 } from "@/lib/business-accounts";
 import { applyLastCalledAtToBusinessAccountRows } from "@/lib/business-account-call-history";
@@ -117,9 +118,11 @@ function prepareRowsForStorage(
   nextRows: BusinessAccountRow[],
   existingRows: BusinessAccountRow[] = [],
 ): BusinessAccountRow[] {
-  return applyLastCalledAtToBusinessAccountRows(
-    inheritSupplementalAccountMetadata(nextRows, existingRows),
-  ).map(normalizeStoredSupplementalFields);
+  return removeContactlessPrimaryContactDuplicateRows(
+    applyLastCalledAtToBusinessAccountRows(
+      inheritSupplementalAccountMetadata(nextRows, existingRows),
+    ).map(normalizeStoredSupplementalFields),
+  );
 }
 
 function parseStoredRow(payload: string): BusinessAccountRow | null {
@@ -131,10 +134,12 @@ function parseStoredRow(payload: string): BusinessAccountRow | null {
 }
 
 function parseStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
-  return rows
-    .map((row) => parseStoredRow(row.payload_json))
-    .filter((row): row is BusinessAccountRow => row !== null)
-    .map(normalizeBusinessAccountRowClassification);
+  return removeContactlessPrimaryContactDuplicateRows(
+    rows
+      .map((row) => parseStoredRow(row.payload_json))
+      .filter((row): row is BusinessAccountRow => row !== null)
+      .map(normalizeBusinessAccountRowClassification),
+  );
 }
 
 export function readReadModelRowsSnapshotVersion(): string {
