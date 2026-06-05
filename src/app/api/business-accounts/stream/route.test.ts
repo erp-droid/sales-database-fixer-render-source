@@ -103,4 +103,24 @@ describe("GET /api/business-accounts/stream limits", () => {
 
     await closeBody(first);
   });
+
+  it("sends a retry hint on the ready event", async () => {
+    process.env.BUSINESS_ACCOUNTS_STREAM_RETRY_AFTER_SECONDS = "12";
+
+    const { GET } = await import("@/app/api/business-accounts/stream/route");
+
+    const response = await GET(buildRequest("203.0.113.30"));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("X-Accel-Buffering")).toBe("no");
+
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    const firstChunk = await reader!.read();
+    const text = new TextDecoder().decode(firstChunk.value);
+
+    expect(text).toContain("retry: 12000");
+    expect(text).toContain("event: ready");
+
+    await reader!.cancel();
+  });
 });

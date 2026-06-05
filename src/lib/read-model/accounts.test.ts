@@ -168,6 +168,69 @@ describe("readBusinessAccountDetailFromReadModel", () => {
     expect(rows[0]?.contactId).toBe(202);
   });
 
+  it("reads account details directly from sqlite instead of the full snapshot cache", async () => {
+    const readModelAccounts = await import("@/lib/read-model/accounts");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    closeDb = () => getReadModelDb().close();
+
+    readModelAccounts.replaceAllAccountRows([
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+        rowKey: "account-1:contact:202",
+        contactId: 202,
+        isPrimaryContact: true,
+        primaryContactName: "Cached Contact",
+        primaryContactPhone: "905-555-0000",
+      }),
+      buildRow({
+        id: "account-2",
+        accountRecordId: "account-2",
+        rowKey: "account-2:contact:303",
+        contactId: 303,
+        isPrimaryContact: true,
+        primaryContactName: "Other Contact",
+      }),
+    ]);
+
+    const cachedRows = readModelAccounts.readAllAccountRowsFromReadModel();
+    expect(cachedRows.find((row) => row.accountRecordId === "account-1")?.primaryContactPhone).toBe(
+      "905-555-0000",
+    );
+
+    const replacementRow = buildRow({
+      id: "account-1",
+      accountRecordId: "account-1",
+      rowKey: "account-1:contact:202",
+      contactId: 202,
+      isPrimaryContact: true,
+      primaryContactName: "Fresh Contact",
+      primaryContactPhone: "905-555-9999",
+    });
+
+    getReadModelDb()
+      .prepare(
+        `
+        UPDATE account_rows
+        SET payload_json = ?,
+            primary_contact_name = ?,
+            primary_contact_phone = ?
+        WHERE row_key = ?
+        `,
+      )
+      .run(
+        JSON.stringify(replacementRow),
+        replacementRow.primaryContactName,
+        replacementRow.primaryContactPhone,
+        replacementRow.rowKey,
+      );
+
+    const detail = readModelAccounts.readBusinessAccountDetailFromReadModel("account-1", 202);
+
+    expect(detail?.row.primaryContactName).toBe("Fresh Contact");
+    expect(detail?.row.primaryContactPhone).toBe("905-555-9999");
+  });
+
   it("reloads rows when sqlite changes outside the current process cache", async () => {
     const readModelAccounts = await import("@/lib/read-model/accounts");
     const { getReadModelDb } = await import("@/lib/read-model/db");

@@ -142,6 +142,14 @@ function parseStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
   );
 }
 
+function applyReadModelRowDecorations(rows: BusinessAccountRow[]): BusinessAccountRow[] {
+  return applySharedContactNotesToRows(
+    applyLastCalledAtToBusinessAccountRows(
+      applyLocalAccountMetadataToRows(applyDeferredActionsToRows(rows)),
+    ),
+  );
+}
+
 export function readReadModelRowsSnapshotVersion(): string {
   const db = getReadModelDb();
   const accountRow = db
@@ -213,11 +221,7 @@ export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
     )
     .all() as StoredAccountRow[];
 
-  allRowsCache = parseStoredRows(rows);
-  allRowsCache = applyDeferredActionsToRows(allRowsCache);
-  allRowsCache = applyLocalAccountMetadataToRows(allRowsCache);
-  allRowsCache = applyLastCalledAtToBusinessAccountRows(allRowsCache);
-  allRowsCache = applySharedContactNotesToRows(allRowsCache);
+  allRowsCache = applyReadModelRowDecorations(parseStoredRows(rows));
   allRowsCacheVersion = nextVersion;
 
   return allRowsCache;
@@ -547,10 +551,24 @@ export function readBusinessAccountRowsFromReadModel(
   accountRecordId: string,
 ): BusinessAccountRow[] {
   const normalized = accountRecordId.trim();
-  return readAllAccountRowsFromReadModel().filter((row) => {
-    const rowAccountKey = row.accountRecordId?.trim() || row.id.trim();
-    return rowAccountKey === normalized;
-  });
+  if (!normalized) {
+    return [];
+  }
+
+  const db = getReadModelDb();
+  const rows = db
+    .prepare(
+      `
+      SELECT payload_json
+      FROM account_rows
+      WHERE account_record_id = ?
+         OR id = ?
+      ORDER BY updated_at DESC, row_key ASC
+      `,
+    )
+    .all(normalized, normalized) as StoredAccountRow[];
+
+  return applyReadModelRowDecorations(parseStoredRows(rows));
 }
 
 export function readStoredBusinessAccountRowsFromReadModel(

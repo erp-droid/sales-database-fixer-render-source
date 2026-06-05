@@ -2787,7 +2787,6 @@ export function AccountsClient({
   const resolvedPrimaryAccountIdsRef = useRef(new Set<string>());
   const resolvingSalesRepAccountIdsRef = useRef(new Set<string>());
   const resolvedSalesRepAccountIdsRef = useRef(new Set<string>());
-  const meetingOptionsPrefetchKeyRef = useRef<string | null>(null);
   const employeesFetchAttemptedRef = useRef(false);
   const employeesFetchRequestRef = useRef(0);
   const notesFieldRef = useRef<HTMLTextAreaElement | null>(null);
@@ -2831,13 +2830,13 @@ export function AccountsClient({
       }),
     [allRows, lastEmailedByAccountKey],
   );
-  const lastEmailedLookupAccounts = useMemo(
-    () => buildLastEmailedLookupAccounts(allRows),
+  const lastEmailedLookupSignature = useMemo(
+    () => JSON.stringify(buildLastEmailedLookupAccounts(allRows)),
     [allRows],
   );
-  const lastEmailedLookupSignature = useMemo(
-    () => JSON.stringify(lastEmailedLookupAccounts),
-    [lastEmailedLookupAccounts],
+  const lastEmailedLookupAccounts = useMemo(
+    () => JSON.parse(lastEmailedLookupSignature) as MailLastEmailedLookupAccount[],
+    [lastEmailedLookupSignature],
   );
   const debouncedQ = useDebouncedValue(q, 180);
   const debouncedHeaderFilters = useDebouncedValue(headerFilters, 180);
@@ -3004,32 +3003,6 @@ export function AccountsClient({
       setIsLoadingMeetingOptions(false);
     }
   }
-
-  useEffect(() => {
-    if (
-      !session?.authenticated ||
-      allRows.length === 0 ||
-      isCreateMeetingDrawerOpen ||
-      isLoadingMeetingOptions
-    ) {
-      return;
-    }
-
-    const prefetchKey = lastSyncedAt ?? "__initial__";
-    if (meetingOptionsPrefetchKeyRef.current === prefetchKey) {
-      return;
-    }
-
-    meetingOptionsPrefetchKeyRef.current = prefetchKey;
-    void loadMeetingOptions(Boolean(meetingOptions));
-  }, [
-    allRows.length,
-    isCreateMeetingDrawerOpen,
-    isLoadingMeetingOptions,
-    lastSyncedAt,
-    meetingOptions,
-    session?.authenticated,
-  ]);
 
   function openMailComposer(initialState: GmailComposeInitialState | null) {
     closeTransientMenus();
@@ -3215,7 +3188,6 @@ export function AccountsClient({
     return () => controller.abort();
   }, [
     lastEmailedLookupAccounts,
-    lastEmailedLookupSignature,
     lastEmailedRefreshVersion,
     session?.authenticated,
   ]);
@@ -3923,7 +3895,7 @@ export function AccountsClient({
       eventSource.removeEventListener("changed", handleChanged as EventListener);
       eventSource.close();
     };
-  }, [refreshLiveUpdatedAccount, refreshSnapshotFromLive, session?.authenticated]);
+  }, [session?.authenticated]);
 
   useEffect(() => {
     if (!session?.authenticated || !selected) {

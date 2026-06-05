@@ -29,8 +29,16 @@ const STREAM_RETRY_AFTER_SECONDS = readBoundedPositiveInteger(
 let activeStreamCount = 0;
 const activeStreamCountByIp = new Map<string, number>();
 
-function writeSseEvent(event: string, payload: Record<string, unknown>): Uint8Array {
-  return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+function writeSseEvent(
+  event: string,
+  payload: Record<string, unknown>,
+  options: { retryMs?: number } = {},
+): Uint8Array {
+  const retry =
+    options.retryMs && Number.isFinite(options.retryMs)
+      ? `retry: ${Math.trunc(options.retryMs)}\n`
+      : "";
+  return encoder.encode(`${retry}event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
 function readBoundedPositiveInteger(
@@ -183,6 +191,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         controller.enqueue(
           writeSseEvent("ready", {
             at: new Date().toISOString(),
+          }, {
+            retryMs: STREAM_RETRY_AFTER_SECONDS * 1000,
           }),
         );
 
@@ -226,6 +236,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
       },
     });
   } catch (error) {

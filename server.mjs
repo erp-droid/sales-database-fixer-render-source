@@ -872,6 +872,15 @@ server.get("/api/healthz", (req, res) => {
   }
 
   if (!serviceReady) {
+    if (isNextRuntimeReady()) {
+      res.set("Retry-After", "2");
+      res.status(200).json({
+        ...payload,
+        message: "Startup health probe accepted. Remaining warmup probes are still running.",
+      });
+      return;
+    }
+
     res.set("Retry-After", "2");
     res.status(503).json({
       ...payload,
@@ -890,6 +899,11 @@ server.head("/api/healthz", (req, res) => {
   }
 
   if (!serviceReady) {
+    if (isNextRuntimeReady()) {
+      res.status(200).end();
+      return;
+    }
+
     res.set("Retry-After", "2");
     res.status(503).end();
     return;
