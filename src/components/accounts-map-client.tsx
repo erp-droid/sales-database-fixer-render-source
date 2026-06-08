@@ -787,20 +787,20 @@ function buildMapViewMetrics(rows: BusinessAccountRow[], fallbackCompanyCount: n
       tone: "green",
     },
     {
-      id: "contacts",
-      label: "Contacts in view",
-      value: contactCount.toLocaleString(),
-      meta: "Rows with a contact",
-      icon: "contacts",
-      tone: "blue",
-    },
-    {
       id: "company-phones",
       label: "Company phones",
       value: companyPhoneValues.size.toLocaleString(),
       meta: "Company phone numbers",
       icon: "phone",
       tone: "purple",
+    },
+    {
+      id: "contacts",
+      label: "Contacts in view",
+      value: contactCount.toLocaleString(),
+      meta: "Rows with a contact",
+      icon: "contacts",
+      tone: "blue",
     },
     {
       id: "contact-phones",
