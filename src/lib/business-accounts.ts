@@ -52,6 +52,7 @@ type QueryOptions = {
   filterNotes?: string;
   filterCategory?: Category;
   filterLastCalled?: string;
+  filterLastCalendarInvited?: string;
   filterLastEmailed?: string;
   filterLastModified?: string;
   sortBy?: SortBy;
@@ -451,6 +452,10 @@ function mergeBusinessAccountRows(
     category: incoming.category ?? existing.category,
     notes: pickPreferredText(existing.notes, incoming.notes),
     lastCalledAt: pickPreferredText(existing.lastCalledAt, incoming.lastCalledAt),
+    lastCalendarInvitedAt: pickPreferredText(
+      existing.lastCalendarInvitedAt,
+      incoming.lastCalendarInvitedAt,
+    ),
     lastEmailedAt: pickPreferredText(existing.lastEmailedAt, incoming.lastEmailedAt),
     lastModifiedIso: pickPreferredText(existing.lastModifiedIso, incoming.lastModifiedIso),
   };
@@ -1616,6 +1621,8 @@ export function normalizeBusinessAccount(account: unknown): BusinessAccountRow {
     primaryContactId: contact.id,
     category: extractCategory(account),
     notes: contact.notes ?? accountNote,
+    lastCalledAt: null,
+    lastCalendarInvitedAt: null,
     lastEmailedAt: null,
     lastModifiedIso: readNullableString(account, "LastModifiedDateTime"),
   };
@@ -1814,6 +1821,15 @@ export function queryBusinessAccounts(
       return false;
     }
 
+    if (
+      !includesLastModifiedFilter(
+        row.lastCalendarInvitedAt ?? null,
+        options.filterLastCalendarInvited,
+      )
+    ) {
+      return false;
+    }
+
     if (!includesLastModifiedFilter(row.lastEmailedAt ?? null, options.filterLastEmailed)) {
       return false;
     }
@@ -1846,6 +1862,7 @@ export function queryBusinessAccounts(
       row.primaryContactEmail,
       row.notes,
       row.lastCalledAt,
+      row.lastCalendarInvitedAt,
       row.lastEmailedAt,
       row.businessAccountId,
       row.companyDescription,

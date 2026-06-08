@@ -18,6 +18,8 @@ const readBusinessAccountDetailFromReadModel = vi.fn(() => ({
     companyName: "Alpha Foods",
   },
 }));
+const markReadModelCalendarInviteSent = vi.fn(() => 1);
+const publishBusinessAccountChanged = vi.fn();
 const readRecordIdentity = vi.fn((record: Record<string, unknown>) => {
   const id = record.id;
   if (typeof id === "string" && id.trim()) {
@@ -69,7 +71,12 @@ vi.mock("@/lib/audit-log-store", () => ({
 }));
 
 vi.mock("@/lib/read-model/accounts", () => ({
+  markReadModelCalendarInviteSent,
   readBusinessAccountDetailFromReadModel,
+}));
+
+vi.mock("@/lib/business-account-live", () => ({
+  publishBusinessAccountChanged,
 }));
 
 function buildRequest(
@@ -123,6 +130,7 @@ describe("POST /api/meetings", () => {
     requireAuthCookieValue.mockReturnValue("cookie");
     getStoredLoginName.mockReturnValue("jserrano");
     readGoogleCalendarInviteAuthority.mockReturnValue("google");
+    markReadModelCalendarInviteSent.mockReturnValue(1);
     upsertMeetingBooking.mockReset();
     upsertMeetingAuditEvent.mockReset();
     upsertMeetingBooking.mockImplementation((input: Record<string, unknown>) => ({
@@ -255,6 +263,15 @@ describe("POST /api/meetings", () => {
       }),
       { notifyReason: "meeting-create" },
     );
+    expect(markReadModelCalendarInviteSent).toHaveBeenCalledWith({
+      contactIds: [157497, 157498, 157499],
+    });
+    expect(publishBusinessAccountChanged).toHaveBeenCalledWith({
+      accountRecordId: "record-1",
+      businessAccountId: "BA0001",
+      targetContactId: 157497,
+      reason: "calendar-invite-sent",
+    });
 
     const primaryPayloadVariants = createEvent.mock.calls[0]?.[1] as Array<Record<string, unknown>>;
     expect(primaryPayloadVariants[0]).not.toHaveProperty("Attendees");
@@ -300,6 +317,9 @@ describe("POST /api/meetings", () => {
       }),
     );
     expect(upsertMeetingAuditEvent).toHaveBeenCalledTimes(1);
+    expect(markReadModelCalendarInviteSent).toHaveBeenCalledWith({
+      contactIds: [157497, 157498],
+    });
 
     const primaryPayloadVariants = createEvent.mock.calls[0]?.[1] as Array<Record<string, unknown>>;
     expect(primaryPayloadVariants[0]?.Attendees).toHaveLength(3);
@@ -331,6 +351,9 @@ describe("POST /api/meetings", () => {
         meetingSummary: "Sample drop off",
       }),
     );
+    expect(markReadModelCalendarInviteSent).toHaveBeenCalledWith({
+      contactIds: [157497, 157498],
+    });
   });
 
   it("rejects organizer contacts that do not match the signed-in user", async () => {
@@ -360,6 +383,7 @@ describe("POST /api/meetings", () => {
     expect(createMeetingInviteInGoogleCalendar).not.toHaveBeenCalled();
     expect(createEvent).not.toHaveBeenCalled();
     expect(upsertMeetingBooking).not.toHaveBeenCalled();
+    expect(markReadModelCalendarInviteSent).not.toHaveBeenCalled();
   });
 
   it("fails before Acumatica writes when Google invite creation fails", async () => {
@@ -377,6 +401,7 @@ describe("POST /api/meetings", () => {
     expect(createEvent).not.toHaveBeenCalled();
     expect(deleteMeetingInviteFromGoogleCalendar).not.toHaveBeenCalled();
     expect(upsertMeetingBooking).not.toHaveBeenCalled();
+    expect(markReadModelCalendarInviteSent).not.toHaveBeenCalled();
   });
 
   it("rolls back the Google invite when the primary Acumatica event create fails", async () => {
@@ -399,5 +424,6 @@ describe("POST /api/meetings", () => {
       "google-event-1",
     );
     expect(upsertMeetingBooking).not.toHaveBeenCalled();
+    expect(markReadModelCalendarInviteSent).not.toHaveBeenCalled();
   });
 });

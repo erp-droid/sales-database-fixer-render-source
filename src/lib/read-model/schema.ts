@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS account_rows (
   primary_contact_id INTEGER,
   category TEXT,
   notes TEXT,
+  last_called_at TEXT,
+  last_calendar_invited_at TEXT,
   last_modified_iso TEXT,
   search_text TEXT NOT NULL,
   address_key TEXT NOT NULL,
@@ -557,15 +559,28 @@ function readPayloadText(record: unknown, key: string): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function backfillAccountRowCompanyPhoneColumns(db: Database.Database): void {
+function backfillAccountRowSupplementalColumns(db: Database.Database): void {
   const rows = db
     .prepare(
       `
-      SELECT row_key, payload_json
+      SELECT
+        row_key,
+        payload_json,
+        company_phone,
+        company_phone_source,
+        last_called_at,
+        last_calendar_invited_at
       FROM account_rows
       `,
     )
-    .all() as Array<{ row_key: string; payload_json: string }>;
+    .all() as Array<{
+    row_key: string;
+    payload_json: string;
+    company_phone: string | null;
+    company_phone_source: string | null;
+    last_called_at: string | null;
+    last_calendar_invited_at: string | null;
+  }>;
 
   if (rows.length === 0) {
     return;
@@ -575,7 +590,9 @@ function backfillAccountRowCompanyPhoneColumns(db: Database.Database): void {
     `
     UPDATE account_rows
     SET company_phone = @company_phone,
-        company_phone_source = @company_phone_source
+        company_phone_source = @company_phone_source,
+        last_called_at = @last_called_at,
+        last_calendar_invited_at = @last_calendar_invited_at
     WHERE row_key = @row_key
     `,
   );
@@ -591,8 +608,13 @@ function backfillAccountRowCompanyPhoneColumns(db: Database.Database): void {
 
       update.run({
         row_key: row.row_key,
-        company_phone: readPayloadText(payload, "companyPhone"),
-        company_phone_source: readPayloadText(payload, "companyPhoneSource"),
+        company_phone: readPayloadText(payload, "companyPhone") ?? row.company_phone,
+        company_phone_source:
+          readPayloadText(payload, "companyPhoneSource") ?? row.company_phone_source,
+        last_called_at: readPayloadText(payload, "lastCalledAt") ?? row.last_called_at,
+        last_calendar_invited_at:
+          readPayloadText(payload, "lastCalendarInvitedAt") ??
+          row.last_calendar_invited_at,
       });
     }
   });
@@ -618,10 +640,28 @@ export function ensureReadModelSchema(db: Database.Database): void {
   if (!hasCompanyPhoneSourceColumn) {
     db.exec("ALTER TABLE account_rows ADD COLUMN company_phone_source TEXT");
   }
+  const hasLastCalledAtColumn = accountRowColumns.some(
+    (column) => column.name === "last_called_at",
+  );
+  if (!hasLastCalledAtColumn) {
+    db.exec("ALTER TABLE account_rows ADD COLUMN last_called_at TEXT");
+  }
+  const hasLastCalendarInvitedAtColumn = accountRowColumns.some(
+    (column) => column.name === "last_calendar_invited_at",
+  );
+  if (!hasLastCalendarInvitedAtColumn) {
+    db.exec("ALTER TABLE account_rows ADD COLUMN last_calendar_invited_at TEXT");
+  }
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_account_rows_company_phone ON account_rows(company_phone)",
   );
-  backfillAccountRowCompanyPhoneColumns(db);
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_account_rows_last_called_at ON account_rows(last_called_at)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_account_rows_last_calendar_invited_at ON account_rows(last_calendar_invited_at)",
+  );
+  backfillAccountRowSupplementalColumns(db);
 
   const accountLocalMetadataColumns = db
     .prepare("PRAGMA table_info(account_local_metadata)")

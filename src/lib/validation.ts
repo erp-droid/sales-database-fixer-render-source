@@ -56,6 +56,7 @@ const sortByValues = [
   "notes",
   "category",
   "lastCalledAt",
+  "lastCalendarInvitedAt",
   "lastEmailedAt",
   "lastModifiedIso",
 ] as const;
@@ -84,6 +85,7 @@ export const listQuerySchema = z.object({
   filterNotes: z.string().optional(),
   filterCategory: z.enum(CATEGORY_VALUES).optional(),
   filterLastCalled: z.string().optional(),
+  filterLastCalendarInvited: z.string().optional(),
   filterLastEmailed: z.string().optional(),
   filterLastModified: z.string().optional(),
   sortBy: z.enum(sortByValues).optional(),
@@ -716,6 +718,8 @@ export type ParsedListQuery = {
   filterPrimaryContactEmail?: string;
   filterNotes?: string;
   filterCategory?: Category;
+  filterLastCalled?: string;
+  filterLastCalendarInvited?: string;
   filterLastEmailed?: string;
   filterLastModified?: string;
   sortBy?: SortBy;
@@ -781,6 +785,9 @@ export function parseListQuery(queryParams: URLSearchParams): ParsedListQuery {
     filterPrimaryContactEmail: queryParams.get("filterPrimaryContactEmail") ?? undefined,
     filterNotes: queryParams.get("filterNotes") ?? undefined,
     filterCategory: queryParams.get("filterCategory") ?? undefined,
+    filterLastCalled: queryParams.get("filterLastCalled") ?? undefined,
+    filterLastCalendarInvited:
+      queryParams.get("filterLastCalendarInvited") ?? undefined,
     filterLastEmailed: queryParams.get("filterLastEmailed") ?? undefined,
     filterLastModified: queryParams.get("filterLastModified") ?? undefined,
     sortBy: queryParams.get("sortBy") ?? undefined,
@@ -809,6 +816,8 @@ export function parseListQuery(queryParams: URLSearchParams): ParsedListQuery {
     filterPrimaryContactExtension: normalizeOptionalFilter(parsed.filterPrimaryContactExtension),
     filterPrimaryContactEmail: normalizeOptionalFilter(parsed.filterPrimaryContactEmail),
     filterNotes: normalizeOptionalFilter(parsed.filterNotes),
+    filterLastCalled: normalizeOptionalFilter(parsed.filterLastCalled),
+    filterLastCalendarInvited: normalizeOptionalFilter(parsed.filterLastCalendarInvited),
     filterLastEmailed: normalizeOptionalFilter(parsed.filterLastEmailed),
     filterLastModified: normalizeOptionalFilter(parsed.filterLastModified),
   };

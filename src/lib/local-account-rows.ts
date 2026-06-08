@@ -93,6 +93,7 @@ export function buildLocalBusinessAccountRows(
     category: request.category,
     notes: null,
     lastCalledAt: null,
+    lastCalendarInvitedAt: null,
     lastEmailedAt: null,
     lastModifiedIso: createdAt,
   };

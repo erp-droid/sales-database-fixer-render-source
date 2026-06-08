@@ -51,6 +51,7 @@ function buildRow(
     notes: overrides.notes ?? null,
     lastEmailedAt: overrides.lastEmailedAt ?? null,
     lastCalledAt: overrides.lastCalledAt ?? null,
+    lastCalendarInvitedAt: overrides.lastCalendarInvitedAt ?? null,
     lastModifiedIso: overrides.lastModifiedIso ?? "2026-03-13T00:00:00.000Z",
   };
 }
@@ -280,6 +281,64 @@ describe("readBusinessAccountDetailFromReadModel", () => {
     const refreshedRows = readModelAccounts.readAllAccountRowsFromReadModel();
     expect(refreshedRows[0]?.primaryContactRawPhone).toBe("905-829-9927");
     expect(refreshedRows[0]?.primaryContactPhone).toBe("905-829-9927");
+  });
+
+  it("stores supplemental timestamps in physical sqlite columns and reads them over stale payload values", async () => {
+    const readModelAccounts = await import("@/lib/read-model/accounts");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    closeDb = () => getReadModelDb().close();
+
+    readModelAccounts.replaceAllAccountRows([
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+        rowKey: "account-1:contact:202",
+        contactId: 202,
+        primaryContactId: 202,
+        lastCalledAt: "2026-04-12T16:30:00.000Z",
+        lastCalendarInvitedAt: "2026-04-13T10:00:00.000Z",
+      }),
+    ]);
+
+    const db = getReadModelDb();
+    const stored = db
+      .prepare(
+        `
+        SELECT last_called_at, last_calendar_invited_at, payload_json
+        FROM account_rows
+        WHERE row_key = ?
+        `,
+      )
+      .get("account-1:contact:202") as
+      | {
+          last_called_at: string | null;
+          last_calendar_invited_at: string | null;
+          payload_json: string;
+        }
+      | undefined;
+
+    expect(stored?.last_called_at).toBe("2026-04-12T16:30:00.000Z");
+    expect(stored?.last_calendar_invited_at).toBe("2026-04-13T10:00:00.000Z");
+
+    const stalePayload = stored
+      ? ({
+          ...(JSON.parse(stored.payload_json) as BusinessAccountRow),
+          lastCalledAt: null,
+          lastCalendarInvitedAt: null,
+        } satisfies BusinessAccountRow)
+      : null;
+    expect(stalePayload).not.toBeNull();
+    db.prepare(
+      `
+      UPDATE account_rows
+      SET payload_json = ?
+      WHERE row_key = ?
+      `,
+    ).run(JSON.stringify(stalePayload), "account-1:contact:202");
+
+    const rows = readModelAccounts.readStoredBusinessAccountRowsFromReadModel("account-1");
+    expect(rows[0]?.lastCalledAt).toBe("2026-04-12T16:30:00.000Z");
+    expect(rows[0]?.lastCalendarInvitedAt).toBe("2026-04-13T10:00:00.000Z");
   });
 
   it("does not rebuild last-called metadata while reading the account snapshot", async () => {
@@ -552,17 +611,107 @@ describe("readBusinessAccountDetailFromReadModel", () => {
     const stored = db
       .prepare(
         `
-        SELECT payload_json
+        SELECT last_called_at, payload_json
         FROM account_rows
         WHERE row_key = ?
         `,
       )
-      .get("account-1:contact:202") as { payload_json: string } | undefined;
+      .get("account-1:contact:202") as
+      | { last_called_at: string | null; payload_json: string }
+      | undefined;
 
     const parsed = stored ? (JSON.parse(stored.payload_json) as BusinessAccountRow) : null;
+    expect(stored?.last_called_at).toBe("2026-04-12T16:30:00.000Z");
     expect(parsed?.lastCalledAt).toBe("2026-04-12T16:30:00.000Z");
     expect(parsed?.accountType ?? null).toBeNull();
     expect(parsed?.opportunityCount ?? null).toBeNull();
+  });
+
+  it("marks successful calendar invites on matching account rows", async () => {
+    const readModelAccounts = await import("@/lib/read-model/accounts");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    closeDb = () => getReadModelDb().close();
+
+    readModelAccounts.replaceAllAccountRows([
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+        rowKey: "account-1:contact:202",
+        contactId: 202,
+        primaryContactId: 202,
+        primaryContactName: "Andy McMullen",
+      }),
+      buildRow({
+        id: "account-2",
+        accountRecordId: "account-2",
+        rowKey: "account-2:contact:303",
+        contactId: 303,
+        primaryContactId: 303,
+        primaryContactName: "Other Contact",
+      }),
+    ]);
+
+    const changedCount = readModelAccounts.markReadModelCalendarInviteSent({
+      contactIds: [202, 202],
+      invitedAt: "2026-04-13T10:00:00.000Z",
+    });
+
+    expect(changedCount).toBe(1);
+
+    const db = getReadModelDb();
+    const invited = db
+      .prepare(
+        `
+        SELECT last_calendar_invited_at, payload_json
+        FROM account_rows
+        WHERE row_key = ?
+        `,
+      )
+      .get("account-1:contact:202") as
+      | { last_calendar_invited_at: string | null; payload_json: string }
+      | undefined;
+    const untouched = db
+      .prepare(
+        `
+        SELECT last_calendar_invited_at, payload_json
+        FROM account_rows
+        WHERE row_key = ?
+        `,
+      )
+      .get("account-2:contact:303") as
+      | { last_calendar_invited_at: string | null; payload_json: string }
+      | undefined;
+
+    const invitedPayload = invited
+      ? (JSON.parse(invited.payload_json) as BusinessAccountRow)
+      : null;
+    const untouchedPayload = untouched
+      ? (JSON.parse(untouched.payload_json) as BusinessAccountRow)
+      : null;
+
+    expect(invited?.last_calendar_invited_at).toBe("2026-04-13T10:00:00.000Z");
+    expect(invitedPayload?.lastCalendarInvitedAt).toBe("2026-04-13T10:00:00.000Z");
+    expect(untouched?.last_calendar_invited_at).toBeNull();
+    expect(untouchedPayload?.lastCalendarInvitedAt ?? null).toBeNull();
+
+    const downgradeCount = readModelAccounts.markReadModelCalendarInviteSent({
+      contactIds: [202],
+      invitedAt: "2026-04-12T10:00:00.000Z",
+    });
+    const afterDowngrade = db
+      .prepare(
+        `
+        SELECT last_calendar_invited_at
+        FROM account_rows
+        WHERE row_key = ?
+        `,
+      )
+      .get("account-1:contact:202") as
+      | { last_calendar_invited_at: string | null }
+      | undefined;
+
+    expect(downgradeCount).toBe(0);
+    expect(afterDowngrade?.last_calendar_invited_at).toBe("2026-04-13T10:00:00.000Z");
   });
 
   it("preserves stored last-called metadata when replacing one account", async () => {
@@ -579,6 +728,7 @@ describe("readBusinessAccountDetailFromReadModel", () => {
         primaryContactId: 202,
         primaryContactName: "Andy McMullen",
         lastCalledAt: "2026-04-12T16:30:00.000Z",
+        lastCalendarInvitedAt: "2026-04-13T10:00:00.000Z",
       }),
     ]);
 
@@ -596,6 +746,7 @@ describe("readBusinessAccountDetailFromReadModel", () => {
     const storedRows = readModelAccounts.readStoredBusinessAccountRowsFromReadModel("account-1");
     expect(storedRows[0]?.primaryContactName).toBe("Andy McMullen Updated");
     expect(storedRows[0]?.lastCalledAt).toBe("2026-04-12T16:30:00.000Z");
+    expect(storedRows[0]?.lastCalendarInvitedAt).toBe("2026-04-13T10:00:00.000Z");
   });
 
   it("shares notes across matching company/contact identities regardless of address", async () => {

@@ -21,13 +21,17 @@ import {
   type ResolvedMeetingContact,
 } from "@/lib/meeting-create";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { publishBusinessAccountChanged } from "@/lib/business-account-live";
 import {
   createMeetingInviteInGoogleCalendar,
   deleteMeetingInviteFromGoogleCalendar,
   readGoogleCalendarInviteAuthority,
 } from "@/lib/google-calendar";
 import { upsertMeetingBooking } from "@/lib/meeting-bookings";
-import { readBusinessAccountDetailFromReadModel } from "@/lib/read-model/accounts";
+import {
+  markReadModelCalendarInviteSent,
+  readBusinessAccountDetailFromReadModel,
+} from "@/lib/read-model/accounts";
 import { parseMeetingCreatePayload } from "@/lib/validation";
 import type { MeetingCreateResponse } from "@/types/meeting-create";
 
@@ -281,6 +285,29 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           `Unable to mirror the meeting activity for ${readContactLabel(mirroredContact)}: ${getErrorMessage(mirrorError)}`,
         );
       }
+    }
+
+    try {
+      const invitedContactIds =
+        inviteAuthority === "google"
+          ? uniqueContactIds(googleInviteAttendees.map((attendee) => attendee.contactId))
+          : uniqueContactIds(inviteAttendees.map((attendee) => attendee.contactId));
+      const inviteTimestampUpdates = markReadModelCalendarInviteSent({
+        contactIds: invitedContactIds,
+      });
+
+      if (inviteTimestampUpdates > 0 && normalizedRequest.businessAccountRecordId) {
+        publishBusinessAccountChanged({
+          accountRecordId: normalizedRequest.businessAccountRecordId,
+          businessAccountId: normalizedRequest.businessAccountId,
+          targetContactId: normalizedRequest.relatedContactId,
+          reason: "calendar-invite-sent",
+        });
+      }
+    } catch (inviteTimestampError) {
+      warnings.push(
+        `Meeting created, but local invite timestamp could not be updated: ${getErrorMessage(inviteTimestampError)}`,
+      );
     }
 
     const responseBody: MeetingCreateResponse = {

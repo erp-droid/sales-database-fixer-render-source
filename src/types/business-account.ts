@@ -22,6 +22,7 @@ export type SortBy =
   | "notes"
   | "category"
   | "lastCalledAt"
+  | "lastCalendarInvitedAt"
   | "lastEmailedAt"
   | "lastModifiedIso";
 
@@ -67,6 +68,7 @@ export type BusinessAccountRow = {
   category: Category | null;
   notes: string | null;
   lastCalledAt?: string | null;
+  lastCalendarInvitedAt?: string | null;
   lastEmailedAt?: string | null;
   lastModifiedIso: string | null;
 };

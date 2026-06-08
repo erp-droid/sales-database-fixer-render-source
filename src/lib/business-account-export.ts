@@ -51,6 +51,7 @@ const CSV_COLUMNS: Array<{
   { header: "Category", read: (row) => row.category ?? null },
   { header: "Notes", read: (row) => row.notes ?? null },
   { header: "Last Called At", read: (row) => row.lastCalledAt ?? null },
+  { header: "Last Calendar Invited At", read: (row) => row.lastCalendarInvitedAt ?? null },
   { header: "Last Emailed At", read: (row) => row.lastEmailedAt ?? null },
   { header: "Last Modified ISO", read: (row) => row.lastModifiedIso ?? null },
 ];

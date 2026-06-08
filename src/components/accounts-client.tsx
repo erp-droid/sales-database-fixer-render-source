@@ -405,6 +405,7 @@ type HeaderFilters = {
   notes: string;
   category: Category | "";
   lastCalled: string;
+  lastCalendarInvited: string;
   lastEmailed: string;
   lastModified: string;
 };
@@ -438,6 +439,7 @@ const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   notes: "",
   category: "",
   lastCalled: "",
+  lastCalendarInvited: "",
   lastEmailed: "",
   lastModified: "",
 };
@@ -482,6 +484,8 @@ function normalizeStoredHeaderFilters(value: unknown): HeaderFilters {
         ? (record.category as Category | "")
         : "",
     lastCalled: typeof record.lastCalled === "string" ? record.lastCalled : "",
+    lastCalendarInvited:
+      typeof record.lastCalendarInvited === "string" ? record.lastCalendarInvited : "",
     lastEmailed: typeof record.lastEmailed === "string" ? record.lastEmailed : "",
     lastModified: typeof record.lastModified === "string" ? record.lastModified : "",
   };
@@ -550,6 +554,7 @@ function buildAccountsCsvExportHref(input: {
     params.set("filterCategory", input.headerFilters.category);
   }
   append("filterLastCalled", input.headerFilters.lastCalled);
+  append("filterLastCalendarInvited", input.headerFilters.lastCalendarInvited);
   append("filterLastEmailed", input.headerFilters.lastEmailed);
   append("filterLastModified", input.headerFilters.lastModified);
   params.set("sortBy", input.sortBy);
@@ -680,6 +685,12 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
     filterPlaceholder: "Filter last called",
   },
   {
+    id: "lastCalendarInvitedAt",
+    label: "Last Invited",
+    filterKey: "lastCalendarInvited",
+    filterPlaceholder: "Filter last invited",
+  },
+  {
     id: "lastEmailedAt",
     label: "Last Emailed",
     filterKey: "lastEmailed",
@@ -711,6 +722,7 @@ const DEFAULT_VISIBLE_COLUMNS: SortBy[] = [
   "primaryContactExtension",
   "primaryContactEmail",
   "lastCalledAt",
+  "lastCalendarInvitedAt",
   "lastEmailedAt",
   "category",
 ];
@@ -1323,6 +1335,10 @@ function mergeSyncedRows(
     notes: pickPreferredText(existing.notes, incoming.notes),
     category: incoming.category ?? existing.category,
     lastCalledAt: pickPreferredText(existing.lastCalledAt, incoming.lastCalledAt),
+    lastCalendarInvitedAt: pickPreferredText(
+      existing.lastCalendarInvitedAt,
+      incoming.lastCalendarInvitedAt,
+    ),
     lastModifiedIso: pickPreferredText(existing.lastModifiedIso, incoming.lastModifiedIso),
   };
 }
@@ -3273,6 +3289,7 @@ export function AccountsClient({
         filterNotes: debouncedHeaderFilters.notes,
         filterCategory: debouncedHeaderFilters.category || undefined,
         filterLastCalled: debouncedHeaderFilters.lastCalled,
+        filterLastCalendarInvited: debouncedHeaderFilters.lastCalendarInvited,
         filterLastEmailed: debouncedHeaderFilters.lastEmailed,
         filterLastModified: debouncedHeaderFilters.lastModified,
         sortBy,
@@ -7148,6 +7165,14 @@ export function AccountsClient({
       return renderTextCell(formatLastCalled(row.lastCalledAt), "Never called", "secondary");
     }
 
+    if (columnId === "lastCalendarInvitedAt") {
+      return renderTextCell(
+        formatLastCalled(row.lastCalendarInvitedAt),
+        "Never invited",
+        "secondary",
+      );
+    }
+
     if (columnId === "lastEmailedAt") {
       return renderTextCell(formatLastEmailed(row.lastEmailedAt), "Never emailed", "secondary");
     }
@@ -7196,6 +7221,7 @@ export function AccountsClient({
     const filterValue = headerFilters[column.filterKey];
     const isDateFilter =
       columnId === "lastCalledAt" ||
+      columnId === "lastCalendarInvitedAt" ||
       columnId === "lastEmailedAt" ||
       columnId === "lastModifiedIso";
 

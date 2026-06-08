@@ -20,6 +20,8 @@ import type {
 
 type StoredAccountRow = {
   payload_json: string;
+  last_called_at?: string | null;
+  last_calendar_invited_at?: string | null;
 };
 
 type RecentCallSessionIdentityRow = {
@@ -36,6 +38,11 @@ type ReadModelListQuery = Parameters<typeof queryBusinessAccounts>[1];
 
 const RECENT_CALL_SESSION_REFRESH_LIMIT = 50;
 const MAX_MATCH_VALUES_PER_FIELD = 100;
+const ACCOUNT_ROW_SELECT_COLUMNS = `
+  payload_json,
+  last_called_at,
+  last_calendar_invited_at
+`;
 
 let allRowsCache: BusinessAccountRow[] | null = null;
 let allRowsCacheVersion: string | null = null;
@@ -92,6 +99,7 @@ function buildSearchText(row: BusinessAccountRow): string {
     row.notes,
     row.category,
     row.lastCalledAt,
+    row.lastCalendarInvitedAt,
   ]
     .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
     .join(" ")
@@ -176,7 +184,9 @@ function appendInClause<T extends string | number>(
   params.push(...limitedValues);
 }
 
-function resolveLastCalledAtMatchKeys(row: BusinessAccountRow): string[] {
+type SupplementalTimestampField = "lastCalledAt" | "lastCalendarInvitedAt";
+
+function resolveSupplementalTimestampMatchKeys(row: BusinessAccountRow): string[] {
   const keys: string[] = [];
   const rowKey = normalizeIdentityText(row.rowKey ?? row.id);
   if (rowKey) {
@@ -207,16 +217,20 @@ function pickLaterIso(left: string | null | undefined, right: string | null | un
   return right > left ? right : left;
 }
 
-function buildExistingLastCalledAtLookup(existingRows: BusinessAccountRow[]): Map<string, string> {
+function buildExistingTimestampLookup(
+  existingRows: BusinessAccountRow[],
+  field: SupplementalTimestampField,
+): Map<string, string> {
   const lookup = new Map<string, string>();
 
   for (const row of existingRows) {
-    if (!row.lastCalledAt) {
+    const timestamp = row[field];
+    if (!timestamp) {
       continue;
     }
 
-    for (const key of resolveLastCalledAtMatchKeys(row)) {
-      const nextValue = pickLaterIso(lookup.get(key), row.lastCalledAt);
+    for (const key of resolveSupplementalTimestampMatchKeys(row)) {
+      const nextValue = pickLaterIso(lookup.get(key), timestamp);
       if (nextValue) {
         lookup.set(key, nextValue);
       }
@@ -226,12 +240,12 @@ function buildExistingLastCalledAtLookup(existingRows: BusinessAccountRow[]): Ma
   return lookup;
 }
 
-function resolveInheritedLastCalledAt(
+function resolveInheritedTimestamp(
   row: BusinessAccountRow,
   lookup: Map<string, string>,
   accountFallback: string | null,
 ): string | null {
-  for (const key of resolveLastCalledAtMatchKeys(row)) {
+  for (const key of resolveSupplementalTimestampMatchKeys(row)) {
     const value = lookup.get(key);
     if (value) {
       return value;
@@ -250,15 +264,23 @@ function inheritSupplementalAccountMetadata(
   const existingOpportunityCount = existingRows.find(
     (row) => row.opportunityCount !== undefined,
   )?.opportunityCount;
-  const existingLastCalledAtByRow = buildExistingLastCalledAtLookup(existingRows);
+  const existingLastCalledAtByRow = buildExistingTimestampLookup(existingRows, "lastCalledAt");
+  const existingLastCalendarInvitedAtByRow = buildExistingTimestampLookup(
+    existingRows,
+    "lastCalendarInvitedAt",
+  );
   const accountLastCalledAtFallback =
     existingRows.length === 1 ? existingRows[0]?.lastCalledAt ?? null : null;
+  const accountLastCalendarInvitedAtFallback =
+    existingRows.length === 1 ? existingRows[0]?.lastCalendarInvitedAt ?? null : null;
 
   if (
     existingAccountType === undefined &&
     existingOpportunityCount === undefined &&
     existingLastCalledAtByRow.size === 0 &&
-    !accountLastCalledAtFallback
+    !accountLastCalledAtFallback &&
+    existingLastCalendarInvitedAtByRow.size === 0 &&
+    !accountLastCalendarInvitedAtFallback
   ) {
     return nextRows;
   }
@@ -275,10 +297,18 @@ function inheritSupplementalAccountMetadata(
     }
 
     if (!nextRow.lastCalledAt) {
-      nextRow.lastCalledAt = resolveInheritedLastCalledAt(
+      nextRow.lastCalledAt = resolveInheritedTimestamp(
         nextRow,
         existingLastCalledAtByRow,
         accountLastCalledAtFallback,
+      );
+    }
+
+    if (!nextRow.lastCalendarInvitedAt) {
+      nextRow.lastCalendarInvitedAt = resolveInheritedTimestamp(
+        nextRow,
+        existingLastCalendarInvitedAtByRow,
+        accountLastCalendarInvitedAtFallback,
       );
     }
 
@@ -292,6 +322,7 @@ function normalizeStoredSupplementalFields(row: BusinessAccountRow): BusinessAcc
     accountType: row.accountType ?? null,
     opportunityCount: row.opportunityCount ?? null,
     lastCalledAt: row.lastCalledAt ?? null,
+    lastCalendarInvitedAt: row.lastCalendarInvitedAt ?? null,
   };
 }
 
@@ -304,9 +335,15 @@ function prepareRowsForStorage(
   );
 }
 
-function parseStoredRow(payload: string): BusinessAccountRow | null {
+function parseStoredRow(row: StoredAccountRow): BusinessAccountRow | null {
   try {
-    return JSON.parse(payload) as BusinessAccountRow;
+    const payload = JSON.parse(row.payload_json) as BusinessAccountRow;
+    return {
+      ...payload,
+      lastCalledAt: row.last_called_at ?? payload.lastCalledAt ?? null,
+      lastCalendarInvitedAt:
+        row.last_calendar_invited_at ?? payload.lastCalendarInvitedAt ?? null,
+    };
   } catch {
     return null;
   }
@@ -315,7 +352,7 @@ function parseStoredRow(payload: string): BusinessAccountRow | null {
 function parseRawStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
   return removeContactlessPrimaryContactDuplicateRows(
     rows
-      .map((row) => parseStoredRow(row.payload_json))
+      .map((row) => parseStoredRow(row))
       .filter((row): row is BusinessAccountRow => row !== null),
   );
 }
@@ -323,7 +360,7 @@ function parseRawStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
 function parseStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
   return removeContactlessPrimaryContactDuplicateRows(
     rows
-      .map((row) => parseStoredRow(row.payload_json))
+      .map((row) => parseStoredRow(row))
       .filter((row): row is BusinessAccountRow => row !== null)
       .map(normalizeBusinessAccountRowClassification),
   );
@@ -399,7 +436,7 @@ export function readAllAccountRowsFromReadModel(): BusinessAccountRow[] {
   const rows = db
     .prepare(
       `
-      SELECT payload_json
+      SELECT ${ACCOUNT_ROW_SELECT_COLUMNS}
       FROM account_rows
       ORDER BY company_name COLLATE NOCASE ASC, row_key ASC
       `,
@@ -417,7 +454,7 @@ export function readStoredAccountRowsFromReadModel(): BusinessAccountRow[] {
   const rows = db
     .prepare(
       `
-      SELECT payload_json
+      SELECT ${ACCOUNT_ROW_SELECT_COLUMNS}
       FROM account_rows
       ORDER BY company_name COLLATE NOCASE ASC, row_key ASC
       `,
@@ -467,6 +504,8 @@ export function replaceAllAccountRows(rows: BusinessAccountRow[]): void {
         primary_contact_id,
         category,
         notes,
+        last_called_at,
+        last_calendar_invited_at,
         last_modified_iso,
         search_text,
         address_key,
@@ -502,6 +541,8 @@ export function replaceAllAccountRows(rows: BusinessAccountRow[]): void {
         @primary_contact_id,
         @category,
         @notes,
+        @last_called_at,
+        @last_calendar_invited_at,
         @last_modified_iso,
         @search_text,
         @address_key,
@@ -542,6 +583,8 @@ export function replaceAllAccountRows(rows: BusinessAccountRow[]): void {
         primary_contact_id: row.primaryContactId ?? null,
         category: row.category ?? null,
         notes: row.notes ?? null,
+        last_called_at: row.lastCalledAt ?? null,
+        last_calendar_invited_at: row.lastCalendarInvitedAt ?? null,
         last_modified_iso: row.lastModifiedIso ?? null,
         search_text: buildSearchText(row),
         address_key: buildAddressKey(row),
@@ -569,14 +612,14 @@ export function replaceReadModelAccountRows(
   const existingRows = (db
     .prepare(
       `
-      SELECT payload_json
+      SELECT ${ACCOUNT_ROW_SELECT_COLUMNS}
       FROM account_rows
       WHERE account_record_id = ?
          OR id = ?
       `,
     )
     .all(accountKey, accountKey) as StoredAccountRow[])
-    .map((row) => parseStoredRow(row.payload_json))
+    .map((row) => parseStoredRow(row))
     .filter((row): row is BusinessAccountRow => row !== null);
   const nextRows = prepareRowsForStorage(rows, existingRows);
   const now = new Date().toISOString();
@@ -622,6 +665,8 @@ export function replaceReadModelAccountRows(
         primary_contact_id,
         category,
         notes,
+        last_called_at,
+        last_calendar_invited_at,
         last_modified_iso,
         search_text,
         address_key,
@@ -657,6 +702,8 @@ export function replaceReadModelAccountRows(
         @primary_contact_id,
         @category,
         @notes,
+        @last_called_at,
+        @last_calendar_invited_at,
         @last_modified_iso,
         @search_text,
         @address_key,
@@ -697,6 +744,8 @@ export function replaceReadModelAccountRows(
         primary_contact_id: row.primaryContactId ?? null,
         category: row.category ?? null,
         notes: row.notes ?? null,
+        last_called_at: row.lastCalledAt ?? null,
+        last_calendar_invited_at: row.lastCalendarInvitedAt ?? null,
         last_modified_iso: row.lastModifiedIso ?? null,
         search_text: buildSearchText(row),
         address_key: buildAddressKey(row),
@@ -774,7 +823,7 @@ function readRecentlyTouchedAccountRowsFromReadModel(): BusinessAccountRow[] {
   const rows = db
     .prepare(
       `
-      SELECT payload_json
+      SELECT ${ACCOUNT_ROW_SELECT_COLUMNS}
       FROM account_rows
       WHERE ${clauses.map((clause) => `(${clause})`).join(" OR ")}
       ORDER BY company_name COLLATE NOCASE ASC, row_key ASC
@@ -798,6 +847,7 @@ export function refreshStoredReadModelAccountSupplementalFields(): void {
     `
     UPDATE account_rows
     SET search_text = @search_text,
+        last_called_at = @last_called_at,
         payload_json = @payload_json,
         updated_at = @updated_at
     WHERE row_key = @row_key
@@ -819,6 +869,7 @@ export function refreshStoredReadModelAccountSupplementalFields(): void {
       update.run({
         row_key: nextRow.rowKey ?? `${nextRow.accountRecordId ?? nextRow.id}:contact:${nextRow.contactId ?? "row"}`,
         search_text: buildSearchText(nextRow),
+        last_called_at: nextRow.lastCalledAt ?? null,
         payload_json: JSON.stringify(nextRow),
         updated_at: now,
       });
@@ -833,6 +884,83 @@ export function refreshStoredReadModelAccountSupplementalFields(): void {
   }
 }
 
+function resolveStoredRowKey(row: BusinessAccountRow): string {
+  return row.rowKey ?? `${row.accountRecordId ?? row.id}:contact:${row.contactId ?? "row"}`;
+}
+
+export function markReadModelCalendarInviteSent(input: {
+  contactIds: number[];
+  invitedAt?: string | null;
+}): number {
+  const contactIds = uniqueNumbers(input.contactIds);
+  if (contactIds.length === 0) {
+    return 0;
+  }
+
+  const invitedAt = input.invitedAt?.trim() || new Date().toISOString();
+  const db = getReadModelDb();
+  const contactPlaceholders = contactIds.map(() => "?").join(", ");
+  const rows = db
+    .prepare(
+      `
+      SELECT ${ACCOUNT_ROW_SELECT_COLUMNS}
+      FROM account_rows
+      WHERE contact_id IN (${contactPlaceholders})
+         OR primary_contact_id IN (${contactPlaceholders})
+      ORDER BY company_name COLLATE NOCASE ASC, row_key ASC
+      `,
+    )
+    .all(...contactIds, ...contactIds) as StoredAccountRow[];
+
+  const currentRows = parseRawStoredRows(rows);
+  if (currentRows.length === 0) {
+    return 0;
+  }
+
+  const now = new Date().toISOString();
+  const update = db.prepare(
+    `
+    UPDATE account_rows
+    SET search_text = @search_text,
+        last_calendar_invited_at = @last_calendar_invited_at,
+        payload_json = @payload_json,
+        updated_at = @updated_at
+    WHERE row_key = @row_key
+    `,
+  );
+  let changedCount = 0;
+
+  const mark = db.transaction(() => {
+    for (const row of currentRows) {
+      const nextInvitedAt = pickLaterIso(row.lastCalendarInvitedAt, invitedAt);
+      if ((row.lastCalendarInvitedAt ?? null) === nextInvitedAt) {
+        continue;
+      }
+
+      const nextRow = normalizeStoredSupplementalFields({
+        ...row,
+        lastCalendarInvitedAt: nextInvitedAt,
+      });
+      update.run({
+        row_key: resolveStoredRowKey(nextRow),
+        search_text: buildSearchText(nextRow),
+        last_calendar_invited_at: nextRow.lastCalendarInvitedAt ?? null,
+        payload_json: JSON.stringify(nextRow),
+        updated_at: now,
+      });
+      changedCount += 1;
+    }
+  });
+
+  mark();
+
+  if (changedCount > 0) {
+    invalidateReadModelCaches();
+  }
+
+  return changedCount;
+}
+
 export function readBusinessAccountRowsFromReadModel(
   accountRecordId: string,
 ): BusinessAccountRow[] {
@@ -845,7 +973,7 @@ export function readBusinessAccountRowsFromReadModel(
   const rows = db
     .prepare(
       `
-      SELECT payload_json
+      SELECT ${ACCOUNT_ROW_SELECT_COLUMNS}
       FROM account_rows
       WHERE account_record_id = ?
          OR id = ?
@@ -869,7 +997,7 @@ export function readStoredBusinessAccountRowsFromReadModel(
   const rows = db
     .prepare(
       `
-      SELECT payload_json
+      SELECT ${ACCOUNT_ROW_SELECT_COLUMNS}
       FROM account_rows
       WHERE account_record_id = ?
          OR id = ?
