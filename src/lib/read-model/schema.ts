@@ -44,6 +44,8 @@ CREATE INDEX IF NOT EXISTS idx_account_rows_business_account_id
   ON account_rows(business_account_id);
 CREATE INDEX IF NOT EXISTS idx_account_rows_contact_id
   ON account_rows(contact_id);
+CREATE INDEX IF NOT EXISTS idx_account_rows_primary_contact_id
+  ON account_rows(primary_contact_id);
 CREATE INDEX IF NOT EXISTS idx_account_rows_company_name
   ON account_rows(company_name);
 CREATE INDEX IF NOT EXISTS idx_account_rows_sales_rep_name
@@ -275,8 +277,18 @@ CREATE INDEX IF NOT EXISTS idx_call_sessions_ended_at_outcome
   ON call_sessions(ended_at, outcome);
 CREATE INDEX IF NOT EXISTS idx_call_sessions_matched_business_account_id
   ON call_sessions(matched_business_account_id);
+CREATE INDEX IF NOT EXISTS idx_call_sessions_linked_business_account_id
+  ON call_sessions(linked_business_account_id);
+CREATE INDEX IF NOT EXISTS idx_call_sessions_linked_account_row_key
+  ON call_sessions(linked_account_row_key);
+CREATE INDEX IF NOT EXISTS idx_call_sessions_linked_contact_id
+  ON call_sessions(linked_contact_id);
+CREATE INDEX IF NOT EXISTS idx_call_sessions_matched_contact_id
+  ON call_sessions(matched_contact_id);
 CREATE INDEX IF NOT EXISTS idx_call_sessions_target_phone
   ON call_sessions(target_phone);
+CREATE INDEX IF NOT EXISTS idx_call_sessions_counterparty_phone
+  ON call_sessions(counterparty_phone);
 
 CREATE TABLE IF NOT EXISTS call_ingest_state (
   scope TEXT PRIMARY KEY,

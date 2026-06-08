@@ -50,6 +50,7 @@ function buildRow(
     category: overrides.category ?? null,
     notes: overrides.notes ?? null,
     lastEmailedAt: overrides.lastEmailedAt ?? null,
+    lastCalledAt: overrides.lastCalledAt ?? null,
     lastModifiedIso: overrides.lastModifiedIso ?? "2026-03-13T00:00:00.000Z",
   };
 }
@@ -281,7 +282,7 @@ describe("readBusinessAccountDetailFromReadModel", () => {
     expect(refreshedRows[0]?.primaryContactPhone).toBe("905-829-9927");
   });
 
-  it("refreshes cached rows when call sessions change and updates last-called metadata", async () => {
+  it("does not rebuild last-called metadata while reading the account snapshot", async () => {
     const readModelAccounts = await import("@/lib/read-model/accounts");
     const { getReadModelDb } = await import("@/lib/read-model/db");
     closeDb = () => getReadModelDb().close();
@@ -414,7 +415,7 @@ describe("readBusinessAccountDetailFromReadModel", () => {
     });
 
     const refreshedRows = readModelAccounts.readAllAccountRowsFromReadModel();
-    expect(refreshedRows[0]?.lastCalledAt).toBe("2026-04-12T16:30:00.000Z");
+    expect(refreshedRows[0]?.lastCalledAt ?? null).toBeNull();
   });
 
   it("writes refreshed last-called metadata back into the stored account snapshot", async () => {
@@ -562,6 +563,39 @@ describe("readBusinessAccountDetailFromReadModel", () => {
     expect(parsed?.lastCalledAt).toBe("2026-04-12T16:30:00.000Z");
     expect(parsed?.accountType ?? null).toBeNull();
     expect(parsed?.opportunityCount ?? null).toBeNull();
+  });
+
+  it("preserves stored last-called metadata when replacing one account", async () => {
+    const readModelAccounts = await import("@/lib/read-model/accounts");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    closeDb = () => getReadModelDb().close();
+
+    readModelAccounts.replaceAllAccountRows([
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+        rowKey: "account-1:contact:202",
+        contactId: 202,
+        primaryContactId: 202,
+        primaryContactName: "Andy McMullen",
+        lastCalledAt: "2026-04-12T16:30:00.000Z",
+      }),
+    ]);
+
+    readModelAccounts.replaceReadModelAccountRows("account-1", [
+      buildRow({
+        id: "account-1",
+        accountRecordId: "account-1",
+        rowKey: "account-1:contact:202",
+        contactId: 202,
+        primaryContactId: 202,
+        primaryContactName: "Andy McMullen Updated",
+      }),
+    ]);
+
+    const storedRows = readModelAccounts.readStoredBusinessAccountRowsFromReadModel("account-1");
+    expect(storedRows[0]?.primaryContactName).toBe("Andy McMullen Updated");
+    expect(storedRows[0]?.lastCalledAt).toBe("2026-04-12T16:30:00.000Z");
   });
 
   it("shares notes across matching company/contact identities regardless of address", async () => {

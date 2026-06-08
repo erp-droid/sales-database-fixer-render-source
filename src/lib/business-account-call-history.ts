@@ -3,6 +3,7 @@ import { readCallSessions } from "@/lib/call-analytics/sessionize";
 import type { CallSessionRecord } from "@/lib/call-analytics/types";
 import { resolveCompanyPhone } from "@/lib/business-accounts";
 import { extractNormalizedPhoneDigits } from "@/lib/phone";
+import { getReadModelDb } from "@/lib/read-model/db";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type {
   BusinessAccountCallHistoryItem,
@@ -22,8 +23,83 @@ type MatchedSession = {
   sortTimestamp: number;
 };
 
+type StoredCallSessionRow = {
+  session_id: string;
+  root_call_sid: string;
+  primary_leg_sid: string | null;
+  source: string;
+  direction: string;
+  outcome: string;
+  answered: number;
+  started_at: string | null;
+  answered_at: string | null;
+  ended_at: string | null;
+  talk_duration_seconds: number | null;
+  ring_duration_seconds: number | null;
+  employee_login_name: string | null;
+  employee_display_name: string | null;
+  employee_contact_id: number | null;
+  employee_phone: string | null;
+  recipient_employee_login_name: string | null;
+  recipient_employee_display_name: string | null;
+  presented_caller_id: string | null;
+  bridge_number: string | null;
+  target_phone: string | null;
+  counterparty_phone: string | null;
+  matched_contact_id: number | null;
+  matched_contact_name: string | null;
+  matched_business_account_id: string | null;
+  matched_company_name: string | null;
+  phone_match_type: string | null;
+  phone_match_ambiguity_count: number;
+  initiated_from_surface: string | null;
+  linked_account_row_key: string | null;
+  linked_business_account_id: string | null;
+  linked_contact_id: number | null;
+  metadata_json: string;
+  updated_at: string;
+};
+
 const DEFAULT_HISTORY_LIMIT = 10;
 const MAX_HISTORY_LIMIT = 25;
+const DEFAULT_CANDIDATE_SESSION_LIMIT = 250;
+
+const CALL_SESSION_SELECT_COLUMNS = `
+  session_id,
+  root_call_sid,
+  primary_leg_sid,
+  source,
+  direction,
+  outcome,
+  answered,
+  started_at,
+  answered_at,
+  ended_at,
+  talk_duration_seconds,
+  ring_duration_seconds,
+  employee_login_name,
+  employee_display_name,
+  employee_contact_id,
+  employee_phone,
+  recipient_employee_login_name,
+  recipient_employee_display_name,
+  presented_caller_id,
+  bridge_number,
+  target_phone,
+  counterparty_phone,
+  matched_contact_id,
+  matched_contact_name,
+  matched_business_account_id,
+  matched_company_name,
+  phone_match_type,
+  phone_match_ambiguity_count,
+  initiated_from_surface,
+  linked_account_row_key,
+  linked_business_account_id,
+  linked_contact_id,
+  metadata_json,
+  updated_at
+`;
 
 function normalizeText(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -59,6 +135,100 @@ function uniqueContactIds(values: Array<number | null | undefined>): number[] {
   return [...new Set(values.filter(isPositiveInteger))];
 }
 
+function uniqueQueryValues(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map((value) => normalizeText(value)).filter(Boolean))];
+}
+
+function buildPhoneQueryValues(values: Array<string | null | undefined>): string[] {
+  const candidates: string[] = [];
+
+  for (const value of values) {
+    const normalized = normalizeText(value);
+    if (normalized) {
+      candidates.push(normalized);
+    }
+
+    const digits = extractNormalizedPhoneDigits(value);
+    if (!digits) {
+      continue;
+    }
+
+    candidates.push(digits, `+${digits}`);
+    if (digits.length === 10) {
+      candidates.push(`1${digits}`, `+1${digits}`);
+    } else if (digits.length === 11 && digits.startsWith("1")) {
+      candidates.push(digits.slice(1), `+${digits.slice(1)}`);
+    }
+  }
+
+  return uniqueQueryValues(candidates);
+}
+
+function appendInClause<T extends string | number>(
+  clauses: string[],
+  params: Array<string | number>,
+  column: string,
+  values: T[],
+): void {
+  if (values.length === 0) {
+    return;
+  }
+
+  clauses.push(`${column} IN (${values.map(() => "?").join(", ")})`);
+  params.push(...values);
+}
+
+function normalizeStoredCallSessionRow(row: StoredCallSessionRow): CallSessionRecord {
+  const phoneMatchType =
+    row.phone_match_type === "contact_phone" || row.phone_match_type === "company_phone"
+      ? row.phone_match_type
+      : "none";
+  const initiatedFromSurface =
+    row.initiated_from_surface === "accounts" ||
+    row.initiated_from_surface === "map" ||
+    row.initiated_from_surface === "tasks" ||
+    row.initiated_from_surface === "quality"
+      ? row.initiated_from_surface
+      : "unknown";
+
+  return {
+    sessionId: row.session_id,
+    rootCallSid: row.root_call_sid,
+    primaryLegSid: row.primary_leg_sid,
+    source: row.source as CallSessionRecord["source"],
+    direction: row.direction as CallSessionRecord["direction"],
+    outcome: row.outcome as CallSessionRecord["outcome"],
+    answered: row.answered === 1,
+    startedAt: row.started_at,
+    answeredAt: row.answered_at,
+    endedAt: row.ended_at,
+    talkDurationSeconds: row.talk_duration_seconds,
+    ringDurationSeconds: row.ring_duration_seconds,
+    employeeLoginName: row.employee_login_name,
+    employeeDisplayName: row.employee_display_name,
+    employeeContactId: row.employee_contact_id,
+    employeePhone: row.employee_phone,
+    recipientEmployeeLoginName: row.recipient_employee_login_name,
+    recipientEmployeeDisplayName: row.recipient_employee_display_name,
+    presentedCallerId: row.presented_caller_id,
+    bridgeNumber: row.bridge_number,
+    targetPhone: row.target_phone,
+    counterpartyPhone: row.counterparty_phone,
+    matchedContactId: row.matched_contact_id,
+    matchedContactName: row.matched_contact_name,
+    matchedBusinessAccountId: row.matched_business_account_id,
+    matchedCompanyName: row.matched_company_name,
+    phoneMatchType,
+    phoneMatchAmbiguityCount: row.phone_match_ambiguity_count,
+    initiatedFromSurface,
+    linkedAccountRowKey: row.linked_account_row_key,
+    linkedBusinessAccountId: row.linked_business_account_id,
+    linkedContactId: row.linked_contact_id,
+    metadataJson: row.metadata_json,
+    updatedAt: row.updated_at,
+  };
+}
+
 function resolveSessionSortTimestamp(session: CallSessionRecord): number {
   const parsed = Date.parse(session.startedAt ?? session.updatedAt);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -78,13 +248,13 @@ function pushSession<TKey>(
   map.set(key, [session]);
 }
 
-function buildCallHistoryIndex(): CallHistoryIndex {
+function buildCallHistoryIndexFromSessions(sessions: CallSessionRecord[]): CallHistoryIndex {
   const byRowKey = new Map<string, CallSessionRecord[]>();
   const byContactId = new Map<number, CallSessionRecord[]>();
   const byPhoneDigits = new Map<string, CallSessionRecord[]>();
   const byBusinessAccountId = new Map<string, CallSessionRecord[]>();
 
-  for (const session of readCallSessions()) {
+  for (const session of sessions) {
     const linkedRowKey = normalizeText(session.linkedAccountRowKey);
     if (linkedRowKey) {
       pushSession(byRowKey, linkedRowKey, session);
@@ -120,6 +290,10 @@ function buildCallHistoryIndex(): CallHistoryIndex {
   };
 }
 
+function buildCallHistoryIndex(): CallHistoryIndex {
+  return buildCallHistoryIndexFromSessions(readCallSessions());
+}
+
 function collectContactPhoneDigits(row: BusinessAccountRow): string[] {
   return uniquePhoneDigits([
     row.primaryContactPhone,
@@ -130,6 +304,58 @@ function collectContactPhoneDigits(row: BusinessAccountRow): string[] {
 
 function collectCompanyPhoneDigits(row: BusinessAccountRow): string[] {
   return uniquePhoneDigits([resolveCompanyPhone(row)]);
+}
+
+function readCandidateCallSessionsForRow(row: BusinessAccountRow): CallSessionRecord[] {
+  const clauses: string[] = [];
+  const params: Array<string | number> = [];
+  const rowKey = normalizeRowKey(row);
+  const contactIds = uniqueContactIds([row.contactId, row.primaryContactId]);
+  const contactPhoneQueryValues = buildPhoneQueryValues([
+    row.primaryContactPhone,
+    row.primaryContactRawPhone,
+    row.phoneNumber,
+  ]);
+  const hasContactSpecificIdentity = contactIds.length > 0 || contactPhoneQueryValues.length > 0;
+
+  if (rowKey) {
+    clauses.push("linked_account_row_key = ?");
+    params.push(rowKey);
+  }
+
+  appendInClause(clauses, params, "linked_contact_id", contactIds);
+  appendInClause(clauses, params, "matched_contact_id", contactIds);
+  appendInClause(clauses, params, "target_phone", contactPhoneQueryValues);
+  appendInClause(clauses, params, "counterparty_phone", contactPhoneQueryValues);
+
+  if (!hasContactSpecificIdentity) {
+    const companyPhoneQueryValues = buildPhoneQueryValues([resolveCompanyPhone(row)]);
+    const businessAccountIds = uniqueQueryValues([normalizeBusinessAccountId(row.businessAccountId)]);
+    appendInClause(clauses, params, "target_phone", companyPhoneQueryValues);
+    appendInClause(clauses, params, "counterparty_phone", companyPhoneQueryValues);
+    appendInClause(clauses, params, "linked_business_account_id", businessAccountIds);
+    appendInClause(clauses, params, "matched_business_account_id", businessAccountIds);
+  }
+
+  if (clauses.length === 0) {
+    return [];
+  }
+
+  const db = getReadModelDb();
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        ${CALL_SESSION_SELECT_COLUMNS}
+      FROM call_sessions
+      WHERE ${clauses.map((clause) => `(${clause})`).join(" OR ")}
+      ORDER BY COALESCE(started_at, updated_at) DESC, session_id DESC
+      LIMIT ?
+      `,
+    )
+    .all(...params, DEFAULT_CANDIDATE_SESSION_LIMIT) as StoredCallSessionRow[];
+
+  return rows.map(normalizeStoredCallSessionRow);
 }
 
 function collectCandidateSessions(
@@ -344,9 +570,15 @@ function coerceLimit(limit: number | null | undefined): number {
 
 export function buildBusinessAccountCallHistoryResponse(
   row: BusinessAccountRow,
-  options?: { limit?: number | null; index?: CallHistoryIndex },
+  options?: {
+    limit?: number | null;
+    index?: CallHistoryIndex;
+    sessions?: CallSessionRecord[];
+  },
 ): BusinessAccountCallHistoryResponse {
-  const index = options?.index ?? buildCallHistoryIndex();
+  const index =
+    options?.index ??
+    buildCallHistoryIndexFromSessions(options?.sessions ?? readCandidateCallSessionsForRow(row));
   const matched = readPreferredSessionsForRow(row, index);
   const limit = coerceLimit(options?.limit);
   const items = matched.slice(0, limit).map((candidate) => buildCallHistoryItem(candidate.session));
@@ -355,6 +587,14 @@ export function buildBusinessAccountCallHistoryResponse(
     lastCalledAt: matched[0]?.session.startedAt ?? matched[0]?.session.updatedAt ?? null,
     items,
   };
+}
+
+export function resolveLastCalledAtForBusinessAccountRow(
+  row: BusinessAccountRow,
+): string | null {
+  const index = buildCallHistoryIndexFromSessions(readCandidateCallSessionsForRow(row));
+  const matched = readPreferredSessionsForRow(row, index);
+  return matched[0]?.session.startedAt ?? matched[0]?.session.updatedAt ?? null;
 }
 
 export function applyLastCalledAtToBusinessAccountRows(

@@ -166,14 +166,15 @@ describe("business account call history", () => {
   });
 
   it("returns prior-call items with recording and AI summary metadata", async () => {
-    readCallSessionsMock.mockReturnValue([
+    const sessions = [
       buildSession({
         sessionId: "call-1",
         startedAt: "2026-04-12T15:00:00.000Z",
         linkedAccountRowKey: "account-1:contact:101",
         linkedContactId: 101,
       }),
-    ]);
+    ];
+    readCallSessionsMock.mockReturnValue(sessions);
     readCallActivitySyncBySessionIdMock.mockReturnValue({
       sessionId: "call-1",
       recordingSid: "RE123",
@@ -201,6 +202,7 @@ describe("business account call history", () => {
         contactId: 101,
         primaryContactId: 101,
       }),
+      { sessions },
     );
 
     expect(response.lastCalledAt).toBe("2026-04-12T15:00:00.000Z");

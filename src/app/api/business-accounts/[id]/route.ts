@@ -32,7 +32,6 @@ import {
   sanitizeNullableInput,
   withPrimaryContact,
 } from "@/lib/business-accounts";
-import { applyLastCalledAtToBusinessAccountRows } from "@/lib/business-account-call-history";
 import {
   readContactBusinessAccountCode,
   readContactCompanyName,
@@ -1186,9 +1185,8 @@ export async function GET(
     }
 
     const normalizedRows = normalizeBusinessAccountRows(rawAccount);
-    const rowsWithCallHistory = applyLastCalledAtToBusinessAccountRows(normalizedRows);
     const responseRows = mergeDetailRowIntoRows(
-      rowsWithCallHistory,
+      normalizedRows,
       responseRow,
       requestedContactId,
     );
@@ -1237,9 +1235,8 @@ export async function GET(
         }
 
         const normalizedRows = normalizeBusinessAccountRows(rawAccount);
-        const rowsWithCallHistory = applyLastCalledAtToBusinessAccountRows(normalizedRows);
         const responseRows = mergeDetailRowIntoRows(
-          rowsWithCallHistory,
+          normalizedRows,
           responseRow,
           requestedContactId,
         );

@@ -4,8 +4,9 @@ import {
   removeContactlessPrimaryContactDuplicateRows,
   resolveCompanyPhone,
 } from "@/lib/business-accounts";
-import { applyLastCalledAtToBusinessAccountRows } from "@/lib/business-account-call-history";
+import { resolveLastCalledAtForBusinessAccountRow } from "@/lib/business-account-call-history";
 import { applyDeferredActionsToRows } from "@/lib/deferred-actions-store";
+import { extractNormalizedPhoneDigits } from "@/lib/phone";
 import { invalidateReadModelCaches, registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import { applyLocalAccountMetadataToRows } from "@/lib/read-model/account-local-metadata";
 import { applySharedContactNotesToRows } from "@/lib/read-model/contact-identity-notes";
@@ -21,7 +22,20 @@ type StoredAccountRow = {
   payload_json: string;
 };
 
+type RecentCallSessionIdentityRow = {
+  linked_account_row_key: string | null;
+  linked_contact_id: number | null;
+  matched_contact_id: number | null;
+  linked_business_account_id: string | null;
+  matched_business_account_id: string | null;
+  target_phone: string | null;
+  counterparty_phone: string | null;
+};
+
 type ReadModelListQuery = Parameters<typeof queryBusinessAccounts>[1];
+
+const RECENT_CALL_SESSION_REFRESH_LIMIT = 50;
+const MAX_MATCH_VALUES_PER_FIELD = 100;
 
 let allRowsCache: BusinessAccountRow[] | null = null;
 let allRowsCacheVersion: string | null = null;
@@ -33,6 +47,14 @@ registerReadModelCacheClearer(() => {
 
 function normalizeText(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? "";
+}
+
+function normalizeIdentityText(value: string | null | undefined): string {
+  return value?.trim() ?? "";
+}
+
+function normalizeBusinessAccountId(value: string | null | undefined): string {
+  return normalizeIdentityText(value).toUpperCase();
 }
 
 function buildAddressKey(row: BusinessAccountRow): string {
@@ -76,6 +98,149 @@ function buildSearchText(row: BusinessAccountRow): string {
     .toLowerCase();
 }
 
+function isPositiveInteger(value: number | null | undefined): value is number {
+  return Number.isInteger(value) && Number(value) > 0;
+}
+
+function uniqueNumbers(values: Array<number | null | undefined>): number[] {
+  return [...new Set(values.filter(isPositiveInteger))];
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return [
+    ...new Set(
+      values
+        .map((value) => normalizeIdentityText(value))
+        .filter((value) => value.length > 0),
+    ),
+  ];
+}
+
+function uniqueBusinessAccountIds(values: Array<string | null | undefined>): string[] {
+  return [
+    ...new Set(
+      values
+        .flatMap((value) => {
+          const normalized = normalizeIdentityText(value);
+          const upper = normalizeBusinessAccountId(value);
+          return normalized && upper && normalized !== upper
+            ? [normalized, upper]
+            : [normalized || upper];
+        })
+        .filter((value) => value.length > 0),
+    ),
+  ];
+}
+
+function limitMatchValues<T>(values: T[]): T[] {
+  return values.slice(0, MAX_MATCH_VALUES_PER_FIELD);
+}
+
+function buildPhoneQueryValues(values: Array<string | null | undefined>): string[] {
+  const candidates: string[] = [];
+
+  for (const value of values) {
+    const normalized = normalizeIdentityText(value);
+    if (normalized) {
+      candidates.push(normalized);
+    }
+
+    const digits = extractNormalizedPhoneDigits(value);
+    if (!digits) {
+      continue;
+    }
+
+    candidates.push(digits, `+${digits}`);
+    if (digits.length === 10) {
+      candidates.push(`1${digits}`, `+1${digits}`);
+    } else if (digits.length === 11 && digits.startsWith("1")) {
+      candidates.push(digits.slice(1), `+${digits.slice(1)}`);
+    }
+  }
+
+  return uniqueStrings(candidates);
+}
+
+function appendInClause<T extends string | number>(
+  clauses: string[],
+  params: Array<string | number>,
+  column: string,
+  values: T[],
+): void {
+  const limitedValues = limitMatchValues(values);
+  if (limitedValues.length === 0) {
+    return;
+  }
+
+  clauses.push(`${column} IN (${limitedValues.map(() => "?").join(", ")})`);
+  params.push(...limitedValues);
+}
+
+function resolveLastCalledAtMatchKeys(row: BusinessAccountRow): string[] {
+  const keys: string[] = [];
+  const rowKey = normalizeIdentityText(row.rowKey ?? row.id);
+  if (rowKey) {
+    keys.push(`row:${rowKey}`);
+  }
+
+  for (const contactId of uniqueNumbers([row.contactId, row.primaryContactId])) {
+    keys.push(`contact:${contactId}`);
+  }
+
+  return keys;
+}
+
+function pickLaterIso(left: string | null | undefined, right: string | null | undefined): string | null {
+  if (!left) {
+    return right ?? null;
+  }
+  if (!right) {
+    return left;
+  }
+
+  const leftTime = Date.parse(left);
+  const rightTime = Date.parse(right);
+  if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) {
+    return rightTime > leftTime ? right : left;
+  }
+
+  return right > left ? right : left;
+}
+
+function buildExistingLastCalledAtLookup(existingRows: BusinessAccountRow[]): Map<string, string> {
+  const lookup = new Map<string, string>();
+
+  for (const row of existingRows) {
+    if (!row.lastCalledAt) {
+      continue;
+    }
+
+    for (const key of resolveLastCalledAtMatchKeys(row)) {
+      const nextValue = pickLaterIso(lookup.get(key), row.lastCalledAt);
+      if (nextValue) {
+        lookup.set(key, nextValue);
+      }
+    }
+  }
+
+  return lookup;
+}
+
+function resolveInheritedLastCalledAt(
+  row: BusinessAccountRow,
+  lookup: Map<string, string>,
+  accountFallback: string | null,
+): string | null {
+  for (const key of resolveLastCalledAtMatchKeys(row)) {
+    const value = lookup.get(key);
+    if (value) {
+      return value;
+    }
+  }
+
+  return accountFallback;
+}
+
 function inheritSupplementalAccountMetadata(
   nextRows: BusinessAccountRow[],
   existingRows: BusinessAccountRow[],
@@ -85,8 +250,16 @@ function inheritSupplementalAccountMetadata(
   const existingOpportunityCount = existingRows.find(
     (row) => row.opportunityCount !== undefined,
   )?.opportunityCount;
+  const existingLastCalledAtByRow = buildExistingLastCalledAtLookup(existingRows);
+  const accountLastCalledAtFallback =
+    existingRows.length === 1 ? existingRows[0]?.lastCalledAt ?? null : null;
 
-  if (existingAccountType === undefined && existingOpportunityCount === undefined) {
+  if (
+    existingAccountType === undefined &&
+    existingOpportunityCount === undefined &&
+    existingLastCalledAtByRow.size === 0 &&
+    !accountLastCalledAtFallback
+  ) {
     return nextRows;
   }
 
@@ -99,6 +272,14 @@ function inheritSupplementalAccountMetadata(
 
     if (nextRow.opportunityCount === undefined && existingOpportunityCount !== undefined) {
       nextRow.opportunityCount = existingOpportunityCount;
+    }
+
+    if (!nextRow.lastCalledAt) {
+      nextRow.lastCalledAt = resolveInheritedLastCalledAt(
+        nextRow,
+        existingLastCalledAtByRow,
+        accountLastCalledAtFallback,
+      );
     }
 
     return nextRow;
@@ -119,9 +300,7 @@ function prepareRowsForStorage(
   existingRows: BusinessAccountRow[] = [],
 ): BusinessAccountRow[] {
   return removeContactlessPrimaryContactDuplicateRows(
-    applyLastCalledAtToBusinessAccountRows(
-      inheritSupplementalAccountMetadata(nextRows, existingRows),
-    ).map(normalizeStoredSupplementalFields),
+    inheritSupplementalAccountMetadata(nextRows, existingRows).map(normalizeStoredSupplementalFields),
   );
 }
 
@@ -131,6 +310,14 @@ function parseStoredRow(payload: string): BusinessAccountRow | null {
   } catch {
     return null;
   }
+}
+
+function parseRawStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
+  return removeContactlessPrimaryContactDuplicateRows(
+    rows
+      .map((row) => parseStoredRow(row.payload_json))
+      .filter((row): row is BusinessAccountRow => row !== null),
+  );
 }
 
 function parseStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
@@ -144,9 +331,7 @@ function parseStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
 
 function applyReadModelRowDecorations(rows: BusinessAccountRow[]): BusinessAccountRow[] {
   return applySharedContactNotesToRows(
-    applyLastCalledAtToBusinessAccountRows(
-      applyLocalAccountMetadataToRows(applyDeferredActionsToRows(rows)),
-    ),
+    applyLocalAccountMetadataToRows(applyDeferredActionsToRows(rows)),
   );
 }
 
@@ -526,25 +711,126 @@ export function replaceReadModelAccountRows(
   invalidateReadModelCaches();
 }
 
-export function refreshStoredReadModelAccountSupplementalFields(): void {
+function readRecentlyTouchedAccountRowsFromReadModel(): BusinessAccountRow[] {
   const db = getReadModelDb();
-  const currentRows = (db
+  const recentSessions = db
+    .prepare(
+      `
+      SELECT
+        linked_account_row_key,
+        linked_contact_id,
+        matched_contact_id,
+        linked_business_account_id,
+        matched_business_account_id,
+        target_phone,
+        counterparty_phone
+      FROM call_sessions
+      ORDER BY COALESCE(started_at, updated_at) DESC, session_id DESC
+      LIMIT ?
+      `,
+    )
+    .all(RECENT_CALL_SESSION_REFRESH_LIMIT) as RecentCallSessionIdentityRow[];
+
+  if (recentSessions.length === 0) {
+    return [];
+  }
+
+  const rowKeys = uniqueStrings(
+    recentSessions.map((session) => session.linked_account_row_key),
+  );
+  const contactIds = uniqueNumbers(
+    recentSessions.flatMap((session) => [
+      session.linked_contact_id,
+      session.matched_contact_id,
+    ]),
+  );
+  const businessAccountIds = uniqueBusinessAccountIds(
+    recentSessions.flatMap((session) => [
+      session.linked_business_account_id,
+      session.matched_business_account_id,
+    ]),
+  );
+  const phoneValues = buildPhoneQueryValues(
+    recentSessions.flatMap((session) => [
+      session.target_phone,
+      session.counterparty_phone,
+    ]),
+  );
+
+  const clauses: string[] = [];
+  const params: Array<string | number> = [];
+  appendInClause(clauses, params, "row_key", rowKeys);
+  appendInClause(clauses, params, "contact_id", contactIds);
+  appendInClause(clauses, params, "primary_contact_id", contactIds);
+  appendInClause(clauses, params, "business_account_id", businessAccountIds);
+  appendInClause(clauses, params, "phone_number", phoneValues);
+  appendInClause(clauses, params, "company_phone", phoneValues);
+  appendInClause(clauses, params, "primary_contact_phone", phoneValues);
+
+  if (clauses.length === 0) {
+    return [];
+  }
+
+  const rows = db
     .prepare(
       `
       SELECT payload_json
       FROM account_rows
+      WHERE ${clauses.map((clause) => `(${clause})`).join(" OR ")}
       ORDER BY company_name COLLATE NOCASE ASC, row_key ASC
       `,
     )
-    .all() as StoredAccountRow[])
-    .map((row) => parseStoredRow(row.payload_json))
-    .filter((row): row is BusinessAccountRow => row !== null);
+    .all(...params) as StoredAccountRow[];
+
+  return parseRawStoredRows(rows);
+}
+
+export function refreshStoredReadModelAccountSupplementalFields(): void {
+  const currentRows = readRecentlyTouchedAccountRowsFromReadModel();
 
   if (currentRows.length === 0) {
     return;
   }
 
-  replaceAllAccountRows(currentRows);
+  const db = getReadModelDb();
+  const now = new Date().toISOString();
+  const update = db.prepare(
+    `
+    UPDATE account_rows
+    SET search_text = @search_text,
+        payload_json = @payload_json,
+        updated_at = @updated_at
+    WHERE row_key = @row_key
+    `,
+  );
+  let changedCount = 0;
+
+  const refresh = db.transaction(() => {
+    for (const row of currentRows) {
+      const nextLastCalledAt = resolveLastCalledAtForBusinessAccountRow(row);
+      if ((row.lastCalledAt ?? null) === nextLastCalledAt) {
+        continue;
+      }
+
+      const nextRow = normalizeStoredSupplementalFields({
+        ...row,
+        lastCalledAt: nextLastCalledAt,
+      });
+      update.run({
+        row_key: nextRow.rowKey ?? `${nextRow.accountRecordId ?? nextRow.id}:contact:${nextRow.contactId ?? "row"}`,
+        search_text: buildSearchText(nextRow),
+        payload_json: JSON.stringify(nextRow),
+        updated_at: now,
+      });
+      changedCount += 1;
+    }
+  });
+
+  refresh();
+
+  if (changedCount > 0) {
+    invalidateReadModelCaches();
+  }
 }
 
 export function readBusinessAccountRowsFromReadModel(
@@ -599,9 +885,7 @@ export function readBusinessAccountDetailFromReadModel(
   accountRecordId: string,
   contactId?: number | null,
 ): BusinessAccountDetailResponse | null {
-  const rows = applyLastCalledAtToBusinessAccountRows(
-    applyDeferredActionsToRows(readBusinessAccountRowsFromReadModel(accountRecordId)),
-  );
+  const rows = readBusinessAccountRowsFromReadModel(accountRecordId);
   if (rows.length === 0) {
     return null;
   }
