@@ -164,6 +164,9 @@ const dev = process.env.NODE_ENV !== "production";
 const hostname = "0.0.0.0";
 const port = Number(process.env.PORT || 3000);
 const quotesMountPath = normalizeMountPath(process.env.MBQ_BASE_PATH, "/quotes");
+const isClusterWorker = process.env.SALES_MEADOWB_CLUSTER_WORKER === "1";
+const clusterBackgroundTasksEnabled =
+  !isClusterWorker || process.env.SALES_MEADOWB_CLUSTER_BACKGROUND_TASKS === "true";
 
 const nextApp = next({
   dev,
@@ -1079,24 +1082,30 @@ server.listen(port, hostname, () => {
 
   console.log(`sales-meadowb listening on http://${hostname}:${port}`);
   console.log(`embedded pricing-book-app mounted at ${quotesMountPath}`);
-  void applyOptionalBrockAbSqliteRepair()
-    .then((repairResult) => {
-      if (repairResult?.status === "applied") {
-        console.log("[startup] Brock A/B SQLite repair applied", repairResult);
-      } else if (repairResult?.status === "already_applied") {
-        console.log("[startup] Brock A/B SQLite repair already applied", repairResult);
-      } else if (repairResult?.status === "disabled") {
-        console.log("[startup] Brock A/B SQLite repair disabled", repairResult);
-      }
-    })
-    .catch((error) => {
-      console.error("[startup] Brock A/B SQLite repair failed", {
-        message: error instanceof Error ? error.message : String(error),
+  if (clusterBackgroundTasksEnabled) {
+    void applyOptionalBrockAbSqliteRepair()
+      .then((repairResult) => {
+        if (repairResult?.status === "applied") {
+          console.log("[startup] Brock A/B SQLite repair applied", repairResult);
+        } else if (repairResult?.status === "already_applied") {
+          console.log("[startup] Brock A/B SQLite repair already applied", repairResult);
+        } else if (repairResult?.status === "disabled") {
+          console.log("[startup] Brock A/B SQLite repair disabled", repairResult);
+        }
+      })
+      .catch((error) => {
+        console.error("[startup] Brock A/B SQLite repair failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
-    });
-  if (pricingBookAutoSyncEnabled) {
+  } else {
+    console.log("[startup] Brock A/B SQLite repair skipped on web-only cluster worker");
+  }
+  if (pricingBookAutoSyncEnabled && clusterBackgroundTasksEnabled) {
     startPricingBookAutoSync(console);
     console.log("[pricing-book-auto-sync] enabled");
+  } else if (pricingBookAutoSyncEnabled) {
+    console.log("[pricing-book-auto-sync] skipped on web-only cluster worker");
   } else {
     console.log("[pricing-book-auto-sync] disabled on this runtime");
   }
@@ -1110,81 +1119,85 @@ server.listen(port, hostname, () => {
     });
   }
 
-  const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
-  let watchdogInFlight = false;
-  setInterval(async () => {
-    if (watchdogInFlight) {
-      console.warn("[watchdog] previous cycle still running; skipping overlap");
-      return;
-    }
-    if (shouldDeferBackgroundWork("watchdog")) {
-      return;
-    }
+  if (clusterBackgroundTasksEnabled) {
+    const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
+    let watchdogInFlight = false;
+    setInterval(async () => {
+      if (watchdogInFlight) {
+        console.warn("[watchdog] previous cycle still running; skipping overlap");
+        return;
+      }
+      if (shouldDeferBackgroundWork("watchdog")) {
+        return;
+      }
 
-    watchdogInFlight = true;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60_000);
+      watchdogInFlight = true;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60_000);
 
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/api/watchdog/run`, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          ...(process.env.WATCHDOG_SECRET
-            ? { "x-watchdog-secret": process.env.WATCHDOG_SECRET }
-            : {}),
-        },
-        signal: controller.signal,
-      });
-      const payload = await response.json().catch(() => null);
-
-      if (!response.ok && response.status !== 207) {
-        console.error("[watchdog] cycle request failed", {
-          status: response.status,
-          body: payload,
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/api/watchdog/run`, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            ...(process.env.WATCHDOG_SECRET
+              ? { "x-watchdog-secret": process.env.WATCHDOG_SECRET }
+              : {}),
+          },
+          signal: controller.signal,
         });
-        return;
-      }
+        const payload = await response.json().catch(() => null);
 
-      const report = payload && typeof payload === "object" ? payload : null;
-      if (!report || !Array.isArray(report.actions)) {
-        console.error("[watchdog] cycle returned an invalid payload", payload);
-        return;
-      }
+        if (!response.ok && response.status !== 207) {
+          console.error("[watchdog] cycle request failed", {
+            status: response.status,
+            body: payload,
+          });
+          return;
+        }
 
-      if (report.actions.length === 0) {
-        console.log(`[watchdog] all clear; checked ${report.checked} jobs in ${report.durationMs}ms`);
-        return;
-      }
+        const report = payload && typeof payload === "object" ? payload : null;
+        if (!report || !Array.isArray(report.actions)) {
+          console.error("[watchdog] cycle returned an invalid payload", payload);
+          return;
+        }
 
-      const fixed = report.actions.filter((a) => a.result === "fixed").length;
-      const requeued = report.actions.filter((a) => a.result === "requeued").length;
-      const skipped = report.actions.filter((a) => a.result === "skipped").length;
-      const failed = report.actions.filter((a) => a.result === "failed").length;
+        if (report.actions.length === 0) {
+          console.log(`[watchdog] all clear; checked ${report.checked} jobs in ${report.durationMs}ms`);
+          return;
+        }
 
-      const parts = [];
-      if (fixed > 0) parts.push(`${fixed} fixed`);
-      if (requeued > 0) parts.push(`${requeued} requeued`);
-      if (skipped > 0) parts.push(`${skipped} skipped`);
-      if (failed > 0) parts.push(`${failed} failed`);
+        const fixed = report.actions.filter((a) => a.result === "fixed").length;
+        const requeued = report.actions.filter((a) => a.result === "requeued").length;
+        const skipped = report.actions.filter((a) => a.result === "skipped").length;
+        const failed = report.actions.filter((a) => a.result === "failed").length;
 
-      console.log(
-        `[watchdog] ${parts.join(", ")}; checked ${report.checked} jobs in ${report.durationMs}ms`,
-      );
+        const parts = [];
+        if (fixed > 0) parts.push(`${fixed} fixed`);
+        if (requeued > 0) parts.push(`${requeued} requeued`);
+        if (skipped > 0) parts.push(`${skipped} skipped`);
+        if (failed > 0) parts.push(`${failed} failed`);
 
-      for (const action of report.actions) {
         console.log(
-          `[watchdog]   ${action.sessionId}: ${action.issue} -> ${action.result} - ${action.detail}`,
+          `[watchdog] ${parts.join(", ")}; checked ${report.checked} jobs in ${report.durationMs}ms`,
         );
+
+        for (const action of report.actions) {
+          console.log(
+            `[watchdog]   ${action.sessionId}: ${action.issue} -> ${action.result} - ${action.detail}`,
+          );
+        }
+      } catch (error) {
+        console.error("[watchdog] cycle failed", error);
+      } finally {
+        clearTimeout(timeoutId);
+        watchdogInFlight = false;
       }
-    } catch (error) {
-      console.error("[watchdog] cycle failed", error);
-    } finally {
-      clearTimeout(timeoutId);
-      watchdogInFlight = false;
-    }
-  }, WATCHDOG_INTERVAL_MS);
-  console.log(`[watchdog] started; checking every ${WATCHDOG_INTERVAL_MS / 1000}s`);
+    }, WATCHDOG_INTERVAL_MS);
+    console.log(`[watchdog] started; checking every ${WATCHDOG_INTERVAL_MS / 1000}s`);
+  } else {
+    console.log("[watchdog] skipped on web-only cluster worker");
+  }
 
   const dailyCallCoachingEnabled = readFeatureEnabled(
     process.env.DAILY_CALL_COACHING_ENABLED,
@@ -1347,7 +1360,9 @@ server.listen(port, hostname, () => {
     }
   }
 
-  if (dailyCallCoachingEnabled && !dailyCallCoachingExternalSchedulerEnabled) {
+  if (dailyCallCoachingEnabled && !clusterBackgroundTasksEnabled) {
+    console.log("[daily-call-coaching] skipped on web-only cluster worker");
+  } else if (dailyCallCoachingEnabled && !dailyCallCoachingExternalSchedulerEnabled) {
     const minuteAlignedDelayMs = 60_000 - (Date.now() % 60_000);
     setTimeout(() => {
       void runDailyCallCoachingCycle("startup");
@@ -1659,7 +1674,9 @@ server.listen(port, hostname, () => {
     }
   }
 
-  if (callActivitySyncEnabled && !callActivitySyncExternalSchedulerEnabled) {
+  if (callActivitySyncEnabled && !clusterBackgroundTasksEnabled) {
+    console.log("[call-activity-sync] skipped on web-only cluster worker");
+  } else if (callActivitySyncEnabled && !callActivitySyncExternalSchedulerEnabled) {
     if (callActivitySyncUsesScheduledWindow) {
       const minuteAlignedDelayMs = 60_000 - (Date.now() % 60_000);
       setTimeout(() => {

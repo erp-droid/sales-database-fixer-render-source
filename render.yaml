@@ -4,7 +4,7 @@ services:
     runtime: docker
     repo: https://github.com/erp-droid/sales-database-fixer-render-source
     branch: main
-    plan: pro
+    plan: pro plus
     region: ohio
     dockerfilePath: ./Dockerfile
     dockerContext: .
@@ -18,6 +18,10 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: WEB_CONCURRENCY
+        value: "8"
+      - key: WEB_CLUSTER_SHUTDOWN_TIMEOUT_MS
+        value: "10000"
       - key: AUTH_PROVIDER
         value: acumatica
       - key: AUTH_COOKIE_NAME
