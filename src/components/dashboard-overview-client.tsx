@@ -29,6 +29,16 @@ type ErrorPayload = {
   error?: string;
 };
 
+type PriorityCardIcon = "calls" | "meetings" | "connection" | "talkTime" | "emails";
+type DashboardPreset = "today" | "last7" | "last30" | "quarter";
+
+const DASHBOARD_PRESETS: Array<{ key: DashboardPreset; label: string }> = [
+  { key: "today", label: "Today" },
+  { key: "last7", label: "Last 7 days" },
+  { key: "last30", label: "Last 30 days" },
+  { key: "quarter", label: "Quarter to date" },
+];
+
 function formatCountWithTotalShare(count: number, total: number): string {
   const share = total > 0 ? count / total : 0;
   return `${count.toLocaleString()} · ${formatPercent(share)}`;
@@ -38,25 +48,29 @@ function buildPriorityCards(
   stats: DashboardSnapshotResponse["teamStats"],
   meetingStats: DashboardSnapshotResponse["meetingStats"],
   emailStats: DashboardSnapshotResponse["emailStats"],
-): Array<{ label: string; value: string; meta?: string }> {
+): Array<{ icon: PriorityCardIcon; label: string; value: string; meta?: string }> {
   return [
     {
+      icon: "calls",
       label: "Calls",
       value: stats.totalCalls.toLocaleString(),
       meta: `${stats.outboundCalls.toLocaleString()} outbound • ${stats.inboundCalls.toLocaleString()} inbound`,
     },
     {
+      icon: "meetings",
       label: "Meetings booked",
       value: meetingStats.totalMeetings.toLocaleString(),
       meta: `${meetingStats.uniqueBookers.toLocaleString()} creators in the current range`,
     },
-    { label: "Connection rate", value: formatPercent(stats.answerRate) },
+    { icon: "connection", label: "Connection rate", value: formatPercent(stats.answerRate) },
     {
+      icon: "talkTime",
       label: "Talk time",
       value: formatDuration(stats.totalTalkSeconds),
       meta: `${formatDuration(stats.averageTalkSeconds)} avg connected`,
     },
     {
+      icon: "emails",
       label: "Emails sent",
       value: emailStats.totalSent.toLocaleString(),
       meta:
@@ -65,6 +79,95 @@ function buildPriorityCards(
           : `${emailStats.uniqueSenders.toLocaleString()} active senders`,
     },
   ];
+}
+
+function PriorityCardIconGraphic({ icon }: { icon: PriorityCardIcon }) {
+  const commonProps = {
+    "aria-hidden": true,
+    fill: "none",
+    stroke: "currentColor",
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    viewBox: "0 0 24 24",
+  };
+
+  switch (icon) {
+    case "calls":
+      return (
+        <svg {...commonProps}>
+          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.2 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.91.32 1.8.59 2.65a2 2 0 0 1-.45 2.11L8 9.73a16 16 0 0 0 6.27 6.27l1.25-1.25a2 2 0 0 1 2.11-.45c.85.27 1.74.47 2.65.59A2 2 0 0 1 22 16.92Z" />
+        </svg>
+      );
+    case "meetings":
+      return (
+        <svg {...commonProps}>
+          <path d="M8 2v4" />
+          <path d="M16 2v4" />
+          <rect height="18" rx="2" width="18" x="3" y="4" />
+          <path d="M3 10h18" />
+          <path d="M8 14h.01" />
+          <path d="M12 14h.01" />
+          <path d="M16 14h.01" />
+        </svg>
+      );
+    case "connection":
+      return (
+        <svg {...commonProps}>
+          <path d="M16 21v-2a4 4 0 0 0-8 0v2" />
+          <circle cx="12" cy="7" r="4" />
+          <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+        </svg>
+      );
+    case "talkTime":
+      return (
+        <svg {...commonProps}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v5l3 2" />
+        </svg>
+      );
+    case "emails":
+      return (
+        <svg {...commonProps}>
+          <rect height="16" rx="2" width="20" x="2" y="4" />
+          <path d="m22 7-8.97 5.7a2 2 0 0 1-2.06 0L2 7" />
+        </svg>
+      );
+  }
+}
+
+function FilterIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+    >
+      <path d="M3 5h18" />
+      <path d="M7 12h10" />
+      <path d="M10 19h4" />
+    </svg>
+  );
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+    >
+      <path d="M15 3h6v6" />
+      <path d="M10 14 21 3" />
+      <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+    </svg>
+  );
 }
 
 function buildSelectedEmployeeCards(
@@ -225,6 +328,56 @@ function mergeFilters(filters: DashboardFilters, next: Partial<DashboardFilters>
   };
 }
 
+function startOfLocalDay(value: Date): Date {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function endOfLocalDay(value: Date): Date {
+  const date = new Date(value);
+  date.setHours(23, 59, 59, 999);
+  return date;
+}
+
+function buildPresetRange(preset: DashboardPreset, nowInput: Date): Pick<DashboardFilters, "start" | "end"> {
+  const now = new Date(nowInput);
+  const end = endOfLocalDay(now);
+  const start = startOfLocalDay(now);
+
+  switch (preset) {
+    case "today":
+      return { start: start.toISOString(), end: end.toISOString() };
+    case "last7":
+      start.setDate(start.getDate() - 7);
+      return { start: start.toISOString(), end: end.toISOString() };
+    case "last30":
+      start.setDate(start.getDate() - 30);
+      return { start: start.toISOString(), end: end.toISOString() };
+    case "quarter":
+      start.setMonth(Math.floor(start.getMonth() / 3) * 3, 1);
+      return { start: start.toISOString(), end: end.toISOString() };
+  }
+}
+
+function getActivePreset(filters: DashboardFilters, nowIso: string): DashboardPreset | null {
+  const filterStart = formatDashboardDateInputValue(filters.start);
+  const filterEnd = formatDashboardDateInputValue(filters.end);
+  const now = new Date(nowIso);
+
+  for (const preset of DASHBOARD_PRESETS) {
+    const range = buildPresetRange(preset.key, now);
+    if (
+      formatDashboardDateInputValue(range.start) === filterStart &&
+      formatDashboardDateInputValue(range.end) === filterEnd
+    ) {
+      return preset.key;
+    }
+  }
+
+  return null;
+}
+
 type DashboardOverviewClientProps = {
   defaultNowIso: string;
 };
@@ -269,13 +422,11 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     replaceFilters(mergeFilters(filters, next));
   }
 
-  function applyPreset(days: number): void {
-    const end = new Date();
-    const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000);
+  function applyPreset(preset: DashboardPreset): void {
+    const range = buildPresetRange(preset, new Date());
     replaceFilters({
       ...filters,
-      start: start.toISOString(),
-      end: end.toISOString(),
+      ...range,
     });
   }
 
@@ -490,6 +641,7 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     }
     return count;
   }, [filters]);
+  const activePreset = useMemo(() => getActivePreset(filters, defaultNowIso), [defaultNowIso, filters]);
   const selectedEmployee =
     snapshot?.employeeLeaderboard.find((item) => item.loginName === selectedEmployeeLoginName) ?? null;
   const selectedEmployeeRecentCalls = useMemo(() => {
@@ -816,28 +968,26 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
       subtitle="A quieter view of calls, meetings, drop offs, and sent-email activity for the current range."
       title="Dashboard"
     >
-      <DashboardStatusBar
-        backgroundRefreshTriggered={snapshot?.backgroundRefreshTriggered ?? false}
-        importLabel={readStatusLabel(snapshot)}
-        lastUpdatedAt={snapshot?.importState.updatedAt}
-        lastWebhookAt={snapshot?.importState.lastWebhookAt}
-      />
-
       <section className={styles.controlBar}>
         <div className={styles.controlRow}>
           <div className={styles.quickRanges}>
-            <button className={styles.quickButton} onClick={() => applyPreset(1)} type="button">
-              Today
-            </button>
-            <button className={styles.quickButton} onClick={() => applyPreset(7)} type="button">
-              Last 7 days
-            </button>
-            <button className={styles.quickButton} onClick={() => applyPreset(30)} type="button">
-              Last 30 days
-            </button>
-            <button className={styles.quickButton} onClick={() => applyPreset(90)} type="button">
-              Quarter to date
-            </button>
+            {DASHBOARD_PRESETS.map((preset) => {
+              const isActive = activePreset === preset.key;
+
+              return (
+                <button
+                  aria-pressed={isActive}
+                  className={[styles.quickButton, isActive ? styles.quickButtonActive : null]
+                    .filter(Boolean)
+                    .join(" ")}
+                  key={preset.key}
+                  onClick={() => applyPreset(preset.key)}
+                  type="button"
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
           </div>
 
           <div className={styles.controlInputs}>
@@ -868,10 +1018,16 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
               onClick={() => setShowFiltersPanel((current) => !current)}
               type="button"
             >
+              <span className={styles.buttonIcon}>
+                <FilterIcon />
+              </span>
               {showFiltersPanel ? "Hide filters" : `Filters${activeFilterCount ? ` (${activeFilterCount})` : ""}`}
             </button>
-            <a className={styles.summaryLink} href={buildExplorerHref(filters)}>
+            <a className={styles.primaryActionLink} href={buildExplorerHref(filters)}>
               Open Explorer
+              <span className={styles.buttonIcon}>
+                <ExternalLinkIcon />
+              </span>
             </a>
           </div>
         </div>
@@ -984,12 +1140,24 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
           <section className={styles.priorityGrid}>
             {buildPriorityCards(snapshot.teamStats, snapshot.meetingStats, snapshot.emailStats).map((card) => (
               <article className={styles.priorityCard} key={card.label}>
-                <small>{card.label}</small>
-                <strong>{card.value}</strong>
-                {card.meta ? <span>{card.meta}</span> : null}
+                <span className={styles.priorityIcon}>
+                  <PriorityCardIconGraphic icon={card.icon} />
+                </span>
+                <span className={styles.priorityCopy}>
+                  <small>{card.label}</small>
+                  <strong>{card.value}</strong>
+                  {card.meta ? <span>{card.meta}</span> : null}
+                </span>
               </article>
             ))}
           </section>
+
+          <DashboardStatusBar
+            backgroundRefreshTriggered={snapshot.backgroundRefreshTriggered}
+            importLabel={readStatusLabel(snapshot)}
+            lastUpdatedAt={snapshot.importState.updatedAt}
+            lastWebhookAt={snapshot.importState.lastWebhookAt}
+          />
 
           <section className={styles.heroGrid}>
             <article className={styles.chartCard}>

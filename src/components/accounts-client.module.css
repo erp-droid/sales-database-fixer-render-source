@@ -417,111 +417,495 @@
   align-items: center;
   gap: 8px;
   padding: 0 16px;
-  border: 1px solid var(--accounts-green);
+  border: 1px solid var(--accounts-border);
   border-radius: 12px;
-  background: var(--accounts-green);
+  background: var(--accounts-surface);
   color: var(--accounts-text);
   font-weight: 700;
-  box-shadow: 0 10px 18px rgba(47, 143, 99, 0.18);
-}
-
-.filterViewsRow {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.filterViewsLabel {
-  color: var(--accounts-text-secondary);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.filterViews {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px;
-  border: 1px solid var(--accounts-border);
-  border-radius: 999px;
-  background: var(--accounts-surface);
-}
-
-.filterViewButton {
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--accounts-text-secondary);
-  font-size: 14px;
-  font-weight: 600;
-  padding: 8px 14px;
+  box-shadow: 0 10px 24px rgba(23, 32, 51, 0.08);
   transition:
     background-color 0.18s ease,
-    color 0.18s ease;
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
 }
 
-.filterViewButton:hover {
-  background: #f4f7fb;
+.createButton:hover {
+  border-color: var(--accounts-border-strong);
+  background: #fbfcfe;
+  box-shadow: 0 12px 28px rgba(23, 32, 51, 0.1);
+}
+
+.viewMetricsGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.viewMetricCard {
+  min-width: 0;
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 10px 22px rgba(23, 32, 51, 0.06);
+}
+
+.viewMetricIcon {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
   color: var(--accounts-text);
+  flex: 0 0 auto;
 }
 
-.filterViewButtonActive {
+.viewMetricIcon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.viewMetricIconGreen {
   background: var(--accounts-green-soft);
   color: var(--accounts-green);
 }
 
-.categoryFilterViewsRow {
+.viewMetricIconBlue {
+  background: #eaf3ff;
+  color: #2563eb;
+}
+
+.viewMetricIconPurple {
+  background: #f1e8ff;
+  color: #7c3aed;
+}
+
+.viewMetricIconTeal {
+  background: #e8f8f1;
+  color: #138a55;
+}
+
+.viewMetricIconAmber {
+  background: #fff3d8;
+  color: #a16207;
+}
+
+.viewMetricIconCyan {
+  background: #e7f8fb;
+  color: #0e7490;
+}
+
+.viewMetricBody {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.viewMetricHeader {
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.categoryFilterOptions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+.viewMetricLabel {
+  min-width: 0;
+  color: var(--accounts-text-secondary);
+  font-size: 11px;
+  line-height: 1.15;
+  font-weight: 700;
+  white-space: normal;
 }
 
-.categoryFilterOptionButton,
-.categoryFilterClearButton {
+.viewMetricValue {
+  display: block;
+  min-width: 0;
+  color: var(--accounts-text);
+  font-size: 20px;
+  line-height: 1.04;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.viewMetricMeta {
+  min-width: 0;
+  color: var(--accounts-text-secondary);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.viewMetricBadge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  min-height: 19px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.viewMetricBadgeGood {
+  background: var(--accounts-green-soft);
+  color: var(--accounts-green);
+}
+
+.viewMetricBadgeReview {
+  background: #fff3d8;
+  color: #a16207;
+}
+
+.viewMetricBadgeAttention {
+  background: var(--accounts-red-soft);
+  color: var(--accounts-red);
+}
+
+.filterRail {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(215, 225, 239, 0.95);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 8px 18px rgba(23, 32, 51, 0.05);
+  overflow: visible;
+}
+
+.weekRail {
+  align-items: start;
+  padding: 6px 10px;
+}
+
+.filterRailGroup {
+  min-width: 0;
+  display: grid;
+  align-content: end;
+  gap: 10px;
+}
+
+.filterRailGroupViews {
+  min-width: 240px;
+}
+
+.filterRailGroupWeeks {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.filterRailGroupSalesReps {
+  justify-self: start;
+}
+
+.filterRailLabel {
+  color: var(--accounts-text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.filterSegment,
+.compactFilterGroup,
+.salesRepFilterCluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.filterSegment {
+  padding: 4px;
   border: 1px solid var(--accounts-border);
   border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 8px 18px rgba(23, 32, 51, 0.07);
+}
+
+.filterSegmentButton,
+.compactFilterChip,
+.filterResetButton,
+.filterTextButton,
+.salesRepFilterChip,
+.salesRepMoreButton {
+  min-height: 38px;
+  border: 1px solid var(--accounts-border);
   background: var(--accounts-surface);
   color: var(--accounts-text-secondary);
   font-size: 13px;
-  font-weight: 700;
-  padding: 7px 12px;
+  font-weight: 800;
   transition:
     background-color 0.18s ease,
+    border-color 0.18s ease,
     color 0.18s ease,
-    border-color 0.18s ease;
+    box-shadow 0.18s ease;
 }
 
-.categoryFilterOptionButton:hover,
-.categoryFilterClearButton:hover:not(:disabled) {
+.filterSegmentButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-color: transparent;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.filterButtonIcon {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.filterButtonIcon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.filterSegmentButton:hover,
+.compactFilterChip:hover,
+.filterResetButton:hover:not(:disabled),
+.filterTextButton:hover:not(:disabled),
+.salesRepFilterChip:hover,
+.salesRepMoreButton:hover {
   border-color: var(--accounts-border-strong);
   color: var(--accounts-text);
 }
 
-.categoryFilterOptionButtonActive {
-  border-color: var(--accounts-green);
+.filterSegmentButtonActive,
+.compactFilterChipActive {
+  border-color: rgba(47, 143, 99, 0.34);
   background: var(--accounts-green-soft);
   color: var(--accounts-green);
+  box-shadow: 0 8px 18px rgba(47, 143, 99, 0.14);
 }
 
-.categoryFilterClearButton:disabled {
+.compactFilterGroup {
+  flex-wrap: nowrap;
+}
+
+.weekFilterGroup {
+  flex: 1 1 auto;
+  max-width: none;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0;
+}
+
+.weekFilterGroup .compactFilterChip {
+  min-height: 30px;
+  min-width: 58px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.compactFilterChip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 68px;
+  padding: 0 13px;
+  border-radius: 999px;
+}
+
+.categoryFilterChip {
+  width: 38px;
+  min-width: 38px;
+  padding: 0;
+}
+
+.filterResetButton {
+  width: 38px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+}
+
+.filterResetButton svg,
+.salesRepMoreButton svg {
+  width: 16px;
+  height: 16px;
+}
+
+.filterTextButton {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--accounts-text-secondary);
+  font-size: 12px;
+  border-radius: 999px;
+}
+
+.filterResetButton:disabled,
+.filterTextButton:disabled {
   cursor: not-allowed;
-  opacity: 0.6;
+  opacity: 0.5;
+}
+
+.salesRepFilterCluster {
+  position: relative;
+  justify-content: flex-start;
+}
+
+.salesRepFilterChip {
+  width: 38px;
+  min-width: 38px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.salesRepFilterChipActive {
+  border-width: 2px;
+  box-shadow: 0 8px 18px rgba(23, 32, 51, 0.12);
+}
+
+.salesRepFilterChipGreen {
+  border-color: rgba(22, 163, 74, 0.3);
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.salesRepFilterChipPurple {
+  border-color: rgba(99, 102, 241, 0.28);
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
+.salesRepFilterChipBlue {
+  border-color: rgba(37, 99, 235, 0.28);
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.salesRepFilterChipOrange {
+  border-color: rgba(234, 88, 12, 0.28);
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.salesRepFilterChipTeal {
+  border-color: rgba(13, 148, 136, 0.28);
+  background: #ccfbf1;
+  color: #0f766e;
+}
+
+.salesRepMoreButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border-radius: 999px;
+}
+
+.salesRepFilterEmpty {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px dashed var(--accounts-border);
+  border-radius: 999px;
+  color: var(--accounts-text-secondary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.salesRepFilterDropdown {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 24;
+  width: min(320px, 82vw);
+  max-height: min(360px, calc(100vh - 210px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 22px 48px rgba(23, 32, 51, 0.16);
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+}
+
+.salesRepFilterDropdownHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 4px 6px;
+  font-size: 13px;
+}
+
+.salesRepFilterDropdownActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.salesRepFilterDropdownHeader button {
+  border: 0;
+  background: transparent;
+  color: var(--accounts-text-secondary);
+  font: inherit;
+  font-weight: 800;
+}
+
+.salesRepFilterDropdownHeader button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.salesRepFilterDropdownList {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  gap: 4px;
+  padding-right: 2px;
+}
+
+.salesRepFilterOption {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--accounts-text);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  padding: 4px 8px;
+}
+
+.salesRepFilterOption:hover,
+.salesRepFilterOptionActive {
+  background: #f4f7fb;
 }
 
 .toolbar {
@@ -530,6 +914,23 @@
   gap: 14px;
   align-items: center;
   margin-bottom: 10px;
+}
+
+.tableControlsToolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.toolbarFilterControls {
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  flex-wrap: wrap;
 }
 
 .searchField {
@@ -626,12 +1027,6 @@
   border: 0;
   background: transparent;
   padding: 8px 0;
-}
-
-.toolbarClearRow {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 14px;
 }
 
 .clearFiltersButton,
@@ -819,9 +1214,9 @@
 
 .tableCard {
   border: 1px solid var(--accounts-border);
-  border-radius: 20px;
+  border-radius: 16px;
   background: var(--accounts-surface);
-  box-shadow: var(--accounts-shadow);
+  box-shadow: 0 16px 34px rgba(23, 32, 51, 0.08);
   overflow: hidden;
 }
 
@@ -891,7 +1286,7 @@
 
 .table {
   width: 100%;
-  min-width: 980px;
+  min-width: 1180px;
   border-collapse: separate;
   border-spacing: 0;
 }
@@ -902,9 +1297,9 @@
   background: #fbfcfe;
   color: var(--accounts-text-secondary);
   font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  text-transform: none;
   white-space: nowrap;
 }
 
@@ -914,10 +1309,15 @@
 }
 
 .tableHeaderCell {
+  display: block;
+  min-width: 0;
+}
+
+.tableHeaderTop {
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
+  gap: 5px;
 }
 
 .tableHeaderLabel {
@@ -973,8 +1373,8 @@
 }
 
 .tableHeaderDragHandle {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -993,8 +1393,8 @@
 }
 
 .tableHeaderDragHandle svg {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
 }
 
 .tableHeaderCellDragging {
@@ -1006,50 +1406,119 @@
   box-shadow: inset 0 -2px 0 var(--accounts-green);
 }
 
-.tableFilterRow th {
-  top: 49px;
-  z-index: 6;
-  padding-top: 10px;
-  padding-bottom: 12px;
-  text-transform: none;
-  letter-spacing: normal;
-  font-size: 13px;
-  font-weight: 500;
-}
-
 .table th,
 .table td {
-  padding: 16px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--accounts-border);
   text-align: left;
   vertical-align: middle;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .table tbody tr:last-child td {
   border-bottom: 0;
 }
 
-.tableFilterCell {
-  background: #fbfcfe;
+.tableHeaderFilterButton {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #8a97aa;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
-.filterSpacerCell {
-  padding-top: 10px !important;
-  padding-bottom: 12px !important;
+.tableHeaderFilterButton:hover {
+  border-color: var(--accounts-border);
+  background: var(--accounts-surface);
+  color: var(--accounts-text);
+}
+
+.tableHeaderFilterButton:focus-visible {
+  outline: 2px solid rgba(47, 143, 99, 0.18);
+  outline-offset: 1px;
+}
+
+.tableHeaderFilterButtonActive {
+  border-color: rgba(47, 143, 99, 0.24);
+  background: var(--accounts-green-soft);
+  color: var(--accounts-green);
+}
+
+.tableHeaderFilterButton svg {
+  width: 13px;
+  height: 13px;
+}
+
+.headerFilterPopover {
+  position: fixed;
+  z-index: 80;
+  width: 280px;
+  padding: 12px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 14px;
+  background: var(--accounts-surface);
+  box-shadow: 0 18px 46px rgba(23, 32, 51, 0.18);
+  color: var(--accounts-text);
+  white-space: normal;
+}
+
+.headerFilterPopoverHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.headerFilterPopoverTitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accounts-text);
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+}
+
+.headerFilterPopoverClear {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accounts-blue);
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.headerFilterPopoverClear:disabled {
+  color: var(--accounts-text-soft);
+  cursor: not-allowed;
+}
+
+.headerFilterPopoverControl {
+  margin-top: 10px;
 }
 
 .headerFilterInput,
 .headerFilterSelect {
   width: 100%;
-  min-height: 36px;
+  min-height: 32px;
   padding: 0 10px;
   border: 1px solid var(--accounts-border);
   border-radius: 10px;
   background: var(--accounts-surface);
   color: var(--accounts-text);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .headerFilterInput::placeholder {
@@ -1057,7 +1526,7 @@
 }
 
 .headerFilterInput[type="date"] {
-  min-width: 132px;
+  min-width: 128px;
 }
 
 .headerFilterInput:focus,
@@ -1068,17 +1537,17 @@
 }
 
 .selectionCheckboxCell {
-  width: 42px;
-  min-width: 42px;
-  padding-left: 12px !important;
-  padding-right: 12px !important;
+  width: 38px;
+  min-width: 38px;
+  padding-left: 10px !important;
+  padding-right: 10px !important;
   text-align: center !important;
 }
 
 .actionsHeader,
 .rowActionsCell {
-  width: 94px;
-  min-width: 94px;
+  width: 82px;
+  min-width: 82px;
 }
 
 .dataRow {
@@ -1096,18 +1565,18 @@
 .rowActions {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .rowActionButton,
 .rowMenuTrigger {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--accounts-border);
-  border-radius: 10px;
+  border-radius: 9px;
   background: var(--accounts-surface);
   color: var(--accounts-text-secondary);
   cursor: pointer;
@@ -1115,8 +1584,8 @@
 
 .rowActionButton svg,
 .rowMenuTrigger svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
 }
 
 .rowActionButton:hover,
@@ -1728,12 +2197,28 @@
 }
 
 @media (max-width: 1100px) {
+  .viewMetricsGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .filterRail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .filterRailGroupSalesReps {
+    justify-self: stretch;
+  }
+
+  .salesRepFilterCluster {
+    justify-content: flex-start;
+  }
+
   .toolbar {
     grid-template-columns: 1fr;
   }
 
-  .toolbarActions,
-  .toolbarClearRow {
+  .toolbarActions {
     justify-content: flex-start;
   }
 
@@ -1745,6 +2230,24 @@
 @media (max-width: 840px) {
   .page {
     padding: 18px;
+  }
+
+  .viewMetricsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .viewMetricCard {
+    min-height: 68px;
+    padding: 9px 10px;
+  }
+
+  .viewMetricIcon {
+    width: 34px;
+    height: 34px;
+  }
+
+  .viewMetricValue {
+    font-size: 18px;
   }
 
   .appBar,
@@ -1761,25 +2264,32 @@
     order: 3;
   }
 
-  .filterViews {
+  .filterRail {
+    width: 100%;
+    grid-template-columns: 1fr;
+    padding: 10px;
+    gap: 10px;
+  }
+
+  .filterRailGroupWeeks {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .filterSegment {
     width: 100%;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     border-radius: 14px;
   }
 
-  .filterViewButton {
-    width: 100%;
-  }
-
-  .categoryFilterOptions {
-    width: 100%;
-  }
-
-  .categoryFilterOptionButton,
-  .categoryFilterClearButton {
-    flex: 1 1 120px;
+  .filterSegmentButton {
     justify-content: center;
+  }
+
+  .compactFilterGroup,
+  .salesRepFilterCluster {
+    flex-wrap: wrap;
   }
 
   .pageHeaderActions,
@@ -1803,5 +2313,11 @@
 
   .table {
     min-width: 860px;
+  }
+}
+
+@media (max-width: 560px) {
+  .viewMetricsGrid {
+    grid-template-columns: 1fr;
   }
 }

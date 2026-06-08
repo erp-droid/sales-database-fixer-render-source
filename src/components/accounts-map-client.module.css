@@ -230,8 +230,23 @@
   color: var(--accent-strong);
 }
 
+.filterToolbar,
+.weekToolbar {
+  position: relative;
+  z-index: 720;
+}
+
+.weekToolbar {
+  z-index: 700;
+}
+
+.salesRepFilterDropdown {
+  z-index: 900;
+}
+
 .mapShell {
   position: relative;
+  z-index: 1;
   min-height: clamp(420px, calc(100vh - 240px), 860px);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -255,6 +270,11 @@
 .mapCanvas :global(.leaflet-tile) {
   outline: 1px solid transparent;
   backface-visibility: hidden;
+}
+
+.mapCanvas :global(.leaflet-top.leaflet-right) {
+  top: 12px;
+  right: 12px;
 }
 
 .infoPanel {

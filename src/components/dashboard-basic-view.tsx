@@ -86,6 +86,7 @@ export async function DashboardBasicView({ searchParams }: DashboardBasicViewPro
   const filters = parseDashboardFilters(params);
   const snapshot = await getDashboardSnapshot(filters);
   const interactiveHref = query ? `/dashboard?${query}` : "/dashboard";
+  const basicHref = query ? `/dashboard?${query}&basic=1` : "/dashboard?basic=1";
   const explorerHref = query ? `/dashboard/explorer?${query}` : "/dashboard/explorer";
   const resetHref = "/dashboard?basic=1";
   const preservedParams = [...params.entries()].filter(
@@ -95,20 +96,27 @@ export async function DashboardBasicView({ searchParams }: DashboardBasicViewPro
   return (
     <AppChrome
       contentClassName={styles.pageContent}
-      headerActions={
-        <>
-          <Link className={styles.navButton} href={interactiveHref}>
-            Interactive view
-          </Link>
-          <Link className={styles.navButton} href={explorerHref}>
-            Explorer
-          </Link>
-        </>
-      }
+      hidePageHeaderCopy
       subtitle="Browser-safe phone call snapshot for machines that cannot load the interactive dashboard."
       title="Dashboard"
       userName={loginName}
     >
+      <div className={styles.dashboardTopbar}>
+        <nav className={styles.subnav} aria-label="Dashboard sections">
+          <Link className={styles.subnavLinkActive} href={basicHref}>
+            Basic view
+          </Link>
+          <Link className={styles.subnavLink} href={explorerHref}>
+            Explorer
+          </Link>
+        </nav>
+        <div className={styles.dashboardActions}>
+          <Link className={styles.navButton} href={interactiveHref}>
+            Interactive view
+          </Link>
+        </div>
+      </div>
+
       <section className={styles.statusBar}>
         <span className={styles.stateTag}>Basic view</span>
         <span>Generated: {formatDateTime(snapshot.generatedAt)}</span>
@@ -169,22 +177,22 @@ export async function DashboardBasicView({ searchParams }: DashboardBasicViewPro
           </Link>
         </div>
         <div className={styles.priorityGrid}>
-          <div className={styles.priorityCard}>
+          <div className={`${styles.priorityCard} ${styles.priorityCardTextOnly}`}>
             <small>Total calls</small>
             <strong>{snapshot.teamStats.totalCalls.toLocaleString()}</strong>
             <span>{snapshot.teamStats.answeredCalls.toLocaleString()} connected</span>
           </div>
-          <div className={styles.priorityCard}>
+          <div className={`${styles.priorityCard} ${styles.priorityCardTextOnly}`}>
             <small>Outbound</small>
             <strong>{snapshot.teamStats.outboundCalls.toLocaleString()}</strong>
             <span>{snapshot.teamStats.unansweredCalls.toLocaleString()} unanswered</span>
           </div>
-          <div className={styles.priorityCard}>
+          <div className={`${styles.priorityCard} ${styles.priorityCardTextOnly}`}>
             <small>Inbound</small>
             <strong>{snapshot.teamStats.inboundCalls.toLocaleString()}</strong>
             <span>{snapshot.teamStats.missedInboundCalls.toLocaleString()} missed inbound</span>
           </div>
-          <div className={styles.priorityCard}>
+          <div className={`${styles.priorityCard} ${styles.priorityCardTextOnly}`}>
             <small>Connection rate</small>
             <strong>{formatPercent(snapshot.teamStats.answerRate)}</strong>
             <span>{formatDuration(snapshot.teamStats.totalTalkSeconds)} talk time</span>

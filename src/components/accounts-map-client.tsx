@@ -4,21 +4,22 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { AppChrome } from "@/components/app-chrome";
-import type {
-  BusinessAccountDetailResponse,
-  BusinessAccountMapPoint,
-  BusinessAccountMapResponse,
-  BusinessAccountRow,
-  BusinessAccountUpdateRequest,
-  Category,
-  PostalRegion,
-  PostalRegionsResponse,
+import {
+  CATEGORY_VALUES,
+  type BusinessAccountDetailResponse,
+  type BusinessAccountMapPoint,
+  type BusinessAccountMapResponse,
+  type BusinessAccountRow,
+  type BusinessAccountUpdateRequest,
+  type Category,
+  type PostalRegion,
+  type PostalRegionsResponse,
 } from "@/types/business-account";
 import {
   buildAcumaticaBusinessAccountUrl,
   buildAcumaticaContactUrl,
 } from "@/lib/acumatica-links";
-import { enforceSinglePrimaryPerAccountRows } from "@/lib/business-accounts";
+import { enforceSinglePrimaryPerAccountRows, resolveCompanyPhone } from "@/lib/business-accounts";
 import { buildBusinessAccountConcurrencySnapshot } from "@/lib/business-account-concurrency";
 import {
   readCachedDatasetFromStorage,
@@ -36,6 +37,7 @@ import {
   type QueueDeleteContactTarget,
 } from "@/components/queue-delete-contacts-modal";
 
+import accountStyles from "./accounts-client.module.css";
 import styles from "./accounts-map-client.module.css";
 
 type LeafletModule = typeof import("leaflet");
@@ -51,6 +53,8 @@ type SessionResponse = {
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
 const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v5";
 const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
+const SALES_REP_FILTER_VISIBLE_SELECTION_LIMIT = 5;
+const WEEK_OPTIONS = Array.from({ length: 15 }, (_, index) => `Week ${index + 1}`);
 
 const MAP_DETAIL_FIELD_KEYS = [
   "fullAddress",
@@ -120,6 +124,23 @@ type SalesRepFilterOption = {
   count: number;
 };
 
+type AccountsFilterView = "allCompanies" | "marketingOnly";
+type MapViewMetricIcon = "building" | "contacts" | "phone" | "email" | "call" | "database";
+type MapViewMetricTone = "green" | "blue" | "purple" | "teal" | "amber" | "cyan";
+
+type MapViewMetric = {
+  id: string;
+  label: string;
+  value: string;
+  meta: string;
+  icon: MapViewMetricIcon;
+  tone: MapViewMetricTone;
+  badge?: {
+    label: string;
+    tone: "good" | "review" | "attention";
+  };
+};
+
 type DetailFieldDefinition = {
   key: MapDetailFieldKey;
   label: string;
@@ -182,21 +203,6 @@ function buildSalesRepFilterKey(point: Pick<BusinessAccountMapPoint, "salesRepId
 
 function renderSalesRepLabel(value: string | null | undefined): string {
   return hasText(value) ? value.trim() : "Unassigned";
-}
-
-function buildSalesRepFilterSummary(
-  selectedKeys: string[],
-  options: SalesRepFilterOption[],
-): string {
-  if (selectedKeys.length === 0) {
-    return "All";
-  }
-
-  if (selectedKeys.length === 1) {
-    return options.find((option) => option.key === selectedKeys[0])?.label ?? "1 selected";
-  }
-
-  return `${selectedKeys.length} selected`;
 }
 
 function buildSalesRepFilterOptionsFromRows(
@@ -289,6 +295,215 @@ function hasText(value: string | null | undefined): value is string {
   return Boolean(value && value.trim());
 }
 
+function normalizeOptionComparable(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizeWeekValue(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const match = trimmed.match(/^week\s*(\d+)$/i);
+  if (match) {
+    const weekNumber = Number.parseInt(match[1] ?? "", 10);
+    if (Number.isFinite(weekNumber)) {
+      return `Week ${weekNumber}`;
+    }
+  }
+
+  return trimmed;
+}
+
+function compareWeekFilterValues(left: string, right: string): number {
+  const leftMatch = left.match(/^week\s*(\d+)$/i);
+  const rightMatch = right.match(/^week\s*(\d+)$/i);
+  const leftNumber = leftMatch ? Number.parseInt(leftMatch[1] ?? "", 10) : Number.NaN;
+  const rightNumber = rightMatch ? Number.parseInt(rightMatch[1] ?? "", 10) : Number.NaN;
+
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+    return leftNumber - rightNumber;
+  }
+  if (Number.isFinite(leftNumber)) {
+    return -1;
+  }
+  if (Number.isFinite(rightNumber)) {
+    return 1;
+  }
+
+  return left.localeCompare(right, undefined, {
+    sensitivity: "base",
+    numeric: true,
+  });
+}
+
+function buildSalesRepInitials(name: string): string {
+  const parts = name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) {
+    return "?";
+  }
+
+  const initials =
+    parts.length === 1
+      ? parts[0]?.slice(0, 2)
+      : `${parts[0]?.[0] ?? ""}${parts[parts.length - 1]?.[0] ?? ""}`;
+
+  return initials.toUpperCase();
+}
+
+function getSalesRepToneClass(name: string): string {
+  const tones = [
+    accountStyles.salesRepFilterChipGreen,
+    accountStyles.salesRepFilterChipPurple,
+    accountStyles.salesRepFilterChipBlue,
+    accountStyles.salesRepFilterChipOrange,
+    accountStyles.salesRepFilterChipTeal,
+  ];
+  const hash = Array.from(name).reduce((total, character) => {
+    return total + character.charCodeAt(0);
+  }, 0);
+
+  return tones[hash % tones.length] ?? accountStyles.salesRepFilterChipGreen;
+}
+
+function SearchIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
+      <circle cx="8.75" cy="8.75" r="5.75" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="m12.85 12.85 4.15 4.15"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
+      <path
+        d="m4 6 4 4 4-4"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
+
+function BuildingIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+      <path d="M5 21V5.5L14 3v18" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.7" />
+      <path d="M14 9h5v12" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.7" />
+      <path d="M8 8h2M8 12h2M8 16h2M16.5 12h1M16.5 16h1" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+    </svg>
+  );
+}
+
+function MarketingIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
+      <path
+        d="M4 10.75h2.75l6.75 3.75v-9L6.75 9.25H4a1.5 1.5 0 0 0-1.5 1.5v0A1.5 1.5 0 0 0 4 12.25Z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M6.75 12.25 7.6 16h2.15l-.75-2.55"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+      <path d="M15.25 9h2M15.25 11.5h1.25" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function ResetFilterIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
+      <path
+        d="M5.4 6.15A6 6 0 1 1 4 10"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.6"
+      />
+      <path
+        d="M5.4 3.4v2.75h2.75"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.6"
+      />
+    </svg>
+  );
+}
+
+function MapViewMetricIcon({ icon }: { icon: MapViewMetricIcon }) {
+  if (icon === "building") {
+    return <BuildingIcon />;
+  }
+
+  if (icon === "contacts") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        <circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="1.7" />
+        <path d="M3.75 19c.65-3.1 2.45-4.65 5.25-4.65S13.6 15.9 14.25 19" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+        <path d="M15.5 5.6a2.6 2.6 0 0 1 0 5.05M16.6 14.2c2.05.35 3.25 1.75 3.65 4.2" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  if (icon === "phone") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        <path d="M8.2 4.5 6.45 6.25c-.7.7-.82 1.78-.28 2.62a27.9 27.9 0 0 0 8.96 8.96c.84.54 1.92.42 2.62-.28l1.75-1.75a1.5 1.5 0 0 0 0-2.12l-2.18-2.18a1.5 1.5 0 0 0-2.12 0l-.82.82a18.2 18.2 0 0 1-3.2-3.2l.82-.82a1.5 1.5 0 0 0 0-2.12L10.32 4.5a1.5 1.5 0 0 0-2.12 0Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  if (icon === "email") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        <rect height="13" rx="2" stroke="currentColor" strokeWidth="1.7" width="17" x="3.5" y="5.5" />
+        <path d="m5.25 8 6.75 5 6.75-5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  if (icon === "call") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        <path d="M12 6v6l4 2" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
+        <path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+        <path d="M20 5.5v4h-4" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+      <path d="M12 3.5c4.25 0 7.5 1.25 7.5 2.8v11.4c0 1.55-3.25 2.8-7.5 2.8s-7.5-1.25-7.5-2.8V6.3c0-1.55 3.25-2.8 7.5-2.8Z" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M4.5 6.3c0 1.55 3.25 2.8 7.5 2.8s7.5-1.25 7.5-2.8M4.5 12c0 1.55 3.25 2.8 7.5 2.8s7.5-1.25 7.5-2.8" stroke="currentColor" strokeWidth="1.7" />
+    </svg>
+  );
+}
+
 function formatPhoneWithExtension(
   phone: string | null | undefined,
   extension: string | null | undefined,
@@ -310,6 +525,271 @@ function readRowAccountKey(row: BusinessAccountRow): string {
     row.businessAccountId.trim() ||
     row.companyName.trim()
   );
+}
+
+function appendNormalizedKey(target: Set<string>, value: string | null | undefined) {
+  const normalized = normalizeComparableText(value);
+  if (normalized) {
+    target.add(normalized);
+  }
+}
+
+function buildRowLookupKeys(row: BusinessAccountRow): Set<string> {
+  const keys = new Set<string>();
+  appendNormalizedKey(keys, readRowAccountKey(row));
+  appendNormalizedKey(keys, row.accountRecordId);
+  appendNormalizedKey(keys, row.id);
+  appendNormalizedKey(keys, row.businessAccountId);
+  appendNormalizedKey(keys, row.companyName);
+  return keys;
+}
+
+function pointMatchesAccountKeys(
+  point: BusinessAccountMapPoint,
+  allowedAccountKeys: Set<string>,
+): boolean {
+  const keys = new Set<string>();
+  appendNormalizedKey(keys, point.accountRecordId);
+  appendNormalizedKey(keys, point.id);
+  appendNormalizedKey(keys, point.businessAccountId);
+  appendNormalizedKey(keys, point.companyName);
+
+  for (const key of keys) {
+    if (allowedAccountKeys.has(key)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function rowMatchesAccountKeys(row: BusinessAccountRow, allowedAccountKeys: Set<string>): boolean {
+  for (const key of buildRowLookupKeys(row)) {
+    if (allowedAccountKeys.has(key)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function buildMetricCompanyKey(row: BusinessAccountRow): string {
+  const keys = buildRowLookupKeys(row);
+  return [...keys][0] ?? "";
+}
+
+function rowHasMetricAddress(row: BusinessAccountRow): boolean {
+  return (
+    [row.addressLine1, row.city, row.state, row.postalCode].every((value) =>
+      hasText(value),
+    ) || hasText(row.address)
+  );
+}
+
+function rowHasMetricContact(row: BusinessAccountRow): boolean {
+  return (
+    (row.contactId !== null && row.contactId !== undefined) ||
+    row.primaryContactId !== null ||
+    hasText(row.primaryContactName) ||
+    hasText(row.primaryContactEmail) ||
+    hasText(row.primaryContactPhone)
+  );
+}
+
+function rowHasMetricSalesRep(row: BusinessAccountRow): boolean {
+  return hasText(row.salesRepName) || hasText(row.salesRepId);
+}
+
+function normalizeMetricPhone(value: string | null | undefined): string | null {
+  const digits = value?.replace(/\D/g, "") ?? "";
+  if (digits.length >= 7) {
+    return digits;
+  }
+
+  const fallback = value?.trim().toLowerCase() ?? "";
+  return fallback || null;
+}
+
+function readLatestIso(values: Array<string | null | undefined>): string | null {
+  let latestValue: string | null = null;
+  let latestTime = Number.NEGATIVE_INFINITY;
+
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp) || timestamp <= latestTime) {
+      continue;
+    }
+
+    latestTime = timestamp;
+    latestValue = value;
+  }
+
+  return latestValue;
+}
+
+function formatLastCalled(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toLocaleString();
+}
+
+function getMetricIconToneClass(tone: MapViewMetricTone): string {
+  if (tone === "green") {
+    return accountStyles.viewMetricIconGreen;
+  }
+  if (tone === "blue") {
+    return accountStyles.viewMetricIconBlue;
+  }
+  if (tone === "purple") {
+    return accountStyles.viewMetricIconPurple;
+  }
+  if (tone === "teal") {
+    return accountStyles.viewMetricIconTeal;
+  }
+  if (tone === "amber") {
+    return accountStyles.viewMetricIconAmber;
+  }
+
+  return accountStyles.viewMetricIconCyan;
+}
+
+function getMetricBadgeToneClass(tone: NonNullable<MapViewMetric["badge"]>["tone"]): string {
+  if (tone === "good") {
+    return accountStyles.viewMetricBadgeGood;
+  }
+  if (tone === "review") {
+    return accountStyles.viewMetricBadgeReview;
+  }
+
+  return accountStyles.viewMetricBadgeAttention;
+}
+
+function buildMapViewMetrics(rows: BusinessAccountRow[], fallbackCompanyCount: number): MapViewMetric[] {
+  const companyKeys = new Set<string>();
+  const contactCount = rows.filter(rowHasMetricContact).length;
+  const phoneValues = new Set<string>();
+  const emailValues = new Set<string>();
+  let filledDatabaseHealthFields = 0;
+  let totalDatabaseHealthFields = 0;
+
+  for (const row of rows) {
+    const companyKey = buildMetricCompanyKey(row);
+    if (companyKey) {
+      companyKeys.add(companyKey);
+    }
+
+    [resolveCompanyPhone(row), row.primaryContactPhone, row.phoneNumber].forEach((value) => {
+      const normalized = normalizeMetricPhone(value);
+      if (normalized) {
+        phoneValues.add(normalized);
+      }
+    });
+
+    const email = row.primaryContactEmail?.trim().toLowerCase();
+    if (email) {
+      emailValues.add(email);
+    }
+
+    const databaseHealthChecks = [
+      rowHasMetricAddress(row),
+      hasText(resolveCompanyPhone(row)),
+      hasText(row.primaryContactName),
+      hasText(row.primaryContactJobTitle),
+      hasText(row.primaryContactPhone),
+      hasText(row.week),
+      rowHasMetricSalesRep(row),
+      hasText(row.primaryContactEmail),
+    ];
+    totalDatabaseHealthFields += databaseHealthChecks.length;
+    filledDatabaseHealthFields += databaseHealthChecks.filter(Boolean).length;
+  }
+
+  const latestCalledAt = readLatestIso(rows.map((row) => row.lastCalledAt));
+  const databaseHealthScore =
+    totalDatabaseHealthFields > 0
+      ? Math.round((filledDatabaseHealthFields / totalDatabaseHealthFields) * 100)
+      : null;
+  const databaseHealthTone =
+    databaseHealthScore === null || databaseHealthScore >= 85
+      ? "good"
+      : databaseHealthScore >= 70
+        ? "review"
+        : "attention";
+  const databaseHealthLabel =
+    databaseHealthTone === "good"
+      ? "Good"
+      : databaseHealthTone === "review"
+        ? "Review"
+        : "Needs work";
+
+  return [
+    {
+      id: "companies",
+      label: "Companies in view",
+      value: (companyKeys.size || fallbackCompanyCount).toLocaleString(),
+      meta: "Distinct company accounts",
+      icon: "building",
+      tone: "green",
+    },
+    {
+      id: "contacts",
+      label: "Contacts in view",
+      value: contactCount.toLocaleString(),
+      meta: "Rows with a contact",
+      icon: "contacts",
+      tone: "blue",
+    },
+    {
+      id: "phones",
+      label: "Phone numbers",
+      value: phoneValues.size.toLocaleString(),
+      meta: "Company and contact phones",
+      icon: "phone",
+      tone: "purple",
+    },
+    {
+      id: "emails",
+      label: "Email addresses",
+      value: emailValues.size.toLocaleString(),
+      meta: "Primary contact emails",
+      icon: "email",
+      tone: "teal",
+    },
+    {
+      id: "last-called",
+      label: "Last called",
+      value: latestCalledAt ? formatLastCalled(latestCalledAt) : "--",
+      meta: latestCalledAt ? "Most recent call in view" : "No calls in view",
+      icon: "call",
+      tone: "amber",
+    },
+    {
+      id: "database-health",
+      label: "Database health",
+      value: databaseHealthScore === null ? "--" : `${databaseHealthScore}%`,
+      meta:
+        totalDatabaseHealthFields > 0
+          ? `${filledDatabaseHealthFields.toLocaleString()} of ${totalDatabaseHealthFields.toLocaleString()} fields filled`
+          : "No rows in view",
+      icon: "database",
+      tone: "cyan",
+      badge: {
+        label: databaseHealthLabel,
+        tone: databaseHealthTone,
+      },
+    },
+  ];
 }
 
 function buildContactsFromRows(rows: BusinessAccountRow[]): MapContactSummary[] {
@@ -963,8 +1443,10 @@ export function AccountsMapClient({
   const [cachedDatasetRows, setCachedDatasetRows] = useState<BusinessAccountRow[]>([]);
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [q, setQ] = useState("");
+  const [activeFilterView, setActiveFilterView] = useState<AccountsFilterView>("allCompanies");
+  const [selectedCategoryFilters, setSelectedCategoryFilters] = useState<Category[]>([]);
+  const [selectedWeekFilters, setSelectedWeekFilters] = useState<string[]>([]);
   const [salesRepFilterOpen, setSalesRepFilterOpen] = useState(false);
-  const [salesRepFilterQuery, setSalesRepFilterQuery] = useState("");
   const [selectedSalesRepKeys, setSelectedSalesRepKeys] = useState<string[]>([]);
   const [points, setPoints] = useState<BusinessAccountMapPoint[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -995,8 +1477,16 @@ export function AccountsMapClient({
   const leafletRef = useRef<LeafletModule | null>(null);
   const viewportFitSignatureRef = useRef<string | null>(null);
 
-  const selectedSalesRepFilterKeys = useMemo(
-    () => [...selectedSalesRepKeys].sort(),
+  const selectedCategoryFilterSet = useMemo(
+    () => new Set(selectedCategoryFilters),
+    [selectedCategoryFilters],
+  );
+  const selectedWeekFilterSet = useMemo(
+    () => new Set(selectedWeekFilters.map((week) => normalizeOptionComparable(week))),
+    [selectedWeekFilters],
+  );
+  const selectedSalesRepKeySet = useMemo(
+    () => new Set(selectedSalesRepKeys),
     [selectedSalesRepKeys],
   );
   const salesRepOptions = useMemo(() => {
@@ -1033,29 +1523,147 @@ export function AccountsMapClient({
       return left.label.localeCompare(right.label, undefined, { sensitivity: "base" });
     });
   }, [cachedDatasetRows, points]);
-  const visibleSalesRepOptions = useMemo(() => {
-    const normalizedQuery = normalizeTextToken(salesRepFilterQuery);
-    if (!normalizedQuery) {
-      return salesRepOptions;
+  const salesRepFilterOptionByKey = useMemo(
+    () => new Map(salesRepOptions.map((option) => [option.key, option])),
+    [salesRepOptions],
+  );
+  const salesRepFilterPreviewItems = useMemo(() => {
+    return selectedSalesRepKeys
+      .map((key) => salesRepFilterOptionByKey.get(key))
+      .filter((option): option is SalesRepFilterOption => Boolean(option))
+      .slice(0, SALES_REP_FILTER_VISIBLE_SELECTION_LIMIT);
+  }, [salesRepFilterOptionByKey, selectedSalesRepKeys]);
+  const hiddenSelectedSalesRepFilterCount = Math.max(
+    selectedSalesRepKeys.length - salesRepFilterPreviewItems.length,
+    0,
+  );
+  const allSalesRepFiltersSelected =
+    salesRepOptions.length > 0 &&
+    salesRepOptions.every((option) => selectedSalesRepKeySet.has(option.key));
+  const availableWeekFilters = useMemo(() => {
+    const byValue = new Map<string, string>();
+    WEEK_OPTIONS.forEach((week) => {
+      byValue.set(normalizeOptionComparable(week), week);
+    });
+
+    cachedDatasetRows.forEach((row) => {
+      const normalizedWeek = normalizeWeekValue(row.week);
+      if (!normalizedWeek) {
+        return;
+      }
+      byValue.set(normalizeOptionComparable(normalizedWeek), normalizedWeek);
+    });
+
+    return [...byValue.values()].sort(compareWeekFilterValues);
+  }, [cachedDatasetRows]);
+  const filteredDatasetRows = useMemo(() => {
+    let nextRows =
+      activeFilterView === "marketingOnly"
+        ? cachedDatasetRows.filter((row) => row.marketingEligible !== false)
+        : cachedDatasetRows;
+
+    if (selectedCategoryFilterSet.size > 0) {
+      nextRows = nextRows.filter(
+        (row) => row.category !== null && selectedCategoryFilterSet.has(row.category),
+      );
     }
 
-    return salesRepOptions.filter((option) =>
-      option.label.toLowerCase().includes(normalizedQuery),
-    );
-  }, [salesRepFilterQuery, salesRepOptions]);
+    if (selectedWeekFilterSet.size > 0) {
+      nextRows = nextRows.filter((row) => {
+        const week = normalizeWeekValue(row.week);
+        return week ? selectedWeekFilterSet.has(normalizeOptionComparable(week)) : false;
+      });
+    }
+
+    if (selectedSalesRepKeySet.size > 0) {
+      nextRows = nextRows.filter((row) => selectedSalesRepKeySet.has(buildSalesRepFilterKey(row)));
+    }
+
+    return nextRows;
+  }, [
+    activeFilterView,
+    cachedDatasetRows,
+    selectedCategoryFilterSet,
+    selectedSalesRepKeySet,
+    selectedWeekFilterSet,
+  ]);
+  const filteredDatasetAccountKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const row of filteredDatasetRows) {
+      for (const key of buildRowLookupKeys(row)) {
+        keys.add(key);
+      }
+    }
+    return keys;
+  }, [filteredDatasetRows]);
+  const hasStructuredMapFilters =
+    activeFilterView !== "allCompanies" ||
+    selectedCategoryFilters.length > 0 ||
+    selectedWeekFilters.length > 0 ||
+    selectedSalesRepKeys.length > 0;
   const filteredPoints = useMemo(() => {
-    if (selectedSalesRepKeys.length === 0) {
+    if (!hasStructuredMapFilters) {
       return points;
     }
 
-    const selectedKeys = new Set(selectedSalesRepKeys);
-    return points.filter((point) => selectedKeys.has(buildSalesRepFilterKey(point)));
-  }, [points, selectedSalesRepKeys]);
-  const salesRepFilterSummary = useMemo(
-    () => buildSalesRepFilterSummary(selectedSalesRepKeys, salesRepOptions),
-    [salesRepOptions, selectedSalesRepKeys],
+    if (cachedDatasetRows.length > 0) {
+      return points.filter((point) => pointMatchesAccountKeys(point, filteredDatasetAccountKeys));
+    }
+
+    return points.filter((point) => {
+      if (selectedCategoryFilterSet.size > 0) {
+        if (!point.category || !selectedCategoryFilterSet.has(point.category)) {
+          return false;
+        }
+      }
+
+      if (selectedSalesRepKeySet.size > 0 && !selectedSalesRepKeySet.has(buildSalesRepFilterKey(point))) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [
+    cachedDatasetRows.length,
+    filteredDatasetAccountKeys,
+    hasStructuredMapFilters,
+    points,
+    selectedCategoryFilterSet,
+    selectedSalesRepKeySet,
+  ]);
+  const visiblePointAccountKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const point of filteredPoints) {
+      appendNormalizedKey(keys, point.accountRecordId);
+      appendNormalizedKey(keys, point.id);
+      appendNormalizedKey(keys, point.businessAccountId);
+      appendNormalizedKey(keys, point.companyName);
+    }
+    return keys;
+  }, [filteredPoints]);
+  const mapViewMetricRows = useMemo(() => {
+    if (cachedDatasetRows.length === 0 || visiblePointAccountKeys.size === 0) {
+      return [];
+    }
+
+    const sourceRows = hasStructuredMapFilters ? filteredDatasetRows : cachedDatasetRows;
+    return sourceRows.filter((row) => rowMatchesAccountKeys(row, visiblePointAccountKeys));
+  }, [
+    cachedDatasetRows,
+    filteredDatasetRows,
+    hasStructuredMapFilters,
+    visiblePointAccountKeys,
+  ]);
+  const mapViewMetrics = useMemo(
+    () => buildMapViewMetrics(mapViewMetricRows, filteredPoints.length),
+    [filteredPoints.length, mapViewMetricRows],
   );
-  const hasActiveSalesRepFilters = selectedSalesRepKeys.length > 0;
+  const hasActiveMapFilters =
+    q.trim().length > 0 ||
+    activeFilterView !== "allCompanies" ||
+    selectedCategoryFilters.length > 0 ||
+    selectedWeekFilters.length > 0 ||
+    selectedSalesRepKeys.length > 0;
   const selectedPoint = useMemo(
     () => filteredPoints.find((point) => point.id === selectedId) ?? filteredPoints[0] ?? null,
     [filteredPoints, selectedId],
@@ -1194,8 +1802,42 @@ export function AccountsMapClient({
 
   useEffect(() => {
     const optionKeys = new Set(salesRepOptions.map((option) => option.key));
-    setSelectedSalesRepKeys((current) => current.filter((key) => optionKeys.has(key)));
+    setSelectedSalesRepKeys((current) => {
+      const next = current.filter((key) => optionKeys.has(key));
+      return next.length === current.length ? current : next;
+    });
   }, [salesRepOptions]);
+
+  useEffect(() => {
+    if (!salesRepFilterOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest('[data-map-sales-rep-filter="true"]')
+      ) {
+        return;
+      }
+
+      setSalesRepFilterOpen(false);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSalesRepFilterOpen(false);
+      }
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [salesRepFilterOpen]);
 
   useEffect(() => {
     setPanelPreferences(readMapPanelPreferences());
@@ -1250,14 +1892,12 @@ export function AccountsMapClient({
     const controller = new AbortController();
 
     async function fetchMapData() {
-      setLoading(true);
       setError(null);
 
       try {
         const normalizedQuery = q.trim().toLowerCase();
         const lastSyncedAt = readDatasetSyncStamp() ?? "unsynced";
-        const salesRepCacheToken = selectedSalesRepFilterKeys.join(",");
-        const cacheKey = `${lastSyncedAt}|scope:all|${normalizedQuery}|sales-reps:${salesRepCacheToken}`;
+        const cacheKey = `${lastSyncedAt}|scope:all|${normalizedQuery}`;
         const cached = readMapCache(cacheKey);
         if (cached) {
           setPoints(cached.items);
@@ -1269,15 +1909,14 @@ export function AccountsMapClient({
               ? current
               : cached.items[0]?.id ?? null,
           );
+          setLoading(false);
           return;
         }
 
+        setLoading(true);
         const params = new URLSearchParams();
         if (normalizedQuery) {
           params.set("q", normalizedQuery);
-        }
-        for (const salesRepKey of selectedSalesRepFilterKeys) {
-          params.append("salesRep", salesRepKey);
         }
         if (lastSyncedAt !== "unsynced") {
           params.set("syncedAt", lastSyncedAt);
@@ -1331,7 +1970,7 @@ export function AccountsMapClient({
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [q, selectedSalesRepFilterKeys, session]);
+  }, [q, session]);
 
   useEffect(() => {
     if (!session?.authenticated) {
@@ -1404,13 +2043,14 @@ export function AccountsMapClient({
       const map = L.map(mapContainerRef.current, {
         center: DEFAULT_CENTER,
         zoom: 6,
-        zoomControl: true,
+        zoomControl: false,
       });
 
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors",
         maxZoom: 19,
       }).addTo(map);
+      L.control.zoom({ position: "topright" }).addTo(map);
 
       const regionLayer = L.layerGroup().addTo(map);
       const markerLayer = L.layerGroup().addTo(map);
@@ -1629,12 +2269,44 @@ export function AccountsMapClient({
     );
   }
 
+  function toggleCategoryFilter(category: Category) {
+    setSelectedCategoryFilters((current) => {
+      if (current.includes(category)) {
+        return current.filter((currentCategory) => currentCategory !== category);
+      }
+      return [...current, category];
+    });
+  }
+
+  function toggleWeekFilter(week: string) {
+    const normalizedWeek = normalizeWeekValue(week);
+    if (!normalizedWeek) {
+      return;
+    }
+
+    setSelectedWeekFilters((current) => {
+      if (current.includes(normalizedWeek)) {
+        return current.filter((currentWeek) => currentWeek !== normalizedWeek);
+      }
+      return [...current, normalizedWeek].sort(compareWeekFilterValues);
+    });
+  }
+
   function clearSalesRepFilters() {
     setSelectedSalesRepKeys([]);
   }
 
-  function selectAllVisibleSalesRepFilters() {
-    setSelectedSalesRepKeys(visibleSalesRepOptions.map((option) => option.key));
+  function selectAllSalesRepFilters() {
+    setSelectedSalesRepKeys(salesRepOptions.map((option) => option.key));
+  }
+
+  function clearAllFilters() {
+    setQ("");
+    setActiveFilterView("allCompanies");
+    setSelectedCategoryFilters([]);
+    setSelectedWeekFilters([]);
+    setSelectedSalesRepKeys([]);
+    setSalesRepFilterOpen(false);
   }
 
   async function handleSaveContactEdits(contact: MapContactSummary) {
@@ -1965,9 +2637,22 @@ export function AccountsMapClient({
 
   return (
     <AppChrome
-      contentClassName={styles.pageContent}
+      contentClassName={`${styles.pageContent} ${accountStyles.pageContent}`}
+      hidePageHeaderCopy
       subtitle="Sales MeadowBrook Map"
       title="Contacts Location View"
+      topBarSearch={
+        <label className={accountStyles.searchField}>
+          <SearchIcon />
+          <input
+            aria-label="Map search"
+            className={accountStyles.searchInput}
+            onChange={(event) => setQ(event.target.value)}
+            placeholder="Search companies, contacts, addresses, emails, or notes"
+            value={q}
+          />
+        </label>
+      }
       userName={session?.user?.name ?? "Signed in"}
     >
 
@@ -1998,75 +2683,266 @@ export function AccountsMapClient({
         }
       />
 
-      <section className={styles.filtersBar}>
-        <div className={styles.filtersToolbar}>
-          <input
-            className={styles.searchInput}
-            onChange={(event) => setQ(event.target.value)}
-            placeholder="Search company, contact, address"
-            value={q}
-          />
-          <div className={styles.headerFilters}>
-            <button
-              className={styles.salesRepToggle}
-              onClick={() => setSalesRepFilterOpen((current) => !current)}
-              type="button"
+      <section aria-label="Map view metrics" className={accountStyles.viewMetricsGrid}>
+        {mapViewMetrics.map((metric) => (
+          <article className={accountStyles.viewMetricCard} key={metric.id}>
+            <span
+              className={`${accountStyles.viewMetricIcon} ${getMetricIconToneClass(metric.tone)}`}
             >
-              Sales reps: {salesRepFilterSummary}
-            </button>
-            {hasActiveSalesRepFilters ? (
+              <MapViewMetricIcon icon={metric.icon} />
+            </span>
+            <div className={accountStyles.viewMetricBody}>
+              <div className={accountStyles.viewMetricHeader}>
+                <span className={accountStyles.viewMetricLabel}>{metric.label}</span>
+                {metric.badge ? (
+                  <span
+                    className={`${accountStyles.viewMetricBadge} ${getMetricBadgeToneClass(
+                      metric.badge.tone,
+                    )}`}
+                  >
+                    {metric.badge.label}
+                  </span>
+                ) : null}
+              </div>
+              <strong className={accountStyles.viewMetricValue}>{metric.value}</strong>
+              <span className={accountStyles.viewMetricMeta}>{metric.meta}</span>
+            </div>
+          </article>
+        ))}
+      </section>
+
+      <section
+        className={`${accountStyles.toolbar} ${accountStyles.tableControlsToolbar} ${styles.filterToolbar}`}
+      >
+        <div className={accountStyles.toolbarFilterControls}>
+          <div className={`${accountStyles.filterRailGroup} ${accountStyles.filterRailGroupViews}`}>
+            <span className={accountStyles.filterRailLabel}>Filter views</span>
+            <div className={accountStyles.filterSegment}>
               <button
-                className={styles.clearInlineButton}
-                onClick={clearSalesRepFilters}
+                className={`${accountStyles.filterSegmentButton} ${
+                  activeFilterView === "allCompanies" ? accountStyles.filterSegmentButtonActive : ""
+                }`}
+                onClick={() => {
+                  if (activeFilterView === "allCompanies") {
+                    return;
+                  }
+                  setActiveFilterView("allCompanies");
+                }}
                 type="button"
               >
-                Clear
+                <span className={accountStyles.filterButtonIcon}>
+                  <BuildingIcon />
+                </span>
+                <span>All Companies</span>
               </button>
-            ) : null}
+              <button
+                className={`${accountStyles.filterSegmentButton} ${
+                  activeFilterView === "marketingOnly"
+                    ? accountStyles.filterSegmentButtonActive
+                    : ""
+                }`}
+                onClick={() => {
+                  if (activeFilterView === "marketingOnly") {
+                    return;
+                  }
+                  setActiveFilterView("marketingOnly");
+                }}
+                type="button"
+              >
+                <span className={accountStyles.filterButtonIcon}>
+                  <MarketingIcon />
+                </span>
+                <span>Marketing Only</span>
+              </button>
+            </div>
+          </div>
+
+          <div className={accountStyles.filterRailGroup}>
+            <span className={accountStyles.filterRailLabel}>Category</span>
+            <div className={accountStyles.compactFilterGroup}>
+              {CATEGORY_VALUES.map((category) => {
+                const isActive = selectedCategoryFilterSet.has(category);
+                return (
+                  <button
+                    aria-pressed={isActive}
+                    className={`${accountStyles.compactFilterChip} ${accountStyles.categoryFilterChip} ${
+                      isActive ? accountStyles.compactFilterChipActive : ""
+                    }`}
+                    key={category}
+                    onClick={() => toggleCategoryFilter(category)}
+                    type="button"
+                  >
+                    {category}
+                  </button>
+                );
+              })}
+              <button
+                aria-label="Clear categories"
+                className={accountStyles.filterResetButton}
+                disabled={selectedCategoryFilters.length === 0}
+                onClick={() => setSelectedCategoryFilters([])}
+                title="Clear categories"
+                type="button"
+              >
+                <ResetFilterIcon />
+              </button>
+            </div>
+          </div>
+
+          <div
+            className={`${accountStyles.filterRailGroup} ${accountStyles.filterRailGroupSalesReps}`}
+          >
+            <span className={accountStyles.filterRailLabel}>Sales reps</span>
+            <div
+              className={accountStyles.salesRepFilterCluster}
+              data-map-sales-rep-filter="true"
+            >
+              {salesRepFilterPreviewItems.length > 0 ? (
+                salesRepFilterPreviewItems.map((option) => {
+                  const isActive = selectedSalesRepKeySet.has(option.key);
+                  return (
+                    <button
+                      aria-label={`${isActive ? "Remove" : "Add"} ${option.label}`}
+                      aria-pressed={isActive}
+                      className={`${accountStyles.salesRepFilterChip} ${getSalesRepToneClass(
+                        option.label,
+                      )} ${isActive ? accountStyles.salesRepFilterChipActive : ""}`}
+                      key={option.key}
+                      onClick={() => toggleSalesRepFilter(option.key)}
+                      title={`${option.label} (${option.count})`}
+                      type="button"
+                    >
+                      {buildSalesRepInitials(option.label)}
+                    </button>
+                  );
+                })
+              ) : (
+                <span className={accountStyles.salesRepFilterEmpty}>All reps</span>
+              )}
+              <button
+                aria-expanded={salesRepFilterOpen}
+                aria-haspopup="listbox"
+                className={accountStyles.salesRepMoreButton}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setSalesRepFilterOpen((current) => !current);
+                }}
+                type="button"
+              >
+                <span>
+                  {hiddenSelectedSalesRepFilterCount > 0
+                    ? `+${hiddenSelectedSalesRepFilterCount} selected`
+                    : allSalesRepFiltersSelected
+                      ? "All selected"
+                      : selectedSalesRepKeys.length > 0
+                        ? "Edit reps"
+                        : "Select reps"}
+                </span>
+                <ChevronDownIcon />
+              </button>
+              {salesRepFilterOpen ? (
+                <div
+                  className={`${accountStyles.salesRepFilterDropdown} ${styles.salesRepFilterDropdown}`}
+                  role="listbox"
+                >
+                  <div className={accountStyles.salesRepFilterDropdownHeader}>
+                    <strong>Sales reps</strong>
+                    <div className={accountStyles.salesRepFilterDropdownActions}>
+                      <button
+                        disabled={allSalesRepFiltersSelected || salesRepOptions.length === 0}
+                        onClick={selectAllSalesRepFilters}
+                        type="button"
+                      >
+                        Select all
+                      </button>
+                      <button
+                        disabled={selectedSalesRepKeys.length === 0}
+                        onClick={clearSalesRepFilters}
+                        type="button"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  <div className={accountStyles.salesRepFilterDropdownList}>
+                    {salesRepOptions.map((option) => {
+                      const isActive = selectedSalesRepKeySet.has(option.key);
+                      return (
+                        <button
+                          aria-selected={isActive}
+                          className={`${accountStyles.salesRepFilterOption} ${
+                            isActive ? accountStyles.salesRepFilterOptionActive : ""
+                          }`}
+                          key={option.key}
+                          onClick={() => toggleSalesRepFilter(option.key)}
+                          role="option"
+                          type="button"
+                        >
+                          <span
+                            className={`${accountStyles.salesRepFilterChip} ${getSalesRepToneClass(
+                              option.label,
+                            )} ${isActive ? accountStyles.salesRepFilterChipActive : ""}`}
+                          >
+                            {buildSalesRepInitials(option.label)}
+                          </span>
+                          <span>
+                            {option.label} ({option.count})
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
-        {salesRepFilterOpen ? (
-          <div className={styles.salesRepFilterCard}>
-            <div className={styles.salesRepFilterCardHeader}>
-              <div className={styles.salesRepFilterCardCopy}>
-                <strong>Sales reps</strong>
-                <span>{salesRepFilterSummary}</span>
-              </div>
-              <div className={styles.salesRepFilterActions}>
-                <button onClick={selectAllVisibleSalesRepFilters} type="button">
-                  All visible
+
+        <div className={accountStyles.toolbarActions}>
+          <button
+            className={accountStyles.clearFiltersButton}
+            disabled={!hasActiveMapFilters}
+            onClick={clearAllFilters}
+            type="button"
+          >
+            Clear search and filters
+          </button>
+        </div>
+      </section>
+
+      <section
+        aria-label="Map week filters"
+        className={`${accountStyles.filterRail} ${accountStyles.weekRail} ${styles.weekToolbar}`}
+      >
+        <div className={`${accountStyles.filterRailGroup} ${accountStyles.filterRailGroupWeeks}`}>
+          <span className={accountStyles.filterRailLabel}>Weeks</span>
+          <div className={`${accountStyles.compactFilterGroup} ${accountStyles.weekFilterGroup}`}>
+            {availableWeekFilters.map((week) => {
+              const isActive = selectedWeekFilterSet.has(normalizeOptionComparable(week));
+              return (
+                <button
+                  aria-pressed={isActive}
+                  className={`${accountStyles.compactFilterChip} ${
+                    isActive ? accountStyles.compactFilterChipActive : ""
+                  }`}
+                  key={week}
+                  onClick={() => toggleWeekFilter(week)}
+                  type="button"
+                >
+                  {week}
                 </button>
-                <button onClick={clearSalesRepFilters} type="button">
-                  Clear
-                </button>
-              </div>
-            </div>
-            <input
-              className={styles.salesRepFilterSearch}
-              onChange={(event) => setSalesRepFilterQuery(event.target.value)}
-              placeholder="Filter sales reps"
-              value={salesRepFilterQuery}
-            />
-            <div className={styles.salesRepFilterList}>
-              {visibleSalesRepOptions.length > 0 ? (
-                visibleSalesRepOptions.map((option) => (
-                  <label className={styles.viewOptionItem} key={option.key}>
-                    <input
-                      checked={selectedSalesRepKeys.includes(option.key)}
-                      onChange={() => toggleSalesRepFilter(option.key)}
-                      type="checkbox"
-                    />
-                    <span>
-                      {option.label} ({option.count})
-                    </span>
-                  </label>
-                ))
-              ) : (
-                <p className={styles.salesRepFilterEmpty}>No sales reps match this search.</p>
-              )}
-            </div>
+              );
+            })}
           </div>
-        ) : null}
+          <button
+            className={accountStyles.filterTextButton}
+            disabled={selectedWeekFilters.length === 0}
+            onClick={() => setSelectedWeekFilters([])}
+            type="button"
+          >
+            Clear weeks
+          </button>
+        </div>
       </section>
 
       <section className={styles.mapShell}>

@@ -195,8 +195,27 @@ export function DashboardShell({
   return (
     <AppChrome
       contentClassName={styles.pageContent}
-      headerActions={
-        <>
+      hidePageHeaderCopy
+      subtitle={subtitle}
+      title={title}
+      userName={session.userName}
+    >
+      <div className={styles.dashboardTopbar}>
+        <nav className={styles.subnav} aria-label="Dashboard sections">
+          <Link
+            className={activeTab === "overview" ? styles.subnavLinkActive : styles.subnavLink}
+            href="/dashboard"
+          >
+            Overview
+          </Link>
+          <Link
+            className={activeTab === "explorer" ? styles.subnavLinkActive : styles.subnavLink}
+            href="/dashboard/explorer"
+          >
+            Explorer
+          </Link>
+        </nav>
+        <div className={styles.dashboardActions}>
           <button className={styles.navButton} onClick={() => void onRefresh()} type="button">
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
@@ -205,27 +224,8 @@ export function DashboardShell({
               Export CSV
             </a>
           ) : null}
-        </>
-      }
-      subtitle={subtitle}
-      title={title}
-      userName={session.userName}
-    >
-
-      <nav className={styles.subnav} aria-label="Dashboard sections">
-        <Link
-          className={activeTab === "overview" ? styles.subnavLinkActive : styles.subnavLink}
-          href="/dashboard"
-        >
-          Overview
-        </Link>
-        <Link
-          className={activeTab === "explorer" ? styles.subnavLinkActive : styles.subnavLink}
-          href="/dashboard/explorer"
-        >
-          Explorer
-        </Link>
-      </nav>
+        </div>
+      </div>
 
       {session.warning ? <p className={styles.warning}>{session.warning}</p> : null}
 

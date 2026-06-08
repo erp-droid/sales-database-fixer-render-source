@@ -27,6 +27,8 @@ export function AppChrome({
   subtitle,
   statusLine,
   headerActions,
+  hidePageHeaderCopy = false,
+  topBarSearch,
   children,
   userName,
   onSignOut,
@@ -36,6 +38,8 @@ export function AppChrome({
   subtitle?: ReactNode;
   statusLine?: ReactNode;
   headerActions?: ReactNode;
+  hidePageHeaderCopy?: boolean;
+  topBarSearch?: ReactNode;
   children: ReactNode;
   userName?: string | null;
   onSignOut?: () => void | Promise<void>;
@@ -100,7 +104,7 @@ export function AppChrome({
   return (
     <main className={styles.page}>
       <header className={styles.appBar}>
-        <div className={styles.appBrand}>
+        <div className={styles.brandBlock}>
           <Image
             alt="MeadowBrook"
             className={styles.appLogo}
@@ -109,13 +113,13 @@ export function AppChrome({
             src="/mb-logo.png"
             width={478}
           />
+          <div className={styles.brandText}>
+            <strong>Sales MeadowBrook</strong>
+            <span>ACCOUNT MANAGEMENT PLATFORM</span>
+          </div>
         </div>
-        <nav aria-label="Primary" className={styles.appNav}>
-          <AppPageNav
-            activeClassName={styles.appNavLinkActive}
-            linkClassName={styles.appNavLink}
-          />
-        </nav>
+
+        <div className={styles.topBarSearch}>{topBarSearch}</div>
         <div className={styles.appBarActions}>
           <div className={styles.userMenu} ref={userMenuRef}>
             <button
@@ -149,16 +153,44 @@ export function AppChrome({
         </div>
       </header>
 
-      <section className={styles.pageHeader}>
-        <div className={styles.pageHeaderCopy}>
-          <h1 className={styles.title}>{title}</h1>
-          {subtitle ? <div className={styles.subtitle}>{subtitle}</div> : null}
-          {statusLine ? <div className={styles.statusLine}>{statusLine}</div> : null}
-        </div>
-        {headerActions ? <div className={styles.pageHeaderActions}>{headerActions}</div> : null}
-      </section>
+      <div className={styles.shellBody}>
+        <aside className={styles.sidebar}>
+        <nav aria-label="Primary" className={styles.appNav}>
+          <span className={styles.appNavSectionLabel}>Overview</span>
+          <AppPageNav
+            activeClassName={styles.appNavLinkActive}
+            iconClassName={styles.appNavIcon}
+            linkClassName={styles.appNavLink}
+          />
+        </nav>
+        </aside>
 
-      <div className={[styles.content, contentClassName].filter(Boolean).join(" ")}>{children}</div>
+        <div className={styles.mainPane}>
+        {!hidePageHeaderCopy || headerActions ? (
+          <section
+            className={[
+              styles.pageHeader,
+              hidePageHeaderCopy ? styles.pageHeaderCompact : null,
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          >
+            {!hidePageHeaderCopy ? (
+              <div className={styles.pageHeaderCopy}>
+                <h1 className={styles.title}>{title}</h1>
+                {subtitle ? <div className={styles.subtitle}>{subtitle}</div> : null}
+                {statusLine ? <div className={styles.statusLine}>{statusLine}</div> : null}
+              </div>
+            ) : null}
+            {headerActions ? <div className={styles.pageHeaderActions}>{headerActions}</div> : null}
+          </section>
+        ) : null}
+
+        <div className={[styles.content, contentClassName].filter(Boolean).join(" ")}>
+          {children}
+        </div>
+        </div>
+      </div>
     </main>
   );
 }

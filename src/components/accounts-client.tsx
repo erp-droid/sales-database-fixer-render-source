@@ -130,6 +130,7 @@ import styles from "./accounts-client.module.css";
 import type { SyncStatusResponse } from "@/types/sync";
 
 const PAGE_SIZE = 25;
+const SALES_REP_FILTER_VISIBLE_SELECTION_LIMIT = 5;
 
 type SessionResponse = {
   authenticated: boolean;
@@ -198,6 +199,22 @@ type EmailComposerState = {
 type MailLastEmailedLookupAccount = {
   businessAccountRecordId: string | null;
   businessAccountId: string | null;
+};
+
+type AccountViewMetricIcon = "building" | "contacts" | "phone" | "email" | "call" | "database";
+type AccountViewMetricTone = "green" | "blue" | "purple" | "teal" | "amber" | "cyan";
+
+type AccountViewMetric = {
+  id: string;
+  label: string;
+  value: string;
+  meta: string;
+  icon: AccountViewMetricIcon;
+  tone: AccountViewMetricTone;
+  badge?: {
+    label: string;
+    tone: "good" | "review" | "attention";
+  };
 };
 
 const MAIL_SESSION_FOLDERS: MailSessionResponse["folders"] = [
@@ -323,6 +340,48 @@ function FilterIcon() {
   );
 }
 
+function MarketingIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
+      <path
+        d="M4 10.75h2.75l6.75 3.75v-9L6.75 9.25H4a1.5 1.5 0 0 0-1.5 1.5v0A1.5 1.5 0 0 0 4 12.25Z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M6.75 12.25 7.6 16h2.15l-.75-2.55"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.5"
+      />
+      <path d="M15.25 9h2M15.25 11.5h1.25" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function ResetFilterIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
+      <path
+        d="M5.4 6.15A6 6 0 1 1 4 10"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.6"
+      />
+      <path
+        d="M5.4 3.4v2.75h2.75"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.6"
+      />
+    </svg>
+  );
+}
+
 function HeaderSortIcon({
   active,
   direction,
@@ -360,6 +419,62 @@ function MoreIcon() {
       <circle cx="4" cy="10" r="1.5" />
       <circle cx="10" cy="10" r="1.5" />
       <circle cx="16" cy="10" r="1.5" />
+    </svg>
+  );
+}
+
+function AccountViewMetricIcon({ icon }: { icon: AccountViewMetricIcon }) {
+  if (icon === "building") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        <path d="M5 21V5.5L13 3v18" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.7" />
+        <path d="M13 9h6v12" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.7" />
+        <path d="M8 8h2M8 12h2M8 16h2M16 13h1.5M16 17h1.5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  if (icon === "contacts") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        <circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="1.7" />
+        <path d="M3.75 19c.65-3.1 2.45-4.65 5.25-4.65S13.6 15.9 14.25 19" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+        <path d="M15.5 5.6a2.6 2.6 0 0 1 0 5.05M16.6 14.2c2.05.35 3.25 1.75 3.65 4.2" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  if (icon === "phone") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        <path d="M8.2 4.5 6.45 6.25c-.7.7-.82 1.78-.28 2.62a27.9 27.9 0 0 0 8.96 8.96c.84.54 1.92.42 2.62-.28l1.75-1.75a1.5 1.5 0 0 0 0-2.12l-2.18-2.18a1.5 1.5 0 0 0-2.12 0l-.82.82a18.2 18.2 0 0 1-3.2-3.2l.82-.82a1.5 1.5 0 0 0 0-2.12L10.32 4.5a1.5 1.5 0 0 0-2.12 0Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  if (icon === "email") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        <rect height="13" rx="2" stroke="currentColor" strokeWidth="1.7" width="17" x="3.5" y="5.5" />
+        <path d="m5.25 8 6.75 5 6.75-5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  if (icon === "call") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        <path d="M12 6v6l4 2" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
+        <path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+        <path d="M20 5.5v4h-4" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+      <path d="M12 3.5c4.25 0 7.5 1.25 7.5 2.8v11.4c0 1.55-3.25 2.8-7.5 2.8s-7.5-1.25-7.5-2.8V6.3c0-1.55 3.25-2.8 7.5-2.8Z" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M4.5 6.3c0 1.55 3.25 2.8 7.5 2.8s7.5-1.25 7.5-2.8M4.5 12c0 1.55 3.25 2.8 7.5 2.8s7.5-1.25 7.5-2.8" stroke="currentColor" strokeWidth="1.7" />
     </svg>
   );
 }
@@ -415,6 +530,7 @@ type AccountsFilterView = "allCompanies" | "marketingOnly";
 type StoredAccountsFilterPreferences = {
   activeFilterView?: AccountsFilterView;
   selectedCategoryFilters?: Category[];
+  selectedWeekFilters?: string[];
   selectedSalesRepFilters?: string[];
   q?: string;
   headerFilters?: HeaderFilters;
@@ -450,6 +566,43 @@ function isAccountsFilterView(value: unknown): value is AccountsFilterView {
 
 function isCategoryValue(value: unknown): value is Category {
   return typeof value === "string" && CATEGORY_VALUES.includes(value as Category);
+}
+
+function compareWeekFilterValues(left: string, right: string): number {
+  const leftMatch = left.match(/^week\s*(\d+)$/i);
+  const rightMatch = right.match(/^week\s*(\d+)$/i);
+  const leftNumber = leftMatch ? Number.parseInt(leftMatch[1] ?? "", 10) : Number.NaN;
+  const rightNumber = rightMatch ? Number.parseInt(rightMatch[1] ?? "", 10) : Number.NaN;
+
+  if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) {
+    return leftNumber - rightNumber;
+  }
+  if (Number.isFinite(leftNumber)) {
+    return -1;
+  }
+  if (Number.isFinite(rightNumber)) {
+    return 1;
+  }
+
+  return left.localeCompare(right, undefined, {
+    sensitivity: "base",
+    numeric: true,
+  });
+}
+
+function normalizeWeekFilterValues(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return [
+    ...new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => normalizeWeekValue(item))
+        .filter((item): item is string => Boolean(item)),
+    ),
+  ].sort(compareWeekFilterValues);
 }
 
 function normalizeStoredHeaderFilters(value: unknown): HeaderFilters {
@@ -503,6 +656,7 @@ function normalizeStoredAccountsFilterPreferences(
     selectedCategoryFilters: Array.isArray(record.selectedCategoryFilters)
       ? [...new Set(record.selectedCategoryFilters.filter(isCategoryValue))]
       : [],
+    selectedWeekFilters: normalizeWeekFilterValues(record.selectedWeekFilters),
     selectedSalesRepFilters: Array.isArray(record.selectedSalesRepFilters)
       ? [
           ...new Set(
@@ -710,6 +864,29 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
   },
 ];
 
+const COLUMN_MIN_WIDTHS: Partial<Record<SortBy, number>> = {
+  companyName: 190,
+  accountType: 124,
+  opportunityCount: 128,
+  salesRepName: 150,
+  industryType: 150,
+  subCategory: 160,
+  companyRegion: 150,
+  week: 110,
+  address: 220,
+  companyPhone: 140,
+  primaryContactName: 180,
+  primaryContactJobTitle: 180,
+  primaryContactPhone: 140,
+  primaryContactExtension: 112,
+  primaryContactEmail: 260,
+  lastCalledAt: 150,
+  lastCalendarInvitedAt: 150,
+  lastEmailedAt: 150,
+  category: 110,
+  lastModifiedIso: 150,
+};
+
 const DEFAULT_VISIBLE_COLUMNS: SortBy[] = [
   "companyName",
   "accountType",
@@ -825,7 +1002,10 @@ function normalizeWeekValue(value: string | null | undefined): string | null {
 
   const match = trimmed.match(/^week\s*(\d+)$/i);
   if (match) {
-    return `Week ${match[1]}`;
+    const weekNumber = Number.parseInt(match[1] ?? "", 10);
+    if (Number.isFinite(weekNumber)) {
+      return `Week ${weekNumber}`;
+    }
   }
 
   return trimmed;
@@ -2063,6 +2243,260 @@ function hasRowContactEmail(row: BusinessAccountRow): boolean {
   return resolveRowContactEmail(row) !== null;
 }
 
+function normalizeMetricPhone(value: string | null | undefined): string | null {
+  const digits = value?.replace(/\D/g, "") ?? "";
+  if (digits.length >= 7) {
+    return digits;
+  }
+
+  const fallback = value?.trim().toLowerCase() ?? "";
+  return fallback || null;
+}
+
+function rowHasMetricAddress(row: BusinessAccountRow): boolean {
+  return (
+    [row.addressLine1, row.city, row.state, row.postalCode].every((value) =>
+      hasText(value),
+    ) || hasText(row.address)
+  );
+}
+
+function rowHasMetricContact(row: BusinessAccountRow): boolean {
+  return resolveRowContactId(row) !== null || hasText(row.primaryContactName);
+}
+
+function rowHasMetricSalesRep(row: BusinessAccountRow): boolean {
+  return hasText(row.salesRepName) || hasText(row.salesRepId);
+}
+
+function normalizeMetricText(value: string | null | undefined): string {
+  return value?.trim().toLowerCase().replace(/\s+/g, " ") ?? "";
+}
+
+function buildMetricCompanyKey(row: BusinessAccountRow): string {
+  const accountRecordId = readTextValue(row.accountRecordId ?? row.id);
+  if (accountRecordId) {
+    return `record:${normalizeComparable(accountRecordId)}`;
+  }
+
+  const businessAccountId = readTextValue(row.businessAccountId);
+  if (businessAccountId) {
+    return `business:${normalizeComparable(businessAccountId)}`;
+  }
+
+  const fallbackParts = [
+    normalizeMetricText(row.companyName),
+    normalizeMetricText(row.addressLine1),
+    normalizeMetricText(row.city),
+    normalizeMetricText(row.state),
+    normalizeMetricText(row.postalCode),
+  ].filter(Boolean);
+
+  return fallbackParts.length > 0 ? `fallback:${fallbackParts.join("|")}` : "";
+}
+
+function readLatestIso(values: Array<string | null | undefined>): string | null {
+  let latestValue: string | null = null;
+  let latestTime = Number.NEGATIVE_INFINITY;
+
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp) || timestamp <= latestTime) {
+      continue;
+    }
+
+    latestTime = timestamp;
+    latestValue = value;
+  }
+
+  return latestValue;
+}
+
+function buildAccountViewMetrics(rows: BusinessAccountRow[]): AccountViewMetric[] {
+  const companyKeys = new Set<string>();
+  const contactCount = rows.filter(rowHasMetricContact).length;
+  const phoneValues = new Set<string>();
+  const emailValues = new Set<string>();
+  let filledDatabaseHealthFields = 0;
+  let totalDatabaseHealthFields = 0;
+
+  for (const row of rows) {
+    const companyKey = buildMetricCompanyKey(row);
+    if (companyKey) {
+      companyKeys.add(companyKey);
+    }
+
+    [resolveCompanyPhone(row), row.primaryContactPhone, row.phoneNumber].forEach((value) => {
+      const normalized = normalizeMetricPhone(value);
+      if (normalized) {
+        phoneValues.add(normalized);
+      }
+    });
+
+    const email = row.primaryContactEmail?.trim().toLowerCase();
+    if (email) {
+      emailValues.add(email);
+    }
+
+    const databaseHealthChecks = [
+      rowHasMetricAddress(row),
+      hasText(resolveCompanyPhone(row)),
+      hasText(row.primaryContactName),
+      hasText(row.primaryContactJobTitle),
+      hasText(row.primaryContactPhone),
+      hasText(row.week),
+      rowHasMetricSalesRep(row),
+      hasRowContactEmail(row),
+    ];
+    totalDatabaseHealthFields += databaseHealthChecks.length;
+    filledDatabaseHealthFields += databaseHealthChecks.filter(Boolean).length;
+  }
+
+  const latestCalledAt = readLatestIso(rows.map((row) => row.lastCalledAt));
+  const databaseHealthScore =
+    totalDatabaseHealthFields > 0
+      ? Math.round((filledDatabaseHealthFields / totalDatabaseHealthFields) * 100)
+      : null;
+  const databaseHealthMeta =
+    totalDatabaseHealthFields > 0
+      ? `${filledDatabaseHealthFields.toLocaleString()} of ${totalDatabaseHealthFields.toLocaleString()} fields filled`
+      : "No rows in view";
+  const databaseHealthTone =
+    databaseHealthScore === null || databaseHealthScore >= 85
+      ? "good"
+      : databaseHealthScore >= 70
+        ? "review"
+        : "attention";
+  const databaseHealthLabel =
+    databaseHealthTone === "good"
+      ? "Good"
+      : databaseHealthTone === "review"
+        ? "Review"
+        : "Needs work";
+
+  return [
+    {
+      id: "companies",
+      label: "Companies in view",
+      value: companyKeys.size.toLocaleString(),
+      meta: "Distinct company accounts",
+      icon: "building",
+      tone: "green",
+    },
+    {
+      id: "contacts",
+      label: "Contacts in view",
+      value: contactCount.toLocaleString(),
+      meta: "Rows with a contact",
+      icon: "contacts",
+      tone: "blue",
+    },
+    {
+      id: "phones",
+      label: "Phone numbers",
+      value: phoneValues.size.toLocaleString(),
+      meta: "Company and contact phones",
+      icon: "phone",
+      tone: "purple",
+    },
+    {
+      id: "emails",
+      label: "Email addresses",
+      value: emailValues.size.toLocaleString(),
+      meta: "Primary contact emails",
+      icon: "email",
+      tone: "teal",
+    },
+    {
+      id: "last-called",
+      label: "Last called",
+      value: latestCalledAt ? formatLastCalled(latestCalledAt) : "--",
+      meta: latestCalledAt ? "Most recent call in view" : "No calls in view",
+      icon: "call",
+      tone: "amber",
+    },
+    {
+      id: "database-health",
+      label: "Database health",
+      value: databaseHealthScore === null ? "--" : `${databaseHealthScore}%`,
+      meta: databaseHealthMeta,
+      icon: "database",
+      tone: "cyan",
+      badge: {
+        label: databaseHealthLabel,
+        tone: databaseHealthTone,
+      },
+    },
+  ];
+}
+
+function getViewMetricIconToneClass(tone: AccountViewMetricTone): string {
+  if (tone === "green") {
+    return styles.viewMetricIconGreen;
+  }
+  if (tone === "blue") {
+    return styles.viewMetricIconBlue;
+  }
+  if (tone === "purple") {
+    return styles.viewMetricIconPurple;
+  }
+  if (tone === "teal") {
+    return styles.viewMetricIconTeal;
+  }
+  if (tone === "amber") {
+    return styles.viewMetricIconAmber;
+  }
+
+  return styles.viewMetricIconCyan;
+}
+
+function getViewMetricBadgeToneClass(tone: NonNullable<AccountViewMetric["badge"]>["tone"]): string {
+  if (tone === "good") {
+    return styles.viewMetricBadgeGood;
+  }
+  if (tone === "review") {
+    return styles.viewMetricBadgeReview;
+  }
+
+  return styles.viewMetricBadgeAttention;
+}
+
+function buildSalesRepInitials(name: string): string {
+  const parts = name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) {
+    return "?";
+  }
+
+  const initials =
+    parts.length === 1
+      ? parts[0]?.slice(0, 2)
+      : `${parts[0]?.[0] ?? ""}${parts[parts.length - 1]?.[0] ?? ""}`;
+
+  return initials.toUpperCase();
+}
+
+function getSalesRepToneClass(name: string): string {
+  const tones = [
+    styles.salesRepFilterChipGreen,
+    styles.salesRepFilterChipPurple,
+    styles.salesRepFilterChipBlue,
+    styles.salesRepFilterChipOrange,
+    styles.salesRepFilterChipTeal,
+  ];
+  const hash = Array.from(name).reduce((total, character) => {
+    return total + character.charCodeAt(0);
+  }, 0);
+
+  return tones[hash % tones.length] ?? styles.salesRepFilterChipGreen;
+}
+
 function hasRowNote(row: BusinessAccountRow): boolean {
   return Boolean(row.notes?.trim());
 }
@@ -2677,6 +3111,7 @@ export function AccountsClient({
   const [serverSnapshotHydrated, setServerSnapshotHydrated] = useState(false);
   const [activeFilterView, setActiveFilterView] = useState<AccountsFilterView>("allCompanies");
   const [selectedCategoryFilters, setSelectedCategoryFilters] = useState<Category[]>([]);
+  const [selectedWeekFilters, setSelectedWeekFilters] = useState<string[]>([]);
   const [selectedSalesRepFilters, setSelectedSalesRepFilters] = useState<string[]>([]);
   const [q, setQ] = useState("");
   const [headerFilters, setHeaderFilters] = useState<HeaderFilters>(
@@ -2742,6 +3177,10 @@ export function AccountsClient({
   const [isCreateMenuOpen, setIsCreateMenuOpen] = useState(false);
   const [createMenuPosition, setCreateMenuPosition] = useState<RowMenuPosition | null>(null);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const [isSalesRepFilterMenuOpen, setIsSalesRepFilterMenuOpen] = useState(false);
+  const [headerFilterMenuColumn, setHeaderFilterMenuColumn] = useState<SortBy | null>(null);
+  const [headerFilterMenuPosition, setHeaderFilterMenuPosition] =
+    useState<RowMenuPosition | null>(null);
   const [rowMenuRowKey, setRowMenuRowKey] = useState<string | null>(null);
   const [rowMenuPosition, setRowMenuPosition] = useState<RowMenuPosition | null>(null);
   const [draggedColumnId, setDraggedColumnId] = useState<SortBy | null>(null);
@@ -3234,6 +3673,10 @@ export function AccountsClient({
     () => new Set(selectedSalesRepFilters),
     [selectedSalesRepFilters],
   );
+  const selectedWeekFilterSet = useMemo(
+    () => new Set(selectedWeekFilters.map((week) => normalizeOptionComparable(week))),
+    [selectedWeekFilters],
+  );
   const categoryViewFilteredRows = useMemo(() => {
     if (selectedCategoryFilterSet.size === 0) {
       return viewFilteredRows;
@@ -3243,16 +3686,26 @@ export function AccountsClient({
       (row) => row.category !== null && selectedCategoryFilterSet.has(row.category),
     );
   }, [selectedCategoryFilterSet, viewFilteredRows]);
-  const workbenchFilteredRows = useMemo(() => {
-    if (selectedSalesRepFilterSet.size === 0) {
+  const weekViewFilteredRows = useMemo(() => {
+    if (selectedWeekFilterSet.size === 0) {
       return categoryViewFilteredRows;
     }
 
     return categoryViewFilteredRows.filter((row) => {
+      const week = normalizeWeekValue(row.week);
+      return week ? selectedWeekFilterSet.has(normalizeOptionComparable(week)) : false;
+    });
+  }, [categoryViewFilteredRows, selectedWeekFilterSet]);
+  const workbenchFilteredRows = useMemo(() => {
+    if (selectedSalesRepFilterSet.size === 0) {
+      return weekViewFilteredRows;
+    }
+
+    return weekViewFilteredRows.filter((row) => {
       const salesRepName = row.salesRepName?.trim();
       return salesRepName ? selectedSalesRepFilterSet.has(salesRepName) : false;
     });
-  }, [categoryViewFilteredRows, selectedSalesRepFilterSet]);
+  }, [selectedSalesRepFilterSet, weekViewFilteredRows]);
 
   useEffect(() => {
     const validRowKeys = new Set(
@@ -3266,45 +3719,63 @@ export function AccountsClient({
     });
   }, [workbenchFilteredRows]);
 
-  const queryResult = useMemo(
-    () =>
-      queryBusinessAccounts(workbenchFilteredRows, {
-        includeInternalRows: true,
-        q: debouncedQ,
-        filterCompanyName: debouncedHeaderFilters.companyName,
-        filterAccountType: debouncedHeaderFilters.accountType,
-        filterOpportunityCount: debouncedHeaderFilters.opportunityCount,
-        filterSalesRep: debouncedHeaderFilters.salesRepName,
-        filterIndustryType: debouncedHeaderFilters.industryType,
-        filterSubCategory: debouncedHeaderFilters.subCategory,
-        filterCompanyRegion: debouncedHeaderFilters.companyRegion,
-        filterWeek: debouncedHeaderFilters.week,
-        filterAddress: debouncedHeaderFilters.address,
-        filterCompanyPhone: debouncedHeaderFilters.companyPhone,
-        filterPrimaryContactName: debouncedHeaderFilters.primaryContactName,
-        filterPrimaryContactJobTitle: debouncedHeaderFilters.primaryContactJobTitle,
-        filterPrimaryContactPhone: debouncedHeaderFilters.primaryContactPhone,
-        filterPrimaryContactExtension: debouncedHeaderFilters.primaryContactExtension,
-        filterPrimaryContactEmail: debouncedHeaderFilters.primaryContactEmail,
-        filterNotes: debouncedHeaderFilters.notes,
-        filterCategory: debouncedHeaderFilters.category || undefined,
-        filterLastCalled: debouncedHeaderFilters.lastCalled,
-        filterLastCalendarInvited: debouncedHeaderFilters.lastCalendarInvited,
-        filterLastEmailed: debouncedHeaderFilters.lastEmailed,
-        filterLastModified: debouncedHeaderFilters.lastModified,
-        sortBy,
-        sortDir,
-        page,
-        pageSize: PAGE_SIZE,
-      }),
+  const queryFilterOptions = useMemo(
+    () => ({
+      includeInternalRows: true,
+      q: debouncedQ,
+      filterCompanyName: debouncedHeaderFilters.companyName,
+      filterAccountType: debouncedHeaderFilters.accountType,
+      filterOpportunityCount: debouncedHeaderFilters.opportunityCount,
+      filterSalesRep: debouncedHeaderFilters.salesRepName,
+      filterIndustryType: debouncedHeaderFilters.industryType,
+      filterSubCategory: debouncedHeaderFilters.subCategory,
+      filterCompanyRegion: debouncedHeaderFilters.companyRegion,
+      filterWeek: debouncedHeaderFilters.week,
+      filterAddress: debouncedHeaderFilters.address,
+      filterCompanyPhone: debouncedHeaderFilters.companyPhone,
+      filterPrimaryContactName: debouncedHeaderFilters.primaryContactName,
+      filterPrimaryContactJobTitle: debouncedHeaderFilters.primaryContactJobTitle,
+      filterPrimaryContactPhone: debouncedHeaderFilters.primaryContactPhone,
+      filterPrimaryContactExtension: debouncedHeaderFilters.primaryContactExtension,
+      filterPrimaryContactEmail: debouncedHeaderFilters.primaryContactEmail,
+      filterNotes: debouncedHeaderFilters.notes,
+      filterCategory: debouncedHeaderFilters.category || undefined,
+      filterLastCalled: debouncedHeaderFilters.lastCalled,
+      filterLastCalendarInvited: debouncedHeaderFilters.lastCalendarInvited,
+      filterLastEmailed: debouncedHeaderFilters.lastEmailed,
+      filterLastModified: debouncedHeaderFilters.lastModified,
+      sortBy,
+      sortDir,
+    }),
     [
-      workbenchFilteredRows,
       debouncedHeaderFilters,
       debouncedQ,
-      page,
       sortBy,
       sortDir,
     ],
+  );
+
+  const queryResult = useMemo(
+    () =>
+      queryBusinessAccounts(workbenchFilteredRows, {
+        ...queryFilterOptions,
+        page,
+        pageSize: PAGE_SIZE,
+      }),
+    [workbenchFilteredRows, queryFilterOptions, page],
+  );
+  const accountViewMetricRows = useMemo(
+    () =>
+      queryBusinessAccounts(workbenchFilteredRows, {
+        ...queryFilterOptions,
+        page: 1,
+        pageSize: Math.max(workbenchFilteredRows.length, 1),
+      }).items,
+    [workbenchFilteredRows, queryFilterOptions],
+  );
+  const accountViewMetrics = useMemo(
+    () => buildAccountViewMetrics(accountViewMetricRows),
+    [accountViewMetricRows],
   );
 
   const canExportAccountsCsv =
@@ -3353,6 +3824,7 @@ export function AccountsClient({
     q.trim().length > 0 ||
     activeFilterCount > 0 ||
     selectedCategoryFilters.length > 0 ||
+    selectedWeekFilters.length > 0 ||
     selectedSalesRepFilters.length > 0;
   const syncUpdatedLabel = useMemo(() => formatRelativeTime(lastSyncedAt), [lastSyncedAt]);
   const hasSnapshot = Boolean(lastSyncedAt) || allRows.length > 0;
@@ -3396,6 +3868,22 @@ export function AccountsClient({
     () => withCurrentOption(WEEK_OPTIONS, draft?.week),
     [draft?.week],
   );
+  const availableWeekFilters = useMemo(() => {
+    const byValue = new Map<string, string>();
+    WEEK_OPTIONS.forEach((option) => {
+      byValue.set(normalizeOptionComparable(option.value), option.value);
+    });
+
+    displayRows.forEach((row) => {
+      const normalizedWeek = normalizeWeekValue(row.week);
+      if (!normalizedWeek) {
+        return;
+      }
+      byValue.set(normalizeOptionComparable(normalizedWeek), normalizedWeek);
+    });
+
+    return [...byValue.values()].sort(compareWeekFilterValues);
+  }, [displayRows]);
   const sortedEmployeeOptions = useMemo(() => {
     const fromRows = collectEmployeeOptionsFromRows(allRows);
     const merged = mergeEmployeeOptions(employeeOptions, fromRows);
@@ -3473,6 +3961,30 @@ export function AccountsClient({
       ),
     [displayRows],
   );
+  const salesRepFilterOptions = useMemo(
+    () =>
+      [
+        ...new Set([...selectedSalesRepFilters, ...availableSalesRepFilters]),
+      ].sort((left, right) =>
+        left.localeCompare(right, undefined, {
+          sensitivity: "base",
+          numeric: true,
+        }),
+      ),
+    [availableSalesRepFilters, selectedSalesRepFilters],
+  );
+  const salesRepFilterPreviewItems = useMemo(() => {
+    return selectedSalesRepFilters
+      .filter((salesRepName) => salesRepFilterOptions.includes(salesRepName))
+      .slice(0, SALES_REP_FILTER_VISIBLE_SELECTION_LIMIT);
+  }, [salesRepFilterOptions, selectedSalesRepFilters]);
+  const hiddenSelectedSalesRepFilterCount = Math.max(
+    selectedSalesRepFilters.length - salesRepFilterPreviewItems.length,
+    0,
+  );
+  const allSalesRepFiltersSelected =
+    salesRepFilterOptions.length > 0 &&
+    salesRepFilterOptions.every((salesRepName) => selectedSalesRepFilterSet.has(salesRepName));
 
   const totalPages = useMemo(() => {
     return Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -3680,6 +4192,7 @@ export function AccountsClient({
           normalizeStoredAccountsFilterPreferences(parsedFilterPreferences);
         setActiveFilterView(normalizedFilterPreferences.activeFilterView);
         setSelectedCategoryFilters(normalizedFilterPreferences.selectedCategoryFilters);
+        setSelectedWeekFilters(normalizedFilterPreferences.selectedWeekFilters);
         setSelectedSalesRepFilters(normalizedFilterPreferences.selectedSalesRepFilters);
         setQ(normalizedFilterPreferences.q);
         setHeaderFilters(normalizedFilterPreferences.headerFilters);
@@ -3701,6 +4214,7 @@ export function AccountsClient({
       JSON.stringify({
         activeFilterView,
         selectedCategoryFilters,
+        selectedWeekFilters,
         selectedSalesRepFilters,
         q,
         headerFilters,
@@ -3712,6 +4226,7 @@ export function AccountsClient({
     headerFilters,
     q,
     selectedCategoryFilters,
+    selectedWeekFilters,
     selectedSalesRepFilters,
   ]);
 
@@ -4160,7 +4675,13 @@ export function AccountsClient({
   }, [draft, sortedEmployeeOptions]);
 
   useEffect(() => {
-    if (!isCreateMenuOpen && !isFiltersOpen && !rowMenuRowKey) {
+    if (
+      !isCreateMenuOpen &&
+      !isFiltersOpen &&
+      !isSalesRepFilterMenuOpen &&
+      !headerFilterMenuColumn &&
+      !rowMenuRowKey
+    ) {
       return;
     }
 
@@ -4186,7 +4707,7 @@ export function AccountsClient({
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("resize", closeTransientMenus);
     window.addEventListener("keydown", handleKeyDown);
-    if (rowMenuRowKey) {
+    if (rowMenuRowKey || headerFilterMenuColumn) {
       window.addEventListener("scroll", closeTransientMenus, true);
     }
 
@@ -4194,11 +4715,17 @@ export function AccountsClient({
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("resize", closeTransientMenus);
       window.removeEventListener("keydown", handleKeyDown);
-      if (rowMenuRowKey) {
+      if (rowMenuRowKey || headerFilterMenuColumn) {
         window.removeEventListener("scroll", closeTransientMenus, true);
       }
     };
-  }, [isCreateMenuOpen, isFiltersOpen, rowMenuRowKey]);
+  }, [
+    headerFilterMenuColumn,
+    isCreateMenuOpen,
+    isFiltersOpen,
+    isSalesRepFilterMenuOpen,
+    rowMenuRowKey,
+  ]);
 
   useEffect(() => {
     if (!selected || drawerFocusTarget !== "notes" || !notesFieldRef.current || isDrawerHydrating) {
@@ -4812,6 +5339,9 @@ export function AccountsClient({
     setIsCreateMenuOpen(false);
     setCreateMenuPosition(null);
     setIsFiltersOpen(false);
+    setIsSalesRepFilterMenuOpen(false);
+    setHeaderFilterMenuColumn(null);
+    setHeaderFilterMenuPosition(null);
     setRowMenuRowKey(null);
     setRowMenuPosition(null);
     setDraggedColumnId(null);
@@ -4859,6 +5389,40 @@ export function AccountsClient({
     setRowMenuPosition({ left, top });
   }
 
+  function openHeaderFilterMenu(columnId: SortBy, trigger: HTMLButtonElement) {
+    if (headerFilterMenuColumn === columnId) {
+      setHeaderFilterMenuColumn(null);
+      setHeaderFilterMenuPosition(null);
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 12;
+    const menuWidth = Math.min(280, window.innerWidth - viewportPadding * 2);
+    const menuHeight = 118;
+    const maxLeft = Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding);
+    const left = Math.min(Math.max(viewportPadding, rect.left - 8), maxLeft);
+    const preferredTop = rect.bottom + 8;
+    const top =
+      preferredTop + menuHeight <= window.innerHeight - viewportPadding
+        ? preferredTop
+        : Math.max(viewportPadding, rect.top - menuHeight - 8);
+
+    setHeaderFilterMenuColumn(columnId);
+    setHeaderFilterMenuPosition({ left, top });
+  }
+
+  function isHeaderFilterActive(columnId: SortBy) {
+    const column = getColumnConfig(columnId);
+    const value = headerFilters[column.filterKey];
+    return typeof value === "string" ? value.trim().length > 0 : Boolean(value);
+  }
+
+  function clearHeaderFilter(columnId: SortBy) {
+    const column = getColumnConfig(columnId);
+    updateHeaderFilter(column.filterKey, "" as HeaderFilters[typeof column.filterKey]);
+  }
+
   function handleSort(column: SortBy) {
     setPage(1);
     if (sortBy === column) {
@@ -4891,6 +5455,21 @@ export function AccountsClient({
     });
   }
 
+  function toggleWeekFilter(week: string) {
+    const normalizedWeek = normalizeWeekValue(week);
+    if (!normalizedWeek) {
+      return;
+    }
+
+    setPage(1);
+    setSelectedWeekFilters((current) => {
+      if (current.includes(normalizedWeek)) {
+        return current.filter((currentWeek) => currentWeek !== normalizedWeek);
+      }
+      return [...current, normalizedWeek].sort(compareWeekFilterValues);
+    });
+  }
+
   function toggleSalesRepFilter(salesRepName: string) {
     setPage(1);
     setSelectedSalesRepFilters((current) => {
@@ -4906,6 +5485,7 @@ export function AccountsClient({
     setQ("");
     setHeaderFilters(DEFAULT_HEADER_FILTERS);
     setSelectedCategoryFilters([]);
+    setSelectedWeekFilters([]);
     setSelectedSalesRepFilters([]);
   }
 
@@ -7264,8 +7844,261 @@ export function AccountsClient({
   return (
     <AppChrome
       contentClassName={styles.pageContent}
-      headerActions={
-        <>
+      hidePageHeaderCopy
+      topBarSearch={
+        <label className={styles.searchField}>
+          <SearchIcon />
+          <input
+            aria-label="Global search"
+            className={styles.searchInput}
+            onChange={(event) => {
+              setPage(1);
+              setQ(event.target.value);
+            }}
+            placeholder="Search companies, contacts, sales reps, addresses, emails, or notes"
+            value={q}
+          />
+        </label>
+      }
+      statusLine={
+        isSyncing ? (
+          <>
+            <span>Syncing records</span>
+            <span>{syncPercent === null ? "Preparing snapshot" : `${syncPercent}% complete`}</span>
+            <span>{formatElapsedDuration(syncElapsedMs)}</span>
+          </>
+        ) : hasSnapshot ? (
+          <>
+            <span>Synced with Acumatica</span>
+            <span>Edit in drawer</span>
+            <span>Live sync</span>
+            {syncUpdatedLabel ? <span>Updated {syncUpdatedLabel}</span> : null}
+          </>
+        ) : (
+          <>
+            <span>Snapshot not built yet</span>
+            <span>Manual sync required</span>
+          </>
+        )
+      }
+      title="Sales MeadowBrook"
+      userName={session?.user?.name ?? "Signed in"}
+    >
+      <section aria-label="Current view metrics" className={styles.viewMetricsGrid}>
+        {accountViewMetrics.map((metric) => (
+          <article className={styles.viewMetricCard} key={metric.id}>
+            <span
+              className={`${styles.viewMetricIcon} ${getViewMetricIconToneClass(metric.tone)}`}
+            >
+              <AccountViewMetricIcon icon={metric.icon} />
+            </span>
+            <div className={styles.viewMetricBody}>
+              <div className={styles.viewMetricHeader}>
+                <span className={styles.viewMetricLabel}>{metric.label}</span>
+                {metric.badge ? (
+                  <span
+                    className={`${styles.viewMetricBadge} ${getViewMetricBadgeToneClass(
+                      metric.badge.tone,
+                    )}`}
+                  >
+                    {metric.badge.label}
+                  </span>
+                ) : null}
+              </div>
+              <strong className={styles.viewMetricValue}>{metric.value}</strong>
+              <span className={styles.viewMetricMeta}>{metric.meta}</span>
+            </div>
+          </article>
+        ))}
+      </section>
+
+      <section className={`${styles.toolbar} ${styles.tableControlsToolbar}`}>
+        <div className={styles.toolbarFilterControls}>
+          <div className={`${styles.filterRailGroup} ${styles.filterRailGroupViews}`}>
+            <span className={styles.filterRailLabel}>Filter views</span>
+            <div className={styles.filterSegment}>
+              <button
+                className={`${styles.filterSegmentButton} ${
+                  activeFilterView === "allCompanies" ? styles.filterSegmentButtonActive : ""
+                }`}
+                onClick={() => {
+                  if (activeFilterView === "allCompanies") {
+                    return;
+                  }
+                  setPage(1);
+                  setActiveFilterView("allCompanies");
+                }}
+                type="button"
+              >
+                <span className={styles.filterButtonIcon}>
+                  <AccountViewMetricIcon icon="building" />
+                </span>
+                <span>All Companies</span>
+              </button>
+              <button
+                className={`${styles.filterSegmentButton} ${
+                  activeFilterView === "marketingOnly" ? styles.filterSegmentButtonActive : ""
+                }`}
+                onClick={() => {
+                  if (activeFilterView === "marketingOnly") {
+                    return;
+                  }
+                  setPage(1);
+                  setActiveFilterView("marketingOnly");
+                }}
+                type="button"
+              >
+                <span className={styles.filterButtonIcon}>
+                  <MarketingIcon />
+                </span>
+                <span>Marketing Only</span>
+              </button>
+            </div>
+          </div>
+
+          <div className={styles.filterRailGroup}>
+            <span className={styles.filterRailLabel}>Category</span>
+            <div className={styles.compactFilterGroup}>
+              {CATEGORY_VALUES.map((category) => {
+                const isActive = selectedCategoryFilterSet.has(category);
+                return (
+                  <button
+                    aria-pressed={isActive}
+                    className={`${styles.compactFilterChip} ${styles.categoryFilterChip} ${
+                      isActive ? styles.compactFilterChipActive : ""
+                    }`}
+                    key={category}
+                    onClick={() => toggleCategoryFilter(category)}
+                    type="button"
+                  >
+                    {category}
+                  </button>
+                );
+              })}
+              <button
+                aria-label="Clear categories"
+                className={styles.filterResetButton}
+                disabled={selectedCategoryFilters.length === 0}
+                onClick={() => {
+                  setPage(1);
+                  setSelectedCategoryFilters([]);
+                }}
+                title="Clear categories"
+                type="button"
+              >
+                <ResetFilterIcon />
+              </button>
+            </div>
+          </div>
+
+          <div className={`${styles.filterRailGroup} ${styles.filterRailGroupSalesReps}`}>
+            <span className={styles.filterRailLabel}>Sales reps</span>
+            <div className={styles.salesRepFilterCluster} data-transient-menu="true">
+              {salesRepFilterPreviewItems.length > 0 ? (
+                salesRepFilterPreviewItems.map((salesRepName) => {
+                  const isActive = selectedSalesRepFilterSet.has(salesRepName);
+                  return (
+                    <button
+                      aria-label={`${isActive ? "Remove" : "Add"} ${salesRepName}`}
+                      aria-pressed={isActive}
+                      className={`${styles.salesRepFilterChip} ${getSalesRepToneClass(
+                        salesRepName,
+                      )} ${isActive ? styles.salesRepFilterChipActive : ""}`}
+                      key={salesRepName}
+                      onClick={() => toggleSalesRepFilter(salesRepName)}
+                      title={salesRepName}
+                      type="button"
+                    >
+                      {buildSalesRepInitials(salesRepName)}
+                    </button>
+                  );
+                })
+              ) : (
+                <span className={styles.salesRepFilterEmpty}>All reps</span>
+              )}
+              <button
+                aria-expanded={isSalesRepFilterMenuOpen}
+                aria-haspopup="listbox"
+                className={styles.salesRepMoreButton}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  const next = !isSalesRepFilterMenuOpen;
+                  closeTransientMenus();
+                  setIsSalesRepFilterMenuOpen(next);
+                }}
+                type="button"
+              >
+                <span>
+                  {hiddenSelectedSalesRepFilterCount > 0
+                    ? `+${hiddenSelectedSalesRepFilterCount} selected`
+                    : allSalesRepFiltersSelected
+                      ? "All selected"
+                      : selectedSalesRepFilters.length > 0
+                        ? "Edit reps"
+                        : "Select reps"}
+                </span>
+                <ChevronDownIcon />
+              </button>
+              {isSalesRepFilterMenuOpen ? (
+                <div className={styles.salesRepFilterDropdown} role="listbox">
+                  <div className={styles.salesRepFilterDropdownHeader}>
+                    <strong>Sales reps</strong>
+                    <div className={styles.salesRepFilterDropdownActions}>
+                      <button
+                        disabled={allSalesRepFiltersSelected || salesRepFilterOptions.length === 0}
+                        onClick={() => {
+                          setPage(1);
+                          setSelectedSalesRepFilters(salesRepFilterOptions);
+                        }}
+                        type="button"
+                      >
+                        Select all
+                      </button>
+                      <button
+                        disabled={selectedSalesRepFilters.length === 0}
+                        onClick={() => {
+                          setPage(1);
+                          setSelectedSalesRepFilters([]);
+                        }}
+                        type="button"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  <div className={styles.salesRepFilterDropdownList}>
+                    {salesRepFilterOptions.map((salesRepName) => {
+                      const isActive = selectedSalesRepFilterSet.has(salesRepName);
+                      return (
+                        <button
+                          aria-selected={isActive}
+                          className={`${styles.salesRepFilterOption} ${
+                            isActive ? styles.salesRepFilterOptionActive : ""
+                          }`}
+                          key={salesRepName}
+                          onClick={() => toggleSalesRepFilter(salesRepName)}
+                          role="option"
+                          type="button"
+                        >
+                          <span
+                            className={`${styles.salesRepFilterChip} ${getSalesRepToneClass(
+                              salesRepName,
+                            )} ${isActive ? styles.salesRepFilterChipActive : ""}`}
+                          >
+                            {buildSalesRepInitials(salesRepName)}
+                          </span>
+                          <span>{salesRepName}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <div className={styles.toolbarActions}>
           {fullSyncEnabled ? (
             <button
               className={styles.syncNowButton}
@@ -7351,145 +8184,6 @@ export function AccountsClient({
               </div>
             ) : null}
           </div>
-        </>
-      }
-      statusLine={
-        isSyncing ? (
-          <>
-            <span>Syncing records</span>
-            <span>{syncPercent === null ? "Preparing snapshot" : `${syncPercent}% complete`}</span>
-            <span>{formatElapsedDuration(syncElapsedMs)}</span>
-          </>
-        ) : hasSnapshot ? (
-          <>
-            <span>Synced with Acumatica</span>
-            <span>Edit in drawer</span>
-            <span>Live sync</span>
-            {syncUpdatedLabel ? <span>Updated {syncUpdatedLabel}</span> : null}
-          </>
-        ) : (
-          <>
-            <span>Snapshot not built yet</span>
-            <span>Manual sync required</span>
-          </>
-        )
-      }
-      title="Sales MeadowBrook"
-      userName={session?.user?.name ?? "Signed in"}
-    >
-      <section className={styles.filterViewsRow}>
-        <span className={styles.filterViewsLabel}>Filter views</span>
-        <div className={styles.filterViews}>
-          <button
-            className={`${styles.filterViewButton} ${
-              activeFilterView === "allCompanies" ? styles.filterViewButtonActive : ""
-            }`}
-            onClick={() => {
-              if (activeFilterView === "allCompanies") {
-                return;
-              }
-              setPage(1);
-              setActiveFilterView("allCompanies");
-            }}
-            type="button"
-          >
-            All Companies
-          </button>
-          <button
-            className={`${styles.filterViewButton} ${
-              activeFilterView === "marketingOnly" ? styles.filterViewButtonActive : ""
-            }`}
-            onClick={() => {
-              if (activeFilterView === "marketingOnly") {
-                return;
-              }
-              setPage(1);
-              setActiveFilterView("marketingOnly");
-            }}
-            type="button"
-          >
-            Marketing Only
-          </button>
-        </div>
-      </section>
-      <section className={styles.categoryFilterViewsRow}>
-        <span className={styles.filterViewsLabel}>Category multi-select</span>
-        <div className={styles.categoryFilterOptions}>
-          {CATEGORY_VALUES.map((category) => {
-            const isActive = selectedCategoryFilterSet.has(category);
-            return (
-              <button
-                className={`${styles.categoryFilterOptionButton} ${
-                  isActive ? styles.categoryFilterOptionButtonActive : ""
-                }`}
-                key={category}
-                onClick={() => toggleCategoryFilter(category)}
-                type="button"
-              >
-                {category}
-              </button>
-            );
-          })}
-          <button
-            className={styles.categoryFilterClearButton}
-            disabled={selectedCategoryFilters.length === 0}
-            onClick={() => {
-              setPage(1);
-              setSelectedCategoryFilters([]);
-            }}
-            type="button"
-          >
-            Clear categories
-          </button>
-        </div>
-      </section>
-      <section className={styles.categoryFilterViewsRow}>
-        <span className={styles.filterViewsLabel}>Sales rep multi-select</span>
-        <div className={styles.categoryFilterOptions}>
-          {availableSalesRepFilters.map((salesRepName) => {
-            const isActive = selectedSalesRepFilterSet.has(salesRepName);
-            return (
-              <button
-                className={`${styles.categoryFilterOptionButton} ${
-                  isActive ? styles.categoryFilterOptionButtonActive : ""
-                }`}
-                key={salesRepName}
-                onClick={() => toggleSalesRepFilter(salesRepName)}
-                type="button"
-              >
-                {salesRepName}
-              </button>
-            );
-          })}
-          <button
-            className={styles.categoryFilterClearButton}
-            disabled={selectedSalesRepFilters.length === 0}
-            onClick={() => {
-              setPage(1);
-              setSelectedSalesRepFilters([]);
-            }}
-            type="button"
-          >
-            Clear sales reps
-          </button>
-        </div>
-      </section>
-
-      <section className={styles.toolbar}>
-        <label className={styles.searchField}>
-          <SearchIcon />
-          <input
-            aria-label="Global search"
-            className={styles.searchInput}
-            onChange={(event) => {
-              setPage(1);
-              setQ(event.target.value);
-            }}
-            placeholder="Search company, sales rep, region, address, contact, email, or notes"
-            value={q}
-          />
-        </label>
-        <div className={styles.toolbarActions}>
           <div className={styles.columnsMenu} data-transient-menu="true">
             <button
               aria-expanded={isFiltersOpen}
@@ -7578,19 +8272,51 @@ export function AccountsClient({
               </div>
             ) : null}
           </div>
+          <button
+            className={styles.clearFiltersButton}
+            disabled={!hasActiveWorkbenchFilters}
+            onClick={clearAllFilters}
+            type="button"
+          >
+            Clear search and filters
+          </button>
         </div>
       </section>
 
-      <div className={styles.toolbarClearRow}>
-        <button
-          className={styles.clearFiltersButton}
-          disabled={!hasActiveWorkbenchFilters}
-          onClick={clearAllFilters}
-          type="button"
-        >
-          Clear search and filters
-        </button>
-      </div>
+      <section aria-label="Account filters" className={`${styles.filterRail} ${styles.weekRail}`}>
+        <div className={`${styles.filterRailGroup} ${styles.filterRailGroupWeeks}`}>
+          <span className={styles.filterRailLabel}>Weeks</span>
+          <div className={`${styles.compactFilterGroup} ${styles.weekFilterGroup}`}>
+            {availableWeekFilters.map((week) => {
+              const isActive = selectedWeekFilterSet.has(normalizeOptionComparable(week));
+              return (
+                <button
+                  aria-pressed={isActive}
+                  className={`${styles.compactFilterChip} ${
+                    isActive ? styles.compactFilterChipActive : ""
+                  }`}
+                  key={week}
+                  onClick={() => toggleWeekFilter(week)}
+                  type="button"
+                >
+                  {week}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            className={styles.filterTextButton}
+            disabled={selectedWeekFilters.length === 0}
+            onClick={() => {
+              setPage(1);
+              setSelectedWeekFilters([]);
+            }}
+            type="button"
+          >
+            Clear weeks
+          </button>
+        </div>
+      </section>
 
       {selectedContactRows.length ? (
         <section className={styles.selectionBar}>
@@ -7708,6 +8434,7 @@ export function AccountsClient({
                   const isHeaderDropTarget =
                     columnDropTargetId === columnId && draggedColumnId !== columnId;
                   const isSortedColumn = sortBy === columnId;
+                  const isColumnFilterActive = isHeaderFilterActive(columnId);
                   const ariaSort =
                     isSortedColumn && sortDir === "asc"
                       ? "ascending"
@@ -7724,57 +8451,84 @@ export function AccountsClient({
                       key={`header-${columnId}`}
                       onDragOver={(event) => handleColumnDragOver(event, columnId)}
                       onDrop={(event) => handleColumnDrop(event, columnId)}
-                      title={`${column.label}. Click to sort; drag handle to reorder.`}
+                      style={{ minWidth: COLUMN_MIN_WIDTHS[columnId] }}
+                      title={`${column.label}. Click label to sort; drag handle to reorder.`}
                     >
                       <div className={styles.tableHeaderCell}>
-                        <button
-                          aria-label={`Drag to reorder ${column.label}`}
-                          className={styles.tableHeaderDragHandle}
-                          draggable
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                          }}
-                          onDragEnd={handleColumnDragEnd}
-                          onDragStart={(event) => handleColumnDragStart(event, columnId)}
-                          type="button"
-                        >
-                          <DragHandleIcon />
-                        </button>
-                        <button
-                          aria-label={`${column.label}: sort ${
-                            isSortedColumn && sortDir === "asc" ? "descending" : "ascending"
-                          }`}
-                          className={`${styles.tableHeaderSortButton} ${
-                            isSortedColumn ? styles.tableHeaderSortButtonActive : ""
-                          }`.trim()}
-                          onClick={() => handleSort(columnId)}
-                          type="button"
-                        >
-                          <span className={styles.tableHeaderLabel}>{column.label}</span>
-                          <span className={styles.tableHeaderSortIcon}>
-                            <HeaderSortIcon active={isSortedColumn} direction={sortDir} />
-                          </span>
-                        </button>
+                        <div className={styles.tableHeaderTop}>
+                          <button
+                            aria-label={`Drag to reorder ${column.label}`}
+                            className={styles.tableHeaderDragHandle}
+                            draggable
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                            }}
+                            onDragEnd={handleColumnDragEnd}
+                            onDragStart={(event) => handleColumnDragStart(event, columnId)}
+                            type="button"
+                          >
+                            <DragHandleIcon />
+                          </button>
+                          <button
+                            aria-label={`${column.label}: sort ${
+                              isSortedColumn && sortDir === "asc" ? "descending" : "ascending"
+                            }`}
+                            className={`${styles.tableHeaderSortButton} ${
+                              isSortedColumn ? styles.tableHeaderSortButtonActive : ""
+                            }`.trim()}
+                            onClick={() => handleSort(columnId)}
+                            type="button"
+                          >
+                            <span className={styles.tableHeaderLabel}>{column.label}</span>
+                            <span className={styles.tableHeaderSortIcon}>
+                              <HeaderSortIcon active={isSortedColumn} direction={sortDir} />
+                            </span>
+                          </button>
+                          <button
+                            aria-label={`Filter ${column.label}`}
+                            aria-pressed={isColumnFilterActive}
+                            className={`${styles.tableHeaderFilterButton} ${
+                              isColumnFilterActive ? styles.tableHeaderFilterButtonActive : ""
+                            }`.trim()}
+                            data-transient-menu="true"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openHeaderFilterMenu(columnId, event.currentTarget);
+                            }}
+                            type="button"
+                          >
+                            <FilterIcon />
+                          </button>
+                        </div>
                       </div>
+                      {headerFilterMenuColumn === columnId && headerFilterMenuPosition ? (
+                        <div
+                          aria-label={`Filter ${column.label}`}
+                          className={styles.headerFilterPopover}
+                          data-transient-menu="true"
+                          role="dialog"
+                          style={headerFilterMenuPosition}
+                        >
+                          <div className={styles.headerFilterPopoverHeader}>
+                            <span className={styles.headerFilterPopoverTitle}>{column.label}</span>
+                            <button
+                              className={styles.headerFilterPopoverClear}
+                              disabled={!isColumnFilterActive}
+                              onClick={() => clearHeaderFilter(columnId)}
+                              type="button"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                          <div className={styles.headerFilterPopoverControl}>
+                            {renderHeaderFilterControl(columnId)}
+                          </div>
+                        </div>
+                      ) : null}
                     </th>
                   );
                 })}
-              </tr>
-              <tr className={styles.tableFilterRow}>
-                <th
-                  aria-hidden="true"
-                  className={`${styles.selectionCheckboxCell} ${styles.tableFilterCell} ${styles.filterSpacerCell}`}
-                />
-                <th
-                  aria-hidden="true"
-                  className={`${styles.actionsHeader} ${styles.tableFilterCell} ${styles.filterSpacerCell}`}
-                />
-                {visibleColumnOrder.map((columnId) => (
-                  <th className={styles.tableFilterCell} key={`filter-${columnId}`}>
-                    {renderHeaderFilterControl(columnId)}
-                  </th>
-                ))}
               </tr>
             </thead>
             <tbody>
@@ -7953,7 +8707,12 @@ export function AccountsClient({
                         </div>
                       </td>
                       {visibleColumnOrder.map((columnId) => (
-                        <td key={`${rowKey}-${columnId}`}>{renderCellContent(row, columnId)}</td>
+                        <td
+                          key={`${rowKey}-${columnId}`}
+                          style={{ minWidth: COLUMN_MIN_WIDTHS[columnId] }}
+                        >
+                          {renderCellContent(row, columnId)}
+                        </td>
                       ))}
                     </tr>
                   );
