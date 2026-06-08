@@ -359,7 +359,7 @@ function computeCounts(rows: BusinessAccountRow[]): {
   };
 }
 
-function kickGeocodeWorker(): void {
+export function kickReadModelGeocodeWorker(): void {
   if (geocodeInFlight) {
     return;
   }
@@ -570,7 +570,7 @@ async function runFullSync(
       reason: "full-sync",
     });
 
-    kickGeocodeWorker();
+    kickReadModelGeocodeWorker();
   } catch (error) {
     const completedAt = new Date().toISOString();
     console.warn("[sync]", {

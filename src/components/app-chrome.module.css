@@ -9,15 +9,15 @@
 .appBar {
   position: sticky;
   top: 0;
-  z-index: 35;
+  z-index: 1000;
   min-height: 72px;
   display: grid;
-  grid-template-columns: minmax(390px, 460px) minmax(320px, 1fr) auto;
+  grid-template-columns: minmax(310px, 410px) minmax(280px, 1fr) auto;
   align-items: center;
   gap: 14px;
   padding: 0 20px;
   border-bottom: 1px solid rgba(215, 225, 239, 0.95);
-  background: rgba(255, 255, 255, 0.9);
+  background: #fff;
   backdrop-filter: blur(18px);
   box-shadow: 0 12px 28px rgba(15, 35, 63, 0.06);
 }
@@ -25,13 +25,13 @@
 .brandBlock {
   min-width: 0;
   display: grid;
-  grid-template-columns: 156px minmax(0, 1fr);
+  grid-template-columns: 142px minmax(0, 1fr);
   align-items: center;
-  gap: 18px;
+  gap: 14px;
 }
 
 .appLogo {
-  width: 156px;
+  width: 142px;
   height: auto;
   display: block;
 }
@@ -40,23 +40,28 @@
   min-width: 0;
   display: grid;
   gap: 5px;
+  overflow: hidden;
 }
 
 .brandText strong {
   color: #172033;
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
   font-weight: 850;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .brandText span {
   color: #334155;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.16em;
   line-height: 1.15;
   text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

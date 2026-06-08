@@ -14,8 +14,12 @@ import { geocodeAddress, type GeocodeResult } from "@/lib/geocode";
 import { isExcludedInternalCompanyName } from "@/lib/internal-records";
 import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import { registerReadModelCacheClearer } from "@/lib/read-model/cache";
-import { buildAddressKeyFromRow, readReadyGeocodeMap } from "@/lib/read-model/geocodes";
-import { maybeTriggerReadModelSync } from "@/lib/read-model/sync";
+import {
+  buildAddressKeyFromRow,
+  queueGeocodesForRows,
+  readReadyGeocodeMap,
+} from "@/lib/read-model/geocodes";
+import { kickReadModelGeocodeWorker, maybeTriggerReadModelSync } from "@/lib/read-model/sync";
 import type {
   BusinessAccountMapPoint,
   BusinessAccountRow,
@@ -192,6 +196,14 @@ function readRowAccountKey(row: BusinessAccountRow): string {
   );
 }
 
+function hasMapIdentity(row: BusinessAccountRow): boolean {
+  return [row.id, row.accountRecordId, row.businessAccountId, row.companyName].some(hasText);
+}
+
+function hasMappableAddress(row: BusinessAccountRow): boolean {
+  return hasText(row.addressLine1) && hasText(row.city);
+}
+
 function buildContactsFromRows(rows: BusinessAccountRow[]) {
   return rows
     .map((row, index) => ({
@@ -224,6 +236,10 @@ function buildContactsFromRows(rows: BusinessAccountRow[]) {
 
 function pickRepresentativeRow(rows: BusinessAccountRow[]): BusinessAccountRow {
   return rows.find((row) => hasText(row.addressLine1) && hasText(row.city)) ?? rows[0];
+}
+
+function pickMappableRow(rows: BusinessAccountRow[]): BusinessAccountRow | null {
+  return rows.find((row) => hasMapIdentity(row) && hasMappableAddress(row)) ?? null;
 }
 
 function pickSalesRepRow(rows: BusinessAccountRow[]): BusinessAccountRow {
@@ -308,13 +324,36 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             const candidates = [...grouped.entries()]
               .map(([accountKey, rows]) => {
                 const representativeRow = pickRepresentativeRow(rows);
+                const mappableRow = pickMappableRow(rows);
                 const salesRepRow = pickSalesRepRow(rows);
                 const contacts = buildContactsFromRows(rows);
                 const haystack = [
-                  representativeRow.companyName,
-                  representativeRow.businessAccountId,
+                  rows
+                    .map((row) =>
+                      [
+                        row.companyName,
+                        row.businessAccountId,
+                        row.salesRepName,
+                        row.address,
+                        row.addressLine1,
+                        row.addressLine2,
+                        row.city,
+                        row.state,
+                        row.postalCode,
+                        row.primaryContactName,
+                        row.primaryContactEmail,
+                        row.primaryContactPhone,
+                        row.primaryContactExtension,
+                        row.companyPhone,
+                        row.week,
+                        row.category,
+                        row.notes,
+                      ]
+                        .filter(Boolean)
+                        .join(" "),
+                    )
+                    .join(" "),
                   salesRepRow.salesRepName,
-                  representativeRow.address,
                   contacts
                     .map((contact) =>
                       [contact.name, contact.email, contact.phone, contact.extension]
@@ -330,6 +369,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                 return {
                   accountKey,
                   representativeRow,
+                  mappableRow,
                   salesRepRow,
                   contacts,
                   haystack,
@@ -344,26 +384,34 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                   candidate.salesRepRow.salesRepName,
                   normalizedSalesRepFilters,
                 ),
-              )
-              .filter((candidate) =>
-                Boolean(
-                  candidate.representativeRow.id &&
-                    candidate.representativeRow.addressLine1 &&
-                    candidate.representativeRow.city,
-                ),
               );
-            const geocodeMap = readReadyGeocodeMap(
-              candidates.map((candidate) => buildAddressKeyFromRow(candidate.representativeRow)),
+            const mappableCandidates = candidates.flatMap((candidate) =>
+              candidate.mappableRow ? [{ ...candidate, mappableRow: candidate.mappableRow }] : [],
             );
-            const items = candidates.flatMap((candidate) => {
-              const row = candidate.representativeRow;
+            const mappableRows = mappableCandidates.map((candidate) => candidate.mappableRow);
+            const geocodeMap = readReadyGeocodeMap(
+              mappableRows.map((row) => buildAddressKeyFromRow(row)),
+            );
+            const missingGeocodeRows = mappableRows.filter(
+              (row) => !geocodeMap.has(buildAddressKeyFromRow(row)),
+            );
+            if (missingGeocodeRows.length > 0) {
+              queueGeocodesForRows(missingGeocodeRows);
+              kickReadModelGeocodeWorker();
+            }
+            const items = mappableCandidates.flatMap((candidate) => {
+              const row = candidate.mappableRow;
               const geocode = geocodeMap.get(buildAddressKeyFromRow(row));
               if (!geocode) {
                 return [];
               }
 
               const point: BusinessAccountMapPoint = {
-                id: row.id,
+                id:
+                  row.id ||
+                  row.accountRecordId ||
+                  row.businessAccountId ||
+                  candidate.accountKey,
                 accountRecordId: row.accountRecordId,
                 businessAccountId: row.businessAccountId,
                 companyName: row.companyName,
@@ -429,7 +477,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                   !isExcludedInternalCompanyName(readBusinessAccountName(account)),
               )
               .map((item) => normalizeBusinessAccount(item))
-              .filter((row) => Boolean(row.id && row.addressLine1 && row.city)),
+              .filter((row) => hasMapIdentity(row)),
           );
 
           const filteredRows = normalizedSearch
@@ -459,7 +507,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           );
 
           const candidates = salesRepFilteredRows;
-          const pointsOrNull = await mapLimit(candidates, 10, async (row) => {
+          const mappableRows = candidates.filter(hasMappableAddress);
+          const pointsOrNull = await mapLimit(mappableRows, 10, async (row) => {
             const key = buildAddressKey(row);
             let geocode = mapGeocodeCache.get(key);
 
@@ -526,7 +575,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             items,
             totalCandidates: candidates.length,
             geocodedCount: items.length,
-            unmappedCount: candidates.length - items.length,
+            unmappedCount: Math.max(0, candidates.length - items.length),
           };
           if (process.env.NODE_ENV !== "production") {
             console.info(

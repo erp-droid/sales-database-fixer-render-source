@@ -2319,7 +2319,8 @@ function readLatestIso(values: Array<string | null | undefined>): string | null 
 function buildAccountViewMetrics(rows: BusinessAccountRow[]): AccountViewMetric[] {
   const companyKeys = new Set<string>();
   const contactCount = rows.filter(rowHasMetricContact).length;
-  const phoneValues = new Set<string>();
+  const companyPhoneValues = new Set<string>();
+  const contactPhoneValues = new Set<string>();
   const emailValues = new Set<string>();
   let filledDatabaseHealthFields = 0;
   let totalDatabaseHealthFields = 0;
@@ -2330,10 +2331,15 @@ function buildAccountViewMetrics(rows: BusinessAccountRow[]): AccountViewMetric[
       companyKeys.add(companyKey);
     }
 
-    [resolveCompanyPhone(row), row.primaryContactPhone, row.phoneNumber].forEach((value) => {
+    const companyPhone = normalizeMetricPhone(resolveCompanyPhone(row));
+    if (companyPhone) {
+      companyPhoneValues.add(companyPhone);
+    }
+
+    [row.primaryContactPhone, row.phoneNumber].forEach((value) => {
       const normalized = normalizeMetricPhone(value);
       if (normalized) {
-        phoneValues.add(normalized);
+        contactPhoneValues.add(normalized);
       }
     });
 
@@ -2396,12 +2402,20 @@ function buildAccountViewMetrics(rows: BusinessAccountRow[]): AccountViewMetric[
       tone: "blue",
     },
     {
-      id: "phones",
-      label: "Phone numbers",
-      value: phoneValues.size.toLocaleString(),
-      meta: "Company and contact phones",
+      id: "company-phones",
+      label: "Company phones",
+      value: companyPhoneValues.size.toLocaleString(),
+      meta: "Company phone numbers",
       icon: "phone",
       tone: "purple",
+    },
+    {
+      id: "contact-phones",
+      label: "Contact phones",
+      value: contactPhoneValues.size.toLocaleString(),
+      meta: "Contact phone numbers",
+      icon: "phone",
+      tone: "cyan",
     },
     {
       id: "emails",

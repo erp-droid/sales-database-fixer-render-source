@@ -51,7 +51,7 @@ type SessionResponse = {
 };
 
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
-const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v5";
+const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v6";
 const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
 const SALES_REP_FILTER_VISIBLE_SELECTION_LIMIT = 5;
 const WEEK_OPTIONS = Array.from({ length: 15 }, (_, index) => `Week ${index + 1}`);
@@ -563,19 +563,57 @@ function pointMatchesAccountKeys(
   return false;
 }
 
-function rowMatchesAccountKeys(row: BusinessAccountRow, allowedAccountKeys: Set<string>): boolean {
-  for (const key of buildRowLookupKeys(row)) {
-    if (allowedAccountKeys.has(key)) {
-      return true;
-    }
+function rowMatchesMapSearch(row: BusinessAccountRow, normalizedSearch: string): boolean {
+  if (!normalizedSearch) {
+    return true;
   }
 
-  return false;
+  return [
+    row.companyName,
+    row.accountType,
+    row.businessAccountId,
+    row.salesRepName,
+    row.industryType,
+    row.subCategory,
+    row.companyRegion,
+    row.week,
+    row.address,
+    row.addressLine1,
+    row.addressLine2,
+    row.city,
+    row.state,
+    row.postalCode,
+    resolveCompanyPhone(row),
+    row.primaryContactName,
+    row.primaryContactJobTitle,
+    row.primaryContactPhone,
+    row.primaryContactExtension,
+    row.primaryContactEmail,
+    row.notes,
+    row.category,
+    row.companyDescription,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .includes(normalizedSearch);
 }
 
 function buildMetricCompanyKey(row: BusinessAccountRow): string {
   const keys = buildRowLookupKeys(row);
   return [...keys][0] ?? "";
+}
+
+function countDistinctMetricCompanies(rows: BusinessAccountRow[]): number {
+  const keys = new Set<string>();
+  for (const row of rows) {
+    const key = buildMetricCompanyKey(row);
+    if (key) {
+      keys.add(key);
+    }
+  }
+
+  return keys.size;
 }
 
 function rowHasMetricAddress(row: BusinessAccountRow): boolean {
@@ -678,7 +716,8 @@ function getMetricBadgeToneClass(tone: NonNullable<MapViewMetric["badge"]>["tone
 function buildMapViewMetrics(rows: BusinessAccountRow[], fallbackCompanyCount: number): MapViewMetric[] {
   const companyKeys = new Set<string>();
   const contactCount = rows.filter(rowHasMetricContact).length;
-  const phoneValues = new Set<string>();
+  const companyPhoneValues = new Set<string>();
+  const contactPhoneValues = new Set<string>();
   const emailValues = new Set<string>();
   let filledDatabaseHealthFields = 0;
   let totalDatabaseHealthFields = 0;
@@ -689,10 +728,15 @@ function buildMapViewMetrics(rows: BusinessAccountRow[], fallbackCompanyCount: n
       companyKeys.add(companyKey);
     }
 
-    [resolveCompanyPhone(row), row.primaryContactPhone, row.phoneNumber].forEach((value) => {
+    const companyPhone = normalizeMetricPhone(resolveCompanyPhone(row));
+    if (companyPhone) {
+      companyPhoneValues.add(companyPhone);
+    }
+
+    [row.primaryContactPhone, row.phoneNumber].forEach((value) => {
       const normalized = normalizeMetricPhone(value);
       if (normalized) {
-        phoneValues.add(normalized);
+        contactPhoneValues.add(normalized);
       }
     });
 
@@ -751,12 +795,20 @@ function buildMapViewMetrics(rows: BusinessAccountRow[], fallbackCompanyCount: n
       tone: "blue",
     },
     {
-      id: "phones",
-      label: "Phone numbers",
-      value: phoneValues.size.toLocaleString(),
-      meta: "Company and contact phones",
+      id: "company-phones",
+      label: "Company phones",
+      value: companyPhoneValues.size.toLocaleString(),
+      meta: "Company phone numbers",
       icon: "phone",
       tone: "purple",
+    },
+    {
+      id: "contact-phones",
+      label: "Contact phones",
+      value: contactPhoneValues.size.toLocaleString(),
+      meta: "Contact phone numbers",
+      icon: "phone",
+      tone: "cyan",
     },
     {
       id: "emails",
@@ -1489,6 +1541,7 @@ export function AccountsMapClient({
     () => new Set(selectedSalesRepKeys),
     [selectedSalesRepKeys],
   );
+  const normalizedMapSearch = q.trim().toLowerCase();
   const salesRepOptions = useMemo(() => {
     if (cachedDatasetRows.length > 0) {
       return buildSalesRepFilterOptionsFromRows(cachedDatasetRows);
@@ -1562,6 +1615,10 @@ export function AccountsMapClient({
         ? cachedDatasetRows.filter((row) => row.marketingEligible !== false)
         : cachedDatasetRows;
 
+    if (normalizedMapSearch) {
+      nextRows = nextRows.filter((row) => rowMatchesMapSearch(row, normalizedMapSearch));
+    }
+
     if (selectedCategoryFilterSet.size > 0) {
       nextRows = nextRows.filter(
         (row) => row.category !== null && selectedCategoryFilterSet.has(row.category),
@@ -1583,6 +1640,7 @@ export function AccountsMapClient({
   }, [
     activeFilterView,
     cachedDatasetRows,
+    normalizedMapSearch,
     selectedCategoryFilterSet,
     selectedSalesRepKeySet,
     selectedWeekFilterSet,
@@ -1631,33 +1689,22 @@ export function AccountsMapClient({
     selectedCategoryFilterSet,
     selectedSalesRepKeySet,
   ]);
-  const visiblePointAccountKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const point of filteredPoints) {
-      appendNormalizedKey(keys, point.accountRecordId);
-      appendNormalizedKey(keys, point.id);
-      appendNormalizedKey(keys, point.businessAccountId);
-      appendNormalizedKey(keys, point.companyName);
-    }
-    return keys;
-  }, [filteredPoints]);
-  const mapViewMetricRows = useMemo(() => {
-    if (cachedDatasetRows.length === 0 || visiblePointAccountKeys.size === 0) {
-      return [];
-    }
-
-    const sourceRows = hasStructuredMapFilters ? filteredDatasetRows : cachedDatasetRows;
-    return sourceRows.filter((row) => rowMatchesAccountKeys(row, visiblePointAccountKeys));
-  }, [
-    cachedDatasetRows,
-    filteredDatasetRows,
-    hasStructuredMapFilters,
-    visiblePointAccountKeys,
-  ]);
   const mapViewMetrics = useMemo(
-    () => buildMapViewMetrics(mapViewMetricRows, filteredPoints.length),
-    [filteredPoints.length, mapViewMetricRows],
+    () =>
+      buildMapViewMetrics(
+        cachedDatasetRows.length > 0 ? filteredDatasetRows : [],
+        filteredPoints.length,
+      ),
+    [cachedDatasetRows.length, filteredDatasetRows, filteredPoints.length],
   );
+  const effectiveTotalCandidates =
+    cachedDatasetRows.length > 0 ? countDistinctMetricCompanies(filteredDatasetRows) : totalCandidates;
+  const effectiveGeocodedCount =
+    cachedDatasetRows.length > 0 ? filteredPoints.length : geocodedCount;
+  const effectiveUnmappedCount =
+    cachedDatasetRows.length > 0
+      ? Math.max(0, effectiveTotalCandidates - filteredPoints.length)
+      : unmappedCount;
   const hasActiveMapFilters =
     q.trim().length > 0 ||
     activeFilterView !== "allCompanies" ||
@@ -3005,10 +3052,10 @@ export function AccountsMapClient({
 
           {panelPreferences.summaryStats ? (
             <div className={styles.stats}>
-              <span>Account Candidates: {totalCandidates}</span>
-              <span>Mapped Accounts: {geocodedCount}</span>
+              <span>Account Candidates: {effectiveTotalCandidates}</span>
+              <span>Geocoded Accounts: {effectiveGeocodedCount}</span>
               <span>Visible Pins: {filteredPoints.length}</span>
-              <span>Unmapped Accounts: {unmappedCount}</span>
+              <span>Unmapped Accounts: {effectiveUnmappedCount}</span>
               <span>Postal Regions: {postalRegions.length}</span>
             </div>
           ) : null}
