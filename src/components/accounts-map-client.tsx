@@ -664,18 +664,6 @@ function buildMetricCompanyKey(row: BusinessAccountRow): string {
   return [...keys][0] ?? "";
 }
 
-function countDistinctMetricCompanies(rows: BusinessAccountRow[]): number {
-  const keys = new Set<string>();
-  for (const row of rows) {
-    const key = buildMetricCompanyKey(row);
-    if (key) {
-      keys.add(key);
-    }
-  }
-
-  return keys.size;
-}
-
 function rowHasMetricAddress(row: BusinessAccountRow): boolean {
   return (
     [row.addressLine1, row.city, row.state, row.postalCode].every((value) =>
@@ -703,6 +691,18 @@ function buildMetricPointCompanyKey(point: BusinessAccountMapPoint): string {
   appendNormalizedKey(keys, point.businessAccountId);
   appendNormalizedKey(keys, point.companyName);
   return [...keys][0] ?? "";
+}
+
+function countDistinctMetricPointCompanies(points: BusinessAccountMapPoint[]): number {
+  const keys = new Set<string>();
+  for (const point of points) {
+    const key = buildMetricPointCompanyKey(point);
+    if (key) {
+      keys.add(key);
+    }
+  }
+
+  return keys.size;
 }
 
 function pointHasMetricAddress(point: BusinessAccountMapPoint): boolean {
@@ -1865,13 +1865,20 @@ export function AccountsMapClient({
       return points;
     }
 
-    if (cachedDatasetRows.length > 0) {
+    if (activeFilterView === "marketingOnly" && cachedDatasetRows.length > 0) {
       return points.filter((point) => pointMatchesAccountKeys(point, filteredDatasetAccountKeys));
     }
 
     return points.filter((point) => {
       if (selectedCategoryFilterSet.size > 0) {
         if (!point.category || !selectedCategoryFilterSet.has(point.category)) {
+          return false;
+        }
+      }
+
+      if (selectedWeekFilterSet.size > 0) {
+        const week = normalizeWeekValue(point.week);
+        if (!week || !selectedWeekFilterSet.has(normalizeOptionComparable(week))) {
           return false;
         }
       }
@@ -1883,12 +1890,14 @@ export function AccountsMapClient({
       return true;
     });
   }, [
+    activeFilterView,
     cachedDatasetRows.length,
     filteredDatasetAccountKeys,
     hasStructuredMapFilters,
     points,
     selectedCategoryFilterSet,
     selectedSalesRepKeySet,
+    selectedWeekFilterSet,
   ]);
   const mapViewMetrics = useMemo(
     () => {
@@ -1896,31 +1905,27 @@ export function AccountsMapClient({
         return buildMapMetricCards(serverMetricSummary);
       }
 
-      if (cachedDatasetRows.length > 0) {
-        return buildMapViewMetrics(filteredDatasetRows, filteredPoints.length);
+      if (points.length > 0 || hasStructuredMapFilters) {
+        return buildMapPointViewMetrics(filteredPoints);
       }
 
-      return buildMapPointViewMetrics(filteredPoints);
+      return buildMapViewMetrics(filteredDatasetRows, filteredPoints.length);
     },
     [
-      cachedDatasetRows.length,
       filteredDatasetRows,
       filteredPoints,
       hasStructuredMapFilters,
+      points.length,
       serverMetricSummary,
     ],
   );
   const shouldUseServerMapSummary = !hasStructuredMapFilters && serverMetricSummary !== null;
+  const filteredPointCompanyCount = countDistinctMetricPointCompanies(filteredPoints);
   const effectiveTotalCandidates =
-    cachedDatasetRows.length > 0 && !shouldUseServerMapSummary
-      ? countDistinctMetricCompanies(filteredDatasetRows)
-      : totalCandidates;
+    shouldUseServerMapSummary ? totalCandidates : filteredPointCompanyCount;
   const effectiveGeocodedCount =
-    cachedDatasetRows.length > 0 && !shouldUseServerMapSummary ? filteredPoints.length : geocodedCount;
-  const effectiveUnmappedCount =
-    cachedDatasetRows.length > 0 && !shouldUseServerMapSummary
-      ? Math.max(0, effectiveTotalCandidates - filteredPoints.length)
-      : unmappedCount;
+    shouldUseServerMapSummary ? geocodedCount : filteredPoints.length;
+  const effectiveUnmappedCount = shouldUseServerMapSummary ? unmappedCount : 0;
   const hasActiveMapFilters =
     q.trim().length > 0 ||
     activeFilterView !== "allCompanies" ||
