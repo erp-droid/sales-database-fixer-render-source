@@ -210,6 +210,7 @@ function buildContactsFromRows(rows: BusinessAccountRow[]) {
       rowKey: row.rowKey ?? `${readRowAccountKey(row)}:contact:${row.contactId ?? index}`,
       contactId: row.contactId ?? null,
       name: row.primaryContactName,
+      jobTitle: row.primaryContactJobTitle ?? null,
       phone: row.primaryContactPhone,
       extension: row.primaryContactExtension ?? null,
       email: row.primaryContactEmail,
@@ -417,6 +418,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                 companyName: row.companyName,
                 salesRepId: candidate.salesRepRow.salesRepId,
                 salesRepName: candidate.salesRepRow.salesRepName,
+                companyPhone: row.companyPhone ?? null,
+                week: row.week,
                 fullAddress:
                   row.address ||
                   toFullAddress({
@@ -434,11 +437,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                 postalCode: row.postalCode,
                 country: row.country,
                 primaryContactName: row.primaryContactName,
+                primaryContactJobTitle: row.primaryContactJobTitle ?? null,
                 primaryContactPhone: row.primaryContactPhone,
                 primaryContactExtension: row.primaryContactExtension ?? null,
                 primaryContactEmail: row.primaryContactEmail,
                 category: row.category,
                 notes: row.notes,
+                lastCalledAt: row.lastCalledAt ?? null,
                 lastModifiedIso: row.lastModifiedIso,
                 latitude: geocode.latitude,
                 longitude: geocode.longitude,
@@ -536,6 +541,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
               companyName: row.companyName,
               salesRepId: row.salesRepId,
               salesRepName: row.salesRepName,
+              companyPhone: row.companyPhone ?? null,
+              week: row.week,
               fullAddress:
                 row.address ||
                 toFullAddress({
@@ -553,11 +560,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
               postalCode: row.postalCode,
               country: row.country,
               primaryContactName: row.primaryContactName,
+              primaryContactJobTitle: row.primaryContactJobTitle ?? null,
               primaryContactPhone: row.primaryContactPhone,
               primaryContactExtension: row.primaryContactExtension ?? null,
               primaryContactEmail: row.primaryContactEmail,
               category: row.category,
               notes: row.notes,
+              lastCalledAt: row.lastCalledAt ?? null,
               lastModifiedIso: row.lastModifiedIso,
               latitude: geocode.latitude,
               longitude: geocode.longitude,

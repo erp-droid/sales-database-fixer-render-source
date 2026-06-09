@@ -51,7 +51,7 @@ type SessionResponse = {
 };
 
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
-const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v6";
+const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v7";
 const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
 const SALES_REP_FILTER_VISIBLE_SELECTION_LIMIT = 5;
 const WEEK_OPTIONS = Array.from({ length: 15 }, (_, index) => `Week ${index + 1}`);
@@ -103,6 +103,7 @@ type MapContactSummary = {
   rowKey: string;
   contactId: number | null;
   name: string | null;
+  jobTitle?: string | null;
   phone: string | null;
   extension: string | null;
   email: string | null;
@@ -638,6 +639,79 @@ function rowHasMetricSalesRep(row: BusinessAccountRow): boolean {
   return hasText(row.salesRepName) || hasText(row.salesRepId);
 }
 
+function buildMetricPointCompanyKey(point: BusinessAccountMapPoint): string {
+  const keys = new Set<string>();
+  appendNormalizedKey(keys, point.accountRecordId);
+  appendNormalizedKey(keys, point.id);
+  appendNormalizedKey(keys, point.businessAccountId);
+  appendNormalizedKey(keys, point.companyName);
+  return [...keys][0] ?? "";
+}
+
+function pointHasMetricAddress(point: BusinessAccountMapPoint): boolean {
+  return (
+    [point.addressLine1, point.city, point.state, point.postalCode].every((value) =>
+      hasText(value),
+    ) || hasText(point.fullAddress)
+  );
+}
+
+function pointHasMetricSalesRep(point: BusinessAccountMapPoint): boolean {
+  return hasText(point.salesRepName) || hasText(point.salesRepId);
+}
+
+function getPointMetricContacts(point: BusinessAccountMapPoint): MapContactSummary[] {
+  const contacts = Array.isArray(point.contacts)
+    ? point.contacts
+        .map((contact, index) => ({
+          rowKey: contact.rowKey ?? `${point.id}:contact:${contact.contactId ?? index}`,
+          contactId: contact.contactId ?? null,
+          name: contact.name,
+          jobTitle: contact.jobTitle ?? null,
+          phone: contact.phone,
+          extension: contact.extension ?? null,
+          email: contact.email,
+          isPrimary: Boolean(contact.isPrimary),
+          notes: contact.notes,
+        }))
+        .filter(
+          (contact) =>
+            hasText(contact.name) ||
+            hasText(contact.jobTitle) ||
+            hasText(contact.phone) ||
+            hasText(contact.extension) ||
+            hasText(contact.email),
+        )
+    : [];
+
+  if (contacts.length > 0) {
+    return contacts;
+  }
+
+  if (
+    !point.primaryContactName &&
+    !point.primaryContactJobTitle &&
+    !point.primaryContactEmail &&
+    !point.primaryContactPhone
+  ) {
+    return [];
+  }
+
+  return [
+    {
+      rowKey: `${point.id}:primary`,
+      contactId: null,
+      name: point.primaryContactName,
+      jobTitle: point.primaryContactJobTitle ?? null,
+      phone: point.primaryContactPhone,
+      extension: point.primaryContactExtension ?? null,
+      email: point.primaryContactEmail,
+      isPrimary: true,
+      notes: point.notes,
+    },
+  ];
+}
+
 function normalizeMetricPhone(value: string | null | undefined): string | null {
   const digits = value?.replace(/\D/g, "") ?? "";
   if (digits.length >= 7) {
@@ -713,6 +787,102 @@ function getMetricBadgeToneClass(tone: NonNullable<MapViewMetric["badge"]>["tone
   return accountStyles.viewMetricBadgeAttention;
 }
 
+type MapMetricSummary = {
+  companyCount: number;
+  contactCount: number;
+  companyPhoneCount: number;
+  contactPhoneCount: number;
+  emailCount: number;
+  latestCalledAt: string | null;
+  filledDatabaseHealthFields: number;
+  totalDatabaseHealthFields: number;
+};
+
+function buildMapMetricCards(summary: MapMetricSummary): MapViewMetric[] {
+  const databaseHealthScore =
+    summary.totalDatabaseHealthFields > 0
+      ? Math.round((summary.filledDatabaseHealthFields / summary.totalDatabaseHealthFields) * 100)
+      : null;
+  const databaseHealthTone =
+    databaseHealthScore === null || databaseHealthScore >= 85
+      ? "good"
+      : databaseHealthScore >= 70
+        ? "review"
+        : "attention";
+  const databaseHealthLabel =
+    databaseHealthTone === "good"
+      ? "Good"
+      : databaseHealthTone === "review"
+        ? "Review"
+        : "Needs work";
+
+  return [
+    {
+      id: "companies",
+      label: "Companies in view",
+      value: summary.companyCount.toLocaleString(),
+      meta: "Distinct company accounts",
+      icon: "building",
+      tone: "green",
+    },
+    {
+      id: "company-phones",
+      label: "Company phones",
+      value: summary.companyPhoneCount.toLocaleString(),
+      meta: "Company phone numbers",
+      icon: "phone",
+      tone: "purple",
+    },
+    {
+      id: "contacts",
+      label: "Contacts in view",
+      value: summary.contactCount.toLocaleString(),
+      meta: "Rows with a contact",
+      icon: "contacts",
+      tone: "blue",
+    },
+    {
+      id: "contact-phones",
+      label: "Contact phones",
+      value: summary.contactPhoneCount.toLocaleString(),
+      meta: "Contact phone numbers",
+      icon: "phone",
+      tone: "cyan",
+    },
+    {
+      id: "emails",
+      label: "Email addresses",
+      value: summary.emailCount.toLocaleString(),
+      meta: "Primary contact emails",
+      icon: "email",
+      tone: "teal",
+    },
+    {
+      id: "last-called",
+      label: "Last called",
+      value: summary.latestCalledAt ? formatLastCalled(summary.latestCalledAt) : "--",
+      meta: summary.latestCalledAt ? "Most recent call in view" : "No calls in view",
+      icon: "call",
+      tone: "amber",
+    },
+    {
+      id: "database-health",
+      label: "Database health",
+      value: databaseHealthScore === null ? "--" : `${databaseHealthScore}%`,
+      meta:
+        summary.totalDatabaseHealthFields > 0
+          ? `${summary.filledDatabaseHealthFields.toLocaleString()} of ${summary.totalDatabaseHealthFields.toLocaleString()} fields filled`
+          : "No rows in view",
+      icon: "database",
+      tone: "cyan",
+      badge: {
+        label: databaseHealthLabel,
+        tone: databaseHealthTone,
+      },
+    },
+  ];
+}
+
 function buildMapViewMetrics(rows: BusinessAccountRow[], fallbackCompanyCount: number): MapViewMetric[] {
   const companyKeys = new Set<string>();
   const contactCount = rows.filter(rowHasMetricContact).length;
@@ -759,89 +929,79 @@ function buildMapViewMetrics(rows: BusinessAccountRow[], fallbackCompanyCount: n
     filledDatabaseHealthFields += databaseHealthChecks.filter(Boolean).length;
   }
 
-  const latestCalledAt = readLatestIso(rows.map((row) => row.lastCalledAt));
-  const databaseHealthScore =
-    totalDatabaseHealthFields > 0
-      ? Math.round((filledDatabaseHealthFields / totalDatabaseHealthFields) * 100)
-      : null;
-  const databaseHealthTone =
-    databaseHealthScore === null || databaseHealthScore >= 85
-      ? "good"
-      : databaseHealthScore >= 70
-        ? "review"
-        : "attention";
-  const databaseHealthLabel =
-    databaseHealthTone === "good"
-      ? "Good"
-      : databaseHealthTone === "review"
-        ? "Review"
-        : "Needs work";
+  return buildMapMetricCards({
+    companyCount: companyKeys.size || fallbackCompanyCount,
+    contactCount,
+    companyPhoneCount: companyPhoneValues.size,
+    contactPhoneCount: contactPhoneValues.size,
+    emailCount: emailValues.size,
+    latestCalledAt: readLatestIso(rows.map((row) => row.lastCalledAt)),
+    filledDatabaseHealthFields,
+    totalDatabaseHealthFields,
+  });
+}
 
-  return [
-    {
-      id: "companies",
-      label: "Companies in view",
-      value: (companyKeys.size || fallbackCompanyCount).toLocaleString(),
-      meta: "Distinct company accounts",
-      icon: "building",
-      tone: "green",
-    },
-    {
-      id: "company-phones",
-      label: "Company phones",
-      value: companyPhoneValues.size.toLocaleString(),
-      meta: "Company phone numbers",
-      icon: "phone",
-      tone: "purple",
-    },
-    {
-      id: "contacts",
-      label: "Contacts in view",
-      value: contactCount.toLocaleString(),
-      meta: "Rows with a contact",
-      icon: "contacts",
-      tone: "blue",
-    },
-    {
-      id: "contact-phones",
-      label: "Contact phones",
-      value: contactPhoneValues.size.toLocaleString(),
-      meta: "Contact phone numbers",
-      icon: "phone",
-      tone: "cyan",
-    },
-    {
-      id: "emails",
-      label: "Email addresses",
-      value: emailValues.size.toLocaleString(),
-      meta: "Primary contact emails",
-      icon: "email",
-      tone: "teal",
-    },
-    {
-      id: "last-called",
-      label: "Last called",
-      value: latestCalledAt ? formatLastCalled(latestCalledAt) : "--",
-      meta: latestCalledAt ? "Most recent call in view" : "No calls in view",
-      icon: "call",
-      tone: "amber",
-    },
-    {
-      id: "database-health",
-      label: "Database health",
-      value: databaseHealthScore === null ? "--" : `${databaseHealthScore}%`,
-      meta:
-        totalDatabaseHealthFields > 0
-          ? `${filledDatabaseHealthFields.toLocaleString()} of ${totalDatabaseHealthFields.toLocaleString()} fields filled`
-          : "No rows in view",
-      icon: "database",
-      tone: "cyan",
-      badge: {
-        label: databaseHealthLabel,
-        tone: databaseHealthTone,
-      },
-    },
-  ];
+function buildMapPointViewMetrics(points: BusinessAccountMapPoint[]): MapViewMetric[] {
+  const companyKeys = new Set<string>();
+  let contactCount = 0;
+  const companyPhoneValues = new Set<string>();
+  const contactPhoneValues = new Set<string>();
+  const emailValues = new Set<string>();
+  const latestCalledValues: Array<string | null | undefined> = [];
+  let filledDatabaseHealthFields = 0;
+  let totalDatabaseHealthFields = 0;
+
+  for (const point of points) {
+    const companyKey = buildMetricPointCompanyKey(point);
+    if (companyKey) {
+      companyKeys.add(companyKey);
+    }
+
+    const companyPhone = normalizeMetricPhone(point.companyPhone);
+    if (companyPhone) {
+      companyPhoneValues.add(companyPhone);
+    }
+
+    const contacts = getPointMetricContacts(point);
+    contactCount += contacts.length;
+    for (const contact of contacts) {
+      const phone = normalizeMetricPhone(contact.phone);
+      if (phone) {
+        contactPhoneValues.add(phone);
+      }
+
+      const email = contact.email?.trim().toLowerCase();
+      if (email) {
+        emailValues.add(email);
+      }
+    }
+
+    const primaryContact = contacts.find((contact) => contact.isPrimary) ?? contacts[0] ?? null;
+    const databaseHealthChecks = [
+      pointHasMetricAddress(point),
+      hasText(point.companyPhone),
+      hasText(primaryContact?.name ?? point.primaryContactName),
+      hasText(primaryContact?.jobTitle ?? point.primaryContactJobTitle),
+      hasText(primaryContact?.phone ?? point.primaryContactPhone),
+      hasText(point.week),
+      pointHasMetricSalesRep(point),
+      hasText(primaryContact?.email ?? point.primaryContactEmail),
+    ];
+    totalDatabaseHealthFields += databaseHealthChecks.length;
+    filledDatabaseHealthFields += databaseHealthChecks.filter(Boolean).length;
+    latestCalledValues.push(point.lastCalledAt);
+  }
+
+  return buildMapMetricCards({
+    companyCount: companyKeys.size || points.length,
+    contactCount,
+    companyPhoneCount: companyPhoneValues.size,
+    contactPhoneCount: contactPhoneValues.size,
+    emailCount: emailValues.size,
+    latestCalledAt: readLatestIso(latestCalledValues),
+    filledDatabaseHealthFields,
+    totalDatabaseHealthFields,
+  });
 }
 
 function buildContactsFromRows(rows: BusinessAccountRow[]): MapContactSummary[] {
@@ -863,6 +1023,7 @@ function buildContactsFromRows(rows: BusinessAccountRow[]): MapContactSummary[] 
       rowKey: row.rowKey ?? `${readRowAccountKey(row)}:contact:${row.contactId ?? index}`,
       contactId: row.contactId ?? null,
       name: row.primaryContactName,
+      jobTitle: row.primaryContactJobTitle ?? null,
       phone: row.primaryContactPhone,
       extension: row.primaryContactExtension ?? null,
       email: row.primaryContactEmail,
@@ -1691,11 +1852,10 @@ export function AccountsMapClient({
   ]);
   const mapViewMetrics = useMemo(
     () =>
-      buildMapViewMetrics(
-        cachedDatasetRows.length > 0 ? filteredDatasetRows : [],
-        filteredPoints.length,
-      ),
-    [cachedDatasetRows.length, filteredDatasetRows, filteredPoints.length],
+      cachedDatasetRows.length > 0
+        ? buildMapViewMetrics(filteredDatasetRows, filteredPoints.length)
+        : buildMapPointViewMetrics(filteredPoints),
+    [cachedDatasetRows.length, filteredDatasetRows, filteredPoints],
   );
   const effectiveTotalCandidates =
     cachedDatasetRows.length > 0 ? countDistinctMetricCompanies(filteredDatasetRows) : totalCandidates;
@@ -1727,6 +1887,7 @@ export function AccountsMapClient({
           `${selectedPoint.id}:contact:${contact.contactId ?? index}`,
         contactId: contact.contactId,
         name: contact.name,
+        jobTitle: contact.jobTitle ?? null,
         phone: contact.phone,
         extension: contact.extension ?? null,
         email: contact.email,
@@ -1737,6 +1898,7 @@ export function AccountsMapClient({
 
     if (
       !selectedPoint.primaryContactName &&
+      !selectedPoint.primaryContactJobTitle &&
       !selectedPoint.primaryContactEmail &&
       !selectedPoint.primaryContactPhone
     ) {
@@ -1748,6 +1910,7 @@ export function AccountsMapClient({
         rowKey: `${selectedPoint.id}:primary`,
         contactId: null,
         name: selectedPoint.primaryContactName,
+        jobTitle: selectedPoint.primaryContactJobTitle ?? null,
         phone: selectedPoint.primaryContactPhone,
         extension: selectedPoint.primaryContactExtension ?? null,
         email: selectedPoint.primaryContactEmail,

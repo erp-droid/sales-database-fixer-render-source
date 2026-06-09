@@ -167,6 +167,8 @@ export type BusinessAccountMapPoint = {
   companyName: string;
   salesRepId: string | null;
   salesRepName: string | null;
+  companyPhone?: string | null;
+  week?: string | null;
   fullAddress: string;
   addressLine1: string;
   addressLine2: string;
@@ -175,11 +177,13 @@ export type BusinessAccountMapPoint = {
   postalCode: string;
   country: string;
   primaryContactName: string | null;
+  primaryContactJobTitle?: string | null;
   primaryContactPhone: string | null;
   primaryContactExtension?: string | null;
   primaryContactEmail: string | null;
   category: Category | null;
   notes: string | null;
+  lastCalledAt?: string | null;
   lastModifiedIso: string | null;
   latitude: number;
   longitude: number;
@@ -188,6 +192,7 @@ export type BusinessAccountMapPoint = {
     rowKey?: string;
     contactId: number | null;
     name: string | null;
+    jobTitle?: string | null;
     phone: string | null;
     extension?: string | null;
     email: string | null;
