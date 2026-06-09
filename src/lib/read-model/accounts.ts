@@ -7,6 +7,7 @@ import {
 import { resolveLastCalledAtForBusinessAccountRow } from "@/lib/business-account-call-history";
 import { applyDeferredActionsToRows } from "@/lib/deferred-actions-store";
 import { extractNormalizedPhoneDigits } from "@/lib/phone";
+import { kickGeocodeWorker, queueGeocodesForRows } from "@/lib/read-model/geocodes";
 import { invalidateReadModelCaches, registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import { applyLocalAccountMetadataToRows } from "@/lib/read-model/account-local-metadata";
 import { applySharedContactNotesToRows } from "@/lib/read-model/contact-identity-notes";
@@ -372,6 +373,16 @@ function applyReadModelRowDecorations(rows: BusinessAccountRow[]): BusinessAccou
   );
 }
 
+function queueGeocodeRefreshForRows(rows: BusinessAccountRow[]): void {
+  if (rows.length === 0) {
+    return;
+  }
+
+  if (queueGeocodesForRows(rows) > 0) {
+    kickGeocodeWorker();
+  }
+}
+
 export function readReadModelRowsSnapshotVersion(): string {
   const db = getReadModelDb();
   const accountRow = db
@@ -595,6 +606,7 @@ export function replaceAllAccountRows(rows: BusinessAccountRow[]): void {
   });
 
   replace(nextRows);
+  queueGeocodeRefreshForRows(nextRows);
   rebuildSalesRepDirectoryFromStoredRows();
   invalidateReadModelCaches();
 }
@@ -756,6 +768,7 @@ export function replaceReadModelAccountRows(
   });
 
   replace();
+  queueGeocodeRefreshForRows(nextRows);
   rebuildSalesRepDirectoryFromStoredRows();
   invalidateReadModelCaches();
 }

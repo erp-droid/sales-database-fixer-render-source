@@ -288,7 +288,6 @@ export function buildGoogleCalendarOauthStartUrl(
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("access_type", "offline");
-  url.searchParams.set("include_granted_scopes", "true");
   url.searchParams.set("prompt", "consent");
   url.searchParams.set("scope", GOOGLE_CALENDAR_OAUTH_SCOPES.join(" "));
   url.searchParams.set(

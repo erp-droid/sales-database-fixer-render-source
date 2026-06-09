@@ -11,7 +11,7 @@ import {
   buildSalesRepDirectory,
   replaceSalesRepDirectory,
 } from "@/lib/read-model/sales-reps";
-import { geocodePendingAddresses, queueGeocodesForRows } from "@/lib/read-model/geocodes";
+import { kickGeocodeWorker } from "@/lib/read-model/geocodes";
 import { getReadModelDb } from "@/lib/read-model/db";
 import {
   replaceAllAccountRows,
@@ -55,7 +55,6 @@ function readNextStoredValue<K extends keyof StoredSyncState>(
 }
 
 let syncInFlight: Promise<void> | null = null;
-let geocodeInFlight: Promise<void> | null = null;
 const RECENT_CALL_ACTIVITY_BLOCK_WINDOW_MS = 5 * 60 * 1000;
 const MIN_STALE_RUNNING_SYNC_AFTER_MS = 10 * 60 * 1000;
 const MIN_STALE_ACTIVE_CALL_BLOCK_AFTER_MS = 30 * 60 * 1000;
@@ -360,20 +359,7 @@ function computeCounts(rows: BusinessAccountRow[]): {
 }
 
 export function kickReadModelGeocodeWorker(): void {
-  if (geocodeInFlight) {
-    return;
-  }
-
-  geocodeInFlight = (async () => {
-    try {
-      while ((await geocodePendingAddresses(150)) > 0) {
-        // keep draining pending work
-      }
-    } finally {
-      geocodeInFlight = null;
-      invalidateReadModelCaches();
-    }
-  })();
+  kickGeocodeWorker();
 }
 
 async function runFullSync(
@@ -540,8 +526,6 @@ async function runFullSync(
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    queueGeocodesForRows(rows);
-
     const completedAt = new Date().toISOString();
     console.info("[sync]", {
       event: "completed",

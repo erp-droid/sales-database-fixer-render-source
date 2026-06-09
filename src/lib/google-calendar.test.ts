@@ -73,6 +73,16 @@ describe("google-calendar oauth config", () => {
     expect(oauthUrl.searchParams.get("redirect_uri")).toBe(
       "http://localhost:3000/api/calendar/oauth/callback",
     );
+    expect(oauthUrl.searchParams.has("include_granted_scopes")).toBe(false);
+    expect(oauthUrl.searchParams.get("scope")).toBe(
+      [
+        "openid",
+        "email",
+        "profile",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/drive.file",
+      ].join(" "),
+    );
   });
 
   it("uses Google invite authority only when a stored connection exists", async () => {

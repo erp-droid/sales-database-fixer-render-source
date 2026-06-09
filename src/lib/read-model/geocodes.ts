@@ -1,4 +1,5 @@
 import { geocodeAddress } from "@/lib/geocode";
+import { invalidateReadModelCaches } from "@/lib/read-model/cache";
 import { getReadModelDb } from "@/lib/read-model/db";
 import type { BusinessAccountRow } from "@/types/business-account";
 
@@ -7,6 +8,8 @@ type ReadyGeocode = {
   longitude: number;
   provider: "nominatim" | "arcgis";
 };
+
+let geocodeInFlight: Promise<void> | null = null;
 
 function normalizeText(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? "";
@@ -210,4 +213,21 @@ export async function geocodePendingAddresses(limit: number = 150): Promise<numb
   }
 
   return processed;
+}
+
+export function kickGeocodeWorker(): void {
+  if (geocodeInFlight) {
+    return;
+  }
+
+  geocodeInFlight = (async () => {
+    try {
+      while ((await geocodePendingAddresses(150)) > 0) {
+        // keep draining pending work
+      }
+    } finally {
+      geocodeInFlight = null;
+      invalidateReadModelCaches();
+    }
+  })();
 }
