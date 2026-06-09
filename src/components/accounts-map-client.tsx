@@ -192,12 +192,12 @@ function normalizeTextToken(value: string | null | undefined): string {
 }
 
 function buildSalesRepFilterKey(point: Pick<BusinessAccountMapPoint, "salesRepId" | "salesRepName">): string {
-  if (hasText(point.salesRepId)) {
-    return `id:${normalizeTextToken(point.salesRepId)}`;
-  }
-
   if (hasText(point.salesRepName)) {
     return `name:${normalizeTextToken(point.salesRepName)}`;
+  }
+
+  if (hasText(point.salesRepId)) {
+    return `id:${normalizeTextToken(point.salesRepId)}`;
   }
 
   return "unassigned";
@@ -232,6 +232,64 @@ function buildSalesRepFilterOptionsFromRows(
     grouped.set(key, {
       key,
       label: renderSalesRepLabel(row.salesRepName ?? row.salesRepId),
+      count: 1,
+      accountKeys: new Set([accountKey]),
+    });
+  }
+
+  return [...grouped.values()]
+    .map((option) => ({
+      key: option.key,
+      label: option.label,
+      count: option.count,
+    }))
+    .sort((left, right) => {
+      if (left.label === "Unassigned" && right.label !== "Unassigned") {
+        return 1;
+      }
+
+      if (right.label === "Unassigned" && left.label !== "Unassigned") {
+        return -1;
+      }
+
+      return left.label.localeCompare(right.label, undefined, { sensitivity: "base" });
+    });
+}
+
+function readPointAccountKey(point: BusinessAccountMapPoint): string {
+  return (
+    point.accountRecordId?.trim() ||
+    point.id.trim() ||
+    point.businessAccountId.trim() ||
+    point.companyName.trim()
+  );
+}
+
+function buildSalesRepFilterOptionsFromPoints(
+  points: BusinessAccountMapPoint[],
+): SalesRepFilterOption[] {
+  const grouped = new Map<
+    string,
+    SalesRepFilterOption & {
+      accountKeys: Set<string>;
+    }
+  >();
+
+  for (const point of points) {
+    const key = buildSalesRepFilterKey(point);
+    const accountKey = readPointAccountKey(point);
+    const existing = grouped.get(key);
+    if (existing) {
+      if (!existing.accountKeys.has(accountKey)) {
+        existing.accountKeys.add(accountKey);
+        existing.count += 1;
+      }
+      continue;
+    }
+
+    grouped.set(key, {
+      key,
+      label: renderSalesRepLabel(point.salesRepName ?? point.salesRepId),
       count: 1,
       accountKeys: new Set([accountKey]),
     });
@@ -1713,38 +1771,11 @@ export function AccountsMapClient({
   );
   const normalizedMapSearch = q.trim().toLowerCase();
   const salesRepOptions = useMemo(() => {
-    if (cachedDatasetRows.length > 0) {
-      return buildSalesRepFilterOptionsFromRows(cachedDatasetRows);
+    if (points.length > 0) {
+      return buildSalesRepFilterOptionsFromPoints(points);
     }
 
-    const grouped = new Map<string, SalesRepFilterOption>();
-
-    for (const point of points) {
-      const key = buildSalesRepFilterKey(point);
-      const existing = grouped.get(key);
-      if (existing) {
-        existing.count += 1;
-        continue;
-      }
-
-      grouped.set(key, {
-        key,
-        label: renderSalesRepLabel(point.salesRepName ?? point.salesRepId),
-        count: 1,
-      });
-    }
-
-    return [...grouped.values()].sort((left, right) => {
-      if (left.label === "Unassigned" && right.label !== "Unassigned") {
-        return 1;
-      }
-
-      if (right.label === "Unassigned" && left.label !== "Unassigned") {
-        return -1;
-      }
-
-      return left.label.localeCompare(right.label, undefined, { sensitivity: "base" });
-    });
+    return buildSalesRepFilterOptionsFromRows(cachedDatasetRows);
   }, [cachedDatasetRows, points]);
   const salesRepFilterOptionByKey = useMemo(
     () => new Map(salesRepOptions.map((option) => [option.key, option])),
