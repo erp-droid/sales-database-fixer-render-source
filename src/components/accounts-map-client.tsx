@@ -52,7 +52,7 @@ type SessionResponse = {
 };
 
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
-const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v9";
+const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v10";
 const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
 const SALES_REP_FILTER_VISIBLE_SELECTION_LIMIT = 5;
 const WEEK_OPTIONS = Array.from({ length: 15 }, (_, index) => `Week ${index + 1}`);
@@ -1861,12 +1861,12 @@ export function AccountsMapClient({
   ]);
   const mapViewMetrics = useMemo(
     () => {
-      if (cachedDatasetRows.length > 0) {
-        return buildMapViewMetrics(filteredDatasetRows, filteredPoints.length);
-      }
-
       if (!hasStructuredMapFilters && serverMetricSummary) {
         return buildMapMetricCards(serverMetricSummary);
+      }
+
+      if (cachedDatasetRows.length > 0) {
+        return buildMapViewMetrics(filteredDatasetRows, filteredPoints.length);
       }
 
       return buildMapPointViewMetrics(filteredPoints);
@@ -1879,12 +1879,15 @@ export function AccountsMapClient({
       serverMetricSummary,
     ],
   );
+  const shouldUseServerMapSummary = !hasStructuredMapFilters && serverMetricSummary !== null;
   const effectiveTotalCandidates =
-    cachedDatasetRows.length > 0 ? countDistinctMetricCompanies(filteredDatasetRows) : totalCandidates;
+    cachedDatasetRows.length > 0 && !shouldUseServerMapSummary
+      ? countDistinctMetricCompanies(filteredDatasetRows)
+      : totalCandidates;
   const effectiveGeocodedCount =
-    cachedDatasetRows.length > 0 ? filteredPoints.length : geocodedCount;
+    cachedDatasetRows.length > 0 && !shouldUseServerMapSummary ? filteredPoints.length : geocodedCount;
   const effectiveUnmappedCount =
-    cachedDatasetRows.length > 0
+    cachedDatasetRows.length > 0 && !shouldUseServerMapSummary
       ? Math.max(0, effectiveTotalCandidates - filteredPoints.length)
       : unmappedCount;
   const hasActiveMapFilters =
