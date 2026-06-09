@@ -57,4 +57,44 @@ describe("GET /api/calendar/oauth/start", () => {
     );
     expect(buildGoogleCalendarOauthStartUrl).not.toHaveBeenCalled();
   });
+
+  it("uses forwarded public Render origin instead of the internal container origin", async () => {
+    readGoogleCalendarExpectedRedirectUri.mockReturnValue(
+      "https://sales-meadowb.onrender.com/api/calendar/oauth/callback",
+    );
+
+    const { GET } = await import("@/app/api/calendar/oauth/start/route");
+    const response = await GET(
+      new NextRequest("http://0.0.0.0:10000/api/calendar/oauth/start?returnTo=/calendar/oauth/complete", {
+        headers: {
+          "x-forwarded-host": "sales-meadowb.onrender.com",
+          "x-forwarded-proto": "https",
+        },
+      }),
+    );
+
+    expect(response.headers.get("location")).toBe(
+      "https://accounts.google.com/o/oauth2/v2/auth?client_id=test",
+    );
+  });
+
+  it("falls back to the configured public origin when an internal Render request errors", async () => {
+    const { HttpError } = await import("@/lib/errors");
+    requireStoredLoginName.mockImplementation(() => {
+      throw new HttpError(401, "Signed-in username is unavailable.");
+    });
+    readGoogleCalendarExpectedRedirectUri.mockReturnValue(
+      "https://sales-meadowb.onrender.com/api/calendar/oauth/callback",
+    );
+
+    const { GET } = await import("@/app/api/calendar/oauth/start/route");
+    const response = await GET(
+      new NextRequest("http://0.0.0.0:10000/api/calendar/oauth/start?returnTo=/calendar/oauth/complete"),
+    );
+    const redirectUrl = new URL(response.headers.get("location") ?? "");
+
+    expect(redirectUrl.origin).toBe("https://sales-meadowb.onrender.com");
+    expect(redirectUrl.pathname).toBe("/calendar/oauth/complete");
+    expect(redirectUrl.searchParams.get("error")).toBe("Signed-in username is unavailable.");
+  });
 });

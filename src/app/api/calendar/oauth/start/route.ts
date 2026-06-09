@@ -18,12 +18,53 @@ function sanitizeReturnTo(returnTo: string | null | undefined): string {
   return trimmed;
 }
 
+function readFirstHeaderValue(request: NextRequest, name: string): string | null {
+  return request.headers.get(name)?.split(",")[0]?.trim() || null;
+}
+
+function isInternalContainerOrigin(origin: string): boolean {
+  try {
+    const hostname = new URL(origin).hostname;
+    return hostname === "0.0.0.0" || hostname === "::" || hostname === "[::]";
+  } catch {
+    return false;
+  }
+}
+
+function readExpectedRedirectOrigin(): string | null {
+  const expectedRedirectUri = readGoogleCalendarExpectedRedirectUri();
+  return expectedRedirectUri ? new URL(expectedRedirectUri).origin : null;
+}
+
+function resolvePublicOrigin(request: NextRequest): string {
+  const expectedOrigin = readExpectedRedirectOrigin();
+  const forwardedHost = readFirstHeaderValue(request, "x-forwarded-host");
+  const host = forwardedHost ?? readFirstHeaderValue(request, "host");
+  const protocol =
+    readFirstHeaderValue(request, "x-forwarded-proto") ??
+    request.nextUrl.protocol.replace(/:$/, "") ??
+    "https";
+
+  if (host) {
+    const forwardedOrigin = new URL(`${protocol}://${host}`).origin;
+    if (!isInternalContainerOrigin(forwardedOrigin)) {
+      return forwardedOrigin;
+    }
+  }
+
+  if (!isInternalContainerOrigin(request.nextUrl.origin)) {
+    return request.nextUrl.origin;
+  }
+
+  return expectedOrigin ?? request.nextUrl.origin;
+}
+
 function buildCurrentOriginCompleteUrl(
   request: NextRequest,
   returnTo: string | null | undefined,
   params: Record<string, string | null | undefined>,
 ): URL {
-  const target = new URL(sanitizeReturnTo(returnTo), request.nextUrl.origin);
+  const target = new URL(sanitizeReturnTo(returnTo), resolvePublicOrigin(request));
   Object.entries(params).forEach(([key, value]) => {
     if (value) {
       target.searchParams.set(key, value);
@@ -33,13 +74,12 @@ function buildCurrentOriginCompleteUrl(
 }
 
 function assertCalendarRedirectOriginMatchesRequest(request: NextRequest): void {
-  const expectedRedirectUri = readGoogleCalendarExpectedRedirectUri();
-  if (!expectedRedirectUri) {
+  const expectedOrigin = readExpectedRedirectOrigin();
+  if (!expectedOrigin) {
     return;
   }
 
-  const expectedOrigin = new URL(expectedRedirectUri).origin;
-  const requestOrigin = request.nextUrl.origin;
+  const requestOrigin = resolvePublicOrigin(request);
   if (expectedOrigin === requestOrigin) {
     return;
   }
