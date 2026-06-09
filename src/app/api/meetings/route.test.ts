@@ -2,17 +2,14 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "@/lib/errors";
+import type { BusinessAccountRow } from "@/types/business-account";
 
 const requireAuthCookieValue = vi.fn(() => "cookie");
-const setAuthCookie = vi.fn();
 const getStoredLoginName = vi.fn(() => "jserrano");
-const createEvent = vi.fn();
-const fetchContactById = vi.fn();
 const createMeetingInviteInGoogleCalendar = vi.fn();
-const deleteMeetingInviteFromGoogleCalendar = vi.fn();
-const readGoogleCalendarInviteAuthority = vi.fn(() => "google");
 const upsertMeetingBooking = vi.fn();
 const upsertMeetingAuditEvent = vi.fn();
+const readAllAccountRowsFromReadModel = vi.fn();
 const readBusinessAccountDetailFromReadModel = vi.fn(() => ({
   row: {
     companyName: "Alpha Foods",
@@ -20,46 +17,14 @@ const readBusinessAccountDetailFromReadModel = vi.fn(() => ({
 }));
 const markReadModelCalendarInviteSent = vi.fn(() => 1);
 const publishBusinessAccountChanged = vi.fn();
-const readRecordIdentity = vi.fn((record: Record<string, unknown>) => {
-  const id = record.id;
-  if (typeof id === "string" && id.trim()) {
-    return id.trim();
-  }
-
-  const note = (record.NoteID as { value?: string } | undefined)?.value;
-  return typeof note === "string" && note.trim() ? note.trim() : null;
-});
 
 vi.mock("@/lib/auth", () => ({
   getStoredLoginName,
   requireAuthCookieValue,
-  setAuthCookie,
-}));
-
-vi.mock("@/lib/acumatica", () => ({
-  createEvent,
-  fetchContactById,
-  readRecordIdentity,
-  readWrappedScalarString: (
-    record: Record<string, { value?: unknown }>,
-    key: string,
-  ) => {
-    const value = record[key]?.value;
-    return typeof value === "string" && value.trim() ? value.trim() : "";
-  },
-  readWrappedString: (
-    record: Record<string, { value?: unknown }>,
-    key: string,
-  ) => {
-    const value = record[key]?.value;
-    return typeof value === "string" && value.trim() ? value.trim() : "";
-  },
 }));
 
 vi.mock("@/lib/google-calendar", () => ({
   createMeetingInviteInGoogleCalendar,
-  deleteMeetingInviteFromGoogleCalendar,
-  readGoogleCalendarInviteAuthority,
 }));
 
 vi.mock("@/lib/meeting-bookings", () => ({
@@ -72,6 +37,7 @@ vi.mock("@/lib/audit-log-store", () => ({
 
 vi.mock("@/lib/read-model/accounts", () => ({
   markReadModelCalendarInviteSent,
+  readAllAccountRowsFromReadModel,
   readBusinessAccountDetailFromReadModel,
 }));
 
@@ -79,49 +45,93 @@ vi.mock("@/lib/business-account-live", () => ({
   publishBusinessAccountChanged,
 }));
 
+function buildAccountRow(input: {
+  contactId: number;
+  contactName: string;
+  email: string | null;
+  companyName?: string;
+}): BusinessAccountRow {
+  return {
+    id: "record-1",
+    accountRecordId: "record-1",
+    rowKey: `record-1:contact:${input.contactId}`,
+    contactId: input.contactId,
+    isPrimaryContact: input.contactId === 157497,
+    marketingEligible: true,
+    companyPhone: "416-555-0100",
+    companyPhoneSource: "account",
+    phoneNumber: "416-555-0100",
+    salesRepId: "JS",
+    salesRepName: "Jorge Serrano",
+    accountType: "Customer",
+    opportunityCount: 0,
+    industryType: "Manufacturing",
+    subCategory: "General",
+    companyRegion: "Region 1",
+    week: "Week 1",
+    businessAccountId: "BA0001",
+    companyName: input.companyName ?? "Alpha Foods",
+    companyDescription: null,
+    address: "1 Main St, Toronto ON M5J 1A1, CA",
+    addressLine1: "1 Main St",
+    addressLine2: "",
+    city: "Toronto",
+    state: "ON",
+    postalCode: "M5J 1A1",
+    country: "CA",
+    primaryContactName: input.contactName,
+    primaryContactJobTitle: "Operations",
+    primaryContactPhone: "416-555-0101",
+    primaryContactExtension: null,
+    primaryContactRawPhone: "4165550101",
+    primaryContactEmail: input.email,
+    primaryContactId: input.contactId,
+    category: "A",
+    notes: null,
+    lastCalledAt: null,
+    lastCalendarInvitedAt: null,
+    lastEmailedAt: null,
+    lastModifiedIso: "2026-03-11T12:00:00.000Z",
+  };
+}
+
+function buildRequestPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    businessAccountRecordId: "record-1",
+    businessAccountId: "BA0001",
+    sourceContactId: 157497,
+    organizerContactId: 157499,
+    includeOrganizerInAcumatica: true,
+    relatedContactId: 157497,
+    category: "Meeting",
+    summary: "Operations sync",
+    location: "Boardroom",
+    timeZone: "America/Toronto",
+    startDate: "2026-03-11",
+    startTime: "09:00",
+    endDate: "2026-03-11",
+    endTime: "10:00",
+    priority: "Normal",
+    details: "Review open items.",
+    privateNotes: "Internal prep only.",
+    includeGoogleMeet: true,
+    attachmentLinks: ["https://drive.google.com/file/d/abc/view"],
+    attendeeContactIds: [157498, 157497, 157498],
+    attendeeEmails: ["amy.vega@example.com", "guest@example.com"],
+    ...overrides,
+  };
+}
+
 function buildRequest(
   overrides: Record<string, unknown> = {},
 ): NextRequest {
   return new NextRequest("http://localhost/api/meetings", {
     method: "POST",
-    body: JSON.stringify({
-      businessAccountRecordId: "record-1",
-      businessAccountId: "BA0001",
-      sourceContactId: 157497,
-      organizerContactId: 157499,
-      includeOrganizerInAcumatica: true,
-      relatedContactId: 157497,
-      category: "Meeting",
-      summary: "Operations sync",
-      location: "Boardroom",
-      timeZone: "America/Toronto",
-      startDate: "2026-03-11",
-      startTime: "09:00",
-      endDate: "2026-03-11",
-      endTime: "10:00",
-      priority: "Normal",
-      details: "Review open items.",
-      attendeeContactIds: [157498, 157497, 157498],
-      attendeeEmails: ["amy.vega@example.com", "guest@example.com"],
-      ...overrides,
-    }),
+    body: JSON.stringify(buildRequestPayload(overrides)),
     headers: {
       "content-type": "application/json",
     },
   });
-}
-
-function buildContactRecord(input: {
-  contactId: number;
-  displayName: string;
-  email: string | null;
-}): Record<string, unknown> {
-  return {
-    id: `contact-note-${input.contactId}`,
-    ContactID: { value: input.contactId },
-    DisplayName: { value: input.displayName },
-    Email: { value: input.email },
-  };
 }
 
 describe("POST /api/meetings", () => {
@@ -129,10 +139,25 @@ describe("POST /api/meetings", () => {
     vi.clearAllMocks();
     requireAuthCookieValue.mockReturnValue("cookie");
     getStoredLoginName.mockReturnValue("jserrano");
-    readGoogleCalendarInviteAuthority.mockReturnValue("google");
+    readAllAccountRowsFromReadModel.mockReturnValue([
+      buildAccountRow({
+        contactId: 157497,
+        contactName: "Jacky Lee",
+        email: "jacky.lee@example.com",
+      }),
+      buildAccountRow({
+        contactId: 157498,
+        contactName: "Amy Vega",
+        email: "amy.vega@example.com",
+      }),
+      buildAccountRow({
+        contactId: 157499,
+        contactName: "Jorge Serrano",
+        email: "jserrano@meadowb.com",
+        companyName: "MeadowBrook",
+      }),
+    ]);
     markReadModelCalendarInviteSent.mockReturnValue(1);
-    upsertMeetingBooking.mockReset();
-    upsertMeetingAuditEvent.mockReset();
     upsertMeetingBooking.mockImplementation((input: Record<string, unknown>) => ({
       id: `meeting:${String(input.eventId)}`,
       eventId: String(input.eventId),
@@ -145,6 +170,7 @@ describe("POST /api/meetings", () => {
       relatedContactName: input.relatedContactName,
       category: input.category,
       meetingSummary: input.meetingSummary,
+      privateNotes: input.privateNotes,
       attendeeCount: input.attendeeCount,
       attendees: input.attendees,
       inviteAuthority: input.inviteAuthority,
@@ -153,52 +179,14 @@ describe("POST /api/meetings", () => {
       createdAt: "2026-03-11T14:00:00.000Z",
       updatedAt: "2026-03-11T14:00:00.000Z",
     }));
-    fetchContactById.mockImplementation(async (_cookie: string, contactId: number) => {
-      if (contactId === 157497) {
-        return buildContactRecord({
-          contactId,
-          displayName: "Jacky Lee",
-          email: "jacky.lee@example.com",
-        });
-      }
-      if (contactId === 157498) {
-        return buildContactRecord({
-          contactId,
-          displayName: "Amy Vega",
-          email: "amy.vega@example.com",
-        });
-      }
-      if (contactId === 157499) {
-        return buildContactRecord({
-          contactId,
-          displayName: "Jorge Serrano",
-          email: "jserrano@meadowb.com",
-        });
-      }
-
-      return buildContactRecord({
-        contactId,
-        displayName: `Contact ${contactId}`,
-        email: null,
-      });
-    });
   });
 
-  it("uses Google as the invite authority, includes the organizer in Google attendees, and omits attendees from the primary Acumatica event", async () => {
+  it("requires Google Calendar, creates the Google invite, then stores the app meeting", async () => {
     createMeetingInviteInGoogleCalendar.mockResolvedValue({
       status: "created",
       eventId: "google-event-1",
       connectedGoogleEmail: "jserrano@gmail.com",
     });
-    createEvent
-      .mockResolvedValueOnce({
-        id: "event-note-1",
-        EventID: { value: "EV0001" },
-      })
-      .mockResolvedValue({
-        id: "event-note-mirror",
-        EventID: { value: "EV0002" },
-      });
 
     const { POST } = await import("@/app/api/meetings/route");
 
@@ -208,7 +196,7 @@ describe("POST /api/meetings", () => {
     expect(response.status).toBe(201);
     expect(payload).toEqual({
       created: true,
-      eventId: "event-note-1",
+      eventId: "google:google-event-1",
       category: "Meeting",
       inviteAuthority: "google",
       calendarEventId: "google-event-1",
@@ -231,38 +219,29 @@ describe("POST /api/meetings", () => {
           expect.objectContaining({ contactId: 157499, email: "jserrano@meadowb.com" }),
           expect.objectContaining({ contactId: null, email: "guest@example.com" }),
         ],
-        acumaticaEventId: null,
+        request: expect.objectContaining({
+          includeGoogleMeet: true,
+          privateNotes: "Internal prep only.",
+          attachmentLinks: ["https://drive.google.com/file/d/abc/view"],
+        }),
       }),
     );
-    expect(createEvent).toHaveBeenCalledTimes(3);
     expect(upsertMeetingBooking).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventId: "event-note-1",
+        eventId: "google:google-event-1",
         actorLoginName: "jserrano",
+        actorName: "Jorge Serrano",
         relatedContactId: 157497,
         relatedContactName: "Jacky Lee",
         category: "Meeting",
         meetingSummary: "Operations sync",
+        privateNotes: "Internal prep only.",
         attendeeCount: 4,
-        attendees: [
-          expect.objectContaining({ contactId: 157497, email: "jacky.lee@example.com" }),
-          expect.objectContaining({ contactId: 157498, email: "amy.vega@example.com" }),
-          expect.objectContaining({ contactId: 157499, email: "jserrano@meadowb.com" }),
-          expect.objectContaining({ contactId: null, email: "guest@example.com" }),
-        ],
         inviteAuthority: "google",
         calendarInviteStatus: "created",
       }),
     );
-    expect(upsertMeetingAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventId: "event-note-1",
-        actorLoginName: "jserrano",
-        relatedContactName: "Jacky Lee",
-        category: "Meeting",
-      }),
-      { notifyReason: "meeting-create" },
-    );
+    expect(upsertMeetingAuditEvent).toHaveBeenCalledTimes(1);
     expect(markReadModelCalendarInviteSent).toHaveBeenCalledWith({
       contactIds: [157497, 157498, 157499],
     });
@@ -272,121 +251,117 @@ describe("POST /api/meetings", () => {
       targetContactId: 157497,
       reason: "calendar-invite-sent",
     });
-
-    const primaryPayloadVariants = createEvent.mock.calls[0]?.[1] as Array<Record<string, unknown>>;
-    expect(primaryPayloadVariants[0]).not.toHaveProperty("Attendees");
-    expect(primaryPayloadVariants[0]?.Category).toEqual({ value: "Meeting" });
-
-    const firstMirrorPayload = createEvent.mock.calls[1]?.[1] as Array<Record<string, unknown>>;
-    const secondMirrorPayload = createEvent.mock.calls[2]?.[1] as Array<Record<string, unknown>>;
-    expect(firstMirrorPayload[0]).not.toHaveProperty("Attendees");
-    expect(secondMirrorPayload[0]).not.toHaveProperty("Attendees");
   });
 
-  it("falls back to Acumatica invite sending when Google is not connected", async () => {
-    readGoogleCalendarInviteAuthority.mockReturnValue("acumatica");
-    createEvent
-      .mockResolvedValueOnce({
-        id: "event-note-1",
-        EventID: { value: "EV0001" },
-      })
-      .mockResolvedValue({
-        id: "event-note-mirror",
-        EventID: { value: "EV0002" },
-      });
+  it("passes multipart attachment files to the Google invite creator", async () => {
+    createMeetingInviteInGoogleCalendar.mockResolvedValue({
+      status: "created",
+      eventId: "google-event-1",
+      connectedGoogleEmail: "jserrano@gmail.com",
+    });
+
+    const formData = new FormData();
+    formData.append(
+      "payload",
+      JSON.stringify(buildRequestPayload({ attachmentLinks: [] })),
+    );
+    formData.append(
+      "attachments",
+      new File([Buffer.from("agenda")], "agenda.pdf", { type: "application/pdf" }),
+    );
 
     const { POST } = await import("@/app/api/meetings/route");
-
-    const response = await POST(buildRequest());
-    const payload = (await response.json()) as Record<string, unknown>;
+    const response = await POST(
+      new NextRequest("http://localhost/api/meetings", {
+        method: "POST",
+        body: formData,
+      }),
+    );
 
     expect(response.status).toBe(201);
-    expect(payload).toEqual(
+    expect(createMeetingInviteInGoogleCalendar).toHaveBeenCalledWith(
+      "jserrano",
       expect.objectContaining({
-        inviteAuthority: "acumatica",
-        calendarEventId: null,
-        calendarInviteStatus: "skipped",
-        connectedGoogleEmail: null,
+        attachmentFiles: [
+          expect.objectContaining({
+            data: expect.any(Buffer),
+            fileName: "agenda.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 6,
+          }),
+        ],
+        request: expect.objectContaining({
+          attachmentLinks: [],
+        }),
       }),
     );
-    expect(createMeetingInviteInGoogleCalendar).not.toHaveBeenCalled();
-    expect(upsertMeetingBooking).toHaveBeenCalledWith(
-      expect.objectContaining({
-        inviteAuthority: "acumatica",
-        calendarInviteStatus: "skipped",
-      }),
-    );
-    expect(upsertMeetingAuditEvent).toHaveBeenCalledTimes(1);
-    expect(markReadModelCalendarInviteSent).toHaveBeenCalledWith({
-      contactIds: [157497, 157498],
-    });
-
-    const primaryPayloadVariants = createEvent.mock.calls[0]?.[1] as Array<Record<string, unknown>>;
-    expect(primaryPayloadVariants[0]?.Attendees).toHaveLength(3);
   });
 
-  it("sends the selected Drop Off category to Acumatica and the local meeting store", async () => {
-    readGoogleCalendarInviteAuthority.mockReturnValue("acumatica");
-    createEvent
-      .mockResolvedValueOnce({
-        id: "event-note-dropoff",
-        EventID: { value: "EV0009" },
-      })
-      .mockResolvedValue({
-        id: "event-note-mirror",
-        EventID: { value: "EV0010" },
-      });
-
-    const { POST } = await import("@/app/api/meetings/route");
-
-    const response = await POST(buildRequest({ category: "Drop Off", summary: "Sample drop off" }));
-    const payload = (await response.json()) as Record<string, unknown>;
-
-    expect(response.status).toBe(201);
-    expect(payload).toEqual(expect.objectContaining({ category: "Drop Off" }));
-    expect(createEvent.mock.calls[0]?.[1]?.[0]?.Category).toEqual({ value: "Drop Off" });
-    expect(upsertMeetingBooking).toHaveBeenCalledWith(
-      expect.objectContaining({
-        category: "Drop Off",
-        meetingSummary: "Sample drop off",
-      }),
+  it("does not create a local app meeting when Google Calendar is not connected", async () => {
+    createMeetingInviteInGoogleCalendar.mockRejectedValue(
+      new HttpError(
+        409,
+        "Google Calendar is not connected for this account. Connect Google Calendar and try again.",
+      ),
     );
-    expect(markReadModelCalendarInviteSent).toHaveBeenCalledWith({
-      contactIds: [157497, 157498],
-    });
-  });
-
-  it("rejects organizer contacts that do not match the signed-in user", async () => {
-    fetchContactById.mockImplementation(async (_cookie: string, contactId: number) => {
-      if (contactId === 157499) {
-        return buildContactRecord({
-          contactId,
-          displayName: "Wrong Person",
-          email: "wrong.person@example.com",
-        });
-      }
-
-      return buildContactRecord({
-        contactId,
-        displayName: `Contact ${contactId}`,
-        email: `contact${contactId}@example.com`,
-      });
-    });
 
     const { POST } = await import("@/app/api/meetings/route");
 
     const response = await POST(buildRequest());
     const payload = (await response.json()) as { error: string };
 
-    expect(response.status).toBe(400);
-    expect(payload.error).toBe("Selected organizer contact does not match the signed-in user.");
-    expect(createMeetingInviteInGoogleCalendar).not.toHaveBeenCalled();
-    expect(createEvent).not.toHaveBeenCalled();
+    expect(response.status).toBe(409);
+    expect(payload.error).toBe(
+      "Google Calendar is not connected for this account. Connect Google Calendar and try again.",
+    );
     expect(upsertMeetingBooking).not.toHaveBeenCalled();
+    expect(upsertMeetingAuditEvent).not.toHaveBeenCalled();
     expect(markReadModelCalendarInviteSent).not.toHaveBeenCalled();
   });
 
-  it("fails before Acumatica writes when Google invite creation fails", async () => {
+  it("allows direct email invites without a selected app contact", async () => {
+    createMeetingInviteInGoogleCalendar.mockResolvedValue({
+      status: "created",
+      eventId: "google-event-direct",
+      connectedGoogleEmail: "jserrano@gmail.com",
+    });
+
+    const { POST } = await import("@/app/api/meetings/route");
+
+    const response = await POST(
+      buildRequest({
+        sourceContactId: null,
+        organizerContactId: null,
+        includeOrganizerInAcumatica: false,
+        relatedContactId: null,
+        attendeeContactIds: [],
+        attendeeEmails: ["external@example.com"],
+      }),
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(201);
+    expect(payload).toEqual(
+      expect.objectContaining({
+        eventId: "google:google-event-direct",
+        relatedContactId: null,
+        attendeeCount: 1,
+      }),
+    );
+    expect(createMeetingInviteInGoogleCalendar).toHaveBeenCalledWith(
+      "jserrano",
+      expect.objectContaining({
+        attendees: [
+          expect.objectContaining({ contactId: null, email: "external@example.com" }),
+        ],
+        relatedContactId: null,
+        relatedContactName: null,
+      }),
+    );
+    expect(markReadModelCalendarInviteSent).toHaveBeenCalledWith({ contactIds: [] });
+  });
+
+  it("fails before local storage when Google invite creation fails", async () => {
     createMeetingInviteInGoogleCalendar.mockRejectedValue(
       new HttpError(502, "Unable to create the Google Calendar invite."),
     );
@@ -398,32 +373,8 @@ describe("POST /api/meetings", () => {
 
     expect(response.status).toBe(502);
     expect(payload.error).toBe("Unable to create the Google Calendar invite.");
-    expect(createEvent).not.toHaveBeenCalled();
-    expect(deleteMeetingInviteFromGoogleCalendar).not.toHaveBeenCalled();
     expect(upsertMeetingBooking).not.toHaveBeenCalled();
-    expect(markReadModelCalendarInviteSent).not.toHaveBeenCalled();
-  });
-
-  it("rolls back the Google invite when the primary Acumatica event create fails", async () => {
-    createMeetingInviteInGoogleCalendar.mockResolvedValue({
-      status: "created",
-      eventId: "google-event-1",
-      connectedGoogleEmail: "jserrano@gmail.com",
-    });
-    createEvent.mockRejectedValue(new HttpError(422, "Event create failed."));
-
-    const { POST } = await import("@/app/api/meetings/route");
-
-    const response = await POST(buildRequest());
-    const payload = (await response.json()) as { error: string };
-
-    expect(response.status).toBe(422);
-    expect(payload.error).toBe("Event create failed.");
-    expect(deleteMeetingInviteFromGoogleCalendar).toHaveBeenCalledWith(
-      "jserrano",
-      "google-event-1",
-    );
-    expect(upsertMeetingBooking).not.toHaveBeenCalled();
+    expect(upsertMeetingAuditEvent).not.toHaveBeenCalled();
     expect(markReadModelCalendarInviteSent).not.toHaveBeenCalled();
   });
 });

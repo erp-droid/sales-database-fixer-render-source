@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { CreateContactDrawer } from "@/components/create-contact-drawer";
 import {
@@ -115,6 +115,17 @@ type MeetingAttendeeSuggestion =
     };
 
 const MEETING_PRIORITY_OPTIONS: MeetingPriority[] = ["Low", "Normal", "High"];
+const MAX_MEETING_ATTACHMENT_FILES = 5;
+const MAX_MEETING_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_MEETING_ATTACHMENT_TOTAL_BYTES = 25 * 1024 * 1024;
+
+type PendingMeetingAttachment = {
+  id: string;
+  file: File;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+};
 
 function readText(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -175,7 +186,7 @@ function isMeetingCreateResponse(payload: unknown): payload is MeetingCreateResp
     (record.connectedGoogleEmail === null || typeof record.connectedGoogleEmail === "string") &&
     typeof record.includeOrganizerInAcumatica === "boolean" &&
     typeof record.summary === "string" &&
-    typeof record.relatedContactId === "number" &&
+    (typeof record.relatedContactId === "number" || record.relatedContactId === null) &&
     typeof record.attendeeCount === "number" &&
     Array.isArray(record.warnings)
   );
@@ -240,7 +251,9 @@ function isGoogleCalendarSessionResponse(
     (record.connectedGoogleEmail === null ||
       typeof record.connectedGoogleEmail === "string") &&
     (record.connectionError === null || typeof record.connectionError === "string") &&
-    (record.expectedRedirectUri === null || typeof record.expectedRedirectUri === "string")
+    (record.expectedRedirectUri === null || typeof record.expectedRedirectUri === "string") &&
+    typeof record.canUploadAttachments === "boolean" &&
+    typeof record.requiresReconnectForAttachments === "boolean"
   );
 }
 
@@ -437,6 +450,9 @@ function buildEmptyMeetingForm(timeZone: string, category: MeetingCategory): Mee
     endTime: defaults.endTime,
     priority: "Normal",
     details: null,
+    privateNotes: null,
+    includeGoogleMeet: false,
+    attachmentLinks: [],
   };
 }
 
@@ -518,6 +534,14 @@ function formatMeetingLocationAddress(address: AddressRetrieveResponse["address"
     .join(", ");
 }
 
+function formatAttachmentSize(sizeBytes: number): string {
+  if (sizeBytes >= 1024 * 1024) {
+    return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  return `${Math.max(1, Math.round(sizeBytes / 1024))} KB`;
+}
+
 export function CreateMeetingDrawer({
   isLoadingOptions,
   isOpen,
@@ -544,6 +568,8 @@ export function CreateMeetingDrawer({
   const [attendeeEmails, setAttendeeEmails] = useState<string[]>([]);
   const [relatedContactSearchTerm, setRelatedContactSearchTerm] = useState("");
   const [attendeeSearchTerm, setAttendeeSearchTerm] = useState("");
+  const [attachmentFiles, setAttachmentFiles] = useState<PendingMeetingAttachment[]>([]);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const debouncedAttendeeSearchTerm = useDebouncedValue(attendeeSearchTerm, 220);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -625,6 +651,11 @@ export function CreateMeetingDrawer({
   const categoryLowerLabel = categoryLabel === "Drop Off" ? "drop off" : "meeting";
   const createLabel = form.category === "Drop Off" ? "Schedule drop off" : "Schedule meeting";
   const createHeading = form.category === "Drop Off" ? "Schedule Drop Off" : "Schedule Meeting";
+  const isGoogleCalendarConnected = calendarSession?.status === "connected";
+  const canUploadSelectedAttachments =
+    attachmentFiles.length === 0 || calendarSession?.canUploadAttachments !== false;
+  const isScheduleDisabled =
+    isSubmitting || !isGoogleCalendarConnected || !canUploadSelectedAttachments;
 
   useEffect(() => {
     if (!isOpen) {
@@ -634,6 +665,7 @@ export function CreateMeetingDrawer({
       setAttendeeEmails([]);
       setRelatedContactSearchTerm("");
       setAttendeeSearchTerm("");
+      setAttachmentFiles([]);
       setFormError(null);
       setIsSubmitting(false);
       setIsCreateContactOpen(false);
@@ -662,6 +694,7 @@ export function CreateMeetingDrawer({
     setAttendeeEmails([]);
     setRelatedContactSearchTerm(source?.contactName?.trim() ?? "");
     setAttendeeSearchTerm("");
+    setAttachmentFiles([]);
     setFormError(null);
     setIsSubmitting(false);
     setIsCreateContactOpen(false);
@@ -732,6 +765,8 @@ export function CreateMeetingDrawer({
           connectionError:
             error instanceof Error ? error.message : "Unable to load Google Calendar status.",
           expectedRedirectUri: null,
+          canUploadAttachments: false,
+          requiresReconnectForAttachments: false,
         });
       })
       .finally(() => {
@@ -759,6 +794,8 @@ export function CreateMeetingDrawer({
         connectedGoogleEmail: event.data.connectedGoogleEmail ?? null,
         connectionError: null,
         expectedRedirectUri: current?.expectedRedirectUri ?? null,
+        canUploadAttachments: true,
+        requiresReconnectForAttachments: false,
       }));
     }
 
@@ -1028,8 +1065,7 @@ export function CreateMeetingDrawer({
   const canInviteDirectEmail =
     isValidAttendeeEmail(attendeeSearchTerm) &&
     normalizedAttendeeSearchEmail !== null &&
-    !selectedExternalAttendeeEmails.includes(normalizedAttendeeSearchEmail) &&
-    matchingDirectInviteContact === null;
+    !selectedInviteEmailSet.has(normalizedAttendeeSearchEmail);
   const isOptionsPending = isLoadingOptions && !options;
 
   function updateForm<K extends keyof MeetingFormState>(
@@ -1076,6 +1112,8 @@ export function CreateMeetingDrawer({
         connectedGoogleEmail: null,
         connectionError: null,
         expectedRedirectUri: calendarSession?.expectedRedirectUri ?? null,
+        canUploadAttachments: false,
+        requiresReconnectForAttachments: false,
       });
     } catch (error) {
       setFormError(
@@ -1182,6 +1220,19 @@ export function CreateMeetingDrawer({
     setFormError(null);
   }
 
+  function handleAttendeeInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter" && event.key !== ",") {
+      return;
+    }
+
+    if (!canInviteDirectEmail) {
+      return;
+    }
+
+    event.preventDefault();
+    handleAddAttendeeEmail(attendeeSearchTerm);
+  }
+
   function handleAddEmployeeAttendee(employee: MeetingEmployeeOption) {
     const normalizedEmail = normalizeMeetingEmail(employee.email);
     if (!normalizedEmail) {
@@ -1199,6 +1250,65 @@ export function CreateMeetingDrawer({
     }
 
     setAttendeeContactIds((current) => current.filter((value) => value !== contactId));
+  }
+
+  function handleSelectAttachmentFiles(event: ChangeEvent<HTMLInputElement>) {
+    const nextFiles = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (nextFiles.length === 0) {
+      return;
+    }
+
+    const existingBytes = attachmentFiles.reduce((total, attachment) => total + attachment.sizeBytes, 0);
+    const existingKeys = new Set(
+      attachmentFiles.map(
+        (attachment) => `${attachment.fileName}:${attachment.sizeBytes}:${attachment.file.lastModified}`,
+      ),
+    );
+    const accepted: PendingMeetingAttachment[] = [];
+    let nextTotalBytes = existingBytes;
+
+    for (const file of nextFiles) {
+      if (attachmentFiles.length + accepted.length >= MAX_MEETING_ATTACHMENT_FILES) {
+        setFormError(`You can attach up to ${MAX_MEETING_ATTACHMENT_FILES} files.`);
+        break;
+      }
+
+      if (file.size > MAX_MEETING_ATTACHMENT_BYTES) {
+        setFormError(`${file.name || "Attachment"} is too large. Maximum file size is 10 MB.`);
+        continue;
+      }
+
+      if (nextTotalBytes + file.size > MAX_MEETING_ATTACHMENT_TOTAL_BYTES) {
+        setFormError("Calendar invite attachments are too large.");
+        break;
+      }
+
+      const key = `${file.name}:${file.size}:${file.lastModified}`;
+      if (existingKeys.has(key)) {
+        continue;
+      }
+
+      existingKeys.add(key);
+      nextTotalBytes += file.size;
+      accepted.push({
+        id: `${key}:${crypto.randomUUID()}`,
+        file,
+        fileName: file.name || "Meeting attachment",
+        mimeType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+      });
+    }
+
+    if (accepted.length > 0) {
+      setAttachmentFiles((current) => [...current, ...accepted]);
+      setFormError(null);
+    }
+  }
+
+  function handleRemoveAttachment(id: string) {
+    setAttachmentFiles((current) => current.filter((attachment) => attachment.id !== id));
+    setFormError(null);
   }
 
   function handleMeetingContactCreated(
@@ -1238,12 +1348,17 @@ export function CreateMeetingDrawer({
       return;
     }
 
-    const effectiveRelatedContactId = relatedContactId ?? normalizedAttendeeIds[0] ?? null;
-    if (effectiveRelatedContactId === null) {
-      setFormError(`Select the related contact before scheduling the ${categoryLowerLabel}.`);
+    if (!isGoogleCalendarConnected) {
+      setFormError("Connect Google Calendar before scheduling this invite.");
       return;
     }
 
+    if (!canUploadSelectedAttachments) {
+      setFormError("Reconnect Google Calendar to allow real file attachments.");
+      return;
+    }
+
+    const effectiveRelatedContactId = relatedContactId ?? normalizedAttendeeIds[0] ?? null;
     try {
       buildMeetingDateTimeRange({
         startDate: form.startDate,
@@ -1263,31 +1378,50 @@ export function CreateMeetingDrawer({
     setFormError(null);
 
     try {
+      const requestPayload = {
+        businessAccountRecordId: source?.accountRecordId ?? null,
+        businessAccountId: source?.businessAccountId ?? null,
+        sourceContactId: source?.contactId ?? null,
+        organizerContactId: includeOrganizerInAcumatica ? viewerContactId : null,
+        includeOrganizerInAcumatica,
+        relatedContactId: effectiveRelatedContactId,
+        category: form.category,
+        summary: form.summary.trim(),
+        location: normalizeNullableInput(form.location ?? ""),
+        timeZone: defaultTimeZone,
+        startDate: form.startDate,
+        startTime: form.startTime,
+        endDate: form.startDate,
+        endTime: form.endTime,
+        priority: form.priority,
+        details: normalizeNullableInput(form.details ?? ""),
+        privateNotes: normalizeNullableInput(form.privateNotes ?? ""),
+        includeGoogleMeet: form.includeGoogleMeet,
+        attachmentLinks: [],
+        attendeeContactIds: normalizedAttendeeIds,
+        attendeeEmails: selectedExternalAttendeeEmails,
+      } satisfies MeetingCreateRequest;
+      const requestBody =
+        attachmentFiles.length > 0
+          ? (() => {
+              const formData = new FormData();
+              formData.append("payload", JSON.stringify(requestPayload));
+              attachmentFiles.forEach((attachment) => {
+                formData.append("attachments", attachment.file, attachment.fileName);
+              });
+              return formData;
+            })()
+          : JSON.stringify(requestPayload);
+      const requestHeaders =
+        attachmentFiles.length > 0
+          ? undefined
+          : {
+              "Content-Type": "application/json",
+            };
       const response = await fetch("/api/meetings", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          businessAccountRecordId: source?.accountRecordId ?? null,
-          businessAccountId: source?.businessAccountId ?? null,
-          sourceContactId: source?.contactId ?? null,
-          organizerContactId: includeOrganizerInAcumatica ? viewerContactId : null,
-          includeOrganizerInAcumatica,
-          relatedContactId: effectiveRelatedContactId,
-          category: form.category,
-          summary: form.summary.trim(),
-          location: normalizeNullableInput(form.location ?? ""),
-          timeZone: defaultTimeZone,
-          startDate: form.startDate,
-          startTime: form.startTime,
-          endDate: form.startDate,
-          endTime: form.endTime,
-          priority: form.priority,
-          details: normalizeNullableInput(form.details ?? ""),
-          attendeeContactIds: normalizedAttendeeIds,
-          attendeeEmails: selectedExternalAttendeeEmails,
-        } satisfies MeetingCreateRequest),
+        ...(requestHeaders ? { headers: requestHeaders } : {}),
+        body: requestBody,
       });
 
       const payload = await readJsonResponse<MeetingCreateResponse | { error?: string }>(
@@ -1317,487 +1451,506 @@ export function CreateMeetingDrawer({
   return (
     <>
       <button className={styles.backdrop} onClick={onClose} type="button" />
-      <aside className={`${styles.drawer} ${styles.drawerOpen}`}>
+      <aside className={`${styles.drawer} ${styles.drawerOpen}`} aria-label={createHeading}>
         <div className={styles.drawerHeader}>
-          <div>
-            <p className={styles.kicker}>{createHeading}</p>
-            <h2>{createHeading}</h2>
-            <p className={styles.headerMeta}>
-              {source
-                ? `${source.companyName} · ${source.contactName ?? "Select a contact"}`
-                : `Create an Acumatica ${categoryLowerLabel} event and relate it to a contact.`}
-            </p>
-          </div>
-          <button className={styles.closeButton} onClick={onClose} type="button">
-            Close
+          <button className={styles.iconButton} onClick={onClose} type="button" aria-label="Close">
+            x
           </button>
         </div>
 
         <div className={styles.drawerBody}>
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <h3>Calendar Invites</h3>
-              {calendarSession?.status === "connected" ? (
+          <div className={styles.titleBlock}>
+            <div className={styles.modeRow}>
+              {MEETING_CATEGORY_VALUES.map((category) => (
                 <button
-                  className={styles.secondaryButton}
-                  onClick={handleDisconnectGoogleCalendar}
+                  className={`${styles.modeButton} ${
+                    form.category === category ? styles.modeButtonActive : ""
+                  }`}
+                  key={category}
+                  onClick={() => updateForm("category", category)}
                   type="button"
-                  disabled={isDisconnectingCalendar}
                 >
-                  {isDisconnectingCalendar ? "Disconnecting..." : "Disconnect"}
+                  {category}
                 </button>
-              ) : (
-                <button
-                  className={styles.secondaryButton}
-                  onClick={handleConnectGoogleCalendar}
-                  type="button"
-                  disabled={isLoadingCalendarSession}
-                >
-                  {isLoadingCalendarSession ? "Checking..." : "Connect Google Calendar"}
-                </button>
-              )}
-            </div>
-            <p className={styles.lookupHint}>
-              {categoryLabel}s created here can send Google Calendar invites directly from the connected
-              account instead of relying on the Gmail Apps Script bridge.
-            </p>
-            {calendarSession?.status === "connected" ? (
-              <div className={styles.calendarStatusCard}>
-                <span className={styles.calendarStatusBadge}>Connected</span>
-                <strong>{calendarSession.connectedGoogleEmail}</strong>
-                <span className={styles.calendarStatusMeta}>
-                  Google Calendar will send invites for this {categoryLowerLabel}. Contact attendees can still be mirrored into Acumatica separately.
-                </span>
-              </div>
-            ) : calendarSession?.status === "needs_setup" ? (
-              <div className={styles.calendarStatusCard}>
-                <span className={styles.calendarStatusBadgeMuted}>Setup needed</span>
-                <span className={styles.calendarStatusMeta}>
-                  {calendarSession.connectionError ??
-                    "Google Calendar OAuth is not configured for this app yet."}
-                </span>
-                {calendarSession.expectedRedirectUri ? (
-                  <code className={styles.calendarStatusCode}>
-                    {calendarSession.expectedRedirectUri}
-                  </code>
-                ) : null}
-              </div>
-            ) : (
-              <div className={styles.calendarStatusCard}>
-                <span className={styles.calendarStatusBadgeMuted}>Not connected</span>
-                <span className={styles.calendarStatusMeta}>
-                  {calendarSession?.connectionError ??
-                    `Acumatica will still create the ${categoryLowerLabel}, but no Google invite will be sent until you connect Calendar.`}
-                </span>
-                {calendarSession?.expectedRedirectUri ? (
-                  <code className={styles.calendarStatusCode}>
-                    {calendarSession.expectedRedirectUri}
-                  </code>
-                ) : null}
-              </div>
-            )}
-          </section>
-
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <h3>Event</h3>
-            </div>
-
-            <label>
-              Summary
-              <input
-                onChange={(event) => updateForm("summary", event.target.value)}
-                value={form.summary}
-              />
-            </label>
-
-            <label>
-              Location
-              <input
-                onChange={(event) => handleLocationChange(event.target.value)}
-                placeholder="Start typing an address"
-                value={form.location ?? ""}
-              />
-            </label>
-            {locationLookupError ? <p className={styles.error}>{locationLookupError}</p> : null}
-            {!selectedLocationLookupId && locationSuggestions.length > 0 ? (
-              <div className={styles.lookupSuggestions}>
-                {locationSuggestions.map((suggestion) => (
-                  <button
-                    className={styles.lookupSuggestionItem}
-                    key={suggestion.id}
-                    onClick={() => {
-                      void handleSelectLocationSuggestion(suggestion);
-                    }}
-                    type="button"
-                  >
-                    <span className={styles.lookupSuggestionTitle}>{suggestion.text}</span>
-                    <span className={styles.lookupSuggestionMeta}>{suggestion.description}</span>
-                  </button>
+              ))}
+              <select
+                className={styles.inlineSelect}
+                onChange={(event) =>
+                  updateForm("priority", event.target.value as MeetingPriority)
+                }
+                value={form.priority}
+              >
+                {MEETING_PRIORITY_OPTIONS.map((priority) => (
+                  <option key={priority} value={priority}>
+                    {priority} priority
+                  </option>
                 ))}
-              </div>
-            ) : null}
-            {isLoadingLocationSuggestions ? (
-              <p className={styles.lookupHint}>Searching Canada Post addresses...</p>
-            ) : null}
-            {!selectedLocationLookupId &&
-            !isLoadingLocationSuggestions &&
-            hasLocationLookupAttempted &&
-            (form.location ?? "").trim().length >= 3 &&
-            locationSuggestions.length === 0 &&
-            !locationLookupError ? (
-              <p className={styles.lookupHint}>No matching Canada Post addresses were found.</p>
-            ) : null}
-            {isApplyingLocationSuggestion ? (
-              <p className={styles.lookupHint}>Applying selected address...</p>
-            ) : null}
-
-            <div className={styles.fieldGrid}>
-              <label>
-                Priority
-                <select
-                  onChange={(event) =>
-                    updateForm("priority", event.target.value as MeetingPriority)
-                  }
-                  value={form.priority}
-                >
-                  {MEETING_PRIORITY_OPTIONS.map((priority) => (
-                    <option key={priority} value={priority}>
-                      {priority}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Category
-                <select
-                  onChange={(event) =>
-                    updateForm("category", event.target.value as MeetingCategory)
-                  }
-                  value={form.category}
-                >
-                  {MEETING_CATEGORY_VALUES.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Start Date
-                <input
-                  onChange={(event) => updateForm("startDate", event.target.value)}
-                  type="date"
-                  value={form.startDate}
-                />
-              </label>
-              <label>
-                Start Time
-                <input
-                  onChange={(event) => updateForm("startTime", event.target.value)}
-                  type="time"
-                  value={form.startTime}
-                />
-              </label>
-              <label>
-                End Time
-                <input
-                  onChange={(event) => updateForm("endTime", event.target.value)}
-                  type="time"
-                  value={form.endTime}
-                />
-              </label>
+              </select>
             </div>
+            <p className={styles.contextLine}>
+              <span className={styles.contextIcon}>Pin</span>
+              {source
+                ? `${source.companyName} - ${source.contactName ?? "Select a contact"}`
+                : `Create an app ${categoryLowerLabel} and send a Google Calendar invite.`}
+            </p>
+            <input
+              className={styles.titleInput}
+              onChange={(event) => updateForm("summary", event.target.value)}
+              placeholder="Add title"
+              value={form.summary}
+            />
+          </div>
 
-            <label>
-              Details
-              <textarea
-                className={styles.textarea}
-                onChange={(event) => updateForm("details", event.target.value)}
-                value={form.details ?? ""}
-              />
-            </label>
-          </section>
-
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <h3>Related Contact</h3>
+          <div className={styles.connectionRow}>
+            <div className={styles.connectionCopy}>
+              <span
+                className={
+                  calendarSession?.status === "connected"
+                    ? styles.calendarStatusBadge
+                    : styles.calendarStatusBadgeMuted
+                }
+              >
+                {calendarSession?.status === "connected"
+                  ? "Connected"
+                  : calendarSession?.status === "needs_setup"
+                    ? "Setup needed"
+                    : "Not connected"}
+              </span>
+              <span>
+                {calendarSession?.status === "connected"
+                  ? calendarSession.requiresReconnectForAttachments
+                    ? calendarSession.connectionError ??
+                      "Reconnect Google Calendar once to allow real file attachments."
+                    : `Google invites send from ${calendarSession.connectedGoogleEmail ?? "this account"}.`
+                  : calendarSession?.connectionError ??
+                    "Connect Calendar before scheduling. The app will not create invites without Google Calendar."}
+              </span>
+            </div>
+            {calendarSession?.status === "connected" &&
+            !calendarSession.requiresReconnectForAttachments ? (
               <button
                 className={styles.secondaryButton}
-                disabled={createContactAccountOptions.length === 0}
-                onClick={() => setIsCreateContactOpen(true)}
+                disabled={isDisconnectingCalendar}
+                onClick={handleDisconnectGoogleCalendar}
                 type="button"
               >
-                Create new contact
+                {isDisconnectingCalendar ? "Disconnecting..." : "Disconnect"}
               </button>
+            ) : (
+              <button
+                className={styles.secondaryButton}
+                disabled={isLoadingCalendarSession}
+                onClick={handleConnectGoogleCalendar}
+                type="button"
+              >
+                {isLoadingCalendarSession
+                  ? "Checking..."
+                  : calendarSession?.requiresReconnectForAttachments
+                    ? "Reconnect"
+                    : "Connect Google Calendar"}
+              </button>
+            )}
+          </div>
+
+          {calendarSession?.expectedRedirectUri && calendarSession.status === "needs_setup" ? (
+            <code className={styles.calendarStatusCode}>
+              {calendarSession.expectedRedirectUri}
+            </code>
+          ) : null}
+
+          <div className={styles.calendarRows}>
+            <div className={styles.calendarRow}>
+              <span className={styles.rowIcon}>Time</span>
+              <div className={styles.timeGrid}>
+                <label>
+                  Date
+                  <input
+                    onChange={(event) => updateForm("startDate", event.target.value)}
+                    type="date"
+                    value={form.startDate}
+                  />
+                </label>
+                <label>
+                  Start
+                  <input
+                    onChange={(event) => updateForm("startTime", event.target.value)}
+                    type="time"
+                    value={form.startTime}
+                  />
+                </label>
+                <label>
+                  End
+                  <input
+                    onChange={(event) => updateForm("endTime", event.target.value)}
+                    type="time"
+                    value={form.endTime}
+                  />
+                </label>
+              </div>
             </div>
 
-            {relatedContact ? (
-              <div className={styles.selectedCard}>
-                <strong>{relatedContact.contactName}</strong>
-                <span>{relatedContact.companyName ?? "No account"}</span>
-                <span>{relatedContact.email ?? "No email"}</span>
-                {relatedContact.isInternal ? (
-                  <span className={styles.badge}>Internal</span>
+            <div className={styles.calendarRow}>
+              <span className={styles.rowIcon}>Guests</span>
+              <div className={styles.rowContent}>
+                <div className={styles.chipInput}>
+                  {selectedAttendees.map((attendee) => {
+                    const isLockedAttendee = attendee.contactId === relatedContactId;
+
+                    return (
+                      <span className={styles.attendeeChip} key={attendee.contactId}>
+                        <span>
+                          {attendee.contactName}
+                          {attendee.email ? ` <${attendee.email}>` : ""}
+                        </span>
+                        {isLockedAttendee ? <small>Related</small> : null}
+                        {!isLockedAttendee ? (
+                          <button
+                            aria-label={`Remove ${attendee.contactName}`}
+                            onClick={() => handleRemoveAttendee(attendee.contactId)}
+                            type="button"
+                          >
+                            x
+                          </button>
+                        ) : null}
+                      </span>
+                    );
+                  })}
+                  {selectedExternalAttendeeEmails.map((email) => (
+                    <span className={styles.attendeeChip} key={email}>
+                      <span>{employeeByEmail.get(email)?.employeeName ?? email}</span>
+                      <button
+                        aria-label={`Remove ${email}`}
+                        onClick={() => {
+                          setAttendeeEmails((current) =>
+                            current.filter((value) => normalizeMeetingEmail(value) !== email),
+                          );
+                        }}
+                        type="button"
+                      >
+                        x
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    onChange={(event) => setAttendeeSearchTerm(event.target.value)}
+                    onKeyDown={handleAttendeeInputKeyDown}
+                    placeholder={
+                      isOptionsPending
+                        ? "Type an email, or wait for contacts..."
+                        : "Add guests by name or email"
+                    }
+                    value={attendeeSearchTerm}
+                  />
+                </div>
+
+                {attendeeSearchTerm.trim() && attendeeSuggestions.length > 0 ? (
+                  <div className={styles.lookupSuggestions}>
+                    {attendeeSuggestions.map((suggestion) =>
+                      suggestion.kind === "contact" ? (
+                        <button
+                          className={styles.lookupSuggestionItem}
+                          key={suggestion.key}
+                          onClick={() => handleAddAttendee(suggestion.contact)}
+                          type="button"
+                        >
+                          <span className={styles.lookupSuggestionTitle}>
+                            {suggestion.contact.contactName}
+                          </span>
+                          <span className={styles.lookupSuggestionMeta}>
+                            {suggestion.contact.isInternal
+                              ? "MeadowBrook employee"
+                              : suggestion.contact.companyName ?? "No account"}
+                          </span>
+                          <span className={styles.lookupSuggestionMeta}>
+                            {suggestion.contact.email ?? "No email"}
+                          </span>
+                        </button>
+                      ) : (
+                        <button
+                          className={styles.lookupSuggestionItem}
+                          key={suggestion.key}
+                          onClick={() => handleAddEmployeeAttendee(suggestion.employee)}
+                          type="button"
+                        >
+                          <span className={styles.lookupSuggestionTitle}>
+                            {suggestion.employee.employeeName}
+                          </span>
+                          <span className={styles.lookupSuggestionMeta}>MeadowBrook employee</span>
+                          <span className={styles.lookupSuggestionMeta}>
+                            {suggestion.employee.email}
+                          </span>
+                        </button>
+                      ),
+                    )}
+                  </div>
+                ) : attendeeSearchTerm.trim() && !isOptionsPending && !isSearchingRemoteEmployees ? (
+                  <p className={styles.lookupHint}>No matching attendees were found.</p>
                 ) : null}
-                {!relatedContactLocked ? (
+                {remoteEmployeeSearchError ? (
+                  <p className={styles.lookupHint}>{remoteEmployeeSearchError}</p>
+                ) : null}
+                {canInviteDirectEmail ? (
                   <button
-                    className={styles.secondaryButton}
-                    onClick={() => {
-                      const nextRelatedId =
-                        attendeeContactIds.find((contactId) => contactId !== relatedContact.contactId) ??
-                        null;
-                      setRelatedContactId(nextRelatedId);
-                      setRelatedContactSearchTerm(
-                        nextRelatedId !== null
-                          ? (contactById.get(nextRelatedId)?.contactName ?? "")
-                          : "",
-                      );
-                      setAttendeeContactIds((current) => {
-                        const remaining = current.filter(
-                          (contactId) => contactId !== relatedContact.contactId,
-                        );
-                        return nextRelatedId !== null
-                          ? uniqueContactIds([nextRelatedId, ...remaining])
-                          : remaining;
-                      });
-                    }}
+                    className={styles.linkButton}
+                    onClick={() => handleAddAttendeeEmail(attendeeSearchTerm)}
                     type="button"
                   >
-                    Change contact
+                    Add {normalizedAttendeeSearchEmail}
                   </button>
+                ) : null}
+                {matchingDirectInviteContact && normalizedAttendeeSearchEmail ? (
+                  <p className={styles.lookupHint}>
+                    This email also exists as {matchingDirectInviteContact.contactName}; choosing the contact logs the activity under that account.
+                  </p>
+                ) : null}
+                {viewerContact ? (
+                  <label className={styles.checkboxLabel}>
+                    <input
+                      checked={includeOrganizerInAcumatica}
+                      onChange={(event) => setIncludeOrganizerInAcumatica(event.target.checked)}
+                      type="checkbox"
+                    />
+                    Add me to the Google invite
+                  </label>
                 ) : (
                   <p className={styles.lookupHint}>
-                    This {categoryLowerLabel} stays tied to the selected contact.
+                    No internal app contact matched your login, so you cannot be added automatically.
                   </p>
                 )}
               </div>
-            ) : (
-              <>
-                <label>
-                  Search contact
-                  <input
-                    disabled={isOptionsPending || Boolean(optionsError && !options)}
-                    onChange={(event) => setRelatedContactSearchTerm(event.target.value)}
-                    placeholder={
-                      isOptionsPending
-                        ? "Loading contacts..."
-                        : "Search name, account, email, or phone"
-                    }
-                    value={relatedContactSearchTerm}
-                  />
-                </label>
-                <p className={styles.lookupHint}>
-                  Acumatica needs one primary related contact on the invite-sending event. Every contact attendee below also gets its own mirrored {categoryLowerLabel} activity.
-                </p>
-                {relatedContactSuggestions.length > 0 ? (
-                  <div className={styles.lookupSuggestions}>
-                    {relatedContactSuggestions.map((contact) => (
+            </div>
+
+            <div className={styles.calendarRow}>
+              <span className={styles.rowIcon}>Contact</span>
+              <div className={styles.rowContent}>
+                {relatedContact ? (
+                  <div className={styles.relatedContactRow}>
+                    <span className={styles.selectedContact}>
+                      <strong>{relatedContact.contactName}</strong>
+                      <span>{relatedContact.companyName ?? "No account"}</span>
+                      <span>{relatedContact.email ?? "No email"}</span>
+                    </span>
+                    {!relatedContactLocked ? (
                       <button
-                        className={styles.lookupSuggestionItem}
-                        key={contact.key}
-                        onClick={() => handleSelectRelatedContact(contact)}
+                        className={styles.linkButton}
+                        onClick={() => {
+                          const nextRelatedId =
+                            attendeeContactIds.find(
+                              (contactId) => contactId !== relatedContact.contactId,
+                            ) ?? null;
+                          setRelatedContactId(nextRelatedId);
+                          setRelatedContactSearchTerm(
+                            nextRelatedId !== null
+                              ? contactById.get(nextRelatedId)?.contactName ?? ""
+                              : "",
+                          );
+                          setAttendeeContactIds((current) => {
+                            const remaining = current.filter(
+                              (contactId) => contactId !== relatedContact.contactId,
+                            );
+                            return nextRelatedId !== null
+                              ? uniqueContactIds([nextRelatedId, ...remaining])
+                              : remaining;
+                          });
+                        }}
                         type="button"
                       >
-                        <span className={styles.lookupSuggestionTitle}>{contact.contactName}</span>
-                        <span className={styles.lookupSuggestionMeta}>
-                          {contact.companyName ?? "No account"}
-                        </span>
-                        <span className={styles.lookupSuggestionMeta}>
-                          {contact.email ?? "No email"}
-                        </span>
+                        Change
+                      </button>
+                    ) : (
+                      <span className={styles.lookupHint}>Linked to the selected contact.</span>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <input
+                      disabled={isOptionsPending || Boolean(optionsError && !options)}
+                      onChange={(event) => setRelatedContactSearchTerm(event.target.value)}
+                      placeholder={
+                        isOptionsPending
+                          ? "Loading contacts..."
+                          : "Search an app contact"
+                      }
+                      value={relatedContactSearchTerm}
+                    />
+                    {relatedContactSearchTerm.trim() && relatedContactSuggestions.length > 0 ? (
+                      <div className={styles.lookupSuggestions}>
+                        {relatedContactSuggestions.map((contact) => (
+                          <button
+                            className={styles.lookupSuggestionItem}
+                            key={contact.key}
+                            onClick={() => handleSelectRelatedContact(contact)}
+                            type="button"
+                          >
+                            <span className={styles.lookupSuggestionTitle}>{contact.contactName}</span>
+                            <span className={styles.lookupSuggestionMeta}>
+                              {contact.companyName ?? "No account"}
+                            </span>
+                            <span className={styles.lookupSuggestionMeta}>
+                              {contact.email ?? "No email"}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : relatedContactSearchTerm.trim() && !isOptionsPending ? (
+                      <p className={styles.lookupHint}>No matching contacts were found.</p>
+                    ) : null}
+                  </>
+                )}
+                <button
+                  className={styles.linkButton}
+                  disabled={createContactAccountOptions.length === 0}
+                  onClick={() => setIsCreateContactOpen(true)}
+                  type="button"
+                >
+                  Create new contact
+                </button>
+                {optionsError ? (
+                  <div className={styles.inlineNotice}>
+                    <p className={styles.error}>{optionsError}</p>
+                    {onRetryLoadOptions ? (
+                      <button className={styles.secondaryButton} onClick={onRetryLoadOptions} type="button">
+                        Retry
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className={styles.calendarRow}>
+              <span className={styles.rowIcon}>Meet</span>
+              <div className={styles.rowContent}>
+                <button
+                  className={`${styles.meetButton} ${
+                    form.includeGoogleMeet ? styles.meetButtonActive : ""
+                  }`}
+                  onClick={() => updateForm("includeGoogleMeet", !form.includeGoogleMeet)}
+                  type="button"
+                >
+                  {form.includeGoogleMeet
+                    ? "Google Meet video conferencing will be added"
+                    : "Add Google Meet video conferencing"}
+                </button>
+                {form.includeGoogleMeet && calendarSession?.status !== "connected" ? (
+                  <p className={styles.lookupHint}>
+                    Meet links are generated only when Google Calendar is connected.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className={styles.calendarRow}>
+              <span className={styles.rowIcon}>Location</span>
+              <div className={styles.rowContent}>
+                <input
+                  onChange={(event) => handleLocationChange(event.target.value)}
+                  placeholder="Add rooms or location"
+                  value={form.location ?? ""}
+                />
+                {locationLookupError ? <p className={styles.error}>{locationLookupError}</p> : null}
+                {!selectedLocationLookupId && locationSuggestions.length > 0 ? (
+                  <div className={styles.lookupSuggestions}>
+                    {locationSuggestions.map((suggestion) => (
+                      <button
+                        className={styles.lookupSuggestionItem}
+                        key={suggestion.id}
+                        onClick={() => {
+                          void handleSelectLocationSuggestion(suggestion);
+                        }}
+                        type="button"
+                      >
+                        <span className={styles.lookupSuggestionTitle}>{suggestion.text}</span>
+                        <span className={styles.lookupSuggestionMeta}>{suggestion.description}</span>
                       </button>
                     ))}
                   </div>
-                ) : relatedContactSearchTerm.trim() && !isOptionsPending ? (
-                  <p className={styles.lookupHint}>No matching contacts were found.</p>
                 ) : null}
-              </>
-            )}
-
-            {optionsError ? (
-              <div className={styles.inlineNotice}>
-                <p className={styles.error}>{optionsError}</p>
-                {onRetryLoadOptions ? (
-                  <button
-                    className={styles.secondaryButton}
-                    onClick={onRetryLoadOptions}
-                    type="button"
-                  >
-                    Retry
-                  </button>
+                {isLoadingLocationSuggestions ? (
+                  <p className={styles.lookupHint}>Searching Canada Post addresses...</p>
+                ) : null}
+                {!selectedLocationLookupId &&
+                !isLoadingLocationSuggestions &&
+                hasLocationLookupAttempted &&
+                (form.location ?? "").trim().length >= 3 &&
+                locationSuggestions.length === 0 &&
+                !locationLookupError ? (
+                  <p className={styles.lookupHint}>No matching Canada Post addresses were found.</p>
+                ) : null}
+                {isApplyingLocationSuggestion ? (
+                  <p className={styles.lookupHint}>Applying selected address...</p>
                 ) : null}
               </div>
-            ) : null}
-          </section>
-
-          <section className={styles.section}>
-            <h3>Attendees</h3>
-            <p className={styles.lookupHint}>
-              Contact attendees get mirrored {categoryLowerLabel} activities in Acumatica. When Google Calendar is connected, Google sends the invite emails and shows included attendees on the calendar event.
-            </p>
-            {viewerContact ? (
-              <label className={styles.checkboxLabel}>
-                <input
-                  checked={includeOrganizerInAcumatica}
-                  onChange={(event) => setIncludeOrganizerInAcumatica(event.target.checked)}
-                  type="checkbox"
-                />
-                <span>
-                  Include my contact
-                  <small className={styles.checkboxHint}>
-                    Adds {viewerContact.contactName} {viewerContact.email ? `(${viewerContact.email})` : ""} to the mirrored Acumatica {categoryLowerLabel} activities and, when Google Calendar is connected, to the attendee list there as well.
-                  </small>
-                </span>
-              </label>
-            ) : (
-              <p className={styles.lookupHint}>
-                No internal contact matched your login, so your contact cannot be mirrored automatically.
-              </p>
-            )}
-
-            <label>
-              Search attendees
-              <input
-                disabled={isOptionsPending || !options}
-                onChange={(event) => setAttendeeSearchTerm(event.target.value)}
-                placeholder={
-                  isOptionsPending
-                    ? "Loading contacts..."
-                    : "Search name, account, employee, email, or phone"
-                }
-                value={attendeeSearchTerm}
-              />
-            </label>
-
-            {attendeeSuggestions.length > 0 ? (
-              <div className={styles.lookupSuggestions}>
-                {attendeeSuggestions.map((suggestion) =>
-                  suggestion.kind === "contact" ? (
-                    <button
-                      className={styles.lookupSuggestionItem}
-                      key={suggestion.key}
-                      onClick={() => handleAddAttendee(suggestion.contact)}
-                      type="button"
-                    >
-                      <span className={styles.lookupSuggestionTitle}>
-                        {suggestion.contact.contactName}
-                      </span>
-                      <span className={styles.lookupSuggestionMeta}>
-                        {suggestion.contact.isInternal
-                          ? "MeadowBrook employee"
-                          : suggestion.contact.companyName ?? "No account"}
-                      </span>
-                      <span className={styles.lookupSuggestionMeta}>
-                        {suggestion.contact.email ?? "No email"}
-                      </span>
-                    </button>
-                  ) : (
-                    <button
-                      className={styles.lookupSuggestionItem}
-                      key={suggestion.key}
-                      onClick={() => handleAddEmployeeAttendee(suggestion.employee)}
-                      type="button"
-                    >
-                      <span className={styles.lookupSuggestionTitle}>
-                        {suggestion.employee.employeeName}
-                      </span>
-                      <span className={styles.lookupSuggestionMeta}>MeadowBrook employee</span>
-                      <span className={styles.lookupSuggestionMeta}>
-                        {suggestion.employee.email}
-                      </span>
-                    </button>
-                  ),
-                )}
-              </div>
-            ) : attendeeSearchTerm.trim() && !isOptionsPending && !isSearchingRemoteEmployees ? (
-              <p className={styles.lookupHint}>No matching attendees were found.</p>
-            ) : null}
-            {remoteEmployeeSearchError ? (
-              <p className={styles.lookupHint}>{remoteEmployeeSearchError}</p>
-            ) : null}
-            {canInviteDirectEmail ? (
-              <button
-                className={styles.secondaryButton}
-                onClick={() => handleAddAttendeeEmail(attendeeSearchTerm)}
-                type="button"
-              >
-                Invite {normalizedAttendeeSearchEmail} directly
-              </button>
-            ) : null}
-            {matchingDirectInviteContact && normalizedAttendeeSearchEmail ? (
-              <p className={styles.lookupHint}>
-                {normalizedAttendeeSearchEmail} already exists in Acumatica. Add the contact entry above so the {categoryLowerLabel} is logged under that account.
-              </p>
-            ) : null}
-
-            <div className={styles.attendeeList}>
-              {selectedAttendees.map((attendee) => {
-                const isLockedAttendee = attendee.contactId === relatedContactId;
-
-                return (
-                  <div className={styles.attendeeCard} key={attendee.contactId}>
-                    <div>
-                      <strong>{attendee.contactName}</strong>
-                      <div className={styles.attendeeMeta}>
-                        <span>
-                          {attendee.isInternal
-                            ? "MeadowBrook employee"
-                            : attendee.companyName ?? "No account"}
-                        </span>
-                        <span>{attendee.email ?? "No email"}</span>
-                        {attendee.isInternal ? (
-                          <span className={styles.badge}>Internal</span>
-                        ) : null}
-                        {isLockedAttendee ? (
-                          <span className={styles.badge}>Related</span>
-                        ) : null}
-                      </div>
-                    </div>
-                    <button
-                      className={styles.secondaryButton}
-                      disabled={isLockedAttendee}
-                      onClick={() => handleRemoveAttendee(attendee.contactId)}
-                      type="button"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                );
-              })}
-              {selectedExternalAttendeeEmails.map((email) => (
-                <div className={styles.attendeeCard} key={email}>
-                  <div>
-                    <strong>{employeeByEmail.get(email)?.employeeName ?? email}</strong>
-                    <div className={styles.attendeeMeta}>
-                      <span>
-                        {employeeByEmail.has(email)
-                          ? "MeadowBrook employee"
-                          : "Direct email invite"}
-                      </span>
-                      <span>{email}</span>
-                      {employeeByEmail.has(email) ? (
-                        <span className={styles.badge}>Internal</span>
-                      ) : (
-                        <span>Not linked to an Acumatica contact</span>
-                      )}
-                    </div>
-                  </div>
-                  <button
-                    className={styles.secondaryButton}
-                    onClick={() => {
-                      setAttendeeEmails((current) =>
-                        current.filter((value) => normalizeMeetingEmail(value) !== email),
-                      );
-                    }}
-                    type="button"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
             </div>
-          </section>
+
+            <div className={styles.calendarRow}>
+              <span className={styles.rowIcon}>Description</span>
+              <div className={styles.rowContent}>
+                <textarea
+                  className={styles.descriptionInput}
+                  onChange={(event) => updateForm("details", event.target.value)}
+                  placeholder="Add description"
+                  value={form.details ?? ""}
+                />
+                <div className={styles.attachmentComposer}>
+                  <button
+                    className={styles.attachmentButton}
+                    disabled={attachmentFiles.length >= MAX_MEETING_ATTACHMENT_FILES}
+                    onClick={() => attachmentInputRef.current?.click()}
+                    type="button"
+                  >
+                    Add attachment
+                  </button>
+                  <input
+                    className={styles.fileInput}
+                    multiple
+                    onChange={handleSelectAttachmentFiles}
+                    ref={attachmentInputRef}
+                    type="file"
+                  />
+                </div>
+                {attachmentFiles.length > 0 && !canUploadSelectedAttachments ? (
+                  <p className={styles.lookupHint}>
+                    Reconnect Google Calendar once so the app can upload and attach files through Google Drive.
+                  </p>
+                ) : null}
+                {attachmentFiles.length > 0 ? (
+                  <div className={styles.attachmentList}>
+                    {attachmentFiles.map((attachment) => (
+                      <span className={styles.attachmentChip} key={attachment.id}>
+                        <span>
+                          {attachment.fileName}
+                          <small>{formatAttachmentSize(attachment.sizeBytes)}</small>
+                        </span>
+                        <button
+                          aria-label={`Remove ${attachment.fileName}`}
+                          onClick={() => handleRemoveAttachment(attachment.id)}
+                          type="button"
+                        >
+                          x
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className={styles.calendarRow}>
+              <span className={styles.rowIcon}>Private</span>
+              <div className={styles.rowContent}>
+                <textarea
+                  className={styles.privateNotesInput}
+                  onChange={(event) => updateForm("privateNotes", event.target.value)}
+                  placeholder="Private notes"
+                  value={form.privateNotes ?? ""}
+                />
+                <p className={styles.lookupHint}>
+                  Private notes are stored for internal context and are not shared in the Google Calendar invite description.
+                </p>
+              </div>
+            </div>
+          </div>
 
           {formError ? <p className={styles.error}>{formError}</p> : null}
 
@@ -1807,13 +1960,19 @@ export function CreateMeetingDrawer({
             </button>
             <button
               className={styles.primaryButton}
-              disabled={isSubmitting}
+              disabled={isScheduleDisabled}
               onClick={() => {
                 void handleSubmit();
               }}
               type="button"
             >
-              {isSubmitting ? "Scheduling..." : createLabel}
+              {isSubmitting
+                ? "Scheduling..."
+                : !isGoogleCalendarConnected
+                  ? "Connect Calendar first"
+                  : !canUploadSelectedAttachments
+                    ? "Reconnect for attachments"
+                    : createLabel}
             </button>
           </div>
         </div>

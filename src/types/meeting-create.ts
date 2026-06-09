@@ -56,7 +56,7 @@ export type MeetingCreateRequest = {
   sourceContactId: number | null;
   organizerContactId: number | null;
   includeOrganizerInAcumatica: boolean;
-  relatedContactId: number;
+  relatedContactId: number | null;
   category: MeetingCategory;
   summary: string;
   location: string | null;
@@ -67,6 +67,9 @@ export type MeetingCreateRequest = {
   endTime: string;
   priority: MeetingPriority;
   details: string | null;
+  privateNotes: string | null;
+  includeGoogleMeet: boolean;
+  attachmentLinks: string[];
   attendeeContactIds: number[];
   attendeeEmails: string[];
 };
@@ -81,7 +84,7 @@ export type MeetingCreateResponse = {
   connectedGoogleEmail: string | null;
   includeOrganizerInAcumatica: boolean;
   summary: string;
-  relatedContactId: number;
+  relatedContactId: number | null;
   attendeeCount: number;
   warnings: string[];
 };

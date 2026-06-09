@@ -95,13 +95,30 @@ describe("google-calendar oauth config", () => {
     expect(googleCalendar.readGoogleCalendarInviteAuthority("jserrano")).toBe("google");
   });
 
-  it("keeps the organizer in Google attendees when included and preserves the meeting sync key", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ id: "google-event-1" }), {
+  it("uploads selected files to Drive, attaches them, keeps attendees, and preserves the meeting sync key", async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = String(input);
+      if (url.includes("upload/drive/v3/files")) {
+        return new Response(
+          JSON.stringify({
+            id: "drive-file-1",
+            name: "agenda.pdf",
+            mimeType: "application/pdf",
+            webViewLink: "https://drive.google.com/file/d/drive-file-1/view",
+            iconLink: "https://drive-thirdparty.googleusercontent.com/icon",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      return new Response(JSON.stringify({ id: "google-event-1" }), {
         status: 200,
         headers: { "content-type": "application/json" },
-      }),
-    );
+      });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const googleCalendar = await import("@/lib/google-calendar");
@@ -115,12 +132,21 @@ describe("google-calendar oauth config", () => {
       refreshToken: "refresh-token",
       accessToken: "access-token",
       accessTokenExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-      tokenScope: "calendar.events",
+      tokenScope:
+        "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.file",
     });
 
     const result = await googleCalendar.createMeetingInviteInGoogleCalendar("jserrano", {
       acumaticaEventId: null,
       meetingSyncKey: "sync-123",
+      attachmentFiles: [
+        {
+          data: Buffer.from("agenda"),
+          fileName: "agenda.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 6,
+        },
+      ],
       attendees: [
         {
           contactId: 1,
@@ -155,6 +181,9 @@ describe("google-calendar oauth config", () => {
         endTime: "10:00",
         priority: "Normal",
         details: "Review open items.",
+        privateNotes: "Do not share this note.",
+        includeGoogleMeet: true,
+        attachmentLinks: [],
         attendeeContactIds: [2],
         attendeeEmails: [],
       },
@@ -166,17 +195,45 @@ describe("google-calendar oauth config", () => {
       connectedGoogleEmail: "jserrano@gmail.com",
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [uploadUrl, uploadInit] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(String(uploadUrl)).toContain("upload/drive/v3/files");
+    expect(uploadInit.method).toBe("POST");
+    expect(uploadInit.headers).toEqual(
+      expect.objectContaining({
+        Authorization: "Bearer access-token",
+      }),
+    );
+
+    const [url, init] = fetchMock.mock.calls[1] as unknown as [URL, RequestInit];
     const payload = JSON.parse(String(init.body)) as {
       attendees?: Array<{ email: string }>;
+      attachments?: Array<{ fileId: string; fileUrl: string; mimeType: string; title: string }>;
+      conferenceData?: { createRequest?: { conferenceSolutionKey?: { type?: string } } };
+      description?: string;
       extendedProperties?: { private?: Record<string, string> };
     };
 
+    expect(url.searchParams.get("conferenceDataVersion")).toBe("1");
+    expect(url.searchParams.get("supportsAttachments")).toBe("true");
     expect(payload.attendees).toEqual([
       { email: "jserrano@gmail.com", displayName: "Jorge Serrano" },
       { email: "jacky.lee@example.com", displayName: "Jacky Lee" },
     ]);
+    expect(payload.conferenceData?.createRequest?.conferenceSolutionKey?.type).toBe("hangoutsMeet");
+    expect(payload.attachments).toEqual([
+      {
+        fileId: "drive-file-1",
+        fileUrl: "https://drive.google.com/file/d/drive-file-1/view",
+        iconLink: "https://drive-thirdparty.googleusercontent.com/icon",
+        mimeType: "application/pdf",
+        title: "agenda.pdf",
+      },
+    ]);
+    expect(payload.description).toContain("Review open items.");
+    expect(payload.description).toContain("https://drive.google.com/file/d/drive-file-1/view");
+    expect(payload.description).not.toContain("Do not share this note.");
+    expect(payload.extendedProperties?.private?.privateNotes).toBe("Do not share this note.");
     expect(payload.extendedProperties?.private?.meetingSyncKey).toBe("sync-123");
   });
 });

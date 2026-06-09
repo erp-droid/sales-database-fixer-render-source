@@ -3,4 +3,6 @@ export type GoogleCalendarSessionResponse = {
   connectedGoogleEmail: string | null;
   connectionError: string | null;
   expectedRedirectUri: string | null;
+  canUploadAttachments: boolean;
+  requiresReconnectForAttachments: boolean;
 };

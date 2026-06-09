@@ -5,67 +5,46 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
-import { getStoredLoginName, requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import { getStoredLoginName, requireAuthCookieValue } from "@/lib/auth";
 import { upsertMeetingAuditEvent } from "@/lib/audit-log-store";
+import { publishBusinessAccountChanged } from "@/lib/business-account-live";
+import { HttpError, getErrorMessage } from "@/lib/errors";
 import {
-  createEvent,
-  fetchContactById,
-  readRecordIdentity,
-  readWrappedScalarString,
-  readWrappedString,
-} from "@/lib/acumatica";
+  createMeetingInviteInGoogleCalendar,
+  type GoogleCalendarAttachmentUploadInput,
+} from "@/lib/google-calendar";
 import {
-  buildMeetingEventPayloadVariants,
+  buildMeetingContactOptionsFromRows,
   buildMeetingInviteAttendees,
+  findMeetingContactByLoginName,
   isMeetingOrganizerContactForLogin,
   type ResolvedMeetingContact,
 } from "@/lib/meeting-create";
-import { HttpError, getErrorMessage } from "@/lib/errors";
-import { publishBusinessAccountChanged } from "@/lib/business-account-live";
-import {
-  createMeetingInviteInGoogleCalendar,
-  deleteMeetingInviteFromGoogleCalendar,
-  readGoogleCalendarInviteAuthority,
-} from "@/lib/google-calendar";
 import { upsertMeetingBooking } from "@/lib/meeting-bookings";
 import {
   markReadModelCalendarInviteSent,
+  readAllAccountRowsFromReadModel,
   readBusinessAccountDetailFromReadModel,
 } from "@/lib/read-model/accounts";
 import { parseMeetingCreatePayload } from "@/lib/validation";
-import type { MeetingCreateResponse } from "@/types/meeting-create";
+import type { MeetingContactOption, MeetingCreateResponse } from "@/types/meeting-create";
 
-function readContactDisplayName(record: unknown): string | null {
-  const explicit =
-    readWrappedString(record, "DisplayName") ||
-    readWrappedString(record, "FullName") ||
-    readWrappedString(record, "ContactName") ||
-    readWrappedString(record, "Attention");
-  if (explicit) {
-    return explicit;
-  }
-
-  const composite = [
-    readWrappedString(record, "FirstName"),
-    readWrappedString(record, "MiddleName"),
-    readWrappedString(record, "LastName"),
-  ]
-    .filter((value): value is string => Boolean(value && value.trim()))
-    .join(" ")
-    .trim();
-
-  return composite || null;
-}
-
-function readContactEmail(record: unknown): string | null {
-  return readWrappedString(record, "Email") || readWrappedString(record, "EMail") || null;
-}
+const MAX_MEETING_ATTACHMENT_FILES = 5;
+const MAX_MEETING_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_MEETING_ATTACHMENT_TOTAL_BYTES = 25 * 1024 * 1024;
 
 function normalizeAttendeeContactIds(
-  relatedContactId: number,
+  relatedContactId: number | null,
   attendeeContactIds: number[],
 ): number[] {
-  return [...new Set([relatedContactId, ...attendeeContactIds])];
+  return [
+    ...new Set(
+      [
+        relatedContactId,
+        ...attendeeContactIds,
+      ].filter((value): value is number => typeof value === "number" && Number.isFinite(value)),
+    ),
+  ];
 }
 
 function normalizeAttendeeEmails(attendeeEmails: string[]): string[] {
@@ -76,38 +55,146 @@ function uniqueContactIds(ids: Array<number | null | undefined>): number[] {
   return [...new Set(ids.filter((value): value is number => typeof value === "number"))];
 }
 
-function readEventIdentity(record: unknown): string | null {
-  return (
-    readRecordIdentity(record) ||
-    readWrappedScalarString(record, "EventID") ||
-    readWrappedScalarString(record, "TaskID") ||
-    readWrappedScalarString(record, "NoteID") ||
-    null
+function toResolvedMeetingContact(contact: MeetingContactOption): ResolvedMeetingContact {
+  return {
+    contactId: contact.contactId,
+    contactRecordId: null,
+    contactName: contact.contactName,
+    email: contact.email,
+  };
+}
+
+function readContactLabel(contact: MeetingContactOption | ResolvedMeetingContact | null): string | null {
+  if (!contact) {
+    return null;
+  }
+
+  return contact.contactName?.trim() || contact.email?.trim() || null;
+}
+
+function isMultipartRequest(request: NextRequest): boolean {
+  return (request.headers.get("content-type") ?? "")
+    .toLowerCase()
+    .includes("multipart/form-data");
+}
+
+async function readMeetingAttachmentFiles(
+  formData: FormData,
+): Promise<GoogleCalendarAttachmentUploadInput[]> {
+  const rawFiles = formData.getAll("attachments");
+  const files = rawFiles.filter((value): value is File => value instanceof File && value.size > 0);
+  if (files.length > MAX_MEETING_ATTACHMENT_FILES) {
+    throw new HttpError(
+      400,
+      `You can attach up to ${MAX_MEETING_ATTACHMENT_FILES} files to a calendar invite.`,
+    );
+  }
+
+  const totalBytes = files.reduce((total, file) => total + file.size, 0);
+  if (totalBytes > MAX_MEETING_ATTACHMENT_TOTAL_BYTES) {
+    throw new HttpError(400, "Calendar invite attachments are too large.");
+  }
+
+  return Promise.all(
+    files.map(async (file) => {
+      if (file.size > MAX_MEETING_ATTACHMENT_BYTES) {
+        throw new HttpError(400, `${file.name || "Attachment"} is too large.`);
+      }
+
+      return {
+        data: Buffer.from(await file.arrayBuffer()),
+        fileName: file.name || "Meeting attachment",
+        mimeType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+      };
+    }),
   );
 }
 
-function readContactLabel(contact: ResolvedMeetingContact): string {
-  return contact.contactName?.trim() || contact.email?.trim() || `contact ${contact.contactId}`;
+async function readMeetingCreateInput(request: NextRequest): Promise<{
+  attachmentFiles: GoogleCalendarAttachmentUploadInput[];
+  body: unknown;
+}> {
+  if (!isMultipartRequest(request)) {
+    return {
+      attachmentFiles: [],
+      body: await request.json().catch(() => {
+        throw new HttpError(400, "Request body must be valid JSON.");
+      }),
+    };
+  }
+
+  const formData = await request.formData().catch(() => {
+    throw new HttpError(400, "Request body must be valid form data.");
+  });
+  const payload = formData.get("payload");
+  if (typeof payload !== "string") {
+    throw new HttpError(400, "Meeting payload is required.");
+  }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(payload);
+  } catch {
+    throw new HttpError(400, "Meeting payload must be valid JSON.");
+  }
+
+  return {
+    attachmentFiles: await readMeetingAttachmentFiles(formData),
+    body,
+  };
+}
+
+function requireGoogleCalendarResult(
+  result: Awaited<ReturnType<typeof createMeetingInviteInGoogleCalendar>>,
+): {
+  calendarEventId: string;
+  calendarInviteStatus: Extract<MeetingCreateResponse["calendarInviteStatus"], "created">;
+  connectedGoogleEmail: string;
+} {
+  return {
+    calendarEventId: result.eventId,
+    calendarInviteStatus: result.status,
+    connectedGoogleEmail: result.connectedGoogleEmail,
+  };
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const authCookieRefresh = {
-    value: null as string | null,
-  };
-
   try {
-    const cookieValue = requireAuthCookieValue(request);
-    const body = await request.json().catch(() => {
-      throw new HttpError(400, "Request body must be valid JSON.");
-    });
+    requireAuthCookieValue(request);
+    const { body, attachmentFiles } = await readMeetingCreateInput(request);
     const meetingRequest = parseMeetingCreatePayload(body);
     const storedLoginName = getStoredLoginName(request);
-    const inviteAuthority = readGoogleCalendarInviteAuthority(storedLoginName);
+    const allRows = readAllAccountRowsFromReadModel();
+    const contactOptions = buildMeetingContactOptionsFromRows(allRows);
+    const contactById = new Map(contactOptions.map((contact) => [contact.contactId, contact]));
     const inviteContactIds = normalizeAttendeeContactIds(
       meetingRequest.relatedContactId,
       meetingRequest.attendeeContactIds,
     );
     const attendeeEmails = normalizeAttendeeEmails(meetingRequest.attendeeEmails);
+    const resolvedContacts = inviteContactIds
+      .map((contactId) => contactById.get(contactId) ?? null)
+      .filter((contact): contact is MeetingContactOption => contact !== null);
+    const missingContactIds = inviteContactIds.filter((contactId) => !contactById.has(contactId));
+    const relatedContact =
+      meetingRequest.relatedContactId !== null
+        ? contactById.get(meetingRequest.relatedContactId) ?? null
+        : null;
+    const viewerContact = findMeetingContactByLoginName(contactOptions, storedLoginName);
+    const includeOrganizerInInvite =
+      meetingRequest.includeOrganizerInAcumatica && viewerContact !== null;
+    if (
+      meetingRequest.includeOrganizerInAcumatica &&
+      viewerContact &&
+      !isMeetingOrganizerContactForLogin(viewerContact.email, storedLoginName)
+    ) {
+      throw new HttpError(
+        400,
+        "Selected organizer contact does not match the signed-in user.",
+      );
+    }
+
     const normalizedRequest = {
       ...meetingRequest,
       attendeeContactIds: inviteContactIds,
@@ -118,180 +205,96 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           normalizedRequest.businessAccountRecordId,
           normalizedRequest.relatedContactId,
         )?.row.companyName ?? null
-      : null;
+      : relatedContact?.companyName ?? null;
     const meetingSyncKey = randomUUID();
-    const contactIdsToResolve = uniqueContactIds([
-      ...inviteContactIds,
-      normalizedRequest.includeOrganizerInAcumatica ? normalizedRequest.organizerContactId : null,
-    ]);
-    const resolvedContacts = new Map<number, ResolvedMeetingContact>();
-    await Promise.all(
-      contactIdsToResolve.map(async (contactId) => {
-        const record = await fetchContactById(cookieValue, contactId, authCookieRefresh);
-        const resolvedContact: ResolvedMeetingContact = {
-          contactId,
-          contactRecordId: readRecordIdentity(record),
-          contactName: readContactDisplayName(record),
-          email: readContactEmail(record),
-        };
-        resolvedContacts.set(contactId, resolvedContact);
-        return resolvedContact;
-      }),
-    );
-    const attendees: ResolvedMeetingContact[] = inviteContactIds.map((contactId) => {
-      const contact = resolvedContacts.get(contactId);
-      if (!contact) {
-        throw new HttpError(502, `Unable to resolve attendee contact ${contactId} from Acumatica.`);
-      }
-      return contact;
-    });
-    const relatedContact =
-      attendees.find((contact) => contact.contactId === normalizedRequest.relatedContactId) ?? null;
-    const relatedContactRecordId = relatedContact?.contactRecordId ?? null;
-    if (!relatedContactRecordId) {
-      throw new HttpError(
-        502,
-        "Acumatica returned the related contact but did not include a record identity.",
-      );
-    }
-    const warnings: string[] = [];
-    let calendarEventId: string | null = null;
-    let calendarInviteStatus: MeetingCreateResponse["calendarInviteStatus"] = "skipped";
-    let connectedGoogleEmail: string | null = null;
-    let organizerContact: ResolvedMeetingContact | null = null;
-    if (normalizedRequest.includeOrganizerInAcumatica) {
-      const organizerContactId = normalizedRequest.organizerContactId;
-      if (organizerContactId === null) {
-        throw new HttpError(400, "Selected organizer contact does not match the signed-in user.");
-      }
-
-      organizerContact = resolvedContacts.get(organizerContactId) ?? null;
-      if (!organizerContact) {
-        throw new HttpError(
-          502,
-          `Unable to resolve organizer contact ${organizerContactId} from Acumatica.`,
-        );
-      }
-
-      if (!isMeetingOrganizerContactForLogin(organizerContact.email, storedLoginName)) {
-        throw new HttpError(
-          400,
-          "Selected organizer contact does not match the signed-in user.",
-        );
-      }
-    }
-    const inviteAttendees = buildMeetingInviteAttendees({
-      attendeeEmails: normalizedRequest.attendeeEmails,
-      contacts: attendees,
-    });
     const googleInviteAttendees = buildMeetingInviteAttendees({
       attendeeEmails: normalizedRequest.attendeeEmails,
-      contacts:
-        organizerContact && normalizedRequest.includeOrganizerInAcumatica
-          ? [...attendees, organizerContact]
-          : attendees,
+      contacts: [
+        ...resolvedContacts.map(toResolvedMeetingContact),
+        ...(includeOrganizerInInvite && viewerContact ? [toResolvedMeetingContact(viewerContact)] : []),
+      ],
     });
     const directInviteEmailCount =
-      (organizerContact && normalizedRequest.includeOrganizerInAcumatica
-        ? [...attendees, organizerContact]
-        : attendees
-      ).filter((contact) => Boolean(contact.email?.trim())).length +
+      resolvedContacts.filter((contact) => Boolean(contact.email?.trim())).length +
+      (includeOrganizerInInvite && viewerContact?.email ? 1 : 0) +
       normalizedRequest.attendeeEmails.length;
+    const warnings: string[] = [];
+    if (missingContactIds.length > 0) {
+      warnings.push(
+        `Some selected app contacts were no longer available and were skipped: ${missingContactIds.join(", ")}.`,
+      );
+    }
     if (googleInviteAttendees.length < directInviteEmailCount) {
       warnings.push(
         "Duplicate attendee email addresses were collapsed so only one invite is sent per email.",
       );
     }
 
-    if (inviteAuthority === "google") {
-      const calendarResult = await createMeetingInviteInGoogleCalendar(storedLoginName, {
+    const calendarResult = requireGoogleCalendarResult(
+      await createMeetingInviteInGoogleCalendar(storedLoginName, {
         acumaticaEventId: null,
         meetingSyncKey,
         attendees: googleInviteAttendees,
+        attachmentFiles,
         businessAccountId: normalizedRequest.businessAccountId,
         companyName: meetingCompanyName,
         relatedContactId: normalizedRequest.relatedContactId,
-        relatedContactName: relatedContact?.contactName ?? null,
+        relatedContactName: readContactLabel(relatedContact),
         request: normalizedRequest,
+      }),
+    );
+
+    const eventId = `google:${calendarResult.calendarEventId}`;
+    const attendeeCount = googleInviteAttendees.length;
+    const responseBody: MeetingCreateResponse = {
+      created: true,
+      eventId,
+      category: normalizedRequest.category,
+      inviteAuthority: "google",
+      calendarEventId: calendarResult.calendarEventId,
+      calendarInviteStatus: calendarResult.calendarInviteStatus,
+      connectedGoogleEmail: calendarResult.connectedGoogleEmail,
+      includeOrganizerInAcumatica: includeOrganizerInInvite,
+      summary: normalizedRequest.summary,
+      relatedContactId: normalizedRequest.relatedContactId,
+      attendeeCount,
+      warnings,
+    };
+
+    try {
+      const storedBooking = upsertMeetingBooking({
+        eventId,
+        actorLoginName: storedLoginName,
+        actorName: readContactLabel(viewerContact) ?? storedLoginName ?? null,
+        businessAccountRecordId: normalizedRequest.businessAccountRecordId,
+        businessAccountId: normalizedRequest.businessAccountId,
+        companyName: meetingCompanyName,
+        relatedContactId: normalizedRequest.relatedContactId,
+        relatedContactName: readContactLabel(relatedContact),
+        category: normalizedRequest.category,
+        meetingSummary: normalizedRequest.summary,
+        privateNotes: normalizedRequest.privateNotes,
+        attendeeCount,
+        attendees: googleInviteAttendees.map((attendee) => ({
+          contactId: attendee.contactId,
+          contactName: attendee.contactName,
+          email: attendee.email,
+          businessAccountRecordId: null,
+          businessAccountId: null,
+          companyName: null,
+        })),
+        inviteAuthority: "google",
+        calendarInviteStatus: calendarResult.calendarInviteStatus,
       });
-      calendarEventId = calendarResult.eventId;
-      calendarInviteStatus = calendarResult.status;
-      connectedGoogleEmail = calendarResult.connectedGoogleEmail;
-    }
-
-    let eventId: string;
-    try {
-      const createdEvent = await createEvent(
-        cookieValue,
-        buildMeetingEventPayloadVariants({
-          attendees: inviteAuthority === "google" ? [] : inviteAttendees,
-          relatedContactRecordId,
-          request: normalizedRequest,
-        }),
-        authCookieRefresh,
+      upsertMeetingAuditEvent(storedBooking, { notifyReason: "meeting-create" });
+    } catch (analyticsError) {
+      warnings.push(
+        `Google Calendar invite was created, but local meeting analytics could not be updated: ${getErrorMessage(analyticsError)}`,
       );
-
-      eventId = readEventIdentity(createdEvent) ?? "";
-      if (!eventId) {
-        throw new HttpError(
-          502,
-          "Acumatica created the event but did not return an event identity.",
-        );
-      }
-    } catch (error) {
-      if (inviteAuthority === "google" && calendarEventId) {
-        try {
-          await deleteMeetingInviteFromGoogleCalendar(storedLoginName, calendarEventId);
-        } catch (rollbackError) {
-          throw new HttpError(
-            error instanceof HttpError ? error.status : 500,
-            `${getErrorMessage(error)} Google Calendar rollback also failed: ${getErrorMessage(rollbackError)}`,
-          );
-        }
-      }
-
-      throw error;
-    }
-
-    const acumaticaActivityContactIds = uniqueContactIds([
-      ...inviteContactIds,
-      normalizedRequest.includeOrganizerInAcumatica ? normalizedRequest.organizerContactId : null,
-    ]);
-    const mirroredContacts = acumaticaActivityContactIds
-      .filter((contactId) => contactId !== normalizedRequest.relatedContactId)
-      .map((contactId) => resolvedContacts.get(contactId) ?? null)
-      .filter((contact): contact is ResolvedMeetingContact => contact !== null);
-
-    for (const mirroredContact of mirroredContacts) {
-      if (!mirroredContact.contactRecordId) {
-        warnings.push(
-          `Acumatica did not return a record identity for ${readContactLabel(mirroredContact)}, so no mirrored activity was written for that contact.`,
-        );
-        continue;
-      }
-
-      try {
-        await createEvent(
-          cookieValue,
-          buildMeetingEventPayloadVariants({
-            attendees: [],
-            relatedContactRecordId: mirroredContact.contactRecordId,
-            request: normalizedRequest,
-          }),
-          authCookieRefresh,
-        );
-      } catch (mirrorError) {
-        warnings.push(
-          `Unable to mirror the meeting activity for ${readContactLabel(mirroredContact)}: ${getErrorMessage(mirrorError)}`,
-        );
-      }
     }
 
     try {
-      const invitedContactIds =
-        inviteAuthority === "google"
-          ? uniqueContactIds(googleInviteAttendees.map((attendee) => attendee.contactId))
-          : uniqueContactIds(inviteAttendees.map((attendee) => attendee.contactId));
+      const invitedContactIds = uniqueContactIds(googleInviteAttendees.map((attendee) => attendee.contactId));
       const inviteTimestampUpdates = markReadModelCalendarInviteSent({
         contactIds: invitedContactIds,
       });
@@ -306,89 +309,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     } catch (inviteTimestampError) {
       warnings.push(
-        `Meeting created, but local invite timestamp could not be updated: ${getErrorMessage(inviteTimestampError)}`,
+        `Google Calendar invite was created, but local invite timestamp could not be updated: ${getErrorMessage(inviteTimestampError)}`,
       );
     }
 
-    const responseBody: MeetingCreateResponse = {
-      created: true,
-      eventId,
-      category: normalizedRequest.category,
-      inviteAuthority,
-      calendarEventId,
-      calendarInviteStatus,
-      connectedGoogleEmail,
-      includeOrganizerInAcumatica: normalizedRequest.includeOrganizerInAcumatica,
-      summary: normalizedRequest.summary,
-      relatedContactId: normalizedRequest.relatedContactId,
-      attendeeCount: inviteContactIds.length + attendeeEmails.length,
-      warnings,
-    };
-
-    try {
-      const storedBooking = upsertMeetingBooking({
-        eventId,
-        actorLoginName: storedLoginName,
-        actorName: organizerContact?.contactName ?? storedLoginName ?? null,
-        businessAccountRecordId: normalizedRequest.businessAccountRecordId,
-        businessAccountId: normalizedRequest.businessAccountId,
-        companyName: meetingCompanyName,
-        relatedContactId: normalizedRequest.relatedContactId,
-        relatedContactName: relatedContact?.contactName ?? null,
-        category: normalizedRequest.category,
-        meetingSummary: normalizedRequest.summary,
-        attendeeCount: responseBody.attendeeCount,
-        attendees:
-          (inviteAuthority === "google" ? googleInviteAttendees : inviteAttendees).map((attendee) => ({
-            contactId: attendee.contactId,
-            contactName: attendee.contactName,
-            email: attendee.email,
-            businessAccountRecordId: null,
-            businessAccountId: null,
-            companyName: null,
-          })),
-        inviteAuthority,
-        calendarInviteStatus,
-      });
-      upsertMeetingAuditEvent(storedBooking, { notifyReason: "meeting-create" });
-    } catch (analyticsError) {
-      warnings.push(
-        `Meeting created, but dashboard analytics could not be updated: ${getErrorMessage(analyticsError)}`,
-      );
-    }
-
-    const response = NextResponse.json(responseBody, { status: 201 });
-    if (authCookieRefresh.value) {
-      setAuthCookie(response, authCookieRefresh.value);
-    }
-
-    return response;
+    return NextResponse.json(responseBody, { status: 201 });
   } catch (error) {
-    let response: NextResponse;
     if (error instanceof ZodError) {
-      response = NextResponse.json(
+      return NextResponse.json(
         {
           error: "Invalid meeting create payload",
           details: error.flatten(),
         },
         { status: 400 },
       );
-    } else if (error instanceof HttpError) {
-      response = NextResponse.json(
+    }
+    if (error instanceof HttpError) {
+      return NextResponse.json(
         {
           error: error.message,
           details: error.details,
         },
         { status: error.status },
       );
-    } else {
-      response = NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
     }
 
-    if (authCookieRefresh.value) {
-      setAuthCookie(response, authCookieRefresh.value);
-    }
-
-    return response;
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

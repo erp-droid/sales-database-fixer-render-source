@@ -45,6 +45,8 @@ describe("GET /api/calendar/session", () => {
       connectedGoogleEmail: "jserrano@example.com",
       connectionError: null,
       expectedRedirectUri: "https://sales-meadowb.onrender.com/api/calendar/oauth/callback",
+      canUploadAttachments: true,
+      requiresReconnectForAttachments: false,
     });
 
     const { GET } = await import("@/app/api/calendar/session/route");
@@ -55,6 +57,8 @@ describe("GET /api/calendar/session", () => {
       connectedGoogleEmail: "jserrano@example.com",
       connectionError: null,
       expectedRedirectUri: "https://sales-meadowb.onrender.com/api/calendar/oauth/callback",
+      canUploadAttachments: true,
+      requiresReconnectForAttachments: false,
     });
     expect(response.status).toBe(200);
     expect(readGoogleCalendarSession).toHaveBeenCalledWith("jserrano");

@@ -865,6 +865,9 @@ describe("parseMeetingCreatePayload", () => {
     endTime: "10:00",
     priority: "Normal",
     details: "Review open items.",
+    privateNotes: "Internal prep only.",
+    includeGoogleMeet: true,
+    attachmentLinks: ["https://drive.google.com/file/d/abc/view"],
     attendeeContactIds: [157497, 157498],
     attendeeEmails: ["guest@example.com"],
   };
@@ -897,12 +900,15 @@ describe("parseMeetingCreatePayload", () => {
       endTime: "10:00",
       priority: "Normal",
       details: "Review open items.",
+      privateNotes: "Internal prep only.",
+      includeGoogleMeet: true,
+      attachmentLinks: ["https://drive.google.com/file/d/abc/view"],
       attendeeContactIds: [157497, 157498],
       attendeeEmails: ["guest@example.com"],
     });
   });
 
-  it("requires summary and related contact", () => {
+  it("requires summary but allows no related contact", () => {
     expect(() =>
       parseMeetingCreatePayload({
         ...validPayload,
@@ -910,30 +916,16 @@ describe("parseMeetingCreatePayload", () => {
       }),
     ).toThrow(ZodError);
 
-    expect(() =>
-      parseMeetingCreatePayload({
-        ...validPayload,
-        relatedContactId: 0,
-      }),
-    ).toThrow(ZodError);
-  });
-
-  it("requires organizer contact when including organizer in Acumatica", () => {
-    expect(() =>
-      parseMeetingCreatePayload({
-        ...validPayload,
-        organizerContactId: null,
-      }),
-    ).toThrow(ZodError);
-
     expect(
       parseMeetingCreatePayload({
         ...validPayload,
+        relatedContactId: 0,
         includeOrganizerInAcumatica: false,
         organizerContactId: null,
       }),
     ).toEqual({
       ...validPayload,
+      relatedContactId: null,
       organizerContactId: null,
       includeOrganizerInAcumatica: false,
     });

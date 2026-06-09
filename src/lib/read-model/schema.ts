@@ -379,6 +379,7 @@ CREATE TABLE IF NOT EXISTS meeting_bookings (
   related_contact_name TEXT,
   category TEXT,
   meeting_summary TEXT NOT NULL,
+  private_notes TEXT,
   attendee_count INTEGER NOT NULL,
   attendee_details_json TEXT NOT NULL DEFAULT '[]',
   invite_authority TEXT,
@@ -804,6 +805,12 @@ export function ensureReadModelSchema(db: Database.Database): void {
   );
   if (!hasMeetingCategoryColumn) {
     db.exec("ALTER TABLE meeting_bookings ADD COLUMN category TEXT");
+  }
+  const hasMeetingPrivateNotesColumn = meetingBookingColumns.some(
+    (column) => column.name === "private_notes",
+  );
+  if (!hasMeetingPrivateNotesColumn) {
+    db.exec("ALTER TABLE meeting_bookings ADD COLUMN private_notes TEXT");
   }
 
   const callerIdentityProfileColumns = db

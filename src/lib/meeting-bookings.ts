@@ -25,6 +25,7 @@ export type StoredMeetingBooking = {
   relatedContactName: string | null;
   category: string | null;
   meetingSummary: string;
+  privateNotes: string | null;
   attendeeCount: number;
   attendees: StoredMeetingAttendee[];
   inviteAuthority: "google" | "acumatica" | null;
@@ -54,6 +55,7 @@ type UpsertMeetingBookingInput = {
   relatedContactName: string | null;
   category?: string | null;
   meetingSummary: string;
+  privateNotes?: string | null;
   attendeeCount: number;
   attendees?: StoredMeetingAttendee[];
   inviteAuthority: "google" | "acumatica" | null;
@@ -78,6 +80,7 @@ type StoredMeetingBookingRow = {
   related_contact_name: string | null;
   category: string | null;
   meeting_summary: string;
+  private_notes: string | null;
   attendee_count: number;
   attendee_details_json: string;
   invite_authority: string | null;
@@ -346,6 +349,7 @@ function writeMeetingBookingUpsert(
       related_contact_name,
       category,
       meeting_summary,
+      private_notes,
       attendee_count,
       attendee_details_json,
       invite_authority,
@@ -365,6 +369,7 @@ function writeMeetingBookingUpsert(
       @related_contact_name,
       @category,
       @meeting_summary,
+      @private_notes,
       @attendee_count,
       @attendee_details_json,
       @invite_authority,
@@ -384,6 +389,7 @@ function writeMeetingBookingUpsert(
       related_contact_name = excluded.related_contact_name,
       category = excluded.category,
       meeting_summary = excluded.meeting_summary,
+      private_notes = excluded.private_notes,
       attendee_count = excluded.attendee_count,
       attendee_details_json = excluded.attendee_details_json,
       invite_authority = excluded.invite_authority,
@@ -406,6 +412,7 @@ function writeMeetingBookingUpsert(
     related_contact_name: cleanString(input.relatedContactName),
     category: cleanString(input.category),
     meeting_summary: cleanString(input.meetingSummary) ?? "Meeting created",
+    private_notes: cleanString(input.privateNotes),
     attendee_count: Math.max(0, Math.trunc(input.attendeeCount)),
     attendee_details_json: JSON.stringify(dedupeMeetingAttendees(input.attendees ?? [])),
     invite_authority: input.inviteAuthority,
@@ -491,6 +498,7 @@ function toStoredMeetingBooking(row: StoredMeetingBookingRow): StoredMeetingBook
     relatedContactName: row.related_contact_name,
     category: cleanString(row.category),
     meetingSummary: row.meeting_summary,
+    privateNotes: cleanString(row.private_notes),
     attendeeCount: Math.max(0, Number(row.attendee_count) || 0),
     attendees: readAttendeeDetailsJson(row.attendee_details_json),
     inviteAuthority:
@@ -538,6 +546,7 @@ export function listMeetingBookings(): StoredMeetingBooking[] {
           related_contact_name,
           category,
           meeting_summary,
+          private_notes,
           attendee_count,
           attendee_details_json,
           invite_authority,
@@ -571,6 +580,7 @@ export function getMeetingBookingById(id: string): StoredMeetingBooking | null {
         related_contact_name,
         category,
         meeting_summary,
+        private_notes,
         attendee_count,
         attendee_details_json,
         invite_authority,

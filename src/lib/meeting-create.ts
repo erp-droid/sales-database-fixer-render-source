@@ -38,6 +38,20 @@ function hasText(value: string | null | undefined): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function buildMeetingSharedDetails(request: MeetingCreateRequest): string | null {
+  const attachmentLinks = (request.attachmentLinks ?? [])
+    .map((link) => link.trim())
+    .filter(Boolean);
+  const parts = [
+    request.details?.trim() || "",
+    attachmentLinks.length > 0
+      ? `Attachment links:\n${attachmentLinks.map((link) => `- ${link}`).join("\n")}`
+      : "",
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
 function normalizeComparable(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? "";
 }
@@ -516,9 +530,10 @@ export function buildMeetingEventPayload(
     };
   }
 
-  if (hasText(input.request.details)) {
+  const sharedDetails = buildMeetingSharedDetails(input.request);
+  if (hasText(sharedDetails)) {
     payload[variant.detailsField] = {
-      value: input.request.details,
+      value: sharedDetails,
     };
   }
 

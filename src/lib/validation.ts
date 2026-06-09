@@ -480,7 +480,16 @@ export const meetingCreateRequestSchema = z
       })
       .default(null),
     includeOrganizerInAcumatica: z.coerce.boolean().default(false),
-    relatedContactId: z.coerce.number().int().positive("Related contact is required."),
+    relatedContactId: z
+      .union([z.number(), z.string(), z.null(), z.undefined()])
+      .transform((value) => {
+        if (value === null || value === undefined || value === "") {
+          return null;
+        }
+        const numeric = Number(value);
+        return Number.isFinite(numeric) && numeric > 0 ? Math.trunc(numeric) : null;
+      })
+      .default(null),
     category: z.enum(MEETING_CATEGORY_VALUES, {
       required_error: "Category is required.",
       invalid_type_error: "Category is required.",
@@ -509,6 +518,12 @@ export const meetingCreateRequestSchema = z
       invalid_type_error: "Priority is required.",
     }),
     details: nullableStringSchema.default(null),
+    privateNotes: nullableStringSchema.default(null),
+    includeGoogleMeet: z.coerce.boolean().default(false),
+    attachmentLinks: z
+      .array(z.string().trim().url("Attachment links must be valid URLs.").max(2000))
+      .max(10, "You can add up to 10 attachment links.")
+      .default([]),
     attendeeContactIds: z
       .array(z.coerce.number().int().positive("Attendee contact IDs must be positive numbers."))
       .default([]),
@@ -517,14 +532,6 @@ export const meetingCreateRequestSchema = z
       .default([]),
   })
   .superRefine((value, ctx) => {
-    if (value.includeOrganizerInAcumatica && value.organizerContactId === null) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Organizer contact is required when including yourself in Acumatica.",
-        path: ["organizerContactId"],
-      });
-    }
-
     try {
       buildMeetingDateTimeRange(value);
     } catch (error) {

@@ -24,9 +24,11 @@ const GOOGLE_CALENDAR_OAUTH_SCOPES = [
   "email",
   "profile",
   "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/drive.file",
 ];
 const GOOGLE_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const GOOGLE_ACCESS_TOKEN_SKEW_MS = 60 * 1000;
+const GOOGLE_DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 
 type GoogleOauthState = {
   loginName: string;
@@ -49,6 +51,14 @@ type GoogleCalendarEventResponse = {
   items?: Array<{ id?: string }>;
 };
 
+type GoogleDriveFileResponse = {
+  id?: string;
+  name?: string;
+  mimeType?: string;
+  webViewLink?: string;
+  iconLink?: string;
+};
+
 export type MeetingCalendarInviteSyncResult =
   | {
       status: "created" | "updated";
@@ -66,11 +76,27 @@ type MeetingCalendarInviteInput = {
   acumaticaEventId: string | null;
   meetingSyncKey: string;
   attendees: ResolvedMeetingInviteAttendee[];
+  attachmentFiles?: GoogleCalendarAttachmentUploadInput[];
   businessAccountId: string | null;
   companyName: string | null;
-  relatedContactId: number;
+  relatedContactId: number | null;
   relatedContactName: string | null;
   request: MeetingCreateRequest;
+};
+
+export type GoogleCalendarAttachmentUploadInput = {
+  data: Buffer;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+};
+
+type UploadedGoogleCalendarAttachment = {
+  fileId: string;
+  fileUrl: string;
+  iconLink?: string;
+  mimeType: string;
+  title: string;
 };
 
 function normalizeLoginName(loginName: string | null | undefined): string | null {
@@ -113,6 +139,22 @@ export function isGoogleCalendarConfigured(): boolean {
   return Boolean(
     env.GOOGLE_OAUTH_CLIENT_ID?.trim() && env.GOOGLE_OAUTH_CLIENT_SECRET?.trim(),
   );
+}
+
+function normalizeGoogleOauthScopes(tokenScope: string | null | undefined): Set<string> {
+  return new Set(
+    (tokenScope ?? "")
+      .split(/\s+/)
+      .map((scope) => scope.trim())
+      .filter(Boolean),
+  );
+}
+
+function hasGoogleOauthScope(
+  connection: StoredGoogleCalendarConnection,
+  scope: string,
+): boolean {
+  return normalizeGoogleOauthScopes(connection.tokenScope).has(scope);
 }
 
 function base64UrlEncode(value: string): string {
@@ -436,6 +478,8 @@ export function readGoogleCalendarSession(
       connectionError:
         "Google Calendar OAuth is not configured. Add GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET.",
       expectedRedirectUri,
+      canUploadAttachments: false,
+      requiresReconnectForAttachments: false,
     };
   }
 
@@ -446,6 +490,8 @@ export function readGoogleCalendarSession(
       connectionError:
         "APP_BASE_URL is required for Google Calendar OAuth. Set APP_BASE_URL and authorize /api/calendar/oauth/callback in Google Cloud OAuth redirect URIs.",
       expectedRedirectUri: null,
+      canUploadAttachments: false,
+      requiresReconnectForAttachments: false,
     };
   }
 
@@ -456,6 +502,8 @@ export function readGoogleCalendarSession(
       connectedGoogleEmail: null,
       connectionError: "Signed-in username is unavailable. Sign out and sign in again.",
       expectedRedirectUri,
+      canUploadAttachments: false,
+      requiresReconnectForAttachments: false,
     };
   }
 
@@ -466,14 +514,22 @@ export function readGoogleCalendarSession(
       connectedGoogleEmail: null,
       connectionError: null,
       expectedRedirectUri,
+      canUploadAttachments: false,
+      requiresReconnectForAttachments: false,
     };
   }
+
+  const canUploadAttachments = hasGoogleOauthScope(connection, GOOGLE_DRIVE_FILE_SCOPE);
 
   return {
     status: "connected",
     connectedGoogleEmail: connection.connectedGoogleEmail,
-    connectionError: null,
+    connectionError: canUploadAttachments
+      ? null
+      : "Reconnect Google Calendar once to allow real file attachments.",
     expectedRedirectUri,
+    canUploadAttachments,
+    requiresReconnectForAttachments: !canUploadAttachments,
   };
 }
 
@@ -512,16 +568,100 @@ function dedupeGoogleCalendarAttendees(
   return [...deduped.values()];
 }
 
-function buildMeetingDescription(input: MeetingCalendarInviteInput): string | undefined {
+function normalizeAttachmentLinks(links: string[]): string[] {
+  return [
+    ...new Set(
+      (links ?? [])
+        .map((link) => link.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function isGoogleDriveAttachmentLink(link: string): boolean {
+  try {
+    const url = new URL(link);
+    const hostname = url.hostname.toLowerCase();
+    return (
+      hostname === "drive.google.com" ||
+      hostname.endsWith(".drive.google.com") ||
+      hostname === "docs.google.com" ||
+      hostname.endsWith(".docs.google.com")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function buildGoogleCalendarAttachments(
+  links: string[],
+): Array<{ fileUrl: string; title: string }> {
+  return normalizeAttachmentLinks(links)
+    .filter(isGoogleDriveAttachmentLink)
+    .map((link, index) => ({
+      fileUrl: link,
+      title: `Attachment ${index + 1}`,
+    }));
+}
+
+function buildUploadedGoogleCalendarAttachments(
+  attachments: UploadedGoogleCalendarAttachment[],
+): Array<{ fileId: string; fileUrl: string; iconLink?: string; mimeType: string; title: string }> {
+  return attachments.map((attachment) => ({
+    fileId: attachment.fileId,
+    fileUrl: attachment.fileUrl,
+    ...(attachment.iconLink ? { iconLink: attachment.iconLink } : {}),
+    mimeType: attachment.mimeType,
+    title: attachment.title,
+  }));
+}
+
+function buildAttachmentDescription(
+  links: string[],
+  uploadedAttachments: UploadedGoogleCalendarAttachment[],
+): string {
+  const normalizedLinks = normalizeAttachmentLinks(links);
+  const uploadedLines = uploadedAttachments.map(
+    (attachment) => `- ${attachment.title}: ${attachment.fileUrl}`,
+  );
+  if (normalizedLinks.length === 0 && uploadedLines.length === 0) {
+    return "";
+  }
+
+  return [
+    uploadedLines.length > 0
+      ? `Attachments:\n${uploadedLines.join("\n")}`
+      : "",
+    normalizedLinks.length > 0
+      ? `Attachment links:\n${normalizedLinks.map((link) => `- ${link}`).join("\n")}`
+      : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+function truncatePrivateExtendedProperty(value: string): string {
+  return value.trim().slice(0, 1024);
+}
+
+function buildMeetingDescription(
+  input: MeetingCalendarInviteInput,
+  uploadedAttachments: UploadedGoogleCalendarAttachment[] = [],
+): string | undefined {
+  const attachmentDescription = buildAttachmentDescription(
+    input.request.attachmentLinks,
+    uploadedAttachments,
+  );
   const parts = [
     input.request.details?.trim() || "",
+    attachmentDescription,
     input.companyName?.trim() ? `Account: ${input.companyName.trim()}` : "",
     input.businessAccountId?.trim()
       ? `Business Account ID: ${input.businessAccountId.trim()}`
       : "",
     input.relatedContactName?.trim()
       ? `Related Contact: ${input.relatedContactName.trim()}`
-      : `Related Contact ID: ${input.relatedContactId}`,
+      : input.relatedContactId !== null
+        ? `Related Contact ID: ${input.relatedContactId}`
+        : "",
     input.acumaticaEventId ? `Acumatica Event ID: ${input.acumaticaEventId}` : "",
     "Created by Sales Database Fixer.",
   ].filter(Boolean);
@@ -531,9 +671,14 @@ function buildMeetingDescription(input: MeetingCalendarInviteInput): string | un
 
 function buildGoogleCalendarEventPayload(
   input: MeetingCalendarInviteInput,
+  uploadedAttachments: UploadedGoogleCalendarAttachment[] = [],
 ): Record<string, unknown> {
   const { startDateTimeIso, endDateTimeIso } = buildMeetingDateTimeRange(input.request);
   const attendees = dedupeGoogleCalendarAttendees(input.attendees);
+  const attachments = [
+    ...buildUploadedGoogleCalendarAttachments(uploadedAttachments),
+    ...buildGoogleCalendarAttachments(input.request.attachmentLinks),
+  ];
   const payload: Record<string, unknown> = {
     summary: input.request.summary,
     start: {
@@ -553,7 +698,12 @@ function buildGoogleCalendarEventPayload(
       private: {
         ...(input.acumaticaEventId ? { acumaticaEventId: input.acumaticaEventId } : {}),
         meetingSyncKey: input.meetingSyncKey,
-        relatedContactId: String(input.relatedContactId),
+        ...(input.request.privateNotes?.trim()
+          ? { privateNotes: truncatePrivateExtendedProperty(input.request.privateNotes) }
+          : {}),
+        ...(input.relatedContactId !== null
+          ? { relatedContactId: String(input.relatedContactId) }
+          : {}),
         sourceApp: "sales-database-fixer",
       },
     },
@@ -563,7 +713,7 @@ function buildGoogleCalendarEventPayload(
     payload.location = input.request.location.trim();
   }
 
-  const description = buildMeetingDescription(input);
+  const description = buildMeetingDescription(input, uploadedAttachments);
   if (description) {
     payload.description = description;
   }
@@ -572,7 +722,38 @@ function buildGoogleCalendarEventPayload(
     payload.attendees = attendees;
   }
 
+  if (input.request.includeGoogleMeet) {
+    payload.conferenceData = {
+      createRequest: {
+        requestId: input.meetingSyncKey,
+        conferenceSolutionKey: {
+          type: "hangoutsMeet",
+        },
+      },
+    };
+  }
+
+  if (attachments.length > 0) {
+    payload.attachments = attachments;
+  }
+
   return payload;
+}
+
+function applyGoogleCalendarCreateParams(
+  url: URL,
+  input: MeetingCalendarInviteInput,
+): void {
+  url.searchParams.set("sendUpdates", "all");
+  if (input.request.includeGoogleMeet) {
+    url.searchParams.set("conferenceDataVersion", "1");
+  }
+  if (
+    (input.attachmentFiles?.length ?? 0) > 0 ||
+    buildGoogleCalendarAttachments(input.request.attachmentLinks).length > 0
+  ) {
+    url.searchParams.set("supportsAttachments", "true");
+  }
 }
 
 async function requestGoogleCalendarJson<T>(
@@ -634,6 +815,159 @@ async function requestGoogleCalendarEmpty(
   }
 }
 
+function sanitizeAttachmentFileName(fileName: string): string {
+  return fileName
+    .trim()
+    .replace(/[\\/\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .slice(0, 180) || "Meeting attachment";
+}
+
+function buildMultipartRelatedBody(input: {
+  metadata: Record<string, unknown>;
+  data: Buffer;
+  mimeType: string;
+}): { body: Buffer; contentType: string } {
+  const boundary = `mb-calendar-${crypto.randomUUID()}`;
+  const metadataPart = Buffer.from(
+    [
+      `--${boundary}`,
+      "Content-Type: application/json; charset=UTF-8",
+      "",
+      JSON.stringify(input.metadata),
+      "",
+      `--${boundary}`,
+      `Content-Type: ${input.mimeType || "application/octet-stream"}`,
+      "",
+    ].join("\r\n"),
+    "utf8",
+  );
+  const closingPart = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
+
+  return {
+    body: Buffer.concat([metadataPart, input.data, closingPart]),
+    contentType: `multipart/related; boundary=${boundary}`,
+  };
+}
+
+async function uploadGoogleDriveFile(
+  accessToken: string,
+  file: GoogleCalendarAttachmentUploadInput,
+): Promise<UploadedGoogleCalendarAttachment> {
+  const fileName = sanitizeAttachmentFileName(file.fileName);
+  const mimeType = file.mimeType.trim() || "application/octet-stream";
+  const url = new URL("https://www.googleapis.com/upload/drive/v3/files");
+  url.searchParams.set("uploadType", "multipart");
+  url.searchParams.set("fields", "id,name,mimeType,webViewLink,iconLink");
+
+  const multipart = buildMultipartRelatedBody({
+    metadata: {
+      name: fileName,
+      mimeType,
+    },
+    data: file.data,
+    mimeType,
+  });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": multipart.contentType,
+    },
+    body: multipart.body as unknown as BodyInit,
+    cache: "no-store",
+  });
+  const payload = await readJsonResponse<GoogleDriveFileResponse>(response);
+  if (!response.ok) {
+    throw new HttpError(
+      response.status,
+      readGoogleErrorMessage(payload, `Unable to upload ${fileName} to Google Drive.`),
+    );
+  }
+
+  const uploadedFile = payload ?? {};
+  const fileId = uploadedFile.id?.trim();
+  const fileUrl = uploadedFile.webViewLink?.trim();
+  if (!fileId || !fileUrl) {
+    throw new HttpError(
+      502,
+      `Google Drive uploaded ${fileName} but did not return a usable file link.`,
+    );
+  }
+
+  return {
+    fileId,
+    fileUrl,
+    ...(uploadedFile.iconLink?.trim() ? { iconLink: uploadedFile.iconLink.trim() } : {}),
+    mimeType: uploadedFile.mimeType?.trim() || mimeType,
+    title: uploadedFile.name?.trim() || fileName,
+  };
+}
+
+async function deleteGoogleDriveFile(accessToken: string, fileId: string): Promise<void> {
+  const url = new URL(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`,
+  );
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    cache: "no-store",
+  });
+  if (!response.ok && response.status !== 404) {
+    const payload = await readJsonResponse<Record<string, unknown>>(response);
+    throw new HttpError(
+      response.status,
+      readGoogleErrorMessage(payload, "Unable to delete the uploaded Google Drive attachment."),
+    );
+  }
+}
+
+async function cleanupUploadedGoogleDriveFiles(
+  accessToken: string,
+  attachments: UploadedGoogleCalendarAttachment[],
+): Promise<void> {
+  await Promise.allSettled(
+    attachments.map((attachment) => deleteGoogleDriveFile(accessToken, attachment.fileId)),
+  );
+}
+
+async function uploadMeetingAttachmentsToGoogleDrive(
+  accessToken: string,
+  files: GoogleCalendarAttachmentUploadInput[],
+): Promise<UploadedGoogleCalendarAttachment[]> {
+  const uploaded: UploadedGoogleCalendarAttachment[] = [];
+  try {
+    for (const file of files) {
+      uploaded.push(await uploadGoogleDriveFile(accessToken, file));
+    }
+  } catch (error) {
+    await cleanupUploadedGoogleDriveFiles(accessToken, uploaded);
+    throw error;
+  }
+
+  return uploaded;
+}
+
+function requireDriveAttachmentScope(
+  connection: StoredGoogleCalendarConnection,
+  input: MeetingCalendarInviteInput,
+): void {
+  if ((input.attachmentFiles?.length ?? 0) === 0) {
+    return;
+  }
+
+  if (hasGoogleOauthScope(connection, GOOGLE_DRIVE_FILE_SCOPE)) {
+    return;
+  }
+
+  throw new HttpError(
+    409,
+    "Reconnect Google Calendar to allow real file attachments, then try again.",
+  );
+}
+
 async function findExistingGoogleCalendarEventId(
   accessToken: string,
   acumaticaEventId: string | null,
@@ -660,7 +994,11 @@ async function upsertMeetingInviteWithAccessToken(
   _connection: StoredGoogleCalendarConnection,
   input: MeetingCalendarInviteInput,
 ): Promise<{ status: "created" | "updated"; eventId: string }> {
-  const payload = buildGoogleCalendarEventPayload(input);
+  const uploadedAttachments = await uploadMeetingAttachmentsToGoogleDrive(
+    accessToken,
+    input.attachmentFiles ?? [],
+  );
+  const payload = buildGoogleCalendarEventPayload(input, uploadedAttachments);
   const existingEventId = await findExistingGoogleCalendarEventId(accessToken, input.acumaticaEventId);
   const method = existingEventId ? "PATCH" : "POST";
   const url = existingEventId
@@ -668,22 +1006,28 @@ async function upsertMeetingInviteWithAccessToken(
         `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(existingEventId)}`,
       )
     : new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
-  url.searchParams.set("sendUpdates", "all");
+  applyGoogleCalendarCreateParams(url, input);
 
-  const response = await requestGoogleCalendarJson<GoogleCalendarEventResponse>(url, {
-    accessToken,
-    init: {
-      method,
-      body: JSON.stringify(payload),
-    },
-    fallbackMessage:
-      method === "POST"
-        ? "Unable to create the Google Calendar invite."
-        : "Unable to update the Google Calendar invite.",
-  });
-  const eventId = response.id?.trim();
-  if (!eventId) {
-    throw new HttpError(502, "Google Calendar accepted the request but did not return an event id.");
+  let eventId: string | undefined;
+  try {
+    const response = await requestGoogleCalendarJson<GoogleCalendarEventResponse>(url, {
+      accessToken,
+      init: {
+        method,
+        body: JSON.stringify(payload),
+      },
+      fallbackMessage:
+        method === "POST"
+          ? "Unable to create the Google Calendar invite."
+          : "Unable to update the Google Calendar invite.",
+    });
+    eventId = response.id?.trim();
+    if (!eventId) {
+      throw new HttpError(502, "Google Calendar accepted the request but did not return an event id.");
+    }
+  } catch (error) {
+    await cleanupUploadedGoogleDriveFiles(accessToken, uploadedAttachments);
+    throw error;
   }
 
   return {
@@ -697,21 +1041,31 @@ async function createMeetingInviteWithAccessToken(
   _connection: StoredGoogleCalendarConnection,
   input: MeetingCalendarInviteInput,
 ): Promise<{ status: "created"; eventId: string }> {
-  const payload = buildGoogleCalendarEventPayload(input);
-  const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
-  url.searchParams.set("sendUpdates", "all");
-
-  const response = await requestGoogleCalendarJson<GoogleCalendarEventResponse>(url, {
+  const uploadedAttachments = await uploadMeetingAttachmentsToGoogleDrive(
     accessToken,
-    init: {
-      method: "POST",
-      body: JSON.stringify(payload),
-    },
-    fallbackMessage: "Unable to create the Google Calendar invite.",
-  });
-  const eventId = response.id?.trim();
-  if (!eventId) {
-    throw new HttpError(502, "Google Calendar accepted the request but did not return an event id.");
+    input.attachmentFiles ?? [],
+  );
+  const payload = buildGoogleCalendarEventPayload(input, uploadedAttachments);
+  const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+  applyGoogleCalendarCreateParams(url, input);
+
+  let eventId: string | undefined;
+  try {
+    const response = await requestGoogleCalendarJson<GoogleCalendarEventResponse>(url, {
+      accessToken,
+      init: {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+      fallbackMessage: "Unable to create the Google Calendar invite.",
+    });
+    eventId = response.id?.trim();
+    if (!eventId) {
+      throw new HttpError(502, "Google Calendar accepted the request but did not return an event id.");
+    }
+  } catch (error) {
+    await cleanupUploadedGoogleDriveFiles(accessToken, uploadedAttachments);
+    throw error;
   }
 
   return {
@@ -763,6 +1117,7 @@ export async function upsertMeetingInviteToGoogleCalendar(
       reason: "not_connected",
     };
   }
+  requireDriveAttachmentScope(connection, input);
 
   let accessToken = await resolveGoogleCalendarAccessToken(normalizedLoginName, connection);
 
@@ -815,6 +1170,7 @@ export async function createMeetingInviteInGoogleCalendar(
       "Google Calendar is not connected for this account. Connect Google Calendar and try again.",
     );
   }
+  requireDriveAttachmentScope(connection, input);
 
   let accessToken = await resolveGoogleCalendarAccessToken(normalizedLoginName, connection);
 
