@@ -201,11 +201,23 @@ export type BusinessAccountMapPoint = {
   }>;
 };
 
+export type BusinessAccountMapMetricSummary = {
+  companyCount: number;
+  contactCount: number;
+  companyPhoneCount: number;
+  contactPhoneCount: number;
+  emailCount: number;
+  latestCalledAt: string | null;
+  filledDatabaseHealthFields: number;
+  totalDatabaseHealthFields: number;
+};
+
 export type BusinessAccountMapResponse = {
   items: BusinessAccountMapPoint[];
   totalCandidates: number;
   geocodedCount: number;
   unmappedCount: number;
+  metricSummary?: BusinessAccountMapMetricSummary;
 };
 
 export type PostalRegion = {

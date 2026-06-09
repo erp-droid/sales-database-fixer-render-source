@@ -7,12 +7,13 @@ import { type AuthCookieRefreshState, fetchBusinessAccounts } from "@/lib/acumat
 import {
   filterSuppressedBusinessAccountRows,
   normalizeBusinessAccount,
+  resolveCompanyPhone,
 } from "@/lib/business-accounts";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { geocodeAddress, type GeocodeResult } from "@/lib/geocode";
 import { isExcludedInternalCompanyName } from "@/lib/internal-records";
-import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
+import { queryReadModelBusinessAccounts } from "@/lib/read-model/accounts";
 import { registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import {
   buildAddressKeyFromRow,
@@ -24,6 +25,7 @@ import type {
   BusinessAccountMapPoint,
   BusinessAccountRow,
   BusinessAccountMapResponse,
+  BusinessAccountMapMetricSummary,
 } from "@/types/business-account";
 
 const mapGeocodeCache = new Map<string, GeocodeResult | null>();
@@ -204,6 +206,126 @@ function hasMappableAddress(row: BusinessAccountRow): boolean {
   return hasText(row.addressLine1) && hasText(row.city);
 }
 
+function rowHasMetricAddress(row: BusinessAccountRow): boolean {
+  return (
+    [row.addressLine1, row.city, row.state, row.postalCode].every(hasText) ||
+    hasText(row.address)
+  );
+}
+
+function resolveRowContactId(row: BusinessAccountRow): number | null {
+  return row.contactId ?? row.primaryContactId ?? null;
+}
+
+function rowHasMetricContact(row: BusinessAccountRow): boolean {
+  return resolveRowContactId(row) !== null || hasText(row.primaryContactName);
+}
+
+function rowHasMetricSalesRep(row: BusinessAccountRow): boolean {
+  return hasText(row.salesRepName) || hasText(row.salesRepId);
+}
+
+function normalizeMetricPhone(value: string | null | undefined): string | null {
+  const digits = value?.replace(/\D/g, "") ?? "";
+  if (digits.length >= 7) {
+    return digits;
+  }
+
+  const fallback = value?.trim().toLowerCase() ?? "";
+  return fallback || null;
+}
+
+function readLatestIso(values: Array<string | null | undefined>): string | null {
+  let latestValue: string | null = null;
+  let latestTime = Number.NEGATIVE_INFINITY;
+
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp) || timestamp <= latestTime) {
+      continue;
+    }
+
+    latestTime = timestamp;
+    latestValue = value;
+  }
+
+  return latestValue;
+}
+
+function countDistinctAccounts(rows: BusinessAccountRow[]): number {
+  const accountKeys = new Set<string>();
+  rows.forEach((row) => {
+    const key = readRowAccountKey(row);
+    if (key) {
+      accountKeys.add(key);
+    }
+  });
+  return accountKeys.size;
+}
+
+function buildMapMetricSummary(
+  rows: BusinessAccountRow[],
+  companyCount = countDistinctAccounts(rows),
+): BusinessAccountMapMetricSummary {
+  const companyPhoneValues = new Set<string>();
+  const contactPhoneValues = new Set<string>();
+  const emailValues = new Set<string>();
+  let contactCount = 0;
+  let filledDatabaseHealthFields = 0;
+  let totalDatabaseHealthFields = 0;
+
+  rows.forEach((row) => {
+    if (rowHasMetricContact(row)) {
+      contactCount += 1;
+    }
+
+    const companyPhone = normalizeMetricPhone(resolveCompanyPhone(row));
+    if (companyPhone) {
+      companyPhoneValues.add(companyPhone);
+    }
+
+    [row.primaryContactPhone, row.phoneNumber].forEach((value) => {
+      const normalized = normalizeMetricPhone(value);
+      if (normalized) {
+        contactPhoneValues.add(normalized);
+      }
+    });
+
+    const email = row.primaryContactEmail?.trim().toLowerCase();
+    if (email) {
+      emailValues.add(email);
+    }
+
+    const databaseHealthChecks = [
+      rowHasMetricAddress(row),
+      hasText(resolveCompanyPhone(row)),
+      hasText(row.primaryContactName),
+      hasText(row.primaryContactJobTitle),
+      hasText(row.primaryContactPhone),
+      hasText(row.week),
+      rowHasMetricSalesRep(row),
+      hasText(row.primaryContactEmail),
+    ];
+    totalDatabaseHealthFields += databaseHealthChecks.length;
+    filledDatabaseHealthFields += databaseHealthChecks.filter(Boolean).length;
+  });
+
+  return {
+    companyCount,
+    contactCount,
+    companyPhoneCount: companyPhoneValues.size,
+    contactPhoneCount: contactPhoneValues.size,
+    emailCount: emailValues.size,
+    latestCalledAt: readLatestIso(rows.map((row) => row.lastCalledAt)),
+    filledDatabaseHealthFields,
+    totalDatabaseHealthFields,
+  };
+}
+
 function buildContactsFromRows(rows: BusinessAccountRow[]) {
   return rows
     .map((row, index) => ({
@@ -233,6 +355,21 @@ function buildContactsFromRows(rows: BusinessAccountRow[]) {
         sensitivity: "base",
       });
     });
+}
+
+function readMapRowsFromReadModel(normalizedSearch: string): BusinessAccountRow[] {
+  const countResult = queryReadModelBusinessAccounts({
+    q: normalizedSearch || undefined,
+    page: 1,
+    pageSize: 1,
+  });
+  const fullResult = queryReadModelBusinessAccounts({
+    q: normalizedSearch || undefined,
+    page: 1,
+    pageSize: Math.max(1, countResult.total),
+  });
+
+  return fullResult.items;
 }
 
 function pickRepresentativeRow(rows: BusinessAccountRow[]): BusinessAccountRow {
@@ -309,7 +446,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           if (getEnv().READ_MODEL_ENABLED) {
             maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
             const grouped = new Map<string, BusinessAccountRow[]>();
-            filterSuppressedBusinessAccountRows(readAllAccountRowsFromReadModel()).forEach((row) => {
+            readMapRowsFromReadModel(normalizedSearch).forEach((row) => {
               const key = readRowAccountKey(row);
               if (!key) {
                 return;
@@ -369,6 +506,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
                 return {
                   accountKey,
+                  rows,
                   representativeRow,
                   mappableRow,
                   salesRepRow,
@@ -459,6 +597,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
               totalCandidates: candidates.length,
               geocodedCount: items.length,
               unmappedCount: Math.max(0, candidates.length - items.length),
+              metricSummary: buildMapMetricSummary(
+                candidates.flatMap((candidate) => candidate.rows),
+                candidates.length,
+              ),
             };
           }
 
@@ -585,6 +727,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             totalCandidates: candidates.length,
             geocodedCount: items.length,
             unmappedCount: Math.max(0, candidates.length - items.length),
+            metricSummary: buildMapMetricSummary(candidates),
           };
           if (process.env.NODE_ENV !== "production") {
             console.info(

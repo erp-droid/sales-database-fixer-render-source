@@ -7,6 +7,7 @@ import { AppChrome } from "@/components/app-chrome";
 import {
   CATEGORY_VALUES,
   type BusinessAccountDetailResponse,
+  type BusinessAccountMapMetricSummary,
   type BusinessAccountMapPoint,
   type BusinessAccountMapResponse,
   type BusinessAccountRow,
@@ -51,7 +52,7 @@ type SessionResponse = {
 };
 
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
-const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v8";
+const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v9";
 const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
 const SALES_REP_FILTER_VISIBLE_SELECTION_LIMIT = 5;
 const WEEK_OPTIONS = Array.from({ length: 15 }, (_, index) => `Week ${index + 1}`);
@@ -625,14 +626,12 @@ function rowHasMetricAddress(row: BusinessAccountRow): boolean {
   );
 }
 
+function resolveRowContactId(row: BusinessAccountRow): number | null {
+  return row.contactId ?? row.primaryContactId ?? null;
+}
+
 function rowHasMetricContact(row: BusinessAccountRow): boolean {
-  return (
-    (row.contactId !== null && row.contactId !== undefined) ||
-    row.primaryContactId !== null ||
-    hasText(row.primaryContactName) ||
-    hasText(row.primaryContactEmail) ||
-    hasText(row.primaryContactPhone)
-  );
+  return resolveRowContactId(row) !== null || hasText(row.primaryContactName);
 }
 
 function rowHasMetricSalesRep(row: BusinessAccountRow): boolean {
@@ -787,16 +786,7 @@ function getMetricBadgeToneClass(tone: NonNullable<MapViewMetric["badge"]>["tone
   return accountStyles.viewMetricBadgeAttention;
 }
 
-type MapMetricSummary = {
-  companyCount: number;
-  contactCount: number;
-  companyPhoneCount: number;
-  contactPhoneCount: number;
-  emailCount: number;
-  latestCalledAt: string | null;
-  filledDatabaseHealthFields: number;
-  totalDatabaseHealthFields: number;
-};
+type MapMetricSummary = BusinessAccountMapMetricSummary;
 
 function buildMapMetricCards(summary: MapMetricSummary): MapViewMetric[] {
   const databaseHealthScore =
@@ -1511,11 +1501,24 @@ function isMapResponse(payload: unknown): payload is BusinessAccountMapResponse 
   }
 
   const record = payload as Record<string, unknown>;
+  const metricSummary = record.metricSummary;
   return (
     Array.isArray(record.items) &&
     typeof record.totalCandidates === "number" &&
     typeof record.geocodedCount === "number" &&
-    typeof record.unmappedCount === "number"
+    typeof record.unmappedCount === "number" &&
+    (metricSummary === undefined ||
+      (metricSummary !== null &&
+        typeof metricSummary === "object" &&
+        typeof (metricSummary as Record<string, unknown>).companyCount === "number" &&
+        typeof (metricSummary as Record<string, unknown>).contactCount === "number" &&
+        typeof (metricSummary as Record<string, unknown>).companyPhoneCount === "number" &&
+        typeof (metricSummary as Record<string, unknown>).contactPhoneCount === "number" &&
+        typeof (metricSummary as Record<string, unknown>).emailCount === "number" &&
+        ((metricSummary as Record<string, unknown>).latestCalledAt === null ||
+          typeof (metricSummary as Record<string, unknown>).latestCalledAt === "string") &&
+        typeof (metricSummary as Record<string, unknown>).filledDatabaseHealthFields === "number" &&
+        typeof (metricSummary as Record<string, unknown>).totalDatabaseHealthFields === "number"))
   );
 }
 
@@ -1618,6 +1621,10 @@ function readMapCache(expectedCacheKey: string): BusinessAccountMapResponse | nu
       return null;
     }
 
+    if (!parsed.payload.metricSummary) {
+      return null;
+    }
+
     if (parsed.payload.totalCandidates > 0 && parsed.payload.unmappedCount > 0) {
       return null;
     }
@@ -1666,6 +1673,8 @@ export function AccountsMapClient({
   const [totalCandidates, setTotalCandidates] = useState(0);
   const [geocodedCount, setGeocodedCount] = useState(0);
   const [unmappedCount, setUnmappedCount] = useState(0);
+  const [serverMetricSummary, setServerMetricSummary] =
+    useState<BusinessAccountMapMetricSummary | null>(null);
   const [postalRegions, setPostalRegions] = useState<PostalRegion[]>([]);
   const [postalRegionsError, setPostalRegionsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1851,11 +1860,24 @@ export function AccountsMapClient({
     selectedSalesRepKeySet,
   ]);
   const mapViewMetrics = useMemo(
-    () =>
-      cachedDatasetRows.length > 0
-        ? buildMapViewMetrics(filteredDatasetRows, filteredPoints.length)
-        : buildMapPointViewMetrics(filteredPoints),
-    [cachedDatasetRows.length, filteredDatasetRows, filteredPoints],
+    () => {
+      if (cachedDatasetRows.length > 0) {
+        return buildMapViewMetrics(filteredDatasetRows, filteredPoints.length);
+      }
+
+      if (!hasStructuredMapFilters && serverMetricSummary) {
+        return buildMapMetricCards(serverMetricSummary);
+      }
+
+      return buildMapPointViewMetrics(filteredPoints);
+    },
+    [
+      cachedDatasetRows.length,
+      filteredDatasetRows,
+      filteredPoints,
+      hasStructuredMapFilters,
+      serverMetricSummary,
+    ],
   );
   const effectiveTotalCandidates =
     cachedDatasetRows.length > 0 ? countDistinctMetricCompanies(filteredDatasetRows) : totalCandidates;
@@ -2114,6 +2136,7 @@ export function AccountsMapClient({
           setTotalCandidates(cached.totalCandidates);
           setGeocodedCount(cached.geocodedCount);
           setUnmappedCount(cached.unmappedCount);
+          setServerMetricSummary(cached.metricSummary ?? null);
           setSelectedId((current) =>
             cached.items.some((item) => item.id === current)
               ? current
@@ -2150,6 +2173,7 @@ export function AccountsMapClient({
         setTotalCandidates(payload.totalCandidates);
         setGeocodedCount(payload.geocodedCount);
         setUnmappedCount(payload.unmappedCount);
+        setServerMetricSummary(payload.metricSummary ?? null);
         writeMapCache(cacheKey, payload);
         setSelectedId((current) =>
           payload.items.some((item) => item.id === current) ? current : payload.items[0]?.id ?? null,
@@ -2164,6 +2188,7 @@ export function AccountsMapClient({
         setTotalCandidates(0);
         setGeocodedCount(0);
         setUnmappedCount(0);
+        setServerMetricSummary(null);
         setError(requestError instanceof Error ? requestError.message : "Failed to load map data.");
       } finally {
         if (!controller.signal.aborted) {
