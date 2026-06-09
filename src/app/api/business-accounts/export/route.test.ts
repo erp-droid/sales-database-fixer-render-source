@@ -82,6 +82,7 @@ function buildRow(overrides: Partial<BusinessAccountRow> = {}): BusinessAccountR
     primaryContactEmail: overrides.primaryContactEmail ?? "yash@example.com",
     primaryContactId: overrides.primaryContactId ?? 101,
     category: overrides.category ?? "A",
+    marketingEligible: overrides.marketingEligible ?? true,
     notes: overrides.notes ?? "Confirmed",
     lastEmailedAt: overrides.lastEmailedAt ?? null,
     lastModifiedIso: overrides.lastModifiedIso ?? "2026-04-06T09:30:00.000Z",
@@ -125,6 +126,63 @@ describe("GET /api/business-accounts/export", () => {
     expect(payload).toContain("Company Name");
     expect(payload).toContain("Footage Tools");
     expect(payload).not.toContain("Acme Packaging");
+  });
+
+  it("exports only rows matching the accounts page view filters", async () => {
+    readAllAccountRowsFromReadModel.mockReturnValue([
+      buildRow(),
+      buildRow({
+        id: "acct-2",
+        accountRecordId: "acct-2",
+        rowKey: "acct-2:contact:202",
+        contactId: 202,
+        businessAccountId: "B200000050",
+        companyName: "Wrong Marketing",
+        marketingEligible: false,
+      }),
+      buildRow({
+        id: "acct-3",
+        accountRecordId: "acct-3",
+        rowKey: "acct-3:contact:303",
+        contactId: 303,
+        businessAccountId: "B200000051",
+        companyName: "Wrong Category",
+        category: "B",
+      }),
+      buildRow({
+        id: "acct-4",
+        accountRecordId: "acct-4",
+        rowKey: "acct-4:contact:404",
+        contactId: 404,
+        businessAccountId: "B200000052",
+        companyName: "Wrong Week",
+        week: "Week 5",
+      }),
+      buildRow({
+        id: "acct-5",
+        accountRecordId: "acct-5",
+        rowKey: "acct-5:contact:505",
+        contactId: 505,
+        businessAccountId: "B200000053",
+        companyName: "Wrong Rep",
+        salesRepName: "Katlyn Allen",
+      }),
+    ]);
+    const { GET } = await import("@/app/api/business-accounts/export/route");
+
+    const response = await GET(
+      new NextRequest(
+        "http://localhost/api/business-accounts/export?filterView=marketingOnly&selectedCategory=A&selectedWeek=Week%204&selectedSalesRep=Jorge%20Serrano&sortBy=companyName&sortDir=asc",
+      ),
+    );
+    const payload = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(payload).toContain("Footage Tools");
+    expect(payload).not.toContain("Wrong Marketing");
+    expect(payload).not.toContain("Wrong Category");
+    expect(payload).not.toContain("Wrong Week");
+    expect(payload).not.toContain("Wrong Rep");
   });
 
   it("rejects non-jserrano users", async () => {

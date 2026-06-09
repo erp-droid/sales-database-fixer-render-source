@@ -20,10 +20,127 @@ import { HttpError, getErrorMessage } from "@/lib/errors";
 import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import { maybeTriggerReadModelSync, readSyncStatus } from "@/lib/read-model/sync";
 import { parseListQuery } from "@/lib/validation";
+import {
+  CATEGORY_VALUES,
+  type BusinessAccountRow,
+  type Category,
+} from "@/types/business-account";
+
+type ExportFilterView = "allCompanies" | "marketingOnly";
+
+type ExportViewFilters = {
+  filterView: ExportFilterView;
+  selectedCategories: Category[];
+  selectedWeeks: string[];
+  selectedSalesReps: string[];
+};
 
 function hasUsableReadModelSnapshot(): boolean {
   const status = readSyncStatus();
   return Boolean(status.lastSuccessfulSyncAt) || status.rowsCount > 0;
+}
+
+function normalizeMultiValueParam(value: string | null | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function readMultiValueParams(searchParams: URLSearchParams, key: string): string[] {
+  return searchParams.getAll(key).flatMap(normalizeMultiValueParam);
+}
+
+function isCategory(value: string): value is Category {
+  return CATEGORY_VALUES.includes(value as Category);
+}
+
+function normalizeWeekValue(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const match = trimmed.match(/^week\s*(\d+)$/i);
+  if (match) {
+    const weekNumber = Number.parseInt(match[1] ?? "", 10);
+    if (Number.isFinite(weekNumber)) {
+      return `Week ${weekNumber}`;
+    }
+  }
+
+  return trimmed;
+}
+
+function normalizeComparable(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function parseExportViewFilters(searchParams: URLSearchParams): ExportViewFilters {
+  const filterView =
+    searchParams.get("filterView") === "marketingOnly"
+      ? "marketingOnly"
+      : "allCompanies";
+
+  return {
+    filterView,
+    selectedCategories: [
+      ...new Set(readMultiValueParams(searchParams, "selectedCategory").filter(isCategory)),
+    ],
+    selectedWeeks: [
+      ...new Set(
+        readMultiValueParams(searchParams, "selectedWeek")
+          .map((value) => normalizeWeekValue(value))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ],
+    selectedSalesReps: [
+      ...new Set(readMultiValueParams(searchParams, "selectedSalesRep")),
+    ],
+  };
+}
+
+function applyExportViewFilters(
+  rows: BusinessAccountRow[],
+  filters: ExportViewFilters,
+): BusinessAccountRow[] {
+  const categorySet = new Set(filters.selectedCategories);
+  const weekSet = new Set(filters.selectedWeeks.map(normalizeComparable));
+  const salesRepSet = new Set(filters.selectedSalesReps);
+
+  return rows.filter((row) => {
+    if (filters.filterView === "marketingOnly" && row.marketingEligible === false) {
+      return false;
+    }
+
+    if (categorySet.size > 0 && (!row.category || !categorySet.has(row.category))) {
+      return false;
+    }
+
+    if (weekSet.size > 0) {
+      const normalizedWeek = normalizeWeekValue(row.week);
+      if (!normalizedWeek || !weekSet.has(normalizeComparable(normalizedWeek))) {
+        return false;
+      }
+    }
+
+    if (salesRepSet.size > 0) {
+      const salesRepName = row.salesRepName?.trim();
+      if (!salesRepName || !salesRepSet.has(salesRepName)) {
+        return false;
+      }
+    }
+
+    return true;
+  });
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -39,6 +156,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
 
     const params = parseListQuery(request.nextUrl.searchParams);
+    const viewFilters = parseExportViewFilters(request.nextUrl.searchParams);
     const { READ_MODEL_ENABLED } = getEnv();
 
     let sourceRows = [] as Awaited<ReturnType<typeof fetchAllSyncRows>>;
@@ -59,10 +177,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       });
     }
 
-    const exportRows = queryBusinessAccounts(sourceRows, {
+    const viewRows = applyExportViewFilters(sourceRows, viewFilters);
+    const exportRows = queryBusinessAccounts(viewRows, {
       ...params,
+      includeInternalRows: true,
       page: 1,
-      pageSize: Math.max(1, sourceRows.length || 1),
+      pageSize: Math.max(1, viewRows.length || 1),
     }).items;
 
     const response = new NextResponse(buildBusinessAccountsCsv(exportRows), {

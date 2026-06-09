@@ -673,6 +673,10 @@ function normalizeStoredAccountsFilterPreferences(
 }
 
 function buildAccountsCsvExportHref(input: {
+  activeFilterView: AccountsFilterView;
+  selectedCategoryFilters: Category[];
+  selectedWeekFilters: string[];
+  selectedSalesRepFilters: string[];
   q: string;
   headerFilters: HeaderFilters;
   sortBy: SortBy;
@@ -687,6 +691,16 @@ function buildAccountsCsvExportHref(input: {
     }
   };
 
+  params.set("filterView", input.activeFilterView);
+  input.selectedCategoryFilters.forEach((category) => {
+    params.append("selectedCategory", category);
+  });
+  input.selectedWeekFilters.forEach((week) => {
+    append("selectedWeek", week);
+  });
+  input.selectedSalesRepFilters.forEach((salesRepName) => {
+    append("selectedSalesRep", salesRepName);
+  });
   append("q", input.q);
   append("filterCompanyName", input.headerFilters.companyName);
   append("filterAccountType", input.headerFilters.accountType);
@@ -3800,12 +3814,25 @@ export function AccountsClient({
   const accountsCsvExportHref = useMemo(
     () =>
       buildAccountsCsvExportHref({
+        activeFilterView,
+        selectedCategoryFilters,
+        selectedWeekFilters,
+        selectedSalesRepFilters,
         q: debouncedQ,
         headerFilters: debouncedHeaderFilters,
         sortBy,
         sortDir,
       }),
-    [debouncedHeaderFilters, debouncedQ, sortBy, sortDir],
+    [
+      activeFilterView,
+      debouncedHeaderFilters,
+      debouncedQ,
+      selectedCategoryFilters,
+      selectedSalesRepFilters,
+      selectedWeekFilters,
+      sortBy,
+      sortDir,
+    ],
   );
   const rows = queryResult.items;
   const total = queryResult.total;
