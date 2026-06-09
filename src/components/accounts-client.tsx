@@ -3033,6 +3033,9 @@ function clearCachedMapData() {
     window.localStorage.removeItem("businessAccounts.mapCache.v3");
     window.localStorage.removeItem("businessAccounts.mapCache.v4");
     window.localStorage.removeItem("businessAccounts.mapCache.v5");
+    window.localStorage.removeItem("businessAccounts.mapCache.v6");
+    window.localStorage.removeItem("businessAccounts.mapCache.v7");
+    window.localStorage.removeItem("businessAccounts.mapCache.v8");
   } catch {
     // Ignore storage failures while updating client caches.
   }

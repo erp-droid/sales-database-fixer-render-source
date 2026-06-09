@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "backfill:address-geocodes": "node scripts/backfill-address-geocodes.cjs",
     "backfill:business-account-class-region": "node scripts/backfill-business-account-class-region.cjs",
     "backfill:call-activities": "tsx scripts/backfill-call-activities.ts",
     "backfill:call-summaries": "tsx scripts/backfill-call-summaries.ts",

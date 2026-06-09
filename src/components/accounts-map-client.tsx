@@ -51,7 +51,7 @@ type SessionResponse = {
 };
 
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
-const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v7";
+const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v8";
 const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
 const SALES_REP_FILTER_VISIBLE_SELECTION_LIMIT = 5;
 const WEEK_OPTIONS = Array.from({ length: 15 }, (_, index) => `Week ${index + 1}`);
@@ -1618,7 +1618,7 @@ function readMapCache(expectedCacheKey: string): BusinessAccountMapResponse | nu
       return null;
     }
 
-    if (parsed.payload.totalCandidates > 0 && parsed.payload.geocodedCount === 0) {
+    if (parsed.payload.totalCandidates > 0 && parsed.payload.unmappedCount > 0) {
       return null;
     }
 
@@ -1629,7 +1629,7 @@ function readMapCache(expectedCacheKey: string): BusinessAccountMapResponse | nu
 }
 
 function writeMapCache(cacheKey: string, payload: BusinessAccountMapResponse) {
-  if (payload.totalCandidates > 0 && payload.geocodedCount === 0) {
+  if (payload.totalCandidates > 0 && payload.unmappedCount > 0) {
     return;
   }
 
