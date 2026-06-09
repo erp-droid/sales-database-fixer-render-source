@@ -5,7 +5,7 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
-import { getStoredLoginName, requireAuthCookieValue } from "@/lib/auth";
+import { requireStoredLoginName } from "@/lib/auth";
 import { upsertMeetingAuditEvent } from "@/lib/audit-log-store";
 import { publishBusinessAccountChanged } from "@/lib/business-account-live";
 import { HttpError, getErrorMessage } from "@/lib/errors";
@@ -161,10 +161,9 @@ function requireGoogleCalendarResult(
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
-    requireAuthCookieValue(request);
+    const storedLoginName = requireStoredLoginName(request);
     const { body, attachmentFiles } = await readMeetingCreateInput(request);
     const meetingRequest = parseMeetingCreatePayload(body);
-    const storedLoginName = getStoredLoginName(request);
     const allRows = readAllAccountRowsFromReadModel();
     const contactOptions = buildMeetingContactOptionsFromRows(allRows);
     const contactById = new Map(contactOptions.map((contact) => [contact.contactId, contact]));

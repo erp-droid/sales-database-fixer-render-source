@@ -309,6 +309,15 @@ export function getStoredLoginName(request: NextRequest): string | null {
   return value || null;
 }
 
+export function requireStoredLoginName(request: NextRequest): string {
+  const loginName = getStoredLoginName(request);
+  if (!loginName) {
+    throw new HttpError(401, "Signed-in username is unavailable. Sign out and sign in again.");
+  }
+
+  return loginName;
+}
+
 export function setStoredLoginName(response: NextResponse, loginName: string): void {
   const env = getEnv();
   const trimmed = loginName.trim();

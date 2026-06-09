@@ -4,8 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "@/lib/errors";
 import type { BusinessAccountRow } from "@/types/business-account";
 
-const requireAuthCookieValue = vi.fn(() => "cookie");
-const getStoredLoginName = vi.fn(() => "jserrano");
+const requireStoredLoginName = vi.fn(() => "jserrano");
 const createMeetingInviteInGoogleCalendar = vi.fn();
 const upsertMeetingBooking = vi.fn();
 const upsertMeetingAuditEvent = vi.fn();
@@ -19,8 +18,7 @@ const markReadModelCalendarInviteSent = vi.fn(() => 1);
 const publishBusinessAccountChanged = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
-  getStoredLoginName,
-  requireAuthCookieValue,
+  requireStoredLoginName,
 }));
 
 vi.mock("@/lib/google-calendar", () => ({
@@ -137,8 +135,7 @@ function buildRequest(
 describe("POST /api/meetings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireAuthCookieValue.mockReturnValue("cookie");
-    getStoredLoginName.mockReturnValue("jserrano");
+    requireStoredLoginName.mockReturnValue("jserrano");
     readAllAccountRowsFromReadModel.mockReturnValue([
       buildAccountRow({
         contactId: 157497,
