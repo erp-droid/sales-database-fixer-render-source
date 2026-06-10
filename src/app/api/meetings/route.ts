@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
-import { ZodError } from "zod";
+import { ZodError, type ZodIssue } from "zod";
 
 import { requireStoredLoginName } from "@/lib/auth";
 import { upsertMeetingAuditEvent } from "@/lib/audit-log-store";
@@ -145,6 +145,15 @@ async function readMeetingCreateInput(request: NextRequest): Promise<{
   };
 }
 
+function describeMeetingPayloadIssue(issue: ZodIssue): string {
+  const isGenericMessage = issue.message === "Required" || issue.message === "Invalid input";
+  if (isGenericMessage && issue.path.length > 0) {
+    return `${issue.path.join(".")}: ${issue.message}.`;
+  }
+
+  return issue.message;
+}
+
 function requireGoogleCalendarResult(
   result: Awaited<ReturnType<typeof createMeetingInviteInGoogleCalendar>>,
 ): {
@@ -168,8 +177,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const contactOptions = buildMeetingContactOptionsFromRows(allRows);
     const contactById = new Map(contactOptions.map((contact) => [contact.contactId, contact]));
     const inviteContactIds = normalizeAttendeeContactIds(
-      meetingRequest.relatedContactId,
-      meetingRequest.attendeeContactIds,
+      meetingRequest.includeRelatedContactInInvite ? meetingRequest.relatedContactId : null,
+      meetingRequest.includeRelatedContactInInvite
+        ? meetingRequest.attendeeContactIds
+        : meetingRequest.attendeeContactIds.filter(
+            (contactId) => contactId !== meetingRequest.relatedContactId,
+          ),
     );
     const attendeeEmails = normalizeAttendeeEmails(meetingRequest.attendeeEmails);
     const resolvedContacts = inviteContactIds
@@ -315,10 +328,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json(responseBody, { status: 201 });
   } catch (error) {
     if (error instanceof ZodError) {
+      const flattened = error.flatten();
+      console.warn(
+        "[meetings] rejected meeting create payload",
+        JSON.stringify(flattened),
+      );
+      const issueMessages = [
+        ...new Set(error.issues.map((issue) => describeMeetingPayloadIssue(issue))),
+      ].slice(0, 3);
       return NextResponse.json(
         {
-          error: "Invalid meeting create payload",
-          details: error.flatten(),
+          error:
+            issueMessages.length > 0
+              ? issueMessages.join(" ")
+              : "Invalid meeting create payload",
+          details: flattened,
         },
         { status: 400 },
       );

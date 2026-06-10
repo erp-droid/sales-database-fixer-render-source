@@ -56,6 +56,7 @@ export type MeetingCreateRequest = {
   sourceContactId: number | null;
   organizerContactId: number | null;
   includeOrganizerInAcumatica: boolean;
+  includeRelatedContactInInvite: boolean;
   relatedContactId: number | null;
   category: MeetingCategory;
   summary: string;

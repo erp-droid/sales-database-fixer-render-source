@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildMeetingEventPayloadVariants,
   buildMeetingInviteAttendees,
+  extractDeliverableMeetingEmail,
   findMeetingContactByEmail,
   findMeetingContactByLoginName,
+  isDeliverableMeetingEmail,
   isMeetingOrganizerContactForLogin,
   normalizeMeetingLoginName,
 } from "@/lib/meeting-create";
@@ -121,7 +123,81 @@ describe("isMeetingOrganizerContactForLogin", () => {
   });
 });
 
+describe("extractDeliverableMeetingEmail", () => {
+  it("passes through valid addresses, normalized", () => {
+    expect(extractDeliverableMeetingEmail(" Victor.Liu@Stellantis.com ")).toBe(
+      "victor.liu@stellantis.com",
+    );
+  });
+
+  it("extracts the address from display-name formats", () => {
+    expect(extractDeliverableMeetingEmail("Alex Buhagiar <abuhagiar@meadowb.com>")).toBe(
+      "abuhagiar@meadowb.com",
+    );
+  });
+
+  it("takes the first deliverable address from separated lists", () => {
+    expect(extractDeliverableMeetingEmail("first@example.com; second@example.com")).toBe(
+      "first@example.com",
+    );
+    expect(extractDeliverableMeetingEmail("first@example.com, second@example.com")).toBe(
+      "first@example.com",
+    );
+  });
+
+  it("strips stray punctuation around addresses", () => {
+    expect(extractDeliverableMeetingEmail("trailing.dot@example.com.")).toBe(
+      "trailing.dot@example.com",
+    );
+    expect(extractDeliverableMeetingEmail("(wrapped@example.com)")).toBe("wrapped@example.com");
+  });
+
+  it("returns null when no deliverable address exists", () => {
+    expect(extractDeliverableMeetingEmail("Alex Buhagiar")).toBeNull();
+    expect(extractDeliverableMeetingEmail("double..dot@example.com")).toBeNull();
+    expect(extractDeliverableMeetingEmail("")).toBeNull();
+    expect(extractDeliverableMeetingEmail(null)).toBeNull();
+  });
+});
+
+describe("isDeliverableMeetingEmail", () => {
+  it("matches the server-side email validation", () => {
+    expect(isDeliverableMeetingEmail("guest@example.com")).toBe(true);
+    expect(isDeliverableMeetingEmail("trailing.dot@example.com.")).toBe(false);
+    expect(isDeliverableMeetingEmail("Alex Buhagiar <abuhagiar@meadowb.com>")).toBe(false);
+  });
+});
+
 describe("buildMeetingInviteAttendees", () => {
+  it("extracts deliverable addresses from messy contact emails", () => {
+    const attendees = buildMeetingInviteAttendees({
+      contacts: [
+        {
+          contactId: 12,
+          contactName: "Messy Email Contact",
+          contactRecordId: "contact-12",
+          email: "Messy Email Contact <messy@example.com>",
+        },
+        {
+          contactId: 13,
+          contactName: "No Email Contact",
+          contactRecordId: "contact-13",
+          email: "not-an-email",
+        },
+      ],
+      attendeeEmails: [],
+    });
+
+    expect(attendees).toEqual([
+      {
+        contactId: 12,
+        contactName: "Messy Email Contact",
+        contactRecordId: "contact-12",
+        email: "messy@example.com",
+      },
+    ]);
+  });
+
   it("dedupes invite emails across contact-backed and direct-email attendees", () => {
     const attendees = buildMeetingInviteAttendees({
       contacts: [

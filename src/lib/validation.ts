@@ -34,7 +34,10 @@ import {
   type ContactMergeRequest,
 } from "@/types/contact-merge";
 import type { CompanyAttributeSuggestionRequest } from "@/types/company-attribute-suggestion";
-import { buildMeetingDateTimeRange } from "@/lib/meeting-create";
+import {
+  buildMeetingDateTimeRange,
+  extractDeliverableMeetingEmail,
+} from "@/lib/meeting-create";
 import { normalizeExtensionForSave, normalizePhoneForSave } from "@/lib/phone";
 
 const sortByValues = [
@@ -480,6 +483,7 @@ export const meetingCreateRequestSchema = z
       })
       .default(null),
     includeOrganizerInAcumatica: z.coerce.boolean().default(false),
+    includeRelatedContactInInvite: z.coerce.boolean().default(true),
     relatedContactId: z
       .union([z.number(), z.string(), z.null(), z.undefined()])
       .transform((value) => {
@@ -528,7 +532,20 @@ export const meetingCreateRequestSchema = z
       .array(z.coerce.number().int().positive("Attendee contact IDs must be positive numbers."))
       .default([]),
     attendeeEmails: z
-      .array(z.string().trim().email("Attendee email addresses must be valid email addresses."))
+      .array(
+        z.string().transform((value, ctx) => {
+          const deliverableEmail = extractDeliverableMeetingEmail(value);
+          if (!deliverableEmail) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `Guest email "${value.trim()}" is not a valid email address. Remove that guest or fix the address, then try again.`,
+            });
+            return z.NEVER;
+          }
+
+          return deliverableEmail;
+        }),
+      )
       .default([]),
   })
   .superRefine((value, ctx) => {

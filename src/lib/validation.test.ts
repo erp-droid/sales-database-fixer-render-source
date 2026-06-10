@@ -889,6 +889,7 @@ describe("parseMeetingCreatePayload", () => {
       sourceContactId: 157497,
       organizerContactId: 157499,
       includeOrganizerInAcumatica: true,
+      includeRelatedContactInInvite: true,
       relatedContactId: 157497,
       category: "Meeting",
       summary: "Operations sync",
@@ -906,6 +907,17 @@ describe("parseMeetingCreatePayload", () => {
       attendeeContactIds: [157497, 157498],
       attendeeEmails: ["guest@example.com"],
     });
+  });
+
+  it("defaults includeRelatedContactInInvite to true and honors an explicit false", () => {
+    expect(parseMeetingCreatePayload(validPayload).includeRelatedContactInInvite).toBe(true);
+
+    expect(
+      parseMeetingCreatePayload({
+        ...validPayload,
+        includeRelatedContactInInvite: false,
+      }).includeRelatedContactInInvite,
+    ).toBe(false);
   });
 
   it("requires summary but allows no related contact", () => {
@@ -928,7 +940,39 @@ describe("parseMeetingCreatePayload", () => {
       relatedContactId: null,
       organizerContactId: null,
       includeOrganizerInAcumatica: false,
+      includeRelatedContactInInvite: true,
     });
+  });
+
+  it("extracts deliverable addresses from messy attendee emails", () => {
+    const parsed = parseMeetingCreatePayload({
+      ...validPayload,
+      attendeeEmails: [
+        "Alex Buhagiar <abuhagiar@meadowb.com>",
+        "first@example.com; second@example.com",
+        "trailing.dot@example.com.",
+      ],
+    });
+
+    expect(parsed.attendeeEmails).toEqual([
+      "abuhagiar@meadowb.com",
+      "first@example.com",
+      "trailing.dot@example.com",
+    ]);
+  });
+
+  it("rejects attendee emails with no deliverable address and names the value", () => {
+    try {
+      parseMeetingCreatePayload({
+        ...validPayload,
+        attendeeEmails: ["Alex Buhagiar"],
+      });
+      expect.unreachable("expected a ZodError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ZodError);
+      const issues = (error as ZodError).issues.map((issue) => issue.message);
+      expect(issues.join(" ")).toContain('"Alex Buhagiar" is not a valid email address');
+    }
   });
 
   it("allows attendee normalization to happen server-side", () => {

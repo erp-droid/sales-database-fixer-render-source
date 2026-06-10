@@ -16,7 +16,12 @@ import {
   updateGoogleCalendarAccessToken,
   type StoredGoogleCalendarConnection,
 } from "@/lib/google-calendar-store";
-import type { GoogleCalendarSessionResponse } from "@/types/google-calendar";
+import type {
+  CalendarEventsResponse,
+  CalendarViewConference,
+  CalendarViewEvent,
+  GoogleCalendarSessionResponse,
+} from "@/types/google-calendar";
 import type { MeetingCreateRequest } from "@/types/meeting-create";
 
 const GOOGLE_CALENDAR_OAUTH_SCOPES = [
@@ -1224,6 +1229,642 @@ export async function deleteMeetingInviteFromGoogleCalendar(
       await refreshGoogleCalendarAccessToken(normalizedLoginName, connection.refreshToken)
     ).accessToken;
     await deleteMeetingInviteWithAccessToken(accessToken, eventId);
+  }
+}
+
+type GoogleCalendarEventTimeResource = {
+  date?: string;
+  dateTime?: string;
+  timeZone?: string;
+};
+
+type GoogleCalendarEventAttendeeResource = {
+  email?: string;
+  displayName?: string;
+  responseStatus?: string;
+  self?: boolean;
+  organizer?: boolean;
+  resource?: boolean;
+};
+
+type GoogleCalendarEventPersonResource = {
+  email?: string;
+  displayName?: string;
+  self?: boolean;
+};
+
+type GoogleCalendarConferenceEntryPointResource = {
+  entryPointType?: string;
+  uri?: string;
+  label?: string;
+  pin?: string;
+  regionCode?: string;
+};
+
+type GoogleCalendarConferenceDataResource = {
+  conferenceId?: string;
+  conferenceSolution?: {
+    name?: string;
+    key?: { type?: string };
+  };
+  entryPoints?: GoogleCalendarConferenceEntryPointResource[];
+};
+
+type GoogleCalendarEventReminderResource = {
+  useDefault?: boolean;
+  overrides?: Array<{
+    method?: string;
+    minutes?: number;
+  }>;
+};
+
+type GoogleCalendarEventViewResource = {
+  id?: string;
+  status?: string;
+  summary?: string;
+  location?: string;
+  description?: string;
+  hangoutLink?: string;
+  htmlLink?: string;
+  colorId?: string;
+  recurrence?: string[];
+  recurringEventId?: string;
+  guestsCanModify?: boolean;
+  guestsCanInviteOthers?: boolean;
+  guestsCanSeeOtherGuests?: boolean;
+  transparency?: string;
+  visibility?: string;
+  organizer?: GoogleCalendarEventPersonResource;
+  creator?: GoogleCalendarEventPersonResource;
+  conferenceData?: GoogleCalendarConferenceDataResource;
+  reminders?: GoogleCalendarEventReminderResource;
+  attendees?: GoogleCalendarEventAttendeeResource[];
+  start?: GoogleCalendarEventTimeResource;
+  end?: GoogleCalendarEventTimeResource;
+};
+
+type GoogleCalendarEventsListResource = {
+  items?: GoogleCalendarEventViewResource[];
+  nextPageToken?: string;
+  timeZone?: string;
+};
+
+function readAllDayDateAsIso(date: string, dayOffset = 0): string {
+  const parsed = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return new Date(0).toISOString();
+  }
+
+  parsed.setDate(parsed.getDate() + dayOffset);
+  return parsed.toISOString();
+}
+
+function normalizeGoogleText(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized || null;
+}
+
+function mapGoogleCalendarPerson(
+  person: GoogleCalendarEventPersonResource | undefined,
+): CalendarViewEvent["organizer"] {
+  if (!person) {
+    return null;
+  }
+
+  const email = normalizeGoogleText(person.email);
+  const displayName = normalizeGoogleText(person.displayName);
+  if (!email && !displayName) {
+    return null;
+  }
+
+  return {
+    email,
+    displayName,
+    isSelf: person.self === true,
+  };
+}
+
+function buildConferenceView(
+  conferenceData: GoogleCalendarConferenceDataResource | undefined,
+  hangoutLink: string | null,
+): CalendarViewConference | null {
+  const entryPoints = conferenceData?.entryPoints ?? [];
+  const videoEntryPoint = entryPoints.find((entryPoint) => entryPoint.entryPointType === "video");
+  const phoneNumbers = entryPoints
+    .filter((entryPoint) => entryPoint.entryPointType === "phone")
+    .map((entryPoint) => ({
+      label: normalizeGoogleText(entryPoint.label),
+      uri: normalizeGoogleText(entryPoint.uri),
+      pin: normalizeGoogleText(entryPoint.pin),
+      regionCode: normalizeGoogleText(entryPoint.regionCode),
+    }))
+    .filter((entryPoint) => entryPoint.label || entryPoint.uri);
+  const morePhoneNumbersUri =
+    normalizeGoogleText(
+      entryPoints.find((entryPoint) => entryPoint.entryPointType === "more")?.uri,
+    ) ?? null;
+  const videoUri = normalizeGoogleText(videoEntryPoint?.uri) ?? hangoutLink;
+  const conferenceId =
+    normalizeGoogleText(conferenceData?.conferenceId) ??
+    normalizeGoogleText(videoEntryPoint?.label)?.replace(/^meet\.google\.com\//i, "") ??
+    null;
+  const name =
+    normalizeGoogleText(conferenceData?.conferenceSolution?.name) ??
+    (videoUri ? "Google Meet" : null);
+
+  if (!name && !conferenceId && !videoUri && phoneNumbers.length === 0 && !morePhoneNumbersUri) {
+    return null;
+  }
+
+  return {
+    name,
+    conferenceId,
+    videoUri,
+    phoneNumbers,
+    morePhoneNumbersUri,
+  };
+}
+
+function buildRecurrenceLabel(resource: GoogleCalendarEventViewResource): string | null {
+  const rule = resource.recurrence
+    ?.map((entry) => entry.trim())
+    .find((entry) => entry.toUpperCase().startsWith("RRULE:"));
+  if (!rule) {
+    return resource.recurringEventId?.trim() ? "Repeating event" : null;
+  }
+
+  const values = new Map<string, string>();
+  rule
+    .slice("RRULE:".length)
+    .split(";")
+    .forEach((part) => {
+      const [key, value] = part.split("=");
+      if (key && value) {
+        values.set(key.toUpperCase(), value);
+      }
+    });
+
+  const frequency = values.get("FREQ");
+  const interval = Number.parseInt(values.get("INTERVAL") ?? "1", 10);
+  const every = Number.isFinite(interval) && interval > 1 ? interval : 1;
+  const weeklyDays = values
+    .get("BYDAY")
+    ?.split(",")
+    .map((day) => {
+      const labels: Record<string, string> = {
+        SU: "Sunday",
+        MO: "Monday",
+        TU: "Tuesday",
+        WE: "Wednesday",
+        TH: "Thursday",
+        FR: "Friday",
+        SA: "Saturday",
+      };
+      return labels[day.replace(/^\d+/, "").toUpperCase()] ?? null;
+    })
+    .filter((day): day is string => Boolean(day));
+
+  if (frequency === "DAILY") {
+    return every === 1 ? "Daily" : `Every ${every} days`;
+  }
+  if (frequency === "WEEKLY") {
+    const base = every === 1 ? "Weekly" : `Every ${every} weeks`;
+    return weeklyDays && weeklyDays.length > 0 ? `${base} on ${weeklyDays.join(", ")}` : base;
+  }
+  if (frequency === "MONTHLY") {
+    return every === 1 ? "Monthly" : `Every ${every} months`;
+  }
+  if (frequency === "YEARLY") {
+    return every === 1 ? "Annually" : `Every ${every} years`;
+  }
+
+  return "Repeating event";
+}
+
+function formatReminderOffset(minutes: number): string {
+  if (minutes < 60) {
+    return `${minutes} minute${minutes === 1 ? "" : "s"} before`;
+  }
+
+  const hours = minutes / 60;
+  if (Number.isInteger(hours) && hours < 24) {
+    return `${hours} hour${hours === 1 ? "" : "s"} before`;
+  }
+
+  const days = minutes / (60 * 24);
+  if (Number.isInteger(days)) {
+    return `${days} day${days === 1 ? "" : "s"} before`;
+  }
+
+  return `${minutes} minutes before`;
+}
+
+function buildReminderLabel(reminders: GoogleCalendarEventReminderResource | undefined): string | null {
+  const overrides = reminders?.overrides?.filter(
+    (override) => typeof override.minutes === "number",
+  );
+  if (overrides && overrides.length > 0) {
+    return overrides.map((override) => formatReminderOffset(override.minutes ?? 0)).join(", ");
+  }
+
+  return reminders?.useDefault === true ? "Default notifications" : null;
+}
+
+function readReminderMinutes(
+  reminders: GoogleCalendarEventReminderResource | undefined,
+): number | null {
+  const firstOverride = reminders?.overrides?.find(
+    (override) => typeof override.minutes === "number",
+  );
+  return firstOverride?.minutes ?? null;
+}
+
+function readRecurrenceRule(resource: GoogleCalendarEventViewResource): string | null {
+  return (
+    resource.recurrence
+      ?.map((entry) => entry.trim())
+      .find((entry) => entry.toUpperCase().startsWith("RRULE:")) ?? null
+  );
+}
+
+function mapGoogleCalendarEventToView(
+  resource: GoogleCalendarEventViewResource,
+): CalendarViewEvent | null {
+  const eventId = resource.id?.trim();
+  if (!eventId || resource.status === "cancelled") {
+    return null;
+  }
+
+  const startDate = resource.start?.date ?? null;
+  const endDate = resource.end?.date ?? null;
+  const isAllDay = Boolean(startDate);
+  const startIso = isAllDay
+    ? readAllDayDateAsIso(startDate ?? "")
+    : resource.start?.dateTime ?? null;
+  const endIso = isAllDay
+    ? readAllDayDateAsIso(endDate ?? startDate ?? "")
+    : resource.end?.dateTime ?? startIso;
+  if (!startIso || !endIso) {
+    return null;
+  }
+
+  const selfAttendee = (resource.attendees ?? []).find((attendee) => attendee.self === true);
+  const isOrganizer = resource.organizer?.self === true;
+  const hangoutLink = normalizeGoogleText(resource.hangoutLink);
+  const recurrenceRule = readRecurrenceRule(resource);
+
+  return {
+    id: eventId,
+    summary: resource.summary?.trim() || "(No title)",
+    status: resource.status === "tentative" ? "tentative" : "confirmed",
+    isAllDay,
+    startIso,
+    endIso,
+    startDate,
+    endDate,
+    startTimeZone: resource.start?.timeZone ?? null,
+    endTimeZone: resource.end?.timeZone ?? null,
+    location: normalizeGoogleText(resource.location),
+    description: normalizeGoogleText(resource.description),
+    hangoutLink,
+    htmlLink: normalizeGoogleText(resource.htmlLink),
+    colorId: normalizeGoogleText(resource.colorId),
+    recurrenceRule,
+    recurringEventId: normalizeGoogleText(resource.recurringEventId),
+    reminderMinutes: readReminderMinutes(resource.reminders),
+    usesDefaultReminders: resource.reminders?.useDefault !== false,
+    guestsCanModify: resource.guestsCanModify === true,
+    guestsCanInviteOthers: resource.guestsCanInviteOthers !== false,
+    guestsCanSeeOtherGuests: resource.guestsCanSeeOtherGuests !== false,
+    transparency: resource.transparency === "transparent" ? "transparent" : "opaque",
+    visibility:
+      resource.visibility === "public" ||
+      resource.visibility === "private" ||
+      resource.visibility === "confidential"
+        ? resource.visibility
+        : "default",
+    organizer: mapGoogleCalendarPerson(resource.organizer),
+    creator: mapGoogleCalendarPerson(resource.creator),
+    conference: buildConferenceView(resource.conferenceData, hangoutLink),
+    recurrenceLabel: buildRecurrenceLabel(resource),
+    reminderLabel: buildReminderLabel(resource.reminders),
+    isOrganizer,
+    canReschedule: isOrganizer || resource.guestsCanModify === true,
+    isRecurringInstance: Boolean(resource.recurringEventId?.trim()),
+    isDeclined: selfAttendee?.responseStatus === "declined",
+    attendees: (resource.attendees ?? [])
+      .filter((attendee) => attendee.resource !== true)
+      .map((attendee) => ({
+        email: attendee.email?.trim() || null,
+        displayName: attendee.displayName?.trim() || null,
+        responseStatus: attendee.responseStatus ?? null,
+        isSelf: attendee.self === true,
+        isOrganizer: attendee.organizer === true,
+      })),
+  };
+}
+
+function requireGoogleCalendarReadConnection(loginName: string | null | undefined): {
+  normalizedLoginName: string;
+  connection: StoredGoogleCalendarConnection;
+} {
+  const normalizedLoginName = normalizeLoginName(loginName);
+  if (!normalizedLoginName) {
+    throw new HttpError(
+      400,
+      "Google Calendar requires a signed-in username. Sign out and sign in again.",
+    );
+  }
+  if (!isGoogleCalendarConfigured()) {
+    throw new HttpError(
+      500,
+      "Google Calendar requires GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET.",
+    );
+  }
+
+  const connection = readGoogleCalendarConnection(normalizedLoginName);
+  if (!connection) {
+    throw new HttpError(
+      409,
+      "Google Calendar is not connected for this account. Connect Google Calendar and try again.",
+    );
+  }
+
+  return { normalizedLoginName, connection };
+}
+
+async function listCalendarEventsWithAccessToken(
+  accessToken: string,
+  input: { timeMinIso: string; timeMaxIso: string },
+): Promise<{ events: CalendarViewEvent[]; calendarTimeZone: string | null }> {
+  const events: CalendarViewEvent[] = [];
+  let calendarTimeZone: string | null = null;
+  let pageToken: string | null = null;
+  let remainingPages = 4;
+
+  do {
+    const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+    url.searchParams.set("singleEvents", "true");
+    url.searchParams.set("orderBy", "startTime");
+    url.searchParams.set("timeMin", input.timeMinIso);
+    url.searchParams.set("timeMax", input.timeMaxIso);
+    url.searchParams.set("maxResults", "250");
+    if (pageToken) {
+      url.searchParams.set("pageToken", pageToken);
+    }
+
+    const payload: GoogleCalendarEventsListResource =
+      await requestGoogleCalendarJson<GoogleCalendarEventsListResource>(url, {
+        accessToken,
+        fallbackMessage: "Unable to load Google Calendar events.",
+      });
+
+    calendarTimeZone = payload.timeZone?.trim() || calendarTimeZone;
+    (payload.items ?? []).forEach((item) => {
+      const mapped = mapGoogleCalendarEventToView(item);
+      if (mapped) {
+        events.push(mapped);
+      }
+    });
+    pageToken = payload.nextPageToken?.trim() || null;
+    remainingPages -= 1;
+  } while (pageToken && remainingPages > 0);
+
+  return { events, calendarTimeZone };
+}
+
+export async function listCalendarEventsFromGoogleCalendar(
+  loginName: string | null | undefined,
+  input: { timeMinIso: string; timeMaxIso: string },
+): Promise<CalendarEventsResponse> {
+  const { normalizedLoginName, connection } = requireGoogleCalendarReadConnection(loginName);
+
+  let accessToken = await resolveGoogleCalendarAccessToken(normalizedLoginName, connection);
+
+  try {
+    const listed = await listCalendarEventsWithAccessToken(accessToken, input);
+    return { connectedGoogleEmail: connection.connectedGoogleEmail, ...listed };
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.status !== 401) {
+      throw error;
+    }
+
+    accessToken = (
+      await refreshGoogleCalendarAccessToken(normalizedLoginName, connection.refreshToken)
+    ).accessToken;
+    const listed = await listCalendarEventsWithAccessToken(accessToken, input);
+    return { connectedGoogleEmail: connection.connectedGoogleEmail, ...listed };
+  }
+}
+
+export type CalendarEventUpdateInput = {
+  eventId: string;
+  start?: { dateTime?: string; date?: string };
+  end?: { dateTime?: string; date?: string };
+  summary?: string;
+  location?: string | null;
+  description?: string | null;
+  attendees?: Array<{ email: string; displayName?: string | null }>;
+  recurrence?: string[] | null;
+  reminders?: { useDefault: boolean; minutes?: number | null };
+  colorId?: string | null;
+  guestsCanModify?: boolean;
+  guestsCanInviteOthers?: boolean;
+  guestsCanSeeOtherGuests?: boolean;
+  transparency?: "opaque" | "transparent";
+  visibility?: "default" | "public" | "private" | "confidential";
+  includeGoogleMeet?: boolean;
+};
+
+export type CalendarEventScheduleUpdateInput = CalendarEventUpdateInput;
+
+async function updateCalendarEventWithAccessToken(
+  accessToken: string,
+  input: CalendarEventUpdateInput,
+): Promise<CalendarViewEvent> {
+  const eventUrl = new URL(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(input.eventId)}`,
+  );
+  const existing = await requestGoogleCalendarJson<GoogleCalendarEventViewResource>(eventUrl, {
+    accessToken,
+    fallbackMessage: "Unable to load the Google Calendar event.",
+  });
+  const existingView = mapGoogleCalendarEventToView(existing);
+  if (!existingView) {
+    throw new HttpError(404, "That Google Calendar event no longer exists.");
+  }
+  if (!existingView.canReschedule) {
+    throw new HttpError(
+      403,
+      "Only events you organize (or that allow guest changes) can be moved here.",
+    );
+  }
+
+  const buildTimePatch = (
+    requested: { dateTime?: string; date?: string },
+    existingTime: GoogleCalendarEventTimeResource | undefined,
+  ): GoogleCalendarEventTimeResource => {
+    if (requested.date) {
+      return { date: requested.date };
+    }
+
+    return {
+      dateTime: requested.dateTime,
+      ...(existingTime?.timeZone ? { timeZone: existingTime.timeZone } : {}),
+    };
+  };
+
+  const patchBody: Record<string, unknown> = {};
+  if (input.start && input.end) {
+    patchBody.start = buildTimePatch(input.start, existing.start);
+    patchBody.end = buildTimePatch(input.end, existing.end);
+  }
+  if (input.summary !== undefined) {
+    patchBody.summary = input.summary;
+  }
+  if (input.location !== undefined) {
+    patchBody.location = input.location ?? "";
+  }
+  if (input.description !== undefined) {
+    patchBody.description = input.description ?? "";
+  }
+  if (input.attendees !== undefined) {
+    patchBody.attendees = input.attendees.map((attendee) => ({
+      email: attendee.email,
+      ...(attendee.displayName?.trim() ? { displayName: attendee.displayName.trim() } : {}),
+    }));
+  }
+  if (input.recurrence !== undefined) {
+    patchBody.recurrence = input.recurrence ?? [];
+  }
+  if (input.reminders !== undefined) {
+    if (input.reminders.useDefault) {
+      patchBody.reminders = { useDefault: true };
+    } else {
+      patchBody.reminders =
+        input.reminders.minutes === null || input.reminders.minutes === undefined
+          ? { useDefault: false, overrides: [] }
+          : {
+              useDefault: false,
+              overrides: [{ method: "popup", minutes: input.reminders.minutes }],
+            };
+    }
+  }
+  if (input.colorId !== undefined) {
+    patchBody.colorId = input.colorId ?? "";
+  }
+  if (input.guestsCanModify !== undefined) {
+    patchBody.guestsCanModify = input.guestsCanModify;
+  }
+  if (input.guestsCanInviteOthers !== undefined) {
+    patchBody.guestsCanInviteOthers = input.guestsCanInviteOthers;
+  }
+  if (input.guestsCanSeeOtherGuests !== undefined) {
+    patchBody.guestsCanSeeOtherGuests = input.guestsCanSeeOtherGuests;
+  }
+  if (input.transparency !== undefined) {
+    patchBody.transparency = input.transparency;
+  }
+  if (input.visibility !== undefined) {
+    patchBody.visibility = input.visibility;
+  }
+  if (input.includeGoogleMeet === true && !existing.conferenceData) {
+    patchBody.conferenceData = {
+      createRequest: {
+        requestId: crypto.randomUUID(),
+        conferenceSolutionKey: { type: "hangoutsMeet" },
+      },
+    };
+  } else if (input.includeGoogleMeet === false) {
+    patchBody.conferenceData = null;
+  }
+
+  const patchUrl = new URL(eventUrl.toString());
+  patchUrl.searchParams.set("sendUpdates", "all");
+  if (input.includeGoogleMeet !== undefined) {
+    patchUrl.searchParams.set("conferenceDataVersion", "1");
+  }
+  const updated = await requestGoogleCalendarJson<GoogleCalendarEventViewResource>(patchUrl, {
+    accessToken,
+    init: {
+      method: "PATCH",
+      body: JSON.stringify(patchBody),
+    },
+    fallbackMessage: "Unable to update the Google Calendar event.",
+  });
+
+  const updatedView = mapGoogleCalendarEventToView(updated);
+  if (!updatedView) {
+    throw new HttpError(502, "Google Calendar accepted the change but returned no event.");
+  }
+
+  return updatedView;
+}
+
+export async function updateCalendarEventInGoogleCalendar(
+  loginName: string | null | undefined,
+  input: CalendarEventUpdateInput,
+): Promise<CalendarViewEvent> {
+  const { normalizedLoginName, connection } = requireGoogleCalendarReadConnection(loginName);
+
+  let accessToken = await resolveGoogleCalendarAccessToken(normalizedLoginName, connection);
+
+  try {
+    return await updateCalendarEventWithAccessToken(accessToken, input);
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.status !== 401) {
+      throw error;
+    }
+
+    accessToken = (
+      await refreshGoogleCalendarAccessToken(normalizedLoginName, connection.refreshToken)
+    ).accessToken;
+    return await updateCalendarEventWithAccessToken(accessToken, input);
+  }
+}
+
+export async function updateCalendarEventScheduleInGoogleCalendar(
+  loginName: string | null | undefined,
+  input: CalendarEventScheduleUpdateInput,
+): Promise<CalendarViewEvent> {
+  return updateCalendarEventInGoogleCalendar(loginName, input);
+}
+
+async function deleteCalendarEventWithAccessToken(
+  accessToken: string,
+  eventId: string,
+): Promise<void> {
+  const url = new URL(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`,
+  );
+  url.searchParams.set("sendUpdates", "all");
+  await requestGoogleCalendarEmpty(url, {
+    accessToken,
+    init: { method: "DELETE" },
+    fallbackMessage: "Unable to delete the Google Calendar event.",
+    allowNotFound: true,
+  });
+}
+
+export async function deleteCalendarEventInGoogleCalendar(
+  loginName: string | null | undefined,
+  eventId: string,
+): Promise<void> {
+  const { normalizedLoginName, connection } = requireGoogleCalendarReadConnection(loginName);
+
+  let accessToken = await resolveGoogleCalendarAccessToken(normalizedLoginName, connection);
+
+  try {
+    await deleteCalendarEventWithAccessToken(accessToken, eventId);
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.status !== 401) {
+      throw error;
+    }
+
+    accessToken = (
+      await refreshGoogleCalendarAccessToken(normalizedLoginName, connection.refreshToken)
+    ).accessToken;
+    await deleteCalendarEventWithAccessToken(accessToken, eventId);
   }
 }
 

@@ -246,4 +246,310 @@ describe("google-calendar oauth config", () => {
     expect(payload.extendedProperties?.private?.privateNotes).toBe("Do not share this note.");
     expect(payload.extendedProperties?.private?.meetingSyncKey).toBe("sync-123");
   });
+
+  it("maps Google Calendar event details for the calendar invite popover", async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = String(input);
+      expect(url).toContain("/calendar/v3/calendars/primary/events");
+      return new Response(
+        JSON.stringify({
+          timeZone: "America/Toronto",
+          items: [
+            {
+              id: "google-event-1",
+              status: "confirmed",
+              summary: "H&S Toolbox talk for the week",
+              location: "Boardroom",
+              description: "Start a new document to capture notes",
+              hangoutLink: "https://meet.google.com/wba-jzpm-hpw",
+              htmlLink: "https://calendar.google.com/event?eid=abc",
+              colorId: "9",
+              recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+              guestsCanModify: false,
+              organizer: {
+                email: "jserrano@meadowb.com",
+                displayName: "Jorge Serrano",
+                self: true,
+              },
+              creator: {
+                email: "jserrano@meadowb.com",
+                displayName: "Jorge Serrano",
+                self: true,
+              },
+              conferenceData: {
+                conferenceId: "wba-jzpm-hpw",
+                conferenceSolution: { name: "Google Meet" },
+                entryPoints: [
+                  {
+                    entryPointType: "video",
+                    uri: "https://meet.google.com/wba-jzpm-hpw",
+                    label: "meet.google.com/wba-jzpm-hpw",
+                  },
+                  {
+                    entryPointType: "phone",
+                    uri: "tel:+16477354272",
+                    label: "(CA) +1 647-735-4272",
+                    pin: "455 928 088#",
+                    regionCode: "CA",
+                  },
+                  {
+                    entryPointType: "more",
+                    uri: "https://tel.meet/wba-jzpm-hpw",
+                  },
+                ],
+              },
+              reminders: {
+                useDefault: false,
+                overrides: [{ method: "popup", minutes: 10 }],
+              },
+              attendees: [
+                {
+                  email: "jserrano@meadowb.com",
+                  displayName: "Jorge Serrano",
+                  self: true,
+                  organizer: true,
+                  responseStatus: "accepted",
+                },
+                {
+                  email: "jacky.lee@example.com",
+                  displayName: "Jacky Lee",
+                  responseStatus: "needsAction",
+                },
+              ],
+              start: {
+                dateTime: "2026-06-08T10:30:00-04:00",
+                timeZone: "America/Toronto",
+              },
+              end: {
+                dateTime: "2026-06-08T12:30:00-04:00",
+                timeZone: "America/Toronto",
+              },
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const googleCalendar = await import("@/lib/google-calendar");
+    const { storeGoogleCalendarConnection } = await import("@/lib/google-calendar-store");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    closeDb = () => getReadModelDb().close();
+
+    storeGoogleCalendarConnection({
+      loginName: "jserrano",
+      connectedGoogleEmail: "jserrano@gmail.com",
+      refreshToken: "refresh-token",
+      accessToken: "access-token",
+      accessTokenExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      tokenScope: "https://www.googleapis.com/auth/calendar.events",
+    });
+
+    const result = await googleCalendar.listCalendarEventsFromGoogleCalendar("jserrano", {
+      timeMinIso: "2026-06-08T04:00:00.000Z",
+      timeMaxIso: "2026-06-09T04:00:00.000Z",
+    });
+
+    expect(result.calendarTimeZone).toBe("America/Toronto");
+    expect(result.events).toEqual([
+      expect.objectContaining({
+        id: "google-event-1",
+        summary: "H&S Toolbox talk for the week",
+        location: "Boardroom",
+        organizer: {
+          email: "jserrano@meadowb.com",
+          displayName: "Jorge Serrano",
+          isSelf: true,
+        },
+        conference: expect.objectContaining({
+          name: "Google Meet",
+          conferenceId: "wba-jzpm-hpw",
+          videoUri: "https://meet.google.com/wba-jzpm-hpw",
+          phoneNumbers: [
+            {
+              label: "(CA) +1 647-735-4272",
+              uri: "tel:+16477354272",
+              pin: "455 928 088#",
+              regionCode: "CA",
+            },
+          ],
+          morePhoneNumbersUri: "https://tel.meet/wba-jzpm-hpw",
+        }),
+        recurrenceLabel: "Weekly on Monday",
+        reminderLabel: "10 minutes before",
+        isOrganizer: true,
+        canReschedule: true,
+      }),
+    ]);
+  });
+
+  it("patches editable Google Calendar event details and schedule", async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "PATCH") {
+        return new Response(
+          JSON.stringify({
+            id: "google-event-1",
+            status: "confirmed",
+            summary: "Updated toolbox talk",
+            location: "Training room",
+            description: "Updated agenda",
+            htmlLink: "https://calendar.google.com/event?eid=abc",
+            organizer: {
+              email: "jserrano@meadowb.com",
+              displayName: "Jorge Serrano",
+              self: true,
+            },
+            start: {
+              dateTime: "2026-06-08T15:00:00.000Z",
+              timeZone: "America/Toronto",
+            },
+            end: {
+              dateTime: "2026-06-08T16:00:00.000Z",
+              timeZone: "America/Toronto",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+
+      expect(url).toContain("/calendar/v3/calendars/primary/events/google-event-1");
+      return new Response(
+        JSON.stringify({
+          id: "google-event-1",
+          status: "confirmed",
+          summary: "H&S Toolbox talk for the week",
+          organizer: {
+            email: "jserrano@meadowb.com",
+            displayName: "Jorge Serrano",
+            self: true,
+          },
+          start: {
+            dateTime: "2026-06-08T14:30:00.000Z",
+            timeZone: "America/Toronto",
+          },
+          end: {
+            dateTime: "2026-06-08T16:30:00.000Z",
+            timeZone: "America/Toronto",
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const googleCalendar = await import("@/lib/google-calendar");
+    const { storeGoogleCalendarConnection } = await import("@/lib/google-calendar-store");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    closeDb = () => getReadModelDb().close();
+
+    storeGoogleCalendarConnection({
+      loginName: "jserrano",
+      connectedGoogleEmail: "jserrano@gmail.com",
+      refreshToken: "refresh-token",
+      accessToken: "access-token",
+      accessTokenExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      tokenScope: "https://www.googleapis.com/auth/calendar.events",
+    });
+
+    const updated = await googleCalendar.updateCalendarEventInGoogleCalendar("jserrano", {
+      eventId: "google-event-1",
+      summary: "Updated toolbox talk",
+      location: "Training room",
+      description: "Updated agenda",
+      start: { dateTime: "2026-06-08T15:00:00.000Z" },
+      end: { dateTime: "2026-06-08T16:00:00.000Z" },
+      attendees: [
+        { email: "jacky.lee@example.com", displayName: "Jacky Lee" },
+        { email: "new.guest@example.com" },
+      ],
+      recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"],
+      reminders: { useDefault: false, minutes: 15 },
+      colorId: "10",
+      includeGoogleMeet: true,
+      guestsCanModify: true,
+      guestsCanInviteOthers: true,
+      guestsCanSeeOtherGuests: false,
+      transparency: "transparent",
+      visibility: "private",
+    });
+
+    expect(updated.summary).toBe("Updated toolbox talk");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [patchUrl, patchInit] = fetchMock.mock.calls[1] as unknown as [URL, RequestInit];
+    expect(String(patchUrl)).toContain("sendUpdates=all");
+    expect(patchInit.method).toBe("PATCH");
+    expect(JSON.parse(String(patchInit.body))).toEqual({
+      summary: "Updated toolbox talk",
+      location: "Training room",
+      description: "Updated agenda",
+      attendees: [
+        { email: "jacky.lee@example.com", displayName: "Jacky Lee" },
+        { email: "new.guest@example.com" },
+      ],
+      recurrence: ["RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"],
+      reminders: {
+        useDefault: false,
+        overrides: [{ method: "popup", minutes: 15 }],
+      },
+      colorId: "10",
+      conferenceData: {
+        createRequest: {
+          requestId: expect.any(String) as string,
+          conferenceSolutionKey: { type: "hangoutsMeet" },
+        },
+      },
+      guestsCanModify: true,
+      guestsCanInviteOthers: true,
+      guestsCanSeeOtherGuests: false,
+      transparency: "transparent",
+      visibility: "private",
+      start: {
+        dateTime: "2026-06-08T15:00:00.000Z",
+        timeZone: "America/Toronto",
+      },
+      end: {
+        dateTime: "2026-06-08T16:00:00.000Z",
+        timeZone: "America/Toronto",
+      },
+    });
+    expect(String(patchUrl)).toContain("conferenceDataVersion=1");
+  });
+
+  it("deletes a Google Calendar event with attendee updates enabled", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const googleCalendar = await import("@/lib/google-calendar");
+    const { storeGoogleCalendarConnection } = await import("@/lib/google-calendar-store");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    closeDb = () => getReadModelDb().close();
+
+    storeGoogleCalendarConnection({
+      loginName: "jserrano",
+      connectedGoogleEmail: "jserrano@gmail.com",
+      refreshToken: "refresh-token",
+      accessToken: "access-token",
+      accessTokenExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      tokenScope: "https://www.googleapis.com/auth/calendar.events",
+    });
+
+    await googleCalendar.deleteCalendarEventInGoogleCalendar("jserrano", "google-event-1");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [deleteUrl, deleteInit] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(String(deleteUrl)).toContain("/calendar/v3/calendars/primary/events/google-event-1");
+    expect(String(deleteUrl)).toContain("sendUpdates=all");
+    expect(deleteInit.method).toBe("DELETE");
+  });
 });

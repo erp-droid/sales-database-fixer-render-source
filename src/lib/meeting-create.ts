@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import type { BusinessAccountRow } from "@/types/business-account";
 import type {
   MeetingAccountOption,
@@ -59,6 +61,50 @@ function normalizeComparable(value: string | null | undefined): string {
 export function normalizeMeetingEmail(value: string | null | undefined): string | null {
   const normalized = normalizeComparable(value);
   return normalized || null;
+}
+
+const deliverableMeetingEmailSchema = z.string().email();
+
+export function isDeliverableMeetingEmail(value: string | null | undefined): boolean {
+  const normalized = normalizeMeetingEmail(value);
+  return normalized !== null && deliverableMeetingEmailSchema.safeParse(normalized).success;
+}
+
+/**
+ * Directory emails are often messy ("Name <user@x.com>", "a@x.com; b@y.com",
+ * trailing punctuation). Google rejects invites sent to malformed addresses,
+ * so pull out the first address that is actually deliverable, or null when
+ * none is.
+ */
+export function extractDeliverableMeetingEmail(
+  value: string | null | undefined,
+): string | null {
+  const normalized = normalizeMeetingEmail(value);
+  if (!normalized) {
+    return null;
+  }
+
+  if (deliverableMeetingEmailSchema.safeParse(normalized).success) {
+    return normalized;
+  }
+
+  const angleMatch = normalized.match(/<([^<>]+)>/);
+  const candidates = [
+    ...(angleMatch ? [angleMatch[1]] : []),
+    ...normalized.split(/[\s;,]+/),
+  ];
+
+  for (const candidate of candidates) {
+    const cleaned = candidate
+      .trim()
+      .replace(/^[<("']+/, "")
+      .replace(/[>)"'.,;:]+$/, "");
+    if (cleaned && deliverableMeetingEmailSchema.safeParse(cleaned).success) {
+      return cleaned;
+    }
+  }
+
+  return null;
 }
 
 export function normalizeMeetingLoginName(value: string | null | undefined): string | null {
@@ -697,7 +743,7 @@ export function buildMeetingInviteAttendees(input: {
   const deduped = new Map<string, ResolvedMeetingInviteAttendee>();
 
   input.contacts.forEach((contact) => {
-    const normalizedEmail = normalizeMeetingEmail(contact.email);
+    const normalizedEmail = extractDeliverableMeetingEmail(contact.email);
     if (!normalizedEmail || deduped.has(normalizedEmail)) {
       return;
     }
@@ -711,7 +757,7 @@ export function buildMeetingInviteAttendees(input: {
   });
 
   input.attendeeEmails.forEach((email) => {
-    const normalizedEmail = normalizeMeetingEmail(email);
+    const normalizedEmail = extractDeliverableMeetingEmail(email);
     if (!normalizedEmail || deduped.has(normalizedEmail)) {
       return;
     }

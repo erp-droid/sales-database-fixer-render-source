@@ -358,6 +358,89 @@ describe("POST /api/meetings", () => {
     expect(markReadModelCalendarInviteSent).toHaveBeenCalledWith({ contactIds: [] });
   });
 
+  it("excludes the related contact from the invite when includeRelatedContactInInvite is false", async () => {
+    createMeetingInviteInGoogleCalendar.mockResolvedValue({
+      status: "created",
+      eventId: "google-event-2",
+      connectedGoogleEmail: "jserrano@gmail.com",
+    });
+
+    const { POST } = await import("@/app/api/meetings/route");
+
+    const response = await POST(
+      buildRequest({
+        includeRelatedContactInInvite: false,
+        includeOrganizerInAcumatica: false,
+        organizerContactId: null,
+        attendeeContactIds: [157498, 157497],
+        attendeeEmails: [],
+      }),
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(201);
+    expect(payload).toEqual(
+      expect.objectContaining({
+        relatedContactId: 157497,
+        attendeeCount: 1,
+      }),
+    );
+    expect(createMeetingInviteInGoogleCalendar).toHaveBeenCalledWith(
+      "jserrano",
+      expect.objectContaining({
+        attendees: [
+          expect.objectContaining({ contactId: 157498, email: "amy.vega@example.com" }),
+        ],
+        relatedContactId: 157497,
+        relatedContactName: "Jacky Lee",
+      }),
+    );
+  });
+
+  it("normalizes messy attendee emails and reports unusable ones specifically", async () => {
+    createMeetingInviteInGoogleCalendar.mockResolvedValue({
+      status: "created",
+      eventId: "google-event-3",
+      connectedGoogleEmail: "jserrano@gmail.com",
+    });
+
+    const { POST } = await import("@/app/api/meetings/route");
+
+    const messyResponse = await POST(
+      buildRequest({
+        includeOrganizerInAcumatica: false,
+        organizerContactId: null,
+        attendeeContactIds: [],
+        relatedContactId: null,
+        attendeeEmails: ["Alex Buhagiar <abuhagiar@meadowb.com>"],
+      }),
+    );
+    expect(messyResponse.status).toBe(201);
+    expect(createMeetingInviteInGoogleCalendar).toHaveBeenCalledWith(
+      "jserrano",
+      expect.objectContaining({
+        attendees: [expect.objectContaining({ email: "abuhagiar@meadowb.com" })],
+      }),
+    );
+
+    const invalidResponse = await POST(
+      buildRequest({
+        attendeeEmails: ["Alex Buhagiar"],
+      }),
+    );
+    const invalidPayload = (await invalidResponse.json()) as {
+      error: string;
+      details: { fieldErrors: Record<string, string[]> };
+    };
+
+    expect(invalidResponse.status).toBe(400);
+    expect(invalidPayload.error).toContain('"Alex Buhagiar" is not a valid email address');
+    expect(invalidPayload.details.fieldErrors.attendeeEmails?.[0]).toContain(
+      "is not a valid email address",
+    );
+    expect(upsertMeetingBooking).toHaveBeenCalledTimes(1);
+  });
+
   it("fails before local storage when Google invite creation fails", async () => {
     createMeetingInviteInGoogleCalendar.mockRejectedValue(
       new HttpError(502, "Unable to create the Google Calendar invite."),
