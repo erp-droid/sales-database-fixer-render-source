@@ -57,7 +57,7 @@ type ParsedLegMetadata = {
     userPhone?: string;
     callerId?: string;
     bridgeNumber?: string;
-    sourcePage?: "accounts" | "map" | "tasks" | "quality" | "unknown";
+    sourcePage?: "accounts" | "map" | "tasks" | "quality" | "calendar" | "unknown";
     linkedAccountRowKey?: string | null;
     linkedBusinessAccountId?: string | null;
     linkedContactId?: number | null;

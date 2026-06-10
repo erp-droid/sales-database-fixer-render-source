@@ -63,7 +63,7 @@ type CallerVerificationResponse =
     };
 
 type StartCallContext = {
-  sourcePage?: "accounts" | "map" | "tasks" | "quality";
+  sourcePage?: "accounts" | "map" | "tasks" | "quality" | "calendar";
   linkedBusinessAccountId?: string | null;
   linkedAccountRowKey?: string | null;
   linkedContactId?: number | null;

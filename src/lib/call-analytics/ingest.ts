@@ -31,7 +31,7 @@ import { invalidateDashboardSnapshotCache } from "@/lib/call-analytics/dashboard
 import type { CallAnalyticsSource, CallIngestState } from "@/lib/call-analytics/types";
 
 type CallContextPayload = {
-  sourcePage?: "accounts" | "map" | "tasks" | "quality";
+  sourcePage?: "accounts" | "map" | "tasks" | "quality" | "calendar";
   linkedBusinessAccountId?: string | null;
   linkedAccountRowKey?: string | null;
   linkedContactId?: number | null;

@@ -46,7 +46,7 @@ export type MailComposePayload = {
   linkedContact: MailLinkedContact;
   matchedContacts?: MailMatchedContact[];
   attachments: MailAttachmentInput[];
-  sourceSurface: "accounts" | "mail";
+  sourceSurface: "accounts" | "mail" | "calendar";
 };
 
 export type MailSendResponse = {

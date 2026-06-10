@@ -40,7 +40,7 @@ export type GmailComposeInitialState = {
     contactName: string | null;
     companyName: string | null;
   } | null;
-  sourceSurface?: "accounts" | "mail";
+  sourceSurface?: "accounts" | "mail" | "calendar";
 };
 
 type GmailComposeModalProps = {
@@ -72,7 +72,7 @@ type ComposeDraftState = Required<
     companyName: string | null;
   };
   attachments: MailAttachmentInput[];
-  sourceSurface: "accounts" | "mail";
+  sourceSurface: "accounts" | "mail" | "calendar";
 };
 
 const EMPTY_LINKED_CONTACT = {

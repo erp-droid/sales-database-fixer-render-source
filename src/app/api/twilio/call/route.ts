@@ -28,7 +28,7 @@ import { endBridgeCall, resolveCallerProfile, startBridgeCall } from "@/lib/twil
 type StartPayload = {
   to?: string;
   context?: {
-    sourcePage?: "accounts" | "map" | "tasks" | "quality";
+    sourcePage?: "accounts" | "map" | "tasks" | "quality" | "calendar";
     linkedBusinessAccountId?: string | null;
     linkedAccountRowKey?: string | null;
     linkedContactId?: number | null;

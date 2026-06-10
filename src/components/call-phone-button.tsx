@@ -11,7 +11,7 @@ type CallPhoneButtonProps = {
   label?: string;
   className?: string;
   context?: {
-    sourcePage?: "accounts" | "map" | "tasks" | "quality";
+    sourcePage?: "accounts" | "map" | "tasks" | "quality" | "calendar";
     linkedBusinessAccountId?: string | null;
     linkedAccountRowKey?: string | null;
     linkedContactId?: number | null;

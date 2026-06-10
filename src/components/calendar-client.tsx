@@ -11,10 +11,17 @@ import {
 } from "react";
 
 import { AppChrome } from "@/components/app-chrome";
+import { CallPhoneButton } from "@/components/call-phone-button";
+import {
+  GmailComposeModal,
+  type GmailComposeInitialState,
+} from "@/components/gmail-compose-modal";
 import {
   extractDeliverableMeetingEmail,
   normalizeMeetingEmail,
 } from "@/lib/meeting-create";
+import type { MailSessionResponse } from "@/types/mail";
+import type { MailContactSuggestion } from "@/types/mail-compose";
 import type {
   CalendarEventsResponse,
   CalendarEventUpdateResponse,
@@ -48,6 +55,18 @@ type CalendarOauthWindowMessage =
       message?: string;
     };
 
+type MailOauthWindowMessage =
+  | {
+      type: "mbmail.oauth";
+      success: true;
+      connectedGoogleEmail?: string | null;
+    }
+  | {
+      type: "mbmail.oauth";
+      success: false;
+      message?: string;
+    };
+
 type AddressLookupSuggestion = {
   id: string;
   type: string;
@@ -75,6 +94,11 @@ type CalendarGuestSuggestion = {
   email: string;
   name: string;
   meta: string | null;
+};
+
+type MailComposeState = {
+  initialState: GmailComposeInitialState | null;
+  isOpen: boolean;
 };
 
 type DragState = {
@@ -670,6 +694,30 @@ function isCalendarOauthWindowMessage(payload: unknown): payload is CalendarOaut
   return record.type === "mbcalendar.oauth" && typeof record.success === "boolean";
 }
 
+function isMailOauthWindowMessage(payload: unknown): payload is MailOauthWindowMessage {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const record = payload as Record<string, unknown>;
+  return record.type === "mbmail.oauth" && typeof record.success === "boolean";
+}
+
+function createMailSuggestionFromMeetingContact(
+  contact: MeetingContactOption,
+  email: string,
+): MailContactSuggestion {
+  return {
+    key: `calendar-contact:${contact.contactId}:${email}`,
+    email,
+    name: contact.contactName,
+    companyName: contact.companyName,
+    contactId: contact.contactId,
+    businessAccountRecordId: contact.businessAccountRecordId,
+    businessAccountId: contact.businessAccountId,
+  };
+}
+
 function isMeetingCreateOptionsResponse(
   payload: MeetingCreateOptionsResponse | { error?: string } | null,
 ): payload is MeetingCreateOptionsResponse {
@@ -924,12 +972,19 @@ export function CalendarClient() {
   const [eventEditForm, setEventEditForm] = useState<CalendarEventEditForm | null>(null);
   const [isSavingEventDetails, setIsSavingEventDetails] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
+  const [detailsNotice, setDetailsNotice] = useState<string | null>(null);
   const [pendingMoveEventId, setPendingMoveEventId] = useState<string | null>(null);
   const [nowTick, setNowTick] = useState<Date>(() => new Date());
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [meetingOptions, setMeetingOptions] = useState<MeetingCreateOptionsResponse | null>(null);
   const [isLoadingMeetingOptions, setIsLoadingMeetingOptions] = useState(false);
   const [meetingOptionsError, setMeetingOptionsError] = useState<string | null>(null);
+  const [mailSession, setMailSession] = useState<MailSessionResponse | null>(null);
+  const [isMailSessionLoading, setIsMailSessionLoading] = useState(false);
+  const [mailComposeState, setMailComposeState] = useState<MailComposeState>({
+    initialState: null,
+    isOpen: false,
+  });
   const [locationSuggestions, setLocationSuggestions] = useState<AddressLookupSuggestion[]>([]);
   const [locationLookupError, setLocationLookupError] = useState<string | null>(null);
   const [isLoadingLocationSuggestions, setIsLoadingLocationSuggestions] = useState(false);
@@ -1005,6 +1060,33 @@ export function CalendarClient() {
     });
     return `${startLabel} – ${endLabel}`;
   }, [anchorDate, view, visibleRange]);
+
+  const contactsByEmail = useMemo(() => {
+    const byEmail = new Map<string, { contact: MeetingContactOption; email: string }>();
+    meetingOptions?.contacts.forEach((contact) => {
+      const email = extractDeliverableMeetingEmail(contact.email);
+      if (!email || byEmail.has(email)) {
+        return;
+      }
+
+      byEmail.set(email, { contact, email });
+    });
+    return byEmail;
+  }, [meetingOptions]);
+
+  const mailContactSuggestions = useMemo(
+    () =>
+      [...contactsByEmail.values()]
+        .map(({ contact, email }) => createMailSuggestionFromMeetingContact(contact, email))
+        .sort((left, right) =>
+          `${left.name ?? ""} ${left.email}`.localeCompare(
+            `${right.name ?? ""} ${right.email}`,
+            undefined,
+            { sensitivity: "base", numeric: true },
+          ),
+        ),
+    [contactsByEmail],
+  );
 
   const guestContactSuggestions = useMemo(() => {
     const query = normalizeSearchText(eventEditForm?.guestInput);
@@ -1104,9 +1186,51 @@ export function CalendarClient() {
     }
   }, []);
 
+  const loadMailSession = useCallback(async () => {
+    setIsMailSessionLoading(true);
+    try {
+      const response = await fetch("/api/mail/session", { cache: "no-store" });
+      const payload = await readJsonResponse<MailSessionResponse | { error?: string }>(response);
+      if (!response.ok) {
+        setMailSession({
+          status: response.status === 422 ? "needs_setup" : "disconnected",
+          senderEmail: null,
+          senderDisplayName: null,
+          expectedGoogleEmail: null,
+          connectedGoogleEmail: null,
+          connectionError: parseError(payload),
+          folders: ["inbox", "sent", "drafts", "starred"],
+        });
+        return;
+      }
+
+      setMailSession(payload as MailSessionResponse);
+    } catch (error) {
+      setMailSession({
+        status: "disconnected",
+        senderEmail: null,
+        senderDisplayName: null,
+        expectedGoogleEmail: null,
+        connectedGoogleEmail: null,
+        connectionError: error instanceof Error ? error.message : "Unable to load Gmail.",
+        folders: ["inbox", "sent", "drafts", "starred"],
+      });
+    } finally {
+      setIsMailSessionLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadCalendarSession();
   }, [loadCalendarSession]);
+
+  useEffect(() => {
+    if (!mailComposeState.isOpen || mailSession || isMailSessionLoading) {
+      return;
+    }
+
+    void loadMailSession();
+  }, [isMailSessionLoading, loadMailSession, mailComposeState.isOpen, mailSession]);
 
   useEffect(() => {
     if (calendarSession?.status !== "connected") {
@@ -1174,6 +1298,29 @@ export function CalendarClient() {
       window.removeEventListener("message", handleCalendarOauthMessage);
     };
   }, [loadCalendarSession]);
+
+  useEffect(() => {
+    function handleMailOauthMessage(event: MessageEvent) {
+      if (event.origin !== window.location.origin || !isMailOauthWindowMessage(event.data)) {
+        return;
+      }
+
+      if (!event.data.success) {
+        setDetailsError(event.data.message ?? "Unable to connect Gmail.");
+        setDetailsNotice(null);
+        return;
+      }
+
+      setDetailsError(null);
+      setDetailsNotice("Gmail connected. You can send email from the calendar now.");
+      void loadMailSession();
+    }
+
+    window.addEventListener("message", handleMailOauthMessage);
+    return () => {
+      window.removeEventListener("message", handleMailOauthMessage);
+    };
+  }, [loadMailSession]);
 
   useEffect(() => {
     if (calendarSession?.status !== "connected") {
@@ -1324,6 +1471,65 @@ export function CalendarClient() {
     popup.focus();
   }
 
+  function handleConnectGmailFromCalendar() {
+    setDetailsError(null);
+    const popup = window.open(
+      "/api/mail/oauth/start?returnTo=/mail/oauth/complete",
+      "mail-oauth",
+      "popup=yes,width=640,height=780",
+    );
+    if (!popup) {
+      setDetailsError("Allow pop-ups to connect Gmail.");
+      setDetailsNotice(null);
+      return;
+    }
+
+    popup.focus();
+  }
+
+  function closeMailComposer() {
+    setMailComposeState({
+      initialState: null,
+      isOpen: false,
+    });
+  }
+
+  function openEmailComposerForContact(contact: MeetingContactOption, email: string) {
+    const suggestion = createMailSuggestionFromMeetingContact(contact, email);
+    const initialState: GmailComposeInitialState = {
+      subject: "",
+      htmlBody: "<div><br /></div>",
+      textBody: "",
+      to: [
+        {
+          email: suggestion.email,
+          name: suggestion.name,
+          contactId: suggestion.contactId,
+          businessAccountRecordId: suggestion.businessAccountRecordId,
+          businessAccountId: suggestion.businessAccountId,
+        },
+      ],
+      cc: [],
+      bcc: [],
+      linkedContact: {
+        contactId: suggestion.contactId,
+        businessAccountRecordId: suggestion.businessAccountRecordId,
+        businessAccountId: suggestion.businessAccountId,
+        contactName: suggestion.name,
+        companyName: suggestion.companyName,
+      },
+      sourceSurface: "calendar",
+    };
+
+    setDetailsError(null);
+    setDetailsNotice(null);
+    setMailComposeState({
+      initialState,
+      isOpen: true,
+    });
+    void loadMailSession();
+  }
+
   const resetLocationLookupState = useCallback((locationValue: string | null = null) => {
     const normalizedLocation = locationValue?.trim() || null;
     setLocationSuggestions([]);
@@ -1339,6 +1545,7 @@ export function CalendarClient() {
     setEditingEventId(null);
     setEventEditForm(null);
     setDetailsError(null);
+    setDetailsNotice(null);
     resetLocationLookupState(null);
     setSelectedEventDetails({
       event,
@@ -1351,6 +1558,7 @@ export function CalendarClient() {
     setEditingEventId(null);
     setEventEditForm(null);
     setDetailsError(null);
+    setDetailsNotice(null);
     setIsSavingEventDetails(false);
     resetLocationLookupState(null);
   }, [resetLocationLookupState]);
@@ -1363,6 +1571,7 @@ export function CalendarClient() {
     setEditingEventId(event.id);
     setEventEditForm(buildEditFormFromEvent(event));
     setDetailsError(null);
+    setDetailsNotice(null);
     resetLocationLookupState(event.location);
   }
 
@@ -1471,6 +1680,7 @@ export function CalendarClient() {
     setEditingEventId(null);
     setEventEditForm(buildEditFormFromEvent(event));
     setDetailsError(null);
+    setDetailsNotice(null);
     resetLocationLookupState(event.location);
   }
 
@@ -2895,6 +3105,10 @@ export function CalendarClient() {
                     <ul className={styles.guestList}>
                       {selectedEvent.attendees.slice(0, 10).map((attendee) => {
                         const label = formatAttendeeLabel(attendee);
+                        const attendeeEmail = normalizeMeetingEmail(attendee.email);
+                        const matchedContact = attendeeEmail
+                          ? contactsByEmail.get(attendeeEmail) ?? null
+                          : null;
                         return (
                           <li key={attendee.email ?? attendee.displayName ?? label}>
                             <span className={styles.guestAvatar}>{getInitials(label)}</span>
@@ -2904,6 +3118,37 @@ export function CalendarClient() {
                                 {attendee.isOrganizer ? "Organizer" : attendee.email}
                               </span>
                             </span>
+                            {matchedContact ? (
+                              <span className={styles.guestActions}>
+                                <button
+                                  className={styles.guestActionButton}
+                                  onClick={() =>
+                                    openEmailComposerForContact(
+                                      matchedContact.contact,
+                                      matchedContact.email,
+                                    )
+                                  }
+                                  type="button"
+                                >
+                                  Email
+                                </button>
+                                <CallPhoneButton
+                                  className={styles.guestActionButton}
+                                  context={{
+                                    sourcePage: "calendar",
+                                    linkedBusinessAccountId:
+                                      matchedContact.contact.businessAccountId,
+                                    linkedAccountRowKey:
+                                      matchedContact.contact.businessAccountRecordId,
+                                    linkedContactId: matchedContact.contact.contactId,
+                                    linkedCompanyName: matchedContact.contact.companyName,
+                                    linkedContactName: matchedContact.contact.contactName,
+                                  }}
+                                  label={`${matchedContact.contact.contactName} phone`}
+                                  phone={matchedContact.contact.phone}
+                                />
+                              </span>
+                            ) : null}
                             <span
                               className={[
                                 styles.guestStatus,
@@ -3076,6 +3321,7 @@ export function CalendarClient() {
           ) : null}
 
           {detailsError ? <p className={styles.detailsError}>{detailsError}</p> : null}
+          {detailsNotice ? <p className={styles.detailsNotice}>{detailsNotice}</p> : null}
 
           {isEditing ? (
             <div className={styles.editActions}>
@@ -3189,6 +3435,27 @@ export function CalendarClient() {
         )}
       </div>
       {renderEventDetails()}
+      <GmailComposeModal
+        contactSuggestions={mailContactSuggestions}
+        initialState={mailComposeState.initialState}
+        isOpen={mailComposeState.isOpen}
+        onClose={closeMailComposer}
+        onRequestConnectGmail={handleConnectGmailFromCalendar}
+        onSendError={(message) => {
+          setDetailsNotice(null);
+          setDetailsError(message);
+        }}
+        onSendQueued={() => {
+          setDetailsError(null);
+          setDetailsNotice("Sending email in the background. You can keep working.");
+        }}
+        onSent={() => {
+          setDetailsError(null);
+          setDetailsNotice("Email sent.");
+        }}
+        session={mailSession}
+        title="New Message"
+      />
     </AppChrome>
   );
 }

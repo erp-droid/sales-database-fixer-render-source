@@ -82,7 +82,7 @@ export const mailComposePayloadSchema = z
     }),
     matchedContacts: z.array(matchedContactSchema).default([]),
     attachments: z.array(attachmentSchema).default([]),
-    sourceSurface: z.enum(["accounts", "mail"]).default("mail"),
+    sourceSurface: z.enum(["accounts", "mail", "calendar"]).default("mail"),
   })
   .superRefine((value, ctx) => {
     const recipientCount = value.to.length + value.cc.length + value.bcc.length;

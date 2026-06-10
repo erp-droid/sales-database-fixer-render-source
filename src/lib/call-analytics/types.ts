@@ -121,7 +121,7 @@ export type CallSessionRecord = {
   matchedCompanyName: string | null;
   phoneMatchType: CallPhoneMatchType;
   phoneMatchAmbiguityCount: number;
-  initiatedFromSurface: "accounts" | "map" | "tasks" | "quality" | "unknown";
+  initiatedFromSurface: "accounts" | "map" | "tasks" | "quality" | "calendar" | "unknown";
   linkedAccountRowKey: string | null;
   linkedBusinessAccountId: string | null;
   linkedContactId: number | null;

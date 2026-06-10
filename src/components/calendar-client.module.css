@@ -978,6 +978,15 @@
   padding: 8px 10px;
 }
 
+.detailsNotice {
+  margin: 8px 20px 0 64px;
+  border-radius: 8px;
+  background: var(--app-green-soft);
+  color: #17663a;
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
 .editActions {
   position: sticky;
   bottom: 0;
@@ -1055,6 +1064,35 @@
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
+}
+
+.guestActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.guestActionButton {
+  appearance: none;
+  border: 1px solid rgba(38, 109, 200, 0.18);
+  border-radius: 999px;
+  background: rgba(38, 109, 200, 0.08);
+  color: #1f5fae;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 5px 8px;
+  white-space: nowrap;
+}
+
+.guestActionButton:hover {
+  background: rgba(38, 109, 200, 0.14);
 }
 
 .guestName {
