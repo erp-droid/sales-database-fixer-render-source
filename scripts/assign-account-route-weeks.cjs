@@ -11,7 +11,7 @@ const DEFAULT_SQLITE_PATH = "/app/data/read-model.sqlite";
 const CANDIDATE_CATEGORIES = new Set(["A", "B"]);
 const ASSIGNMENT_VERSION_PREFIX = "route-weeks-12-compact-geo";
 const SOFT_CLUSTER_SIZE_FACTOR = 1.25;
-const OVERSIZE_ACCOUNT_PENALTY_KM = 0.35;
+const OVERSIZE_ACCOUNT_PENALTY_KM = 1.2;
 
 function parseArgs(argv) {
   const options = {
