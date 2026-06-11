@@ -70,10 +70,11 @@ function parseArgs(argv) {
 }
 
 function repKey(account) {
-  return (
-    normalizeText(account.salesRepId) ||
-    `name:${String(account.salesRepName || "").toLowerCase()}`
-  );
+  const name = normalizeText(account.salesRepName);
+  if (name) {
+    return `name:${name.toLowerCase()}`;
+  }
+  return `id:${normalizeText(account.salesRepId)}`;
 }
 
 function isRoutableAccount(account) {
