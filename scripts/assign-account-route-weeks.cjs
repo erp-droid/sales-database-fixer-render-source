@@ -157,11 +157,11 @@ function accountKey(row) {
 }
 
 function salesRepKey(account) {
-  return (
-    (account.salesRepId ? `id:${account.salesRepId.toLowerCase()}` : null) ||
-    (account.salesRepName ? `name:${account.salesRepName.toLowerCase()}` : null) ||
-    "unassigned"
-  );
+  return account.salesRepName
+    ? `name:${account.salesRepName.toLowerCase()}`
+    : account.salesRepId
+      ? `id:${account.salesRepId.toLowerCase()}`
+      : "unassigned";
 }
 
 function salesRepLabel(account) {
@@ -388,14 +388,36 @@ function readAccounts(db) {
     });
   }
 
+  const categoryAccounts = accounts.filter(
+    (account) => account.accountRecordId && CANDIDATE_CATEGORIES.has(account.category),
+  );
+  const noSalesRepAccounts = categoryAccounts.filter(
+    (account) => !account.salesRepId && !account.salesRepName,
+  );
+  const assignedSalesRepAccounts = categoryAccounts.filter(
+    (account) => account.salesRepId || account.salesRepName,
+  );
+
   return {
-    accounts: accounts.filter(
-      (account) =>
-        account.accountRecordId &&
-        CANDIDATE_CATEGORIES.has(account.category) &&
-        (account.salesRepId || account.salesRepName),
-    ),
+    accounts: assignedSalesRepAccounts,
     sourceTables,
+    diagnostics: {
+      groupedAccountTotal: accounts.length,
+      categoryAccountTotal: categoryAccounts.length,
+      noSalesRepTotal: noSalesRepAccounts.length,
+      categoryCounts: Object.fromEntries(
+        ["A", "B", "C", "D", null].map((category) => [
+          category || "blank",
+          accounts.filter((account) => (account.category ?? null) === category).length,
+        ]),
+      ),
+      noSalesRepSamples: noSalesRepAccounts.slice(0, 10).map((account) => ({
+        accountRecordId: account.accountRecordId,
+        businessAccountId: account.businessAccountId,
+        companyName: account.companyName,
+        category: account.category,
+      })),
+    },
   };
 }
 
@@ -886,7 +908,15 @@ function applyAssignments(db, assignments, sourceTables, assignmentVersion, time
   txn();
 }
 
-function buildReport(options, sourceTables, accounts, assignmentResult, assignmentVersion, backupPath) {
+function buildReport(
+  options,
+  sourceTables,
+  diagnostics,
+  accounts,
+  assignmentResult,
+  assignmentVersion,
+  backupPath,
+) {
   const assignedByWeek = Object.fromEntries(
     Array.from({ length: WEEK_COUNT }, (_, index) => {
       const week = index + 1;
@@ -908,6 +938,7 @@ function buildReport(options, sourceTables, accounts, assignmentResult, assignme
     assignmentVersion,
     sqlitePath: options.sqlitePath,
     sourceTables,
+    diagnostics,
     backupPath,
     expectedTotal: options.expectedTotal,
     candidateTotal: accounts.length,
@@ -934,7 +965,7 @@ async function main() {
 
   try {
     ensureRouteWeekTable(db);
-    const { accounts, sourceTables } = readAccounts(db);
+    const { accounts, sourceTables, diagnostics } = readAccounts(db);
     const assignmentResult = buildAssignments(accounts, options.includeUnmapped);
     if (accounts.length !== options.expectedTotal) {
       const message =
@@ -955,6 +986,7 @@ async function main() {
     const report = buildReport(
       options,
       sourceTables,
+      diagnostics,
       accounts,
       assignmentResult,
       assignmentVersion,
