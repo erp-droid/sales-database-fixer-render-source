@@ -517,7 +517,7 @@ function chooseSpatialSplit(points, leftClusterCount, rightClusterCount, targetP
     const averageSpacing = spread / Math.max(points.length - 1, 1);
     for (let splitIndex = minLeftCount; splitIndex <= maxLeftCount; splitIndex += 1) {
       const gap = sorted[splitIndex][axis] - sorted[splitIndex - 1][axis];
-      const balancePenalty = Math.abs(splitIndex - targetLeftCount) * averageSpacing * 0.75;
+      const balancePenalty = Math.abs(splitIndex - targetLeftCount) * averageSpacing * 0.2;
       const score = gap - balancePenalty;
       if (
         !bestSplit ||
