@@ -126,6 +126,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     request.nextUrl.searchParams.get("matchScope")?.trim().toLowerCase() === "justin"
       ? "justin"
       : "all";
+  const createMissingAccounts =
+    request.nextUrl.searchParams.get("createMissingAccounts")?.trim().toLowerCase() !==
+    "false";
   const body = (await request.json().catch(() => null)) as { rows?: unknown } | null;
   const rows = normalizeRows(body?.rows);
   if (rows.length === 0) {
@@ -154,6 +157,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     String(clusterIterations),
     "--match-scope",
     matchScope,
+    createMissingAccounts ? "--create-missing-accounts" : "--no-create-missing-accounts",
   ];
   if (mode === "apply") {
     args.push("--report", REPORT_PATH);

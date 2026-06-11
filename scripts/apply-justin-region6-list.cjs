@@ -21,6 +21,7 @@ function parseArgs(argv) {
     promoteSourceNonAbTo: "B",
     clusterIterations: 40,
     matchScope: "all",
+    createMissingAccounts: true,
     reportPath: "",
   };
 
@@ -45,6 +46,10 @@ function parseArgs(argv) {
     } else if (arg === "--match-scope") {
       const matchScope = normalizeText(argv[++index])?.toLowerCase();
       options.matchScope = matchScope === "justin" ? "justin" : "all";
+    } else if (arg === "--create-missing-accounts") {
+      options.createMissingAccounts = true;
+    } else if (arg === "--no-create-missing-accounts") {
+      options.createMissingAccounts = false;
     } else if (arg === "--report") {
       options.reportPath = argv[++index];
     } else {
@@ -79,6 +84,14 @@ function normalizeText(value) {
 function normalizeCategory(value) {
   const normalized = normalizeText(value)?.toUpperCase() ?? null;
   return ["A", "B", "C", "D"].includes(normalized) ? normalized : null;
+}
+
+function normalizeSourceCity(value) {
+  const text = normalizeText(value);
+  if (!text) {
+    return null;
+  }
+  return text.toLowerCase() === "etobiocoke" ? "Etobicoke" : text;
 }
 
 function quoteIdentifier(value) {
@@ -243,6 +256,140 @@ function readReadyGeocodeMap(db) {
       .all()
       .map((row) => [row.address_key, row]),
   );
+}
+
+function buildSearchTextForAccount(account) {
+  return [
+    account.companyName,
+    account.businessAccountId,
+    account.accountType,
+    account.address,
+    account.companyPhone,
+    account.phoneNumber,
+    account.primaryContactName,
+    account.primaryContactEmail,
+    account.primaryContactPhone,
+    account.salesRepName,
+    account.industryType,
+    account.subCategory,
+    account.companyRegion,
+    account.week,
+    account.companyDescription,
+    account.notes,
+    account.category,
+  ]
+    .filter((part) => typeof part === "string" && part.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+}
+
+function toAddressPartsFromSource(source) {
+  const addressLine1 = normalizeText(source.streetAddress) || "";
+  const city = normalizeSourceCity(source.city) || "";
+  const hasAddress = Boolean(addressLine1 || city);
+  return {
+    addressLine1,
+    addressLine2: "",
+    city,
+    state: hasAddress ? "ON" : "",
+    postalCode: "",
+    country: hasAddress ? "CA" : "",
+  };
+}
+
+function formatAddress(parts) {
+  const street = [parts.addressLine1, parts.addressLine2].filter(Boolean).join(" ").trim();
+  const cityLine = [parts.city, parts.state, parts.postalCode].filter(Boolean).join(" ").trim();
+  return [street, cityLine, parts.country].filter(Boolean).join(", ");
+}
+
+function buildSyntheticAccountIds(source) {
+  const rowNumber = Number.isInteger(source.rowNumber) ? source.rowNumber : 0;
+  const suffix = String(rowNumber).padStart(3, "0");
+  return {
+    accountRecordId: `local-justin-region6-row-${suffix}`,
+    businessAccountId: `LOCAL-JR6-${suffix}`,
+  };
+}
+
+function buildSyntheticAccount(source, justinRepIdentity, coordinate) {
+  const ids = buildSyntheticAccountIds(source);
+  const addressParts = toAddressPartsFromSource(source);
+  const addressKey = buildAddressKey(addressParts);
+  const timestamp = new Date().toISOString();
+  const row = {
+    id: ids.accountRecordId,
+    accountRecordId: ids.accountRecordId,
+    rowKey: `${ids.accountRecordId}:contact:row`,
+    contactId: null,
+    isPrimaryContact: false,
+    phoneNumber: normalizeText(source.phoneNumber),
+    companyPhone: normalizeText(source.phoneNumber),
+    companyPhoneSource: normalizeText(source.phoneNumber) ? "account" : null,
+    salesRepId: justinRepIdentity.salesRepId,
+    salesRepName: justinRepIdentity.salesRepName,
+    accountType: "Lead",
+    opportunityCount: null,
+    industryType: null,
+    subCategory: null,
+    companyRegion: "Region 6",
+    week: null,
+    businessAccountId: ids.businessAccountId,
+    companyName: source.companyName,
+    companyDescription: "Created from Justin Region 6 workbook.",
+    address: formatAddress(addressParts),
+    addressLine1: addressParts.addressLine1,
+    addressLine2: addressParts.addressLine2,
+    city: addressParts.city,
+    state: addressParts.state,
+    postalCode: addressParts.postalCode,
+    country: addressParts.country,
+    primaryContactName: null,
+    primaryContactJobTitle: null,
+    primaryContactPhone: null,
+    primaryContactExtension: null,
+    primaryContactRawPhone: null,
+    primaryContactEmail: null,
+    primaryContactId: null,
+    category: source.sourceCategory,
+    notes: null,
+    lastCalledAt: null,
+    lastCalendarInvitedAt: null,
+    lastEmailedAt: null,
+    lastModifiedIso: timestamp,
+    marketingEligible: true,
+  };
+
+  return {
+    sourceTable: "created_local_account",
+    rowKey: row.rowKey,
+    id: row.id,
+    accountRecordId: row.accountRecordId,
+    businessAccountId: row.businessAccountId,
+    companyName: row.companyName,
+    address: row.address,
+    addressLine1: row.addressLine1,
+    city: row.city,
+    state: row.state,
+    postalCode: row.postalCode,
+    country: row.country,
+    addressKey,
+    salesRepId: row.salesRepId,
+    salesRepName: row.salesRepName,
+    category: row.category,
+    week: row.week,
+    isPrimaryContact: row.isPrimaryContact,
+    companyPhone: row.companyPhone,
+    phoneNumber: row.phoneNumber,
+    primaryContactPhone: row.primaryContactPhone,
+    payload: row,
+    metadata: null,
+    rows: [],
+    latitude: coordinate ? coordinate.latitude : null,
+    longitude: coordinate ? coordinate.longitude : null,
+    geocodeProvider: coordinate ? coordinate.provider : null,
+    createdFromSource: source,
+  };
 }
 
 function accountKey(row) {
@@ -563,12 +710,218 @@ function readSourceRows(sourceJsonPath, promoteSourceNonAbTo) {
         companyName,
         priority,
         sourceCategory,
-        city: normalizeText(row.city ?? row.F),
+        city: normalizeSourceCity(row.city ?? row.F),
         streetAddress: normalizeText(row.streetAddress ?? row.street_address ?? row.G),
         phoneNumber: normalizeText(row.phoneNumber ?? row.phone_number ?? row.E),
       };
     })
     .filter((row) => row.companyName);
+}
+
+function parseNumber(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 3500) {
+  if (typeof fetch !== "function") {
+    return null;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return response.json().catch(() => null);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function geocodeAddressParts(parts) {
+  if (!parts.addressLine1.trim() || !parts.city.trim()) {
+    return null;
+  }
+  const query = [
+    parts.addressLine1,
+    parts.addressLine2,
+    parts.city,
+    parts.state,
+    parts.postalCode,
+    parts.country,
+  ]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(" ");
+  const arcgisPayload = await fetchJsonWithTimeout(
+    "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates" +
+      `?f=json&maxLocations=1&singleLine=${encodeURIComponent(query)}`,
+  );
+  const arcgisLocation = arcgisPayload?.candidates?.[0]?.location;
+  const arcgisLatitude = parseNumber(arcgisLocation?.y);
+  const arcgisLongitude = parseNumber(arcgisLocation?.x);
+  if (arcgisLatitude !== null && arcgisLongitude !== null) {
+    return {
+      latitude: arcgisLatitude,
+      longitude: arcgisLongitude,
+      provider: "arcgis",
+    };
+  }
+
+  const nominatimPayload = await fetchJsonWithTimeout(
+    `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`,
+  );
+  const firstResult = Array.isArray(nominatimPayload) ? nominatimPayload[0] : null;
+  const nominatimLatitude = parseNumber(firstResult?.lat);
+  const nominatimLongitude = parseNumber(firstResult?.lon);
+  if (nominatimLatitude !== null && nominatimLongitude !== null) {
+    return {
+      latitude: nominatimLatitude,
+      longitude: nominatimLongitude,
+      provider: "nominatim",
+    };
+  }
+
+  return null;
+}
+
+function upsertAddressGeocode(db, source, coordinate, timestamp) {
+  const parts = toAddressPartsFromSource(source);
+  if (!parts.addressLine1.trim() || !parts.city.trim()) {
+    return;
+  }
+  const addressKey = buildAddressKey(parts);
+  if (coordinate) {
+    db.prepare(
+      `
+      INSERT INTO address_geocodes (
+        address_key,
+        address_line1,
+        address_line2,
+        city,
+        state,
+        postal_code,
+        country,
+        latitude,
+        longitude,
+        provider,
+        status,
+        attempt_count,
+        last_attempted_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 1, ?, ?)
+      ON CONFLICT(address_key) DO UPDATE SET
+        address_line1 = excluded.address_line1,
+        address_line2 = excluded.address_line2,
+        city = excluded.city,
+        state = excluded.state,
+        postal_code = excluded.postal_code,
+        country = excluded.country,
+        latitude = excluded.latitude,
+        longitude = excluded.longitude,
+        provider = excluded.provider,
+        status = 'ready',
+        attempt_count = address_geocodes.attempt_count + 1,
+        last_attempted_at = excluded.last_attempted_at,
+        updated_at = excluded.updated_at
+      `,
+    ).run(
+      addressKey,
+      parts.addressLine1,
+      parts.addressLine2,
+      parts.city,
+      parts.state,
+      parts.postalCode,
+      parts.country,
+      coordinate.latitude,
+      coordinate.longitude,
+      coordinate.provider,
+      timestamp,
+      timestamp,
+    );
+    return;
+  }
+
+  db.prepare(
+    `
+    INSERT INTO address_geocodes (
+      address_key,
+      address_line1,
+      address_line2,
+      city,
+      state,
+      postal_code,
+      country,
+      latitude,
+      longitude,
+      provider,
+      status,
+      attempt_count,
+      last_attempted_at,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 'pending', 0, NULL, ?)
+    ON CONFLICT(address_key) DO UPDATE SET
+      address_line1 = excluded.address_line1,
+      address_line2 = excluded.address_line2,
+      city = excluded.city,
+      state = excluded.state,
+      postal_code = excluded.postal_code,
+      country = excluded.country,
+      updated_at = excluded.updated_at
+    `,
+  ).run(
+    addressKey,
+    parts.addressLine1,
+    parts.addressLine2,
+    parts.city,
+    parts.state,
+    parts.postalCode,
+    parts.country,
+    timestamp,
+  );
+}
+
+async function resolveSourceCoordinateMap(db, sourceRows, shouldPersist, timestamp) {
+  const readyGeocodes = readReadyGeocodeMap(db);
+  const coordinates = new Map();
+  for (const source of sourceRows) {
+    const parts = toAddressPartsFromSource(source);
+    if (!parts.addressLine1.trim() || !parts.city.trim()) {
+      continue;
+    }
+    const addressKey = buildAddressKey(parts);
+    const ready = readyGeocodes.get(addressKey);
+    if (ready) {
+      coordinates.set(source.rowNumber, {
+        latitude: Number(ready.latitude),
+        longitude: Number(ready.longitude),
+        provider: normalizeText(ready.provider) || "stored",
+      });
+      continue;
+    }
+    const resolved = await geocodeAddressParts(parts);
+    if (resolved) {
+      coordinates.set(source.rowNumber, resolved);
+    }
+    if (shouldPersist) {
+      upsertAddressGeocode(db, source, resolved, timestamp);
+    }
+  }
+  return coordinates;
 }
 
 function buildMatches(sourceRows, justinAccounts) {
@@ -1140,6 +1493,8 @@ function applyUpdates(db, plan, sourceTables, assignmentVersion, timestamp) {
     const insertJustinId = db.prepare("INSERT OR IGNORE INTO justin_account_ids VALUES (?)");
     const insertCandidateId = db.prepare("INSERT OR IGNORE INTO justin_route_candidate_ids VALUES (?)");
 
+    insertCreatedAccountRows(db, plan.createdAccounts, timestamp);
+
     for (const update of plan.categoryUpdates) {
       insertJustinId.run(update.account.accountRecordId);
       const existingMetadata = update.account.metadata || {};
@@ -1208,6 +1563,180 @@ function applyUpdates(db, plan, sourceTables, assignmentVersion, timestamp) {
 
   txn();
   return sourceTables;
+}
+
+function insertCreatedAccountRows(db, createdAccounts, timestamp) {
+  if (createdAccounts.length === 0) {
+    return 0;
+  }
+
+  const insert = db.prepare(
+    `
+    INSERT INTO account_rows (
+      row_key,
+      id,
+      account_record_id,
+      business_account_id,
+      contact_id,
+      is_primary_contact,
+      company_name,
+      address,
+      address_line1,
+      address_line2,
+      city,
+      state,
+      postal_code,
+      country,
+      phone_number,
+      company_phone,
+      company_phone_source,
+      sales_rep_id,
+      sales_rep_name,
+      industry_type,
+      sub_category,
+      company_region,
+      week,
+      primary_contact_name,
+      primary_contact_phone,
+      primary_contact_email,
+      primary_contact_id,
+      category,
+      notes,
+      last_called_at,
+      last_calendar_invited_at,
+      last_modified_iso,
+      search_text,
+      address_key,
+      payload_json,
+      updated_at
+    ) VALUES (
+      @row_key,
+      @id,
+      @account_record_id,
+      @business_account_id,
+      @contact_id,
+      @is_primary_contact,
+      @company_name,
+      @address,
+      @address_line1,
+      @address_line2,
+      @city,
+      @state,
+      @postal_code,
+      @country,
+      @phone_number,
+      @company_phone,
+      @company_phone_source,
+      @sales_rep_id,
+      @sales_rep_name,
+      @industry_type,
+      @sub_category,
+      @company_region,
+      @week,
+      @primary_contact_name,
+      @primary_contact_phone,
+      @primary_contact_email,
+      @primary_contact_id,
+      @category,
+      @notes,
+      @last_called_at,
+      @last_calendar_invited_at,
+      @last_modified_iso,
+      @search_text,
+      @address_key,
+      @payload_json,
+      @updated_at
+    )
+    ON CONFLICT(row_key) DO UPDATE SET
+      id = excluded.id,
+      account_record_id = excluded.account_record_id,
+      business_account_id = excluded.business_account_id,
+      contact_id = excluded.contact_id,
+      is_primary_contact = excluded.is_primary_contact,
+      company_name = excluded.company_name,
+      address = excluded.address,
+      address_line1 = excluded.address_line1,
+      address_line2 = excluded.address_line2,
+      city = excluded.city,
+      state = excluded.state,
+      postal_code = excluded.postal_code,
+      country = excluded.country,
+      phone_number = excluded.phone_number,
+      company_phone = excluded.company_phone,
+      company_phone_source = excluded.company_phone_source,
+      sales_rep_id = excluded.sales_rep_id,
+      sales_rep_name = excluded.sales_rep_name,
+      industry_type = excluded.industry_type,
+      sub_category = excluded.sub_category,
+      company_region = excluded.company_region,
+      week = excluded.week,
+      primary_contact_name = excluded.primary_contact_name,
+      primary_contact_phone = excluded.primary_contact_phone,
+      primary_contact_email = excluded.primary_contact_email,
+      primary_contact_id = excluded.primary_contact_id,
+      category = excluded.category,
+      notes = excluded.notes,
+      last_modified_iso = excluded.last_modified_iso,
+      search_text = excluded.search_text,
+      address_key = excluded.address_key,
+      payload_json = excluded.payload_json,
+      updated_at = excluded.updated_at
+    `,
+  );
+
+  let changed = 0;
+  for (const account of createdAccounts) {
+    const payload = account.payload || {};
+    const addressParts = {
+      addressLine1: account.addressLine1 || "",
+      addressLine2: payload.addressLine2 || "",
+      city: account.city || "",
+      state: account.state || "",
+      postalCode: account.postalCode || "",
+      country: account.country || "",
+    };
+    upsertAddressGeocode(db, account.createdFromSource, hasCoordinate(account) ? account : null, timestamp);
+    changed += insert.run({
+      row_key: account.rowKey,
+      id: account.id,
+      account_record_id: account.accountRecordId,
+      business_account_id: account.businessAccountId,
+      contact_id: null,
+      is_primary_contact: 0,
+      company_name: account.companyName,
+      address: account.address || "",
+      address_line1: account.addressLine1 || "",
+      address_line2: payload.addressLine2 || "",
+      city: account.city || "",
+      state: account.state || "",
+      postal_code: account.postalCode || "",
+      country: account.country || "",
+      phone_number: account.phoneNumber || null,
+      company_phone: account.companyPhone || null,
+      company_phone_source: account.companyPhone ? "account" : null,
+      sales_rep_id: account.salesRepId || null,
+      sales_rep_name: account.salesRepName || null,
+      industry_type: payload.industryType || null,
+      sub_category: payload.subCategory || null,
+      company_region: payload.companyRegion || null,
+      week: account.week || null,
+      primary_contact_name: null,
+      primary_contact_phone: null,
+      primary_contact_email: null,
+      primary_contact_id: null,
+      category: account.category || null,
+      notes: payload.notes || null,
+      last_called_at: null,
+      last_calendar_invited_at: null,
+      last_modified_iso: payload.lastModifiedIso || timestamp,
+      search_text: buildSearchTextForAccount(payload),
+      address_key: buildAddressKey(addressParts),
+      payload_json: JSON.stringify(payload),
+      updated_at: timestamp,
+    }).changes;
+  }
+
+  return changed;
 }
 
 function updateSourceRowsForAccount(db, tableName, update) {
@@ -1305,11 +1834,29 @@ function updateSourceRowsForAccount(db, tableName, update) {
   return updated;
 }
 
-function buildPlan(sourceRows, accounts, options) {
+function buildPlan(sourceRows, accounts, options, sourceCoordinateByRowNumber) {
   const justinAccounts = accounts.filter(isJustinAccount);
   const matchAccounts = options.matchScope === "justin" ? justinAccounts : accounts;
   const justinRepIdentity = resolveJustinRepIdentity(justinAccounts);
-  const { matches, unmatched, ambiguous } = buildMatches(sourceRows, matchAccounts);
+  const initialMatches = buildMatches(sourceRows, matchAccounts);
+  const createdAccounts = options.createMissingAccounts
+    ? initialMatches.unmatched.map((entry) =>
+        buildSyntheticAccount(
+          entry.source,
+          justinRepIdentity,
+          sourceCoordinateByRowNumber.get(entry.source.rowNumber) || null,
+        ),
+      )
+    : [];
+  const createdMatches = createdAccounts.map((account) => ({
+    source: account.createdFromSource,
+    account,
+    score: null,
+    reasons: ["created_local_missing_account"],
+  }));
+  const matches = [...initialMatches.matches, ...createdMatches];
+  const unmatched = options.createMissingAccounts ? [] : initialMatches.unmatched;
+  const ambiguous = initialMatches.ambiguous;
   const matchedAccountIds = new Set(matches.map((match) => match.account.accountRecordId));
   const matchedSourceByAccountId = new Map(
     matches.map((match) => [match.account.accountRecordId, match.source]),
@@ -1356,6 +1903,12 @@ function buildPlan(sourceRows, accounts, options) {
     justinAccounts,
     matchAccounts,
     justinRepIdentity,
+    createdAccounts,
+    createdMissingSources: initialMatches.unmatched.map((entry) => ({
+      ...entry.source,
+      duplicateOnly: entry.duplicateOnly || false,
+      topCandidates: entry.topCandidates,
+    })),
     matches,
     unmatched,
     ambiguous,
@@ -1409,6 +1962,7 @@ function buildReport(options, sourceRows, plan, assignmentVersion, backupPath) {
       promoteSourceNonAbTo: options.promoteSourceNonAbTo,
       clusterIterations: options.clusterIterations,
       matchScope: options.matchScope,
+      createMissingAccounts: options.createMissingAccounts,
     },
     sourceTotal: sourceRows.length,
     sourcePriorityCounts,
@@ -1418,6 +1972,8 @@ function buildReport(options, sourceRows, plan, assignmentVersion, backupPath) {
     matchedSourceTotal: plan.matches.length,
     uniqueMatchedAccountTotal: plan.matchedAccountIds.size,
     unmatchedSourceTotal: plan.unmatched.length,
+    createdMissingAccountTotal: plan.createdAccounts.length,
+    createdMissingSources: plan.createdMissingSources,
     ambiguousMatchTotal: plan.ambiguous.length,
     previousCategoryCounts,
     targetCategoryCounts,
@@ -1494,7 +2050,13 @@ async function main() {
     ensureTables(db);
     const accounts = readAccounts(db);
     const sourceTables = ["account_rows", ...(tableExists(db, "local_account_rows") ? ["local_account_rows"] : [])];
-    const plan = buildPlan(sourceRows, accounts, options);
+    const sourceCoordinateByRowNumber = await resolveSourceCoordinateMap(
+      db,
+      sourceRows,
+      options.apply,
+      timestamp,
+    );
+    const plan = buildPlan(sourceRows, accounts, options, sourceCoordinateByRowNumber);
     const routeTotal = plan.routeAssignments.length;
     if (plan.unmatched.length > 0) {
       const message = `${plan.unmatched.length} source companies did not match Justin accounts.`;
