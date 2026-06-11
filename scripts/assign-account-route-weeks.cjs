@@ -603,52 +603,123 @@ function orderedPointsForAssignment(points, centers) {
   });
 }
 
-function assignPointsToCenters(points, centers, targetPerCluster) {
-  const softClusterSize = Math.max(
-    1,
-    Math.ceil(targetPerCluster * clusteringConfig.softClusterSizeFactor),
+function buildBalancedClusterSizes(pointCount, clusterCount) {
+  const baseSize = Math.floor(pointCount / clusterCount);
+  const extraCount = pointCount % clusterCount;
+  return Array.from({ length: clusterCount }, (_, index) =>
+    index < extraCount ? baseSize + 1 : baseSize,
   );
-  const hardClusterSize = Math.max(
-    Math.ceil(points.length / centers.length),
-    Math.ceil(targetPerCluster * clusteringConfig.hardClusterSizeFactor),
-  );
+}
+
+function allocateCapacitiesToCenters(points, centers) {
+  const sizes = buildBalancedClusterSizes(points.length, centers.length).sort((left, right) => right - left);
+  const centerDemand = centers.map((center, index) => ({
+    index,
+    center,
+    nearestCount: 0,
+    nearestDistanceTotal: 0,
+  }));
+
+  for (const point of points) {
+    const nearest = nearestCenter(point, centers);
+    centerDemand[nearest.index].nearestCount += 1;
+    centerDemand[nearest.index].nearestDistanceTotal += nearest.distanceKm;
+  }
+
+  const capacities = Array.from({ length: centers.length }, () => 0);
+  centerDemand
+    .sort((left, right) => {
+      const countDelta = right.nearestCount - left.nearestCount;
+      if (countDelta !== 0) {
+        return countDelta;
+      }
+
+      const distanceDelta = right.nearestDistanceTotal - left.nearestDistanceTotal;
+      if (Math.abs(distanceDelta) > 0.000001) {
+        return distanceDelta;
+      }
+
+      const xDelta = left.center.x - right.center.x;
+      if (Math.abs(xDelta) > 0.000001) {
+        return xDelta;
+      }
+
+      return right.center.y - left.center.y;
+    })
+    .forEach((entry, orderIndex) => {
+      capacities[entry.index] = sizes[orderIndex] || 0;
+    });
+
+  return capacities;
+}
+
+function squaredDistanceKm(left, right) {
+  const distance = distanceKm(left, right);
+  return distance * distance;
+}
+
+function pointCenterRankings(point, centers) {
+  return centers
+    .map((center, index) => ({
+      index,
+      distanceKm: distanceKm(point, center),
+    }))
+    .sort((left, right) => {
+      if (Math.abs(left.distanceKm - right.distanceKm) > 0.000001) {
+        return left.distanceKm - right.distanceKm;
+      }
+      return left.index - right.index;
+    });
+}
+
+function assignPointsToCenters(points, centers, capacities) {
   const clusters = centers.map((center) => ({
     center,
     points: [],
   }));
+  const remainingCapacities = [...capacities];
+  const rankedPoints = orderedPointsForAssignment(points, centers).map((point) => {
+    const rankings = pointCenterRankings(point, centers);
+    const firstDistance = rankings[0]?.distanceKm || 0;
+    const secondDistance = rankings[1]?.distanceKm ?? firstDistance;
+    return {
+      point,
+      rankings,
+      nearestDistance: firstDistance,
+      regretDistance: secondDistance - firstDistance,
+    };
+  });
 
-  for (const point of orderedPointsForAssignment(points, centers)) {
+  rankedPoints.sort((left, right) => {
+    if (Math.abs(right.regretDistance - left.regretDistance) > 0.000001) {
+      return right.regretDistance - left.regretDistance;
+    }
+    if (Math.abs(right.nearestDistance - left.nearestDistance) > 0.000001) {
+      return right.nearestDistance - left.nearestDistance;
+    }
+    return comparePointIdentity(left.point, right.point);
+  });
+
+  for (const rankedPoint of rankedPoints) {
     let bestIndex = 0;
-    let bestScore = Number.POSITIVE_INFINITY;
+    let foundOpenCenter = false;
 
-    for (let index = 0; index < centers.length; index += 1) {
-      const projectedSize = clusters[index].points.length + 1;
-      if (projectedSize > hardClusterSize) {
-        continue;
-      }
-
-      const overSoftSize = Math.max(0, projectedSize - softClusterSize);
-      const score =
-        distanceKm(point, centers[index]) +
-        overSoftSize * clusteringConfig.oversizeAccountPenaltyKm +
-        Math.max(0, projectedSize - targetPerCluster) * 0.001;
-      if (
-        score < bestScore ||
-        (Math.abs(score - bestScore) < 0.000001 &&
-          clusters[index].points.length < clusters[bestIndex].points.length)
-      ) {
-        bestIndex = index;
-        bestScore = score;
+    for (const ranking of rankedPoint.rankings) {
+      if (remainingCapacities[ranking.index] > 0) {
+        bestIndex = ranking.index;
+        foundOpenCenter = true;
+        break;
       }
     }
 
-    if (!Number.isFinite(bestScore)) {
+    if (!foundOpenCenter) {
       bestIndex = clusters
         .map((cluster, index) => ({ index, size: cluster.points.length }))
         .sort((left, right) => left.size - right.size || left.index - right.index)[0].index;
     }
 
-    clusters[bestIndex].points.push(point);
+    clusters[bestIndex].points.push(rankedPoint.point);
+    remainingCapacities[bestIndex] -= 1;
   }
 
   return clusters;
@@ -670,58 +741,69 @@ function chooseMedoid(points) {
   })[0];
 }
 
-function refillEmptyClusters(clusters, targetPerCluster) {
+function improveCapacityAssignments(clusters) {
   const nextClusters = clusters.map((cluster) => ({
     center: cluster.center,
     points: [...cluster.points],
+    targetSize: cluster.targetSize,
   }));
+  const totalPointCount = nextClusters.reduce((sum, cluster) => sum + cluster.points.length, 0);
+  const maxSwaps = Math.min(60, Math.ceil(totalPointCount / 8));
+  let swapCount = 0;
 
-  for (let index = 0; index < nextClusters.length; index += 1) {
-    if (nextClusters[index].points.length > 0) {
-      continue;
+  while (swapCount < maxSwaps) {
+    let bestSwap = null;
+
+    for (let leftIndex = 0; leftIndex < nextClusters.length - 1; leftIndex += 1) {
+      const leftCluster = nextClusters[leftIndex];
+      for (let rightIndex = leftIndex + 1; rightIndex < nextClusters.length; rightIndex += 1) {
+        const rightCluster = nextClusters[rightIndex];
+        for (let leftPointIndex = 0; leftPointIndex < leftCluster.points.length; leftPointIndex += 1) {
+          const leftPoint = leftCluster.points[leftPointIndex];
+          const leftCurrentCost = squaredDistanceKm(leftPoint, leftCluster.center);
+          const leftSwapCost = squaredDistanceKm(leftPoint, rightCluster.center);
+          for (let rightPointIndex = 0; rightPointIndex < rightCluster.points.length; rightPointIndex += 1) {
+            const rightPoint = rightCluster.points[rightPointIndex];
+            const currentCost = leftCurrentCost + squaredDistanceKm(rightPoint, rightCluster.center);
+            const swapCost = leftSwapCost + squaredDistanceKm(rightPoint, leftCluster.center);
+            const improvement = currentCost - swapCost;
+            if (
+              improvement > 0.000001 &&
+              (!bestSwap || improvement > bestSwap.improvement)
+            ) {
+              bestSwap = {
+                leftIndex,
+                rightIndex,
+                leftPointIndex,
+                rightPointIndex,
+                improvement,
+              };
+            }
+          }
+        }
+      }
     }
 
-    const donor = nextClusters
-      .map((cluster, donorIndex) => {
-        const farthest = cluster.points
-          .map((point) => ({
-            point,
-            distanceKm: distanceKm(point, cluster.center),
-          }))
-          .sort((left, right) => right.distanceKm - left.distanceKm)[0];
-        return {
-          donorIndex,
-          score:
-            (farthest?.distanceKm || 0) *
-            Math.sqrt(Math.max(1, cluster.points.length / Math.max(targetPerCluster, 1))),
-          farthestPoint: farthest?.point || null,
-        };
-      })
-      .filter(
-        (candidate) =>
-          candidate.farthestPoint && nextClusters[candidate.donorIndex].points.length > 1,
-      )
-      .sort((left, right) => right.score - left.score)[0];
-
-    if (!donor) {
-      continue;
+    if (!bestSwap) {
+      break;
     }
 
-    const donorPoints = nextClusters[donor.donorIndex].points;
-    nextClusters[donor.donorIndex].points = donorPoints.filter(
-      (point) => point !== donor.farthestPoint,
-    );
-    nextClusters[index].points.push(donor.farthestPoint);
-    nextClusters[index].center = donor.farthestPoint;
+    const leftCluster = nextClusters[bestSwap.leftIndex];
+    const rightCluster = nextClusters[bestSwap.rightIndex];
+    const leftPoint = leftCluster.points[bestSwap.leftPointIndex];
+    leftCluster.points[bestSwap.leftPointIndex] = rightCluster.points[bestSwap.rightPointIndex];
+    rightCluster.points[bestSwap.rightPointIndex] = leftPoint;
+    swapCount += 1;
   }
 
   return nextClusters;
 }
 
-function summarizeCluster(points) {
+function summarizeCluster(points, targetSize = points.length) {
   const farthestPair = findFarthestPair(points);
   return {
     points,
+    targetSize,
     centroid: averageCentroid(points),
     currentWeekCounts: countCurrentWeeks(points),
     diameterKm: farthestPair.distanceKm,
@@ -729,21 +811,23 @@ function summarizeCluster(points) {
 }
 
 function scoreClusterSet(clusters, targetPerCluster) {
-  const clusterSummaries = clusters.map((cluster) => summarizeCluster(cluster.points));
+  const clusterSummaries = clusters.map((cluster) => summarizeCluster(cluster.points, cluster.targetSize));
   const maxDiameterKm = Math.max(...clusterSummaries.map((cluster) => cluster.diameterKm));
   const totalDiameterKm = clusterSummaries.reduce((sum, cluster) => sum + cluster.diameterKm, 0);
-  const maxOversize = Math.max(
+  const totalSquaredDistanceKm = clusters.reduce(
+    (sum, cluster) =>
+      sum +
+      cluster.points.reduce((clusterSum, point) => clusterSum + squaredDistanceKm(point, cluster.center), 0),
+    0,
+  );
+  const maxCountDelta = Math.max(
     ...clusterSummaries.map((cluster) =>
-      Math.max(
-        0,
-        cluster.points.length -
-          Math.ceil(targetPerCluster * clusteringConfig.softClusterSizeFactor),
-      ),
+      Math.abs(cluster.points.length - Math.round(targetPerCluster)),
     ),
   );
 
   return {
-    score: maxDiameterKm * 1000 + totalDiameterKm + maxOversize * 10,
+    score: maxDiameterKm * 1000 + totalDiameterKm + totalSquaredDistanceKm * 0.05 + maxCountDelta * 100000,
     clusters: clusterSummaries,
   };
 }
@@ -757,9 +841,12 @@ function buildCompactGeoClusters(points, clusterCount, targetPerCluster) {
   let best = null;
 
   for (let iteration = 0; iteration < clusteringConfig.clusterIterations; iteration += 1) {
-    const assignedClusters = refillEmptyClusters(
-      assignPointsToCenters(points, centers, targetPerCluster),
-      targetPerCluster,
+    const capacities = allocateCapacitiesToCenters(points, centers);
+    const assignedClusters = improveCapacityAssignments(
+      assignPointsToCenters(points, centers, capacities).map((cluster, index) => ({
+        ...cluster,
+        targetSize: capacities[index],
+      })),
     );
     const scored = scoreClusterSet(assignedClusters, targetPerCluster);
     if (!best || scored.score < best.score) {
@@ -1066,6 +1153,27 @@ function buildAssignments(accounts, includeUnmapped) {
   };
 }
 
+function findCountBalanceViolations(summaries) {
+  return summaries.flatMap((summary) => {
+    if (summary.total < WEEK_COUNT) {
+      return [];
+    }
+
+    const minExpected = Math.floor(summary.total / WEEK_COUNT);
+    const maxExpected = Math.ceil(summary.total / WEEK_COUNT);
+    return Object.entries(summary.weekCounts)
+      .filter(([, count]) => count < minExpected || count > maxExpected)
+      .map(([week, count]) => ({
+        salesRep: summary.salesRep,
+        week,
+        count,
+        minExpected,
+        maxExpected,
+        total: summary.total,
+      }));
+  });
+}
+
 function ensureRouteWeekTable(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS account_route_weeks (
@@ -1321,6 +1429,7 @@ function buildReport(
     unmappedTotal: accounts.filter((account) => !hasCoordinate(account)).length,
     currentWeekKept,
     assignedByWeek,
+    countBalanceViolations: findCountBalanceViolations(assignmentResult.summaries),
     reps: assignmentResult.summaries,
     spatialStats: assignmentResult.spatialStats,
     widestWeeks: [...assignmentResult.spatialStats]
@@ -1345,9 +1454,19 @@ async function main() {
     ensureRouteWeekTable(db);
     const { accounts, sourceTables, diagnostics } = readAccounts(db);
     const assignmentResult = buildAssignments(accounts, options.includeUnmapped);
+    const countBalanceViolations = findCountBalanceViolations(assignmentResult.summaries);
     if (accounts.length !== options.expectedTotal) {
       const message =
         `Expected ${options.expectedTotal} A/B accounts but found ${accounts.length}. ` +
+        "Review report before applying.";
+      if (options.apply) {
+        throw new Error(message);
+      }
+      process.stderr.write(`${message}\n`);
+    }
+    if (countBalanceViolations.length > 0) {
+      const message =
+        `Route week count balance failed for ${countBalanceViolations.length} rep/week buckets. ` +
         "Review report before applying.";
       if (options.apply) {
         throw new Error(message);
