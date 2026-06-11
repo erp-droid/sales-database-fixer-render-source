@@ -10,9 +10,23 @@ const WEEK_COUNT = 12;
 const DEFAULT_SQLITE_PATH = "/app/data/read-model.sqlite";
 const CANDIDATE_CATEGORIES = new Set(["A", "B"]);
 const ASSIGNMENT_VERSION_PREFIX = "route-weeks-12-compact-geo";
-const CLUSTER_ITERATIONS = 18;
-const SOFT_CLUSTER_SIZE_FACTOR = 1.4;
-const OVERSIZE_ACCOUNT_PENALTY_KM = 1.5;
+const DEFAULT_CLUSTER_ITERATIONS = 18;
+const DEFAULT_SOFT_CLUSTER_SIZE_FACTOR = 1.4;
+const DEFAULT_OVERSIZE_ACCOUNT_PENALTY_KM = 1.5;
+
+let clusteringConfig = {
+  clusterIterations: DEFAULT_CLUSTER_ITERATIONS,
+  softClusterSizeFactor: DEFAULT_SOFT_CLUSTER_SIZE_FACTOR,
+  oversizeAccountPenaltyKm: DEFAULT_OVERSIZE_ACCOUNT_PENALTY_KM,
+};
+
+function parsePositiveNumber(value, label) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive number.`);
+  }
+  return parsed;
+}
 
 function parseArgs(argv) {
   const options = {
@@ -21,6 +35,7 @@ function parseArgs(argv) {
     reportPath: "",
     expectedTotal: 1269,
     includeUnmapped: true,
+    clustering: { ...clusteringConfig },
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -35,6 +50,22 @@ function parseArgs(argv) {
       options.reportPath = argv[++index];
     } else if (arg === "--expected-total") {
       options.expectedTotal = Number(argv[++index]);
+    } else if (arg === "--cluster-iterations") {
+      const clusterIterations = Number(argv[++index]);
+      if (!Number.isInteger(clusterIterations) || clusterIterations <= 0) {
+        throw new Error("--cluster-iterations must be a positive integer.");
+      }
+      options.clustering.clusterIterations = clusterIterations;
+    } else if (arg === "--soft-cluster-size-factor") {
+      options.clustering.softClusterSizeFactor = parsePositiveNumber(
+        argv[++index],
+        "--soft-cluster-size-factor",
+      );
+    } else if (arg === "--oversize-account-penalty-km") {
+      options.clustering.oversizeAccountPenaltyKm = parsePositiveNumber(
+        argv[++index],
+        "--oversize-account-penalty-km",
+      );
     } else if (arg === "--exclude-unmapped") {
       options.includeUnmapped = false;
     } else {
@@ -45,6 +76,8 @@ function parseArgs(argv) {
   if (!Number.isInteger(options.expectedTotal) || options.expectedTotal <= 0) {
     throw new Error("--expected-total must be a positive integer.");
   }
+
+  clusteringConfig = { ...options.clustering };
 
   return options;
 }
@@ -564,7 +597,10 @@ function orderedPointsForAssignment(points, centers) {
 }
 
 function assignPointsToCenters(points, centers, targetPerCluster) {
-  const softClusterSize = Math.max(1, Math.ceil(targetPerCluster * SOFT_CLUSTER_SIZE_FACTOR));
+  const softClusterSize = Math.max(
+    1,
+    Math.ceil(targetPerCluster * clusteringConfig.softClusterSizeFactor),
+  );
   const clusters = centers.map((center) => ({
     center,
     points: [],
@@ -579,11 +615,12 @@ function assignPointsToCenters(points, centers, targetPerCluster) {
       const overSoftSize = Math.max(0, projectedSize - softClusterSize);
       const score =
         distanceKm(point, centers[index]) +
-        overSoftSize * OVERSIZE_ACCOUNT_PENALTY_KM +
+        overSoftSize * clusteringConfig.oversizeAccountPenaltyKm +
         Math.max(0, projectedSize - targetPerCluster) * 0.001;
       if (
         score < bestScore ||
-        (Math.abs(score - bestScore) < 0.000001 && clusters[index].points.length < clusters[bestIndex].points.length)
+        (Math.abs(score - bestScore) < 0.000001 &&
+          clusters[index].points.length < clusters[bestIndex].points.length)
       ) {
         bestIndex = index;
         bestScore = score;
@@ -639,7 +676,10 @@ function refillEmptyClusters(clusters, targetPerCluster) {
           farthestPoint: farthest?.point || null,
         };
       })
-      .filter((candidate) => candidate.farthestPoint && nextClusters[candidate.donorIndex].points.length > 1)
+      .filter(
+        (candidate) =>
+          candidate.farthestPoint && nextClusters[candidate.donorIndex].points.length > 1,
+      )
       .sort((left, right) => right.score - left.score)[0];
 
     if (!donor) {
@@ -673,7 +713,11 @@ function scoreClusterSet(clusters, targetPerCluster) {
   const totalDiameterKm = clusterSummaries.reduce((sum, cluster) => sum + cluster.diameterKm, 0);
   const maxOversize = Math.max(
     ...clusterSummaries.map((cluster) =>
-      Math.max(0, cluster.points.length - Math.ceil(targetPerCluster * SOFT_CLUSTER_SIZE_FACTOR)),
+      Math.max(
+        0,
+        cluster.points.length -
+          Math.ceil(targetPerCluster * clusteringConfig.softClusterSizeFactor),
+      ),
     ),
   );
 
@@ -691,7 +735,7 @@ function buildCompactGeoClusters(points, clusterCount, targetPerCluster) {
   let centers = chooseInitialCenters(points, clusterCount);
   let best = null;
 
-  for (let iteration = 0; iteration < CLUSTER_ITERATIONS; iteration += 1) {
+  for (let iteration = 0; iteration < clusteringConfig.clusterIterations; iteration += 1) {
     const assignedClusters = refillEmptyClusters(
       assignPointsToCenters(points, centers, targetPerCluster),
       targetPerCluster,
@@ -701,7 +745,9 @@ function buildCompactGeoClusters(points, clusterCount, targetPerCluster) {
       best = scored;
     }
 
-    const nextCenters = assignedClusters.map((cluster) => chooseMedoid(cluster.points) || cluster.center);
+    const nextCenters = assignedClusters.map(
+      (cluster) => chooseMedoid(cluster.points) || cluster.center,
+    );
     const unchanged = nextCenters.every((center, index) => center === centers[index]);
     centers = nextCenters;
     if (unchanged) {
@@ -1242,6 +1288,7 @@ function buildReport(
     ok: true,
     mode: options.apply ? "apply" : "dry-run",
     assignmentVersion,
+    clustering: options.clustering,
     sqlitePath: options.sqlitePath,
     sourceTables,
     diagnostics,

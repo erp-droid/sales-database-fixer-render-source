@@ -21,6 +21,24 @@ function parseExpectedTotal(value: string | null): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_EXPECTED_TOTAL;
 }
 
+function parsePositiveNumber(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parsePositiveInteger(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function readMode(value: string | null): "dry-run" | "apply" {
   return value === "apply" ? "apply" : "dry-run";
 }
@@ -55,6 +73,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const mode = readMode(request.nextUrl.searchParams.get("mode"));
   const expectedTotal = parseExpectedTotal(request.nextUrl.searchParams.get("expectedTotal"));
+  const clusterIterations = parsePositiveInteger(
+    request.nextUrl.searchParams.get("clusterIterations"),
+  );
+  const softClusterSizeFactor = parsePositiveNumber(
+    request.nextUrl.searchParams.get("softClusterSizeFactor"),
+  );
+  const oversizeAccountPenaltyKm = parsePositiveNumber(
+    request.nextUrl.searchParams.get("oversizeAccountPenaltyKm"),
+  );
   const scriptPath = path.join(process.cwd(), "scripts", "assign-account-route-weeks.cjs");
   const args = [
     scriptPath,
@@ -62,6 +89,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     "--expected-total",
     String(expectedTotal),
   ];
+  if (clusterIterations) {
+    args.push("--cluster-iterations", String(clusterIterations));
+  }
+  if (softClusterSizeFactor) {
+    args.push("--soft-cluster-size-factor", String(softClusterSizeFactor));
+  }
+  if (oversizeAccountPenaltyKm) {
+    args.push("--oversize-account-penalty-km", String(oversizeAccountPenaltyKm));
+  }
   if (mode === "apply") {
     args.push("--report", REPORT_PATH);
   }
