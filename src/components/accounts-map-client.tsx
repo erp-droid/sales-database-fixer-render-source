@@ -16,10 +16,6 @@ import {
   type PostalRegion,
   type PostalRegionsResponse,
 } from "@/types/business-account";
-import {
-  buildAcumaticaBusinessAccountUrl,
-  buildAcumaticaContactUrl,
-} from "@/lib/acumatica-links";
 import { enforceSinglePrimaryPerAccountRows, resolveCompanyPhone } from "@/lib/business-accounts";
 import { buildBusinessAccountConcurrencySnapshot } from "@/lib/business-account-concurrency";
 import {
@@ -70,6 +66,27 @@ const ROUTE_WEEK_COLORS = [
   "#005a32",
   "#6a3d9a",
 ] as const;
+
+function buildInternalAccountHref(input: {
+  accountRecordId?: string | null;
+  businessAccountId?: string | null;
+  contactId?: number | null;
+}): string {
+  const params = new URLSearchParams();
+  const accountRecordId = input.accountRecordId?.trim();
+  const businessAccountId = input.businessAccountId?.trim();
+  if (accountRecordId) {
+    params.set("accountRecordId", accountRecordId);
+  }
+  if (businessAccountId) {
+    params.set("businessAccountId", businessAccountId);
+  }
+  if (input.contactId !== null && input.contactId !== undefined) {
+    params.set("contactId", String(input.contactId));
+  }
+  const query = params.toString();
+  return query ? `/accounts?${query}` : "/accounts";
+}
 
 const MAP_DETAIL_FIELD_KEYS = [
   "fullAddress",
@@ -1738,13 +1755,7 @@ function writeMapCache(cacheKey: string, payload: BusinessAccountMapResponse) {
   }
 }
 
-export function AccountsMapClient({
-  acumaticaBaseUrl,
-  acumaticaCompanyId,
-}: {
-  acumaticaBaseUrl: string;
-  acumaticaCompanyId: string;
-}) {
+export function AccountsMapClient() {
   const router = useRouter();
 
   const [cachedDatasetRows, setCachedDatasetRows] = useState<BusinessAccountRow[]>([]);
@@ -3348,28 +3359,18 @@ export function AccountsMapClient({
           {selectedPoint ? (
             <div className={styles.card}>
               {(() => {
-                const companyUrl = buildAcumaticaBusinessAccountUrl(
-                  acumaticaBaseUrl,
-                  selectedPoint.businessAccountId,
-                  acumaticaCompanyId,
-                );
+                const companyUrl = buildInternalAccountHref({
+                  accountRecordId: selectedPoint.accountRecordId ?? selectedPoint.id,
+                  businessAccountId: selectedPoint.businessAccountId,
+                });
 
                 return (
               <div className={styles.cardHeader}>
                 <div className={styles.cardTitleBlock}>
                   <h2>
-                    {companyUrl ? (
-                      <a
-                        className={styles.recordLink}
-                        href={companyUrl}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        {selectedPoint.companyName || selectedPoint.businessAccountId}
-                      </a>
-                    ) : (
-                      selectedPoint.companyName || selectedPoint.businessAccountId
-                    )}
+                    <a className={styles.recordLink} href={companyUrl}>
+                      {selectedPoint.companyName || selectedPoint.businessAccountId}
+                    </a>
                   </h2>
                   <p className={styles.cardSubtitle}>
                     Focus this panel on the fields you need for contact cleanup.
@@ -3406,11 +3407,11 @@ export function AccountsMapClient({
                       const draft = contactDrafts[contact.rowKey] ?? buildContactDraft(contact);
                       const canMutateContact =
                         contact.contactId !== null && contact.contactId !== undefined;
-                      const contactUrl = buildAcumaticaContactUrl(
-                        acumaticaBaseUrl,
-                        contact.contactId,
-                        acumaticaCompanyId,
-                      );
+                      const contactUrl = buildInternalAccountHref({
+                        accountRecordId: selectedPoint.accountRecordId ?? selectedPoint.id,
+                        businessAccountId: selectedPoint.businessAccountId,
+                        contactId: contact.contactId,
+                      });
 
                       return (
                         <li
@@ -3419,13 +3420,8 @@ export function AccountsMapClient({
                         >
                           <div className={styles.contactHeader}>
                             <strong>
-                              {contactUrl && renderText(contact.name) !== "-" ? (
-                                <a
-                                  className={styles.recordLink}
-                                  href={contactUrl}
-                                  rel="noreferrer"
-                                  target="_blank"
-                                >
+                              {renderText(contact.name) !== "-" ? (
+                                <a className={styles.recordLink} href={contactUrl}>
                                   {renderText(contact.name)}
                                 </a>
                               ) : (

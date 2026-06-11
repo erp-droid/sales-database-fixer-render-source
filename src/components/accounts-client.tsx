@@ -3563,6 +3563,49 @@ export function AccountsClient({
     allRowsCountRef.current = allRows.length;
   }, [allRows]);
 
+  const accountDeepLinkHandledRef = useRef(false);
+
+  const openAccountFromDeepLink = useEffectEvent((rows: BusinessAccountRow[]) => {
+    const params = new URLSearchParams(window.location.search);
+    const accountRecordId = params.get("accountRecordId")?.trim() ?? "";
+    const businessAccountId = params.get("businessAccountId")?.trim() ?? "";
+    const contactIdParam = params.get("contactId")?.trim() ?? "";
+    if (!accountRecordId && !businessAccountId) {
+      accountDeepLinkHandledRef.current = true;
+      return;
+    }
+
+    const accountRows = rows.filter((row) => {
+      if (accountRecordId && (row.accountRecordId ?? row.id) === accountRecordId) {
+        return true;
+      }
+      return Boolean(businessAccountId) && row.businessAccountId === businessAccountId;
+    });
+    if (accountRows.length === 0) {
+      // Rows may still be hydrating; retry on the next snapshot update.
+      return;
+    }
+
+    const contactId = /^\d+$/.test(contactIdParam) ? Number(contactIdParam) : null;
+    const target =
+      (contactId !== null
+        ? accountRows.find((row) => resolveRowContactId(row) === contactId)
+        : undefined) ??
+      accountRows.find((row) => row.isPrimaryContact) ??
+      accountRows[0];
+
+    accountDeepLinkHandledRef.current = true;
+    window.history.replaceState(window.history.state, "", "/accounts");
+    void openDrawer(target);
+  });
+
+  useEffect(() => {
+    if (accountDeepLinkHandledRef.current || allRows.length === 0) {
+      return;
+    }
+    openAccountFromDeepLink(allRows);
+  }, [allRows]);
+
   useEffect(() => {
     selectedRef.current = selected;
   }, [selected]);
