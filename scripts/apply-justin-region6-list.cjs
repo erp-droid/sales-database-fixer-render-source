@@ -385,8 +385,11 @@ function normalizeCompanyForMatch(value) {
     .replace(/&/g, " and ")
     .replace(/['’]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\bm d a\b/g, " mda ")
+    .replace(/\blogistix\b/g, "logistics")
+    .replace(/\bpepsico\b/g, "pepsi")
     .replace(
-      /\b(incorporated|inc|limited|ltd|corp|corporation|company|co|canada|canadian|the)\b/g,
+      /\b(incorporated|inc|limited|ltd|corp|corporation|company|co|canada|canadian|the|aerospace)\b/g,
       " ",
     )
     .replace(/\s+/g, " ")
@@ -409,6 +412,46 @@ function phoneDigits(value) {
     return digits.slice(1);
   }
   return digits;
+}
+
+function normalizeStreetForMatch(value) {
+  return String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(street|str)\b/g, "st")
+    .replace(/\b(road)\b/g, "rd")
+    .replace(/\b(avenue)\b/g, "ave")
+    .replace(/\b(boulevard)\b/g, "blvd")
+    .replace(/\b(drive)\b/g, "dr")
+    .replace(/\b(court)\b/g, "ct")
+    .replace(/\b(crescent)\b/g, "cres")
+    .replace(/\b(place)\b/g, "pl")
+    .replace(/\b(parkway)\b/g, "pkwy")
+    .replace(/\b(north)\b/g, "n")
+    .replace(/\b(south)\b/g, "s")
+    .replace(/\b(east)\b/g, "e")
+    .replace(/\b(west)\b/g, "w")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function streetMatches(sourceStreet, accountStreet) {
+  if (!sourceStreet || !accountStreet) {
+    return false;
+  }
+  if (sourceStreet === accountStreet) {
+    return true;
+  }
+
+  const sourceCompact = sourceStreet.replace(/\s+/g, "");
+  const accountCompact = accountStreet.replace(/\s+/g, "");
+  if (sourceCompact.length >= 6 && accountCompact.length >= 6) {
+    return sourceCompact.includes(accountCompact) || accountCompact.includes(sourceCompact);
+  }
+
+  return false;
 }
 
 function tokenSet(value) {
@@ -445,6 +488,13 @@ function matchScore(source, account) {
     score += 96;
     reasons.push("name_compact");
   } else if (
+    sourceName.length >= 3 &&
+    sourceName.length <= 4 &&
+    tokenSet(account.companyName).has(sourceName)
+  ) {
+    score += 82;
+    reasons.push("name_acronym_token");
+  } else if (
     sourceName.length >= 5 &&
     accountName.length >= 5 &&
     (sourceName.includes(accountName) || accountName.includes(sourceName))
@@ -470,10 +520,10 @@ function matchScore(source, account) {
     reasons.push("raw_name_exact");
   }
 
-  const sourceStreet = normalizeLoose(source.streetAddress);
-  const accountStreet = normalizeLoose(account.addressLine1 || account.address);
-  if (sourceStreet && accountStreet && (sourceStreet.includes(accountStreet) || accountStreet.includes(sourceStreet))) {
-    score += 60;
+  const sourceStreet = normalizeStreetForMatch(source.streetAddress);
+  const accountStreet = normalizeStreetForMatch(account.addressLine1 || account.address);
+  if (streetMatches(sourceStreet, accountStreet)) {
+    score += 75;
     reasons.push("street_match");
   }
 
@@ -552,10 +602,11 @@ function buildMatches(sourceRows, justinAccounts) {
     const ranked = rankedAll.filter((candidate) => candidate.score >= 80);
 
     const unusedRanked = ranked.filter((candidate) => !usedAccountIds.has(candidate.account.accountRecordId));
-    const best = unusedRanked[0] || ranked[0];
+    const best = unusedRanked[0];
     if (!best) {
       unmatched.push({
         source,
+        duplicateOnly: ranked.length > 0,
         topCandidates: rankedAll.slice(0, 5).map(summarizeMatchCandidate),
       });
       continue;
@@ -1383,8 +1434,21 @@ function buildReport(options, sourceRows, plan, assignmentVersion, backupPath) {
     countBalanceViolations,
     unmatchedSources: plan.unmatched.map((entry) => ({
       ...entry.source,
+      duplicateOnly: entry.duplicateOnly || false,
       topCandidates: entry.topCandidates,
     })),
+    duplicateAccountMatches: (() => {
+      const sourcesByAccountId = new Map();
+      for (const match of plan.matches) {
+        const sources = sourcesByAccountId.get(match.account.accountRecordId) || [];
+        sources.push(match.source);
+        sourcesByAccountId.set(match.account.accountRecordId, sources);
+      }
+      return [...sourcesByAccountId.entries()]
+        .filter(([, sources]) => sources.length > 1)
+        .map(([accountId, sources]) => ({ accountId, sources }))
+        .slice(0, 25);
+    })(),
     ambiguousMatches: plan.ambiguous.slice(0, 25),
     categoryChangeSamples: plan.categoryUpdates
       .filter((update) => update.previousCategory !== update.targetCategory)
