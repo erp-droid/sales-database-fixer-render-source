@@ -9,7 +9,7 @@ const Database = require("better-sqlite3");
 const WEEK_COUNT = 12;
 const DEFAULT_SQLITE_PATH = "/app/data/read-model.sqlite";
 const CANDIDATE_CATEGORIES = new Set(["A", "B"]);
-const ASSIGNMENT_VERSION_PREFIX = "route-weeks-12";
+const ASSIGNMENT_VERSION_PREFIX = "route-weeks-12-contiguous";
 
 function parseArgs(argv) {
   const options = {
@@ -436,16 +436,14 @@ function projectPoints(points) {
   }));
 }
 
-function squaredDistance(point, centroid) {
-  const dx = point.x - centroid.x;
-  const dy = point.y - centroid.y;
-  return dx * dx + dy * dy;
-}
-
 function computeCapacities(total) {
   const base = Math.floor(total / WEEK_COUNT);
   const remainder = total % WEEK_COUNT;
   return Array.from({ length: WEEK_COUNT }, (_, index) => base + (index < remainder ? 1 : 0));
+}
+
+function computeActiveCapacities(total) {
+  return computeCapacities(total).filter((capacity) => capacity > 0);
 }
 
 function averageCentroid(points) {
@@ -459,62 +457,133 @@ function averageCentroid(points) {
   };
 }
 
-function initializeCentroids(points) {
-  const sorted = [...points].sort((left, right) =>
-    (left.companyName || left.accountRecordId).localeCompare(
+function sum(values) {
+  return values.reduce((total, value) => total + value, 0);
+}
+
+function compareProjectedPoints(axis) {
+  const primary = axis === "x" ? "x" : "y";
+  const secondary = axis === "x" ? "y" : "x";
+  return (left, right) => {
+    const primaryDelta = left[primary] - right[primary];
+    if (Math.abs(primaryDelta) > 0.000001) {
+      return primaryDelta;
+    }
+
+    const secondaryDelta = left[secondary] - right[secondary];
+    if (Math.abs(secondaryDelta) > 0.000001) {
+      return secondaryDelta;
+    }
+
+    return (left.companyName || left.accountRecordId).localeCompare(
       right.companyName || right.accountRecordId,
       undefined,
       { sensitivity: "base", numeric: true },
-    ),
-  );
+    );
+  };
+}
 
-  const centroids = Array.from({ length: WEEK_COUNT }, (_, weekIndex) => {
-    const weekPoints = sorted.filter((point) => point.currentWeek === weekIndex + 1);
-    return averageCentroid(weekPoints);
-  });
-
-  while (centroids.some((centroid) => centroid === null)) {
-    const missingIndex = centroids.findIndex((centroid) => centroid === null);
-    if (missingIndex < 0) {
-      break;
-    }
-
-    const candidate =
-      sorted
-        .filter(
-          (point) =>
-            !centroids.some(
-              (centroid) =>
-                centroid &&
-                Math.abs(point.x - centroid.x) < 0.000001 &&
-                Math.abs(point.y - centroid.y) < 0.000001,
-            ),
-        )
-        .map((point) => {
-          const referenceCentroids = centroids.filter(Boolean);
-          if (referenceCentroids.length === 0) {
-            return { point, distance: 0 };
-          }
-          return {
-            point,
-            distance: Math.min(
-              ...referenceCentroids.map((centroid) => squaredDistance(point, centroid)),
-            ),
-          };
-        })
-        .sort((left, right) => right.distance - left.distance)[0]?.point ||
-      sorted[missingIndex % sorted.length];
-
-    centroids[missingIndex] = { x: candidate.x, y: candidate.y };
+function pointSpread(points, axis) {
+  if (points.length <= 1) {
+    return 0;
   }
 
-  return centroids.map(
-    (centroid, index) =>
-      centroid || {
-        x: sorted[index % sorted.length]?.x || 0,
-        y: sorted[index % sorted.length]?.y || 0,
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (const point of points) {
+    min = Math.min(min, point[axis]);
+    max = Math.max(max, point[axis]);
+  }
+
+  return max - min;
+}
+
+function partitionProjectedPoints(points, targetSizes) {
+  if (targetSizes.length <= 1) {
+    return [
+      {
+        points,
+        targetSize: targetSizes[0] || points.length,
       },
-  );
+    ];
+  }
+
+  const leftGroupCount = Math.floor(targetSizes.length / 2);
+  const leftTargetSizes = targetSizes.slice(0, leftGroupCount);
+  const rightTargetSizes = targetSizes.slice(leftGroupCount);
+  const leftPointCount = sum(leftTargetSizes);
+  const axis = pointSpread(points, "x") >= pointSpread(points, "y") ? "x" : "y";
+  const sorted = [...points].sort(compareProjectedPoints(axis));
+
+  return [
+    ...partitionProjectedPoints(sorted.slice(0, leftPointCount), leftTargetSizes),
+    ...partitionProjectedPoints(sorted.slice(leftPointCount), rightTargetSizes),
+  ];
+}
+
+function countCurrentWeeks(points) {
+  const counts = new Map();
+  for (const point of points) {
+    if (
+      Number.isInteger(point.currentWeek) &&
+      point.currentWeek >= 1 &&
+      point.currentWeek <= WEEK_COUNT
+    ) {
+      counts.set(point.currentWeek, (counts.get(point.currentWeek) || 0) + 1);
+    }
+  }
+
+  return counts;
+}
+
+function scoreClusterWeek(cluster, week, clusterIndex) {
+  const keptCount = cluster.currentWeekCounts.get(week) || 0;
+  const spatialOrderWeek = Math.min(clusterIndex + 1, WEEK_COUNT);
+  const orderPenalty = Math.abs(week - spatialOrderWeek) * 0.001;
+  return keptCount - orderPenalty;
+}
+
+function assignWeeksToClusters(clusters) {
+  const memo = new Map();
+
+  function solve(clusterIndex, usedMask) {
+    if (clusterIndex >= clusters.length) {
+      return { score: 0, weeks: [] };
+    }
+
+    const memoKey = `${clusterIndex}:${usedMask}`;
+    const cached = memo.get(memoKey);
+    if (cached) {
+      return cached;
+    }
+
+    let best = null;
+    for (let week = 1; week <= WEEK_COUNT; week += 1) {
+      const bit = 1 << (week - 1);
+      if ((usedMask & bit) !== 0) {
+        continue;
+      }
+
+      const rest = solve(clusterIndex + 1, usedMask | bit);
+      const score = scoreClusterWeek(clusters[clusterIndex], week, clusterIndex) + rest.score;
+      if (
+        !best ||
+        score > best.score ||
+        (Math.abs(score - best.score) < 0.000001 && week < best.weeks[0])
+      ) {
+        best = {
+          score,
+          weeks: [week, ...rest.weeks],
+        };
+      }
+    }
+
+    const result = best || { score: Number.NEGATIVE_INFINITY, weeks: [] };
+    memo.set(memoKey, result);
+    return result;
+  }
+
+  return solve(0, 0).weeks;
 }
 
 function assignProjectedPoints(projectedPoints) {
@@ -522,87 +591,34 @@ function assignProjectedPoints(projectedPoints) {
     return [];
   }
 
-  if (projectedPoints.length <= WEEK_COUNT) {
-    return projectedPoints.map((point, index) => ({
-      ...point,
-      assignedWeek: point.currentWeek || index + 1,
-      assignmentReason:
-        point.currentWeek && point.currentWeek <= projectedPoints.length
-          ? "kept_existing_small_rep"
-          : "single_per_week",
-    }));
-  }
-
-  const capacities = computeCapacities(projectedPoints.length);
-  let centroids = initializeCentroids(projectedPoints);
-  let assigned = new Map();
-
-  for (let iteration = 0; iteration < 24; iteration += 1) {
-    const remaining = [...capacities];
-    const rankedPoints = projectedPoints
-      .map((point) => {
-        const ranks = centroids
-          .map((centroid, index) => {
-            const week = index + 1;
-            const rawDistance = squaredDistance(point, centroid);
-            const adjustedDistance =
-              point.currentWeek === week ? rawDistance * 0.62 : rawDistance;
-            return { week, rawDistance, adjustedDistance };
-          })
-          .sort((left, right) => {
-            if (left.adjustedDistance !== right.adjustedDistance) {
-              return left.adjustedDistance - right.adjustedDistance;
-            }
-            return left.week - right.week;
-          });
-        const margin =
-          (ranks[1]?.adjustedDistance ?? ranks[0].adjustedDistance) -
-          ranks[0].adjustedDistance;
-        return { point, ranks, margin };
-      })
-      .sort((left, right) => {
-        if (right.margin !== left.margin) {
-          return right.margin - left.margin;
-        }
-        return (left.point.companyName || "").localeCompare(right.point.companyName || "");
-      });
-
-    const nextAssigned = new Map();
-    for (const ranked of rankedPoints) {
-      const selected =
-        ranked.ranks.find((rank) => remaining[rank.week - 1] > 0) ||
-        ranked.ranks[ranked.ranks.length - 1];
-      nextAssigned.set(ranked.point.accountRecordId, selected.week);
-      remaining[selected.week - 1] -= 1;
-    }
-
-    const changed = projectedPoints.some(
-      (point) => assigned.get(point.accountRecordId) !== nextAssigned.get(point.accountRecordId),
-    );
-
-    assigned = nextAssigned;
-    centroids = centroids.map((centroid, index) => {
-      const weekPoints = projectedPoints.filter(
-        (point) => assigned.get(point.accountRecordId) === index + 1,
-      );
-      return averageCentroid(weekPoints) || centroid;
+  const capacities = computeActiveCapacities(projectedPoints.length);
+  const clusters = partitionProjectedPoints(projectedPoints, capacities)
+    .map((cluster) => ({
+      ...cluster,
+      centroid: averageCentroid(cluster.points),
+      currentWeekCounts: countCurrentWeeks(cluster.points),
+    }))
+    .sort((left, right) => {
+      const leftCentroid = left.centroid || { x: 0, y: 0 };
+      const rightCentroid = right.centroid || { x: 0, y: 0 };
+      const xDelta = leftCentroid.x - rightCentroid.x;
+      if (Math.abs(xDelta) > 0.000001) {
+        return xDelta;
+      }
+      return rightCentroid.y - leftCentroid.y;
     });
+  const assignedWeeks = assignWeeksToClusters(clusters);
 
-    if (!changed && iteration > 0) {
-      break;
-    }
-  }
-
-  return projectedPoints.map((point) => {
-    const assignedWeek = assigned.get(point.accountRecordId) || 1;
-    return {
+  return clusters.flatMap((cluster, index) => {
+    const assignedWeek = assignedWeeks[index] || index + 1;
+    return cluster.points.map((point) => ({
       ...point,
       assignedWeek,
       assignmentReason:
         point.currentWeek === assignedWeek
-          ? "kept_existing_close_cluster"
-          : "geographic_rebalanced",
-    };
+          ? "kept_existing_in_contiguous_cluster"
+          : "geographic_contiguous_rebalanced",
+    }));
   });
 }
 
@@ -632,6 +648,79 @@ function assignUnmapped(unmappedPoints, existingCountsByWeek) {
             ? "kept_existing_unmapped_balanced"
             : "unmapped_balanced",
       };
+    });
+}
+
+function distanceKm(left, right) {
+  const dx = left.x - right.x;
+  const dy = left.y - right.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function computeSpatialStats(assignments) {
+  const grouped = new Map();
+  for (const assignment of assignments) {
+    if (!hasCoordinate(assignment)) {
+      continue;
+    }
+
+    const key = `${salesRepLabel(assignment)}::${assignment.assignedWeek}`;
+    const group = grouped.get(key) || {
+      salesRep: salesRepLabel(assignment),
+      week: assignment.assignedWeek,
+      points: [],
+    };
+    group.points.push(assignment);
+    grouped.set(key, group);
+  }
+
+  return [...grouped.values()]
+    .map((group) => {
+      const centroid = averageCentroid(group.points) || { x: 0, y: 0 };
+      const distances = group.points.map((point) => distanceKm(point, centroid));
+      const maxDistanceKm = distances.length > 0 ? Math.max(...distances) : 0;
+      const xSpreadKm = pointSpread(group.points, "x");
+      const ySpreadKm = pointSpread(group.points, "y");
+      const bboxDiagonalKm = Math.sqrt(xSpreadKm * xSpreadKm + ySpreadKm * ySpreadKm);
+      const farthestPoint = group.points
+        .map((point, index) => ({ point, distance: distances[index] || 0 }))
+        .sort((left, right) => right.distance - left.distance)[0]?.point;
+
+      return {
+        salesRep: group.salesRep,
+        week: `Week ${group.week}`,
+        count: group.points.length,
+        centroidLatitude: Number((centroid.y / 110.57).toFixed(6)),
+        centroidLongitude: Number(
+          (
+            group.points.reduce((sum, point) => sum + point.longitude, 0) /
+            Math.max(group.points.length, 1)
+          ).toFixed(6),
+        ),
+        maxDistanceKm: Number(maxDistanceKm.toFixed(2)),
+        bboxDiagonalKm: Number(bboxDiagonalKm.toFixed(2)),
+        farthestAccount: farthestPoint
+          ? {
+              accountRecordId: farthestPoint.accountRecordId,
+              businessAccountId: farthestPoint.businessAccountId,
+              companyName: farthestPoint.companyName,
+              latitude: farthestPoint.latitude,
+              longitude: farthestPoint.longitude,
+            }
+          : null,
+      };
+    })
+    .sort((left, right) => {
+      const repDelta = left.salesRep.localeCompare(right.salesRep, undefined, {
+        sensitivity: "base",
+      });
+      if (repDelta !== 0) {
+        return repDelta;
+      }
+
+      const leftWeek = Number(left.week.replace(/\D/g, ""));
+      const rightWeek = Number(right.week.replace(/\D/g, ""));
+      return leftWeek - rightWeek;
     });
 }
 
@@ -690,7 +779,11 @@ function buildAssignments(accounts, includeUnmapped) {
     });
   }
 
-  return { assignments, summaries };
+  return {
+    assignments,
+    summaries,
+    spatialStats: computeSpatialStats(assignments),
+  };
 }
 
 function ensureRouteWeekTable(db) {
@@ -948,6 +1041,10 @@ function buildReport(
     currentWeekKept,
     assignedByWeek,
     reps: assignmentResult.summaries,
+    spatialStats: assignmentResult.spatialStats,
+    widestWeeks: [...assignmentResult.spatialStats]
+      .sort((left, right) => right.bboxDiagonalKm - left.bboxDiagonalKm)
+      .slice(0, 12),
   };
 }
 
