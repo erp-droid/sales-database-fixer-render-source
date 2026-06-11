@@ -484,11 +484,27 @@ function pointSpread(points, axis) {
   return max - min;
 }
 
-function chooseSpatialSplit(points, leftClusterCount, rightClusterCount) {
+function chooseSpatialSplit(points, leftClusterCount, rightClusterCount, targetPerCluster) {
   const totalClusterCount = leftClusterCount + rightClusterCount;
   const targetLeftCount = Math.round((points.length * leftClusterCount) / totalClusterCount);
-  const minLeftCount = leftClusterCount;
-  const maxLeftCount = points.length - rightClusterCount;
+  const validMinLeftCount = leftClusterCount;
+  const validMaxLeftCount = points.length - rightClusterCount;
+  const minClusterSize = Math.max(1, Math.floor(targetPerCluster * 0.55));
+  const maxClusterSize = Math.max(minClusterSize, Math.ceil(targetPerCluster * 1.45));
+  let minLeftCount = Math.max(
+    validMinLeftCount,
+    leftClusterCount * minClusterSize,
+    points.length - rightClusterCount * maxClusterSize,
+  );
+  let maxLeftCount = Math.min(
+    validMaxLeftCount,
+    leftClusterCount * maxClusterSize,
+    points.length - rightClusterCount * minClusterSize,
+  );
+  if (minLeftCount > maxLeftCount) {
+    minLeftCount = validMinLeftCount;
+    maxLeftCount = validMaxLeftCount;
+  }
   let bestSplit = null;
 
   for (const axis of ["x", "y"]) {
@@ -534,7 +550,7 @@ function chooseSpatialSplit(points, leftClusterCount, rightClusterCount) {
   };
 }
 
-function partitionProjectedPoints(points, clusterCount) {
+function partitionProjectedPoints(points, clusterCount, targetPerCluster) {
   if (clusterCount <= 1 || points.length <= 1) {
     return [
       {
@@ -546,11 +562,24 @@ function partitionProjectedPoints(points, clusterCount) {
 
   const leftClusterCount = Math.floor(clusterCount / 2);
   const rightClusterCount = clusterCount - leftClusterCount;
-  const split = chooseSpatialSplit(points, leftClusterCount, rightClusterCount);
+  const split = chooseSpatialSplit(
+    points,
+    leftClusterCount,
+    rightClusterCount,
+    targetPerCluster,
+  );
 
   return [
-    ...partitionProjectedPoints(split.sorted.slice(0, split.splitIndex), leftClusterCount),
-    ...partitionProjectedPoints(split.sorted.slice(split.splitIndex), rightClusterCount),
+    ...partitionProjectedPoints(
+      split.sorted.slice(0, split.splitIndex),
+      leftClusterCount,
+      targetPerCluster,
+    ),
+    ...partitionProjectedPoints(
+      split.sorted.slice(split.splitIndex),
+      rightClusterCount,
+      targetPerCluster,
+    ),
   ];
 }
 
@@ -625,7 +654,8 @@ function assignProjectedPoints(projectedPoints) {
   }
 
   const clusterCount = Math.min(WEEK_COUNT, projectedPoints.length);
-  const clusters = partitionProjectedPoints(projectedPoints, clusterCount)
+  const targetPerCluster = projectedPoints.length / clusterCount;
+  const clusters = partitionProjectedPoints(projectedPoints, clusterCount, targetPerCluster)
     .map((cluster) => ({
       ...cluster,
       centroid: averageCentroid(cluster.points),
