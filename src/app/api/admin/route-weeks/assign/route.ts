@@ -79,6 +79,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const softClusterSizeFactor = parsePositiveNumber(
     request.nextUrl.searchParams.get("softClusterSizeFactor"),
   );
+  const hardClusterSizeFactor = parsePositiveNumber(
+    request.nextUrl.searchParams.get("hardClusterSizeFactor"),
+  );
   const oversizeAccountPenaltyKm = parsePositiveNumber(
     request.nextUrl.searchParams.get("oversizeAccountPenaltyKm"),
   );
@@ -94,6 +97,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
   if (softClusterSizeFactor) {
     args.push("--soft-cluster-size-factor", String(softClusterSizeFactor));
+  }
+  if (hardClusterSizeFactor) {
+    args.push("--hard-cluster-size-factor", String(hardClusterSizeFactor));
   }
   if (oversizeAccountPenaltyKm) {
     args.push("--oversize-account-penalty-km", String(oversizeAccountPenaltyKm));

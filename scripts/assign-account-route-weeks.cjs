@@ -12,11 +12,13 @@ const CANDIDATE_CATEGORIES = new Set(["A", "B"]);
 const ASSIGNMENT_VERSION_PREFIX = "route-weeks-12-compact-geo";
 const DEFAULT_CLUSTER_ITERATIONS = 18;
 const DEFAULT_SOFT_CLUSTER_SIZE_FACTOR = 1.4;
+const DEFAULT_HARD_CLUSTER_SIZE_FACTOR = 2;
 const DEFAULT_OVERSIZE_ACCOUNT_PENALTY_KM = 1.5;
 
 let clusteringConfig = {
   clusterIterations: DEFAULT_CLUSTER_ITERATIONS,
   softClusterSizeFactor: DEFAULT_SOFT_CLUSTER_SIZE_FACTOR,
+  hardClusterSizeFactor: DEFAULT_HARD_CLUSTER_SIZE_FACTOR,
   oversizeAccountPenaltyKm: DEFAULT_OVERSIZE_ACCOUNT_PENALTY_KM,
 };
 
@@ -60,6 +62,11 @@ function parseArgs(argv) {
       options.clustering.softClusterSizeFactor = parsePositiveNumber(
         argv[++index],
         "--soft-cluster-size-factor",
+      );
+    } else if (arg === "--hard-cluster-size-factor") {
+      options.clustering.hardClusterSizeFactor = parsePositiveNumber(
+        argv[++index],
+        "--hard-cluster-size-factor",
       );
     } else if (arg === "--oversize-account-penalty-km") {
       options.clustering.oversizeAccountPenaltyKm = parsePositiveNumber(
@@ -601,6 +608,10 @@ function assignPointsToCenters(points, centers, targetPerCluster) {
     1,
     Math.ceil(targetPerCluster * clusteringConfig.softClusterSizeFactor),
   );
+  const hardClusterSize = Math.max(
+    Math.ceil(points.length / centers.length),
+    Math.ceil(targetPerCluster * clusteringConfig.hardClusterSizeFactor),
+  );
   const clusters = centers.map((center) => ({
     center,
     points: [],
@@ -612,6 +623,10 @@ function assignPointsToCenters(points, centers, targetPerCluster) {
 
     for (let index = 0; index < centers.length; index += 1) {
       const projectedSize = clusters[index].points.length + 1;
+      if (projectedSize > hardClusterSize) {
+        continue;
+      }
+
       const overSoftSize = Math.max(0, projectedSize - softClusterSize);
       const score =
         distanceKm(point, centers[index]) +
@@ -625,6 +640,12 @@ function assignPointsToCenters(points, centers, targetPerCluster) {
         bestIndex = index;
         bestScore = score;
       }
+    }
+
+    if (!Number.isFinite(bestScore)) {
+      bestIndex = clusters
+        .map((cluster, index) => ({ index, size: cluster.points.length }))
+        .sort((left, right) => left.size - right.size || left.index - right.index)[0].index;
     }
 
     clusters[bestIndex].points.push(point);
