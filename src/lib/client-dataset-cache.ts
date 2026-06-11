@@ -3,6 +3,7 @@
 import type { BusinessAccountRow } from "@/types/business-account";
 
 const LEGACY_DATASET_STORAGE_KEYS = [
+  "businessAccounts.dataset.v11",
   "businessAccounts.dataset.v10",
   "businessAccounts.dataset.v9",
   "businessAccounts.dataset.v8",
@@ -15,7 +16,7 @@ const LEGACY_DATASET_STORAGE_KEYS = [
   "businessAccounts.dataset.v1",
 ] as const;
 
-export const DATASET_STORAGE_KEYS = ["businessAccounts.dataset.v11"] as const;
+export const DATASET_STORAGE_KEYS = ["businessAccounts.dataset.v12"] as const;
 
 const CURRENT_DATASET_STORAGE_KEY = DATASET_STORAGE_KEYS[0];
 const SYNC_META_STORAGE_KEY = "businessAccounts.syncMeta.v1";
