@@ -10,6 +10,7 @@ import { extractNormalizedPhoneDigits } from "@/lib/phone";
 import { kickGeocodeWorker, queueGeocodesForRows } from "@/lib/read-model/geocodes";
 import { invalidateReadModelCaches, registerReadModelCacheClearer } from "@/lib/read-model/cache";
 import { applyLocalAccountMetadataToRows } from "@/lib/read-model/account-local-metadata";
+import { applyLocalAccountRouteWeeksToRows } from "@/lib/read-model/account-route-weeks";
 import { applySharedContactNotesToRows } from "@/lib/read-model/contact-identity-notes";
 import { getReadModelDb } from "@/lib/read-model/db";
 import { rebuildSalesRepDirectoryFromStoredRows } from "@/lib/read-model/sales-reps";
@@ -368,8 +369,10 @@ function parseStoredRows(rows: StoredAccountRow[]): BusinessAccountRow[] {
 }
 
 function applyReadModelRowDecorations(rows: BusinessAccountRow[]): BusinessAccountRow[] {
-  return applySharedContactNotesToRows(
-    applyLocalAccountMetadataToRows(applyDeferredActionsToRows(rows)),
+  return applyLocalAccountRouteWeeksToRows(
+    applySharedContactNotesToRows(
+      applyLocalAccountMetadataToRows(applyDeferredActionsToRows(rows)),
+    ),
   );
 }
 
@@ -427,6 +430,20 @@ export function readReadModelRowsSnapshotVersion(): string {
     latest_updated_at?: string;
   };
 
+  const accountRouteWeeksRow = db
+    .prepare(
+      `
+      SELECT
+        COUNT(*) AS row_count,
+        COALESCE(MAX(updated_at), '') AS latest_updated_at
+      FROM account_route_weeks
+      `,
+    )
+    .get() as {
+    row_count?: number;
+    latest_updated_at?: string;
+  };
+
   return [
     Number(accountRow?.row_count ?? 0),
     accountRow?.latest_updated_at ?? "",
@@ -434,6 +451,8 @@ export function readReadModelRowsSnapshotVersion(): string {
     callSessionRow?.latest_updated_at ?? "",
     Number(contactIdentityNotesRow?.row_count ?? 0),
     contactIdentityNotesRow?.latest_updated_at ?? "",
+    Number(accountRouteWeeksRow?.row_count ?? 0),
+    accountRouteWeeksRow?.latest_updated_at ?? "",
   ].join("|");
 }
 

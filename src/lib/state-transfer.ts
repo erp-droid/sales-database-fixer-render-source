@@ -27,6 +27,7 @@ export type AppStateTransferImportResult = {
 const PORTABLE_TABLES = [
   "account_rows",
   "account_local_metadata",
+  "account_route_weeks",
   "contact_identity_notes",
   "employee_directory",
   "sales_rep_directory",

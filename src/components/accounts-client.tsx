@@ -600,7 +600,10 @@ function normalizeWeekFilterValues(value: unknown): string[] {
       value
         .filter((item): item is string => typeof item === "string")
         .map((item) => normalizeWeekValue(item))
-        .filter((item): item is string => Boolean(item)),
+        .filter(
+          (item): item is string =>
+            Boolean(item) && parseRouteWeekNumber(item) !== null,
+        ),
     ),
   ].sort(compareWeekFilterValues);
 }
@@ -959,7 +962,7 @@ const COMPANY_REGION_DEFAULT_OPTIONS: AttributeOption[] = [
   })),
 ];
 
-const WEEK_OPTIONS: AttributeOption[] = Array.from({ length: 15 }, (_, index) => {
+const WEEK_OPTIONS: AttributeOption[] = Array.from({ length: 12 }, (_, index) => {
   const value = `Week ${index + 1}`;
   return {
     value,
@@ -1023,6 +1026,19 @@ function normalizeWeekValue(value: string | null | undefined): string | null {
   }
 
   return trimmed;
+}
+
+function parseRouteWeekNumber(value: string | null | undefined): number | null {
+  const normalized = normalizeWeekValue(value);
+  const match = normalized?.match(/^week\s*(\d+)$/i) ?? null;
+  if (!match) {
+    return null;
+  }
+
+  const weekNumber = Number.parseInt(match[1] ?? "", 10);
+  return Number.isInteger(weekNumber) && weekNumber >= 1 && weekNumber <= 12
+    ? weekNumber
+    : null;
 }
 
 function withCurrentOption(
@@ -3036,6 +3052,9 @@ function clearCachedMapData() {
     window.localStorage.removeItem("businessAccounts.mapCache.v6");
     window.localStorage.removeItem("businessAccounts.mapCache.v7");
     window.localStorage.removeItem("businessAccounts.mapCache.v8");
+    window.localStorage.removeItem("businessAccounts.mapCache.v9");
+    window.localStorage.removeItem("businessAccounts.mapCache.v10");
+    window.localStorage.removeItem("businessAccounts.mapCache.v11");
   } catch {
     // Ignore storage failures while updating client caches.
   }
@@ -3908,10 +3927,12 @@ export function AccountsClient({
     () => withCurrentOption(SUB_CATEGORY_OPTIONS, draft?.subCategory),
     [draft?.subCategory],
   );
-  const weekOptions = useMemo(
-    () => withCurrentOption(WEEK_OPTIONS, draft?.week),
-    [draft?.week],
-  );
+  const weekOptions = useMemo(() => {
+    const currentWeek = normalizeWeekValue(draft?.week);
+    return currentWeek && parseRouteWeekNumber(currentWeek) !== null
+      ? withCurrentOption(WEEK_OPTIONS, currentWeek)
+      : WEEK_OPTIONS;
+  }, [draft?.week]);
   const availableWeekFilters = useMemo(() => {
     const byValue = new Map<string, string>();
     WEEK_OPTIONS.forEach((option) => {
@@ -3920,7 +3941,7 @@ export function AccountsClient({
 
     displayRows.forEach((row) => {
       const normalizedWeek = normalizeWeekValue(row.week);
-      if (!normalizedWeek) {
+      if (!normalizedWeek || parseRouteWeekNumber(normalizedWeek) === null) {
         return;
       }
       byValue.set(normalizeOptionComparable(normalizedWeek), normalizedWeek);
@@ -5501,7 +5522,7 @@ export function AccountsClient({
 
   function toggleWeekFilter(week: string) {
     const normalizedWeek = normalizeWeekValue(week);
-    if (!normalizedWeek) {
+    if (!normalizedWeek || parseRouteWeekNumber(normalizedWeek) === null) {
       return;
     }
 

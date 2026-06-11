@@ -67,6 +67,28 @@ CREATE TABLE IF NOT EXISTS account_local_metadata (
 CREATE INDEX IF NOT EXISTS idx_account_local_metadata_business_account_id
   ON account_local_metadata(business_account_id);
 
+CREATE TABLE IF NOT EXISTS account_route_weeks (
+  account_record_id TEXT PRIMARY KEY,
+  business_account_id TEXT,
+  sales_rep_id TEXT,
+  sales_rep_name TEXT,
+  category TEXT,
+  route_week INTEGER NOT NULL CHECK(route_week BETWEEN 1 AND 12),
+  route_week_label TEXT NOT NULL,
+  latitude REAL,
+  longitude REAL,
+  assignment_version TEXT NOT NULL,
+  assignment_reason TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_route_weeks_business_account_id
+  ON account_route_weeks(business_account_id);
+CREATE INDEX IF NOT EXISTS idx_account_route_weeks_sales_rep_name
+  ON account_route_weeks(sales_rep_name);
+CREATE INDEX IF NOT EXISTS idx_account_route_weeks_route_week
+  ON account_route_weeks(route_week);
+
 CREATE TABLE IF NOT EXISTS contact_identity_notes (
   identity_key TEXT PRIMARY KEY,
   company_name TEXT NOT NULL,

@@ -52,15 +52,30 @@ type SessionResponse = {
 };
 
 const DEFAULT_CENTER: [number, number] = [43.6532, -79.3832];
-const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v10";
+const MAP_CACHE_STORAGE_KEY = "businessAccounts.mapCache.v11";
 const MAP_PANEL_PREFERENCES_STORAGE_KEY = "businessAccounts.mapPanelPrefs.v1";
 const SALES_REP_FILTER_VISIBLE_SELECTION_LIMIT = 5;
-const WEEK_OPTIONS = Array.from({ length: 15 }, (_, index) => `Week ${index + 1}`);
+const WEEK_OPTIONS = Array.from({ length: 12 }, (_, index) => `Week ${index + 1}`);
+const ROUTE_WEEK_COLORS = [
+  "#1f77b4",
+  "#2ca02c",
+  "#d62728",
+  "#9467bd",
+  "#8c564b",
+  "#e377c2",
+  "#7f7f7f",
+  "#bcbd22",
+  "#17becf",
+  "#ff7f0e",
+  "#005a32",
+  "#6a3d9a",
+] as const;
 
 const MAP_DETAIL_FIELD_KEYS = [
   "fullAddress",
   "contactsCount",
   "category",
+  "week",
   "businessAccountId",
   "coordinates",
   "geocodeSource",
@@ -81,6 +96,7 @@ const DEFAULT_MAP_PANEL_PREFERENCES: MapPanelPreferences = {
   fullAddress: true,
   contactsCount: false,
   category: false,
+  week: true,
   businessAccountId: true,
   coordinates: false,
   geocodeSource: false,
@@ -160,6 +176,10 @@ const DETAIL_FIELD_DEFINITIONS: DetailFieldDefinition[] = [
   {
     key: "category",
     label: "Category",
+  },
+  {
+    key: "week",
+    label: "Route Week",
   },
   {
     key: "businessAccountId",
@@ -1423,6 +1443,7 @@ function buildFocusedDetailPreferences(
     fullAddress: true,
     contactsCount: false,
     category: false,
+    week: true,
     businessAccountId: true,
     coordinates: false,
     geocodeSource: false,
@@ -1439,6 +1460,7 @@ function buildAllDetailPreferences(
     fullAddress: true,
     contactsCount: true,
     category: true,
+    week: true,
     businessAccountId: true,
     coordinates: true,
     geocodeSource: true,
@@ -1529,19 +1551,26 @@ function buildMapContactUpdateRequest(
   };
 }
 
-function markerColor(category: Category | null): string {
-  switch (category) {
-    case "A":
-      return "#0f9d58";
-    case "B":
-      return "#f4b400";
-    case "C":
-      return "#db4437";
-    case "D":
-      return "#7e57c2";
-    default:
-      return "#1e88e5";
+function parseRouteWeekNumber(value: string | null | undefined): number | null {
+  const normalized = normalizeWeekValue(value);
+  const match = normalized?.match(/^week\s*(\d+)$/i) ?? null;
+  if (!match) {
+    return null;
   }
+
+  const weekNumber = Number.parseInt(match[1] ?? "", 10);
+  return Number.isInteger(weekNumber) && weekNumber >= 1 && weekNumber <= 12
+    ? weekNumber
+    : null;
+}
+
+function markerColor(week: string | null | undefined): string {
+  const weekNumber = parseRouteWeekNumber(week);
+  if (weekNumber === null) {
+    return "#1e88e5";
+  }
+
+  return ROUTE_WEEK_COLORS[weekNumber - 1] ?? "#1e88e5";
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T | null> {
@@ -1802,7 +1831,7 @@ export function AccountsMapClient({
 
     cachedDatasetRows.forEach((row) => {
       const normalizedWeek = normalizeWeekValue(row.week);
-      if (!normalizedWeek) {
+      if (!normalizedWeek || parseRouteWeekNumber(normalizedWeek) === null) {
         return;
       }
       byValue.set(normalizeOptionComparable(normalizedWeek), normalizedWeek);
@@ -2009,6 +2038,11 @@ export function AccountsMapClient({
         key: "category" as const,
         label: "Category",
         value: renderText(selectedPoint.category),
+      },
+      {
+        key: "week" as const,
+        label: "Route Week",
+        value: renderText(selectedPoint.week ?? null),
       },
       {
         key: "businessAccountId" as const,
@@ -2397,7 +2431,7 @@ export function AccountsMapClient({
         radius: isSelected ? 10 : 8,
         color: "#ffffff",
         weight: 2,
-        fillColor: markerColor(point.category),
+        fillColor: markerColor(point.week),
         fillOpacity: 0.94,
       });
 
@@ -2554,7 +2588,7 @@ export function AccountsMapClient({
 
   function toggleWeekFilter(week: string) {
     const normalizedWeek = normalizeWeekValue(week);
-    if (!normalizedWeek) {
+    if (!normalizedWeek || parseRouteWeekNumber(normalizedWeek) === null) {
       return;
     }
 
@@ -3286,6 +3320,18 @@ export function AccountsMapClient({
               <span>Postal Regions: {postalRegions.length}</span>
             </div>
           ) : null}
+
+          <div className={styles.weekLegend} aria-label="Route week map colors">
+            {ROUTE_WEEK_COLORS.map((color, index) => (
+              <span className={styles.weekLegendItem} key={color}>
+                <span
+                  className={styles.weekLegendSwatch}
+                  style={{ backgroundColor: color }}
+                />
+                Week {index + 1}
+              </span>
+            ))}
+          </div>
 
           {loading ? <p className={styles.loadingText}>Loading map data...</p> : null}
           {error ? <p className={styles.errorText}>{error}</p> : null}

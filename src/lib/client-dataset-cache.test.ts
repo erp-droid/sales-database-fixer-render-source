@@ -104,6 +104,7 @@ describe("client dataset cache", () => {
 
     const cache = await import("@/lib/client-dataset-cache");
     expect(cache.readCachedDatasetFromStorage()).toBeNull();
+    expect(localStorage.getItem("businessAccounts.dataset.v8")).toBeNull();
     expect(localStorage.getItem("businessAccounts.dataset.v5")).toBeNull();
     expect(localStorage.getItem("businessAccounts.dataset.v4")).toBeNull();
     expect(localStorage.getItem("businessAccounts.dataset.v3")).toBeNull();

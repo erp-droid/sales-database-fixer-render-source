@@ -103,7 +103,7 @@ export const COMPANY_REGION_OPTIONS: AttributeOption[] = [
   })),
 ];
 
-export const WEEK_OPTIONS: AttributeOption[] = Array.from({ length: 15 }, (_, index) => {
+export const WEEK_OPTIONS: AttributeOption[] = Array.from({ length: 12 }, (_, index) => {
   const value = `Week ${index + 1}`;
   return {
     value,

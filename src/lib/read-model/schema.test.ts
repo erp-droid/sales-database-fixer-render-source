@@ -212,6 +212,31 @@ describe("ensureReadModelSchema", () => {
     );
   });
 
+  it("creates the local account_route_weeks table", () => {
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(account_route_weeks)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "account_record_id",
+        "business_account_id",
+        "sales_rep_id",
+        "sales_rep_name",
+        "category",
+        "route_week",
+        "route_week_label",
+        "latitude",
+        "longitude",
+        "assignment_version",
+        "assignment_reason",
+        "updated_at",
+      ]),
+    );
+  });
+
   it("adds account row supplemental timestamp columns and indexes to legacy account_rows tables", () => {
     db.exec(`
       CREATE TABLE account_rows (
