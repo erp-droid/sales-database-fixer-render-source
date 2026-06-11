@@ -489,8 +489,8 @@ function chooseSpatialSplit(points, leftClusterCount, rightClusterCount, targetP
   const targetLeftCount = Math.round((points.length * leftClusterCount) / totalClusterCount);
   const validMinLeftCount = leftClusterCount;
   const validMaxLeftCount = points.length - rightClusterCount;
-  const minClusterSize = Math.max(1, Math.floor(targetPerCluster * 0.55));
-  const maxClusterSize = Math.max(minClusterSize, Math.ceil(targetPerCluster * 1.45));
+  const minClusterSize = Math.max(1, Math.floor(targetPerCluster * 0.35));
+  const maxClusterSize = Math.max(minClusterSize, Math.ceil(targetPerCluster * 1.65));
   let minLeftCount = Math.max(
     validMinLeftCount,
     leftClusterCount * minClusterSize,
