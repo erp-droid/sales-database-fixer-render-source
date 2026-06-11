@@ -122,6 +122,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     40,
   );
   const promoteSourceNonAbTo = request.nextUrl.searchParams.get("promoteSourceNonAbTo") || "B";
+  const matchScope =
+    request.nextUrl.searchParams.get("matchScope")?.trim().toLowerCase() === "justin"
+      ? "justin"
+      : "all";
   const body = (await request.json().catch(() => null)) as { rows?: unknown } | null;
   const rows = normalizeRows(body?.rows);
   if (rows.length === 0) {
@@ -148,6 +152,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     promoteSourceNonAbTo,
     "--cluster-iterations",
     String(clusterIterations),
+    "--match-scope",
+    matchScope,
   ];
   if (mode === "apply") {
     args.push("--report", REPORT_PATH);

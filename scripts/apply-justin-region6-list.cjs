@@ -20,6 +20,7 @@ function parseArgs(argv) {
     expectedRouteTotal: 109,
     promoteSourceNonAbTo: "B",
     clusterIterations: 40,
+    matchScope: "all",
     reportPath: "",
   };
 
@@ -41,6 +42,9 @@ function parseArgs(argv) {
       options.promoteSourceNonAbTo = normalizeCategory(argv[++index]) || "B";
     } else if (arg === "--cluster-iterations") {
       options.clusterIterations = Number(argv[++index]);
+    } else if (arg === "--match-scope") {
+      const matchScope = normalizeText(argv[++index])?.toLowerCase();
+      options.matchScope = matchScope === "justin" ? "justin" : "all";
     } else if (arg === "--report") {
       options.reportPath = argv[++index];
     } else {
@@ -59,6 +63,9 @@ function parseArgs(argv) {
   }
   if (!Number.isInteger(options.clusterIterations) || options.clusterIterations <= 0) {
     throw new Error("--cluster-iterations must be a positive integer.");
+  }
+  if (!["all", "justin"].includes(options.matchScope)) {
+    throw new Error("--match-scope must be all or justin.");
   }
 
   return options;
@@ -351,6 +358,25 @@ function isJustinAccount(account) {
   return label.includes("justin") || label.includes("settle");
 }
 
+function mostCommonText(values) {
+  const counts = new Map();
+  for (const value of values.map(normalizeText).filter(Boolean)) {
+    counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  return (
+    [...counts.entries()].sort(
+      (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+    )[0]?.[0] || null
+  );
+}
+
+function resolveJustinRepIdentity(justinAccounts) {
+  return {
+    salesRepId: mostCommonText(justinAccounts.map((account) => account.salesRepId)),
+    salesRepName: mostCommonText(justinAccounts.map((account) => account.salesRepName)) || JUSTIN_REP_LABEL,
+  };
+}
+
 function normalizeCompanyForMatch(value) {
   return String(value ?? "")
     .normalize("NFKD")
@@ -405,6 +431,8 @@ function jaccard(left, right) {
 function matchScore(source, account) {
   const sourceName = normalizeCompanyForMatch(source.companyName);
   const accountName = normalizeCompanyForMatch(account.companyName);
+  const sourceRawName = normalizeLoose(source.companyName);
+  const accountRawName = normalizeLoose(account.companyName);
   const sourceCompact = sourceName.replace(/\s+/g, "");
   const accountCompact = accountName.replace(/\s+/g, "");
   let score = 0;
@@ -437,10 +465,15 @@ function matchScore(source, account) {
     }
   }
 
+  if (sourceRawName && sourceRawName === accountRawName) {
+    score += 4;
+    reasons.push("raw_name_exact");
+  }
+
   const sourceStreet = normalizeLoose(source.streetAddress);
   const accountStreet = normalizeLoose(account.addressLine1 || account.address);
   if (sourceStreet && accountStreet && (sourceStreet.includes(accountStreet) || accountStreet.includes(sourceStreet))) {
-    score += 25;
+    score += 60;
     reasons.push("street_match");
   }
 
@@ -495,23 +528,36 @@ function buildMatches(sourceRows, justinAccounts) {
   const ambiguous = [];
 
   for (const source of sourceRows) {
-    const ranked = justinAccounts
+    const rankedAll = justinAccounts
       .map((account) => {
         const score = matchScore(source, account);
         return { account, ...score };
       })
-      .filter((candidate) => candidate.score >= 80)
       .sort((left, right) => {
         if (right.score !== left.score) {
           return right.score - left.score;
         }
+        const leftJustin = isJustinAccount(left.account) ? 0 : 1;
+        const rightJustin = isJustinAccount(right.account) ? 0 : 1;
+        if (leftJustin !== rightJustin) {
+          return leftJustin - rightJustin;
+        }
+        const leftCategory = left.account.category === source.sourceCategory ? 0 : 1;
+        const rightCategory = right.account.category === source.sourceCategory ? 0 : 1;
+        if (leftCategory !== rightCategory) {
+          return leftCategory - rightCategory;
+        }
         return String(left.account.companyName).localeCompare(String(right.account.companyName));
       });
+    const ranked = rankedAll.filter((candidate) => candidate.score >= 80);
 
     const unusedRanked = ranked.filter((candidate) => !usedAccountIds.has(candidate.account.accountRecordId));
     const best = unusedRanked[0] || ranked[0];
     if (!best) {
-      unmatched.push({ source });
+      unmatched.push({
+        source,
+        topCandidates: rankedAll.slice(0, 5).map(summarizeMatchCandidate),
+      });
       continue;
     }
 
@@ -1059,6 +1105,8 @@ function applyUpdates(db, plan, sourceTables, assignmentVersion, timestamp) {
           account: update.account,
           category: update.targetCategory,
           week: routeWeekByAccountRecordId.get(update.account.accountRecordId) || null,
+          salesRepId: update.targetSalesRepId,
+          salesRepName: update.targetSalesRepName,
           timestamp,
         });
       }
@@ -1158,6 +1206,12 @@ function updateSourceRowsForAccount(db, tableName, update) {
   if (columns.has("week")) {
     setClauses.push("week = @week");
   }
+  if (columns.has("sales_rep_id")) {
+    setClauses.push("sales_rep_id = @sales_rep_id");
+  }
+  if (columns.has("sales_rep_name")) {
+    setClauses.push("sales_rep_name = @sales_rep_name");
+  }
   if (columns.has("payload_json")) {
     setClauses.push("payload_json = @payload_json");
   }
@@ -1178,12 +1232,20 @@ function updateSourceRowsForAccount(db, tableName, update) {
     const payload = parsePayload(row.payload_json);
     const nextPayload =
       payload && typeof payload === "object"
-        ? JSON.stringify({ ...payload, category: update.category, week: update.week })
+        ? JSON.stringify({
+            ...payload,
+            category: update.category,
+            week: update.week,
+            salesRepId: update.salesRepId,
+            salesRepName: update.salesRepName,
+          })
         : row.payload_json;
     updated += statement.run({
       row_id: row.row_id,
       category: update.category,
       week: update.week,
+      sales_rep_id: update.salesRepId,
+      sales_rep_name: update.salesRepName,
       payload_json: nextPayload,
       updated_at: update.timestamp,
     }).changes;
@@ -1194,31 +1256,55 @@ function updateSourceRowsForAccount(db, tableName, update) {
 
 function buildPlan(sourceRows, accounts, options) {
   const justinAccounts = accounts.filter(isJustinAccount);
-  const { matches, unmatched, ambiguous } = buildMatches(sourceRows, justinAccounts);
+  const matchAccounts = options.matchScope === "justin" ? justinAccounts : accounts;
+  const justinRepIdentity = resolveJustinRepIdentity(justinAccounts);
+  const { matches, unmatched, ambiguous } = buildMatches(sourceRows, matchAccounts);
   const matchedAccountIds = new Set(matches.map((match) => match.account.accountRecordId));
   const matchedSourceByAccountId = new Map(
     matches.map((match) => [match.account.accountRecordId, match.source]),
   );
-  const categoryUpdates = justinAccounts.map((account) => {
+  const categoryUpdateMap = new Map();
+  for (const account of justinAccounts) {
     const source = matchedSourceByAccountId.get(account.accountRecordId);
-    return {
+    categoryUpdateMap.set(account.accountRecordId, {
       account,
       source: source || null,
       previousCategory: account.category || null,
       targetCategory: source ? source.sourceCategory : "D",
+      targetSalesRepId: account.salesRepId || justinRepIdentity.salesRepId,
+      targetSalesRepName: account.salesRepName || justinRepIdentity.salesRepName,
       reason: source ? "matched_source_list" : "justin_not_in_source_list",
-    };
-  });
+    });
+  }
+  for (const match of matches) {
+    if (categoryUpdateMap.has(match.account.accountRecordId)) {
+      continue;
+    }
+    categoryUpdateMap.set(match.account.accountRecordId, {
+      account: match.account,
+      source: match.source,
+      previousCategory: match.account.category || null,
+      targetCategory: match.source.sourceCategory,
+      targetSalesRepId: justinRepIdentity.salesRepId,
+      targetSalesRepName: justinRepIdentity.salesRepName,
+      reason: "matched_source_list_reassigned_to_justin",
+    });
+  }
+  const categoryUpdates = [...categoryUpdateMap.values()];
   const routeAccounts = categoryUpdates
     .filter((update) => update.targetCategory === "A" || update.targetCategory === "B")
     .map((update) => ({
       ...update.account,
       targetCategory: update.targetCategory,
+      salesRepId: update.targetSalesRepId,
+      salesRepName: update.targetSalesRepName,
     }));
   const routeAssignments = assignRouteWeeks(routeAccounts, options.clusterIterations);
 
   return {
     justinAccounts,
+    matchAccounts,
+    justinRepIdentity,
     matches,
     unmatched,
     ambiguous,
@@ -1271,10 +1357,13 @@ function buildReport(options, sourceRows, plan, assignmentVersion, backupPath) {
       expectedRouteTotal: options.expectedRouteTotal,
       promoteSourceNonAbTo: options.promoteSourceNonAbTo,
       clusterIterations: options.clusterIterations,
+      matchScope: options.matchScope,
     },
     sourceTotal: sourceRows.length,
     sourcePriorityCounts,
     justinAccountTotal: plan.justinAccounts.length,
+    matchAccountTotal: plan.matchAccounts.length,
+    justinRepIdentity: plan.justinRepIdentity,
     matchedSourceTotal: plan.matches.length,
     uniqueMatchedAccountTotal: plan.matchedAccountIds.size,
     unmatchedSourceTotal: plan.unmatched.length,
@@ -1284,12 +1373,18 @@ function buildReport(options, sourceRows, plan, assignmentVersion, backupPath) {
     movedJustinAccountsToD: plan.categoryUpdates.filter(
       (update) => update.reason === "justin_not_in_source_list",
     ).length,
+    movedSourceAccountsToJustin: plan.categoryUpdates.filter(
+      (update) => update.reason === "matched_source_list_reassigned_to_justin",
+    ).length,
     routeAccountTotal: plan.routeAssignments.length,
     routeGeocodedTotal: plan.routeAssignments.filter(hasCoordinate).length,
     routeUnmappedTotal: plan.routeAssignments.filter((assignment) => !hasCoordinate(assignment)).length,
     weekCounts,
     countBalanceViolations,
-    unmatchedSources: plan.unmatched.map((entry) => entry.source),
+    unmatchedSources: plan.unmatched.map((entry) => ({
+      ...entry.source,
+      topCandidates: entry.topCandidates,
+    })),
     ambiguousMatches: plan.ambiguous.slice(0, 25),
     categoryChangeSamples: plan.categoryUpdates
       .filter((update) => update.previousCategory !== update.targetCategory)
