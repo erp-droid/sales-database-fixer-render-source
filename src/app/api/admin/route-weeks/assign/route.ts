@@ -11,6 +11,7 @@ const execFileAsync = promisify(execFile);
 const ADMIN_TOKEN = "974a7830a84a313e4ee51d939684773476dc101f64dc3752447a9b5f65baa17b";
 const DEFAULT_EXPECTED_TOTAL = 1254;
 const REPORT_PATH = "/app/data/route-week-assignment-report.json";
+const SCRIPT_TIMEOUT_MS = 300_000;
 
 function parseExpectedTotal(value: string | null): number {
   if (!value) {
@@ -41,6 +42,10 @@ function parsePositiveInteger(value: string | null): number | null {
 
 function readMode(value: string | null): "dry-run" | "apply" {
   return value === "apply" ? "apply" : "dry-run";
+}
+
+function readBoolean(value: string | null): boolean {
+  return value === "1" || value === "true" || value === "yes";
 }
 
 function isAuthorized(request: NextRequest): boolean {
@@ -85,6 +90,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const oversizeAccountPenaltyKm = parsePositiveNumber(
     request.nextUrl.searchParams.get("oversizeAccountPenaltyKm"),
   );
+  const skipSourceRowUpdates = readBoolean(
+    request.nextUrl.searchParams.get("skipSourceRowUpdates"),
+  );
   const scriptPath = path.join(process.cwd(), "scripts", "assign-account-route-weeks.cjs");
   const args = [
     scriptPath,
@@ -107,13 +115,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (mode === "apply") {
     args.push("--report", REPORT_PATH);
   }
+  if (skipSourceRowUpdates) {
+    args.push("--skip-source-row-updates");
+  }
 
   try {
     const { stdout, stderr } = await execFileAsync(process.execPath, args, {
       cwd: process.cwd(),
       env: process.env,
       maxBuffer: 10 * 1024 * 1024,
-      timeout: 120_000,
+      timeout: SCRIPT_TIMEOUT_MS,
     });
 
     return NextResponse.json({

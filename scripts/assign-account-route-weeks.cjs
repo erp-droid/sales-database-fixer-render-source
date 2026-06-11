@@ -37,6 +37,7 @@ function parseArgs(argv) {
     reportPath: "",
     expectedTotal: 1269,
     includeUnmapped: true,
+    skipSourceRowUpdates: false,
     clustering: { ...clusteringConfig },
   };
 
@@ -75,6 +76,8 @@ function parseArgs(argv) {
       );
     } else if (arg === "--exclude-unmapped") {
       options.includeUnmapped = false;
+    } else if (arg === "--skip-source-row-updates") {
+      options.skipSourceRowUpdates = true;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
@@ -1287,7 +1290,14 @@ function updateAccountRowsForAssignment(db, tableName, assignment, timestamp) {
   return updated;
 }
 
-function applyAssignments(db, assignments, sourceTables, assignmentVersion, timestamp) {
+function applyAssignments(
+  db,
+  assignments,
+  sourceTables,
+  assignmentVersion,
+  timestamp,
+  skipSourceRowUpdates,
+) {
   ensureRouteWeekTable(db);
   const insert = db.prepare(`
     INSERT INTO account_route_weeks (
@@ -1355,8 +1365,10 @@ function applyAssignments(db, assignments, sourceTables, assignmentVersion, time
         updated_at: timestamp,
       });
       insertCandidate.run(assignment.accountRecordId);
-      for (const tableName of sourceTables) {
-        updateAccountRowsForAssignment(db, tableName, assignment, timestamp);
+      if (!skipSourceRowUpdates) {
+        for (const tableName of sourceTables) {
+          updateAccountRowsForAssignment(db, tableName, assignment, timestamp);
+        }
       }
     }
 
@@ -1418,6 +1430,7 @@ function buildReport(
     mode: options.apply ? "apply" : "dry-run",
     assignmentVersion,
     clustering: options.clustering,
+    skipSourceRowUpdates: options.skipSourceRowUpdates,
     sqlitePath: options.sqlitePath,
     sourceTables,
     diagnostics,
@@ -1477,7 +1490,14 @@ async function main() {
     let backupPath = null;
     if (options.apply) {
       backupPath = await createBackup(db, sqlitePath, safeTimestamp);
-      applyAssignments(db, assignmentResult.assignments, sourceTables, assignmentVersion, timestamp);
+      applyAssignments(
+        db,
+        assignmentResult.assignments,
+        sourceTables,
+        assignmentVersion,
+        timestamp,
+        options.skipSourceRowUpdates,
+      );
     }
 
     const report = buildReport(
