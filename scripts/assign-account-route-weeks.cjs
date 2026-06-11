@@ -436,16 +436,6 @@ function projectPoints(points) {
   }));
 }
 
-function computeCapacities(total) {
-  const base = Math.floor(total / WEEK_COUNT);
-  const remainder = total % WEEK_COUNT;
-  return Array.from({ length: WEEK_COUNT }, (_, index) => base + (index < remainder ? 1 : 0));
-}
-
-function computeActiveCapacities(total) {
-  return computeCapacities(total).filter((capacity) => capacity > 0);
-}
-
 function averageCentroid(points) {
   if (points.length === 0) {
     return null;
@@ -455,10 +445,6 @@ function averageCentroid(points) {
     x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
     y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
   };
-}
-
-function sum(values) {
-  return values.reduce((total, value) => total + value, 0);
 }
 
 function compareProjectedPoints(axis) {
@@ -498,26 +484,73 @@ function pointSpread(points, axis) {
   return max - min;
 }
 
-function partitionProjectedPoints(points, targetSizes) {
-  if (targetSizes.length <= 1) {
+function chooseSpatialSplit(points, leftClusterCount, rightClusterCount) {
+  const totalClusterCount = leftClusterCount + rightClusterCount;
+  const targetLeftCount = Math.round((points.length * leftClusterCount) / totalClusterCount);
+  const minLeftCount = leftClusterCount;
+  const maxLeftCount = points.length - rightClusterCount;
+  let bestSplit = null;
+
+  for (const axis of ["x", "y"]) {
+    const spread = pointSpread(points, axis);
+    if (spread <= 0) {
+      continue;
+    }
+
+    const sorted = [...points].sort(compareProjectedPoints(axis));
+    const averageSpacing = spread / Math.max(points.length - 1, 1);
+    for (let splitIndex = minLeftCount; splitIndex <= maxLeftCount; splitIndex += 1) {
+      const gap = sorted[splitIndex][axis] - sorted[splitIndex - 1][axis];
+      const balancePenalty = Math.abs(splitIndex - targetLeftCount) * averageSpacing * 0.75;
+      const score = gap - balancePenalty;
+      if (
+        !bestSplit ||
+        score > bestSplit.score ||
+        (Math.abs(score - bestSplit.score) < 0.000001 &&
+          Math.abs(splitIndex - targetLeftCount) <
+            Math.abs(bestSplit.splitIndex - targetLeftCount))
+      ) {
+        bestSplit = {
+          axis,
+          score,
+          splitIndex,
+          sorted,
+        };
+      }
+    }
+  }
+
+  if (bestSplit) {
+    return bestSplit;
+  }
+
+  const axis = pointSpread(points, "x") >= pointSpread(points, "y") ? "x" : "y";
+  const sorted = [...points].sort(compareProjectedPoints(axis));
+  return {
+    axis,
+    score: 0,
+    splitIndex: Math.min(Math.max(targetLeftCount, minLeftCount), maxLeftCount),
+    sorted,
+  };
+}
+
+function partitionProjectedPoints(points, clusterCount) {
+  if (clusterCount <= 1 || points.length <= 1) {
     return [
       {
         points,
-        targetSize: targetSizes[0] || points.length,
+        targetSize: points.length,
       },
     ];
   }
 
-  const leftGroupCount = Math.floor(targetSizes.length / 2);
-  const leftTargetSizes = targetSizes.slice(0, leftGroupCount);
-  const rightTargetSizes = targetSizes.slice(leftGroupCount);
-  const leftPointCount = sum(leftTargetSizes);
-  const axis = pointSpread(points, "x") >= pointSpread(points, "y") ? "x" : "y";
-  const sorted = [...points].sort(compareProjectedPoints(axis));
+  const leftClusterCount = Math.floor(clusterCount / 2);
+  const rightClusterCount = clusterCount - leftClusterCount;
+  const split = chooseSpatialSplit(points, leftClusterCount, rightClusterCount);
 
   return [
-    ...partitionProjectedPoints(sorted.slice(0, leftPointCount), leftTargetSizes),
-    ...partitionProjectedPoints(sorted.slice(leftPointCount), rightTargetSizes),
+    ...partitionProjectedPoints(split.sorted.slice(0, split.splitIndex), leftClusterCount),
+    ...partitionProjectedPoints(split.sorted.slice(split.splitIndex), rightClusterCount),
   ];
 }
 
@@ -591,8 +624,8 @@ function assignProjectedPoints(projectedPoints) {
     return [];
   }
 
-  const capacities = computeActiveCapacities(projectedPoints.length);
-  const clusters = partitionProjectedPoints(projectedPoints, capacities)
+  const clusterCount = Math.min(WEEK_COUNT, projectedPoints.length);
+  const clusters = partitionProjectedPoints(projectedPoints, clusterCount)
     .map((cluster) => ({
       ...cluster,
       centroid: averageCentroid(cluster.points),
