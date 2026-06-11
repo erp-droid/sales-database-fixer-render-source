@@ -113,6 +113,12 @@ function computeRepSpatialStats(assignments) {
         week: `Week ${week}`,
         count: points.length,
         diameterKm: Number(farthestPair.distanceKm.toFixed(2)),
+        farthestPair: farthestPair.accounts.map((account) => ({
+          companyName: account.companyName,
+          city: account.city,
+          latitude: account.latitude,
+          longitude: account.longitude,
+        })),
       };
     })
     .sort((left, right) => Number(left.week.replace(/\D/g, "")) - Number(right.week.replace(/\D/g, "")));
