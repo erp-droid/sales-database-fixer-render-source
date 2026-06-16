@@ -30,6 +30,8 @@ services:
         value: "true"
       - key: AUTH_TOKEN_SECRET
         sync: false
+      - key: STATE_TRANSFER_SYSTEM_KEY
+        sync: false
       - key: APP_BASE_URL
         value: https://sales-meadowb.onrender.com
       - key: STARTUP_WARMUP_ENABLED
