@@ -17,7 +17,9 @@ import {
   buildMeetingContactOptionsFromRows,
   buildMeetingInviteAttendees,
   findMeetingContactByLoginName,
+  isBlockedMeetingAttendeeEmail,
   isMeetingOrganizerContactForLogin,
+  normalizeMeetingContactIds,
   type ResolvedMeetingContact,
 } from "@/lib/meeting-create";
 import { upsertMeetingBooking } from "@/lib/meeting-bookings";
@@ -37,22 +39,21 @@ function normalizeAttendeeContactIds(
   relatedContactId: number | null,
   attendeeContactIds: number[],
 ): number[] {
+  return normalizeMeetingContactIds([relatedContactId, ...attendeeContactIds]);
+}
+
+function normalizeAttendeeEmails(attendeeEmails: string[]): string[] {
   return [
     ...new Set(
-      [
-        relatedContactId,
-        ...attendeeContactIds,
-      ].filter((value): value is number => typeof value === "number" && Number.isFinite(value)),
+      attendeeEmails
+        .map((email) => email.trim().toLowerCase())
+        .filter((email) => email && !isBlockedMeetingAttendeeEmail(email)),
     ),
   ];
 }
 
-function normalizeAttendeeEmails(attendeeEmails: string[]): string[] {
-  return [...new Set(attendeeEmails.map((email) => email.trim().toLowerCase()).filter(Boolean))];
-}
-
 function uniqueContactIds(ids: Array<number | null | undefined>): number[] {
-  return [...new Set(ids.filter((value): value is number => typeof value === "number"))];
+  return normalizeMeetingContactIds(ids);
 }
 
 function toResolvedMeetingContact(contact: MeetingContactOption): ResolvedMeetingContact {

@@ -37,6 +37,7 @@ import type { CompanyAttributeSuggestionRequest } from "@/types/company-attribut
 import {
   buildMeetingDateTimeRange,
   extractDeliverableMeetingEmail,
+  normalizeMeetingContactId,
 } from "@/lib/meeting-create";
 import { normalizeExtensionForSave, normalizePhoneForSave } from "@/lib/phone";
 
@@ -464,35 +465,17 @@ export const meetingCreateRequestSchema = z
     businessAccountId: nullableStringSchema.default(null),
     sourceContactId: z
       .union([z.number(), z.string(), z.null(), z.undefined()])
-      .transform((value) => {
-        if (value === null || value === undefined || value === "") {
-          return null;
-        }
-        const numeric = Number(value);
-        return Number.isFinite(numeric) ? numeric : null;
-      })
+      .transform((value) => normalizeMeetingContactId(value))
       .default(null),
     organizerContactId: z
       .union([z.number(), z.string(), z.null(), z.undefined()])
-      .transform((value) => {
-        if (value === null || value === undefined || value === "") {
-          return null;
-        }
-        const numeric = Number(value);
-        return Number.isFinite(numeric) ? numeric : null;
-      })
+      .transform((value) => normalizeMeetingContactId(value))
       .default(null),
     includeOrganizerInAcumatica: z.coerce.boolean().default(false),
     includeRelatedContactInInvite: z.coerce.boolean().default(true),
     relatedContactId: z
       .union([z.number(), z.string(), z.null(), z.undefined()])
-      .transform((value) => {
-        if (value === null || value === undefined || value === "") {
-          return null;
-        }
-        const numeric = Number(value);
-        return Number.isFinite(numeric) && numeric > 0 ? Math.trunc(numeric) : null;
-      })
+      .transform((value) => normalizeMeetingContactId(value))
       .default(null),
     category: z.enum(MEETING_CATEGORY_VALUES, {
       required_error: "Category is required.",
@@ -529,7 +512,20 @@ export const meetingCreateRequestSchema = z
       .max(10, "You can add up to 10 attachment links.")
       .default([]),
     attendeeContactIds: z
-      .array(z.coerce.number().int().positive("Attendee contact IDs must be positive numbers."))
+      .array(
+        z.unknown().transform((value, ctx) => {
+          const contactId = normalizeMeetingContactId(value);
+          if (contactId === null) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: "Attendee contact IDs must be positive numbers.",
+            });
+            return z.NEVER;
+          }
+
+          return contactId;
+        }),
+      )
       .default([]),
     attendeeEmails: z
       .array(

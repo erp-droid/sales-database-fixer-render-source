@@ -197,6 +197,34 @@ describe("GET /api/employees/search", () => {
     expect(fetchEmployeeProfileById).not.toHaveBeenCalled();
   });
 
+  it("does not return Alex Buhagiar from cached employee search results", async () => {
+    readEmployeeDirectorySnapshot.mockReturnValue({
+      items: [
+        {
+          id: "E0000099",
+          name: "Alex Buhagiar",
+          loginName: "abuhagiar",
+          email: "abuhagiar@meadowb.com",
+          contactId: 99,
+          phone: "+14374239999",
+          isActive: true,
+        },
+      ],
+      source: "acumatica_employees",
+      updatedAt: "2026-03-17T16:00:00.000Z",
+    });
+
+    const { GET } = await import("@/app/api/employees/search/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/employees/search?q=alex"),
+    );
+    const payload = (await response.json()) as { items: unknown[] };
+
+    expect(response.status).toBe(200);
+    expect(payload.items).toEqual([]);
+    expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
+  });
+
   it("falls back to a broader internal contact search when Acumatica contact display names differ", async () => {
     fetchEmployees.mockResolvedValue([{ id: "E0000153", name: "Simon Doal" }]);
     fetchEmployeeProfileById.mockResolvedValueOnce({

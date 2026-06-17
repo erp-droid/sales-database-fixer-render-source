@@ -30,6 +30,10 @@ import {
   readEmployeeDirectorySnapshot,
 } from "@/lib/read-model/employees";
 import { normalizeTwilioPhoneNumber } from "@/lib/twilio";
+import {
+  isBlockedMeetingEmployeeAttendee,
+  normalizeMeetingContactId,
+} from "@/lib/meeting-create";
 import type { MeetingEmployeeOption } from "@/types/meeting-create";
 
 const EMPLOYEE_DIRECTORY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -280,14 +284,16 @@ function buildCachedMeetingEmployeeOption(
     return null;
   }
 
-  return {
+  const option = {
     key: `employee:${loginName}`,
     loginName,
     employeeName,
     email: emailCandidate,
-    contactId: employee.contactId ?? null,
+    contactId: normalizeMeetingContactId(employee.contactId),
     isInternal: true,
-  };
+  } satisfies MeetingEmployeeOption;
+
+  return isBlockedMeetingEmployeeAttendee(option) ? null : option;
 }
 
 function buildMeetingEmployeeOptionFromCachedDirectoryItem(
@@ -307,14 +313,16 @@ function buildMeetingEmployeeOptionFromCachedDirectoryItem(
     return null;
   }
 
-  return {
+  const option = {
     key: `employee:${loginName}`,
     loginName,
     employeeName,
     email: emailCandidate,
-    contactId: employee.contactId ?? null,
+    contactId: normalizeMeetingContactId(employee.contactId),
     isInternal: true,
-  };
+  } satisfies MeetingEmployeeOption;
+
+  return isBlockedMeetingEmployeeAttendee(option) ? null : option;
 }
 
 async function buildMeetingEmployeeOption(
@@ -369,9 +377,22 @@ async function buildMeetingEmployeeOption(
   }
 
   const contactId =
-    profile?.contactId ?? readWrappedNumber(fallbackContact, "ContactID") ?? null;
+    normalizeMeetingContactId(profile?.contactId) ??
+    normalizeMeetingContactId(readWrappedNumber(fallbackContact, "ContactID"));
   const employeeName = profile?.displayName?.trim() || displayName;
   const normalizedPhone = normalizeTwilioPhoneNumber(profile?.phone ?? null);
+  const option = {
+    key: `employee:${loginName}`,
+    loginName,
+    employeeName,
+    email: emailCandidate,
+    contactId,
+    isInternal: true,
+  } satisfies MeetingEmployeeOption;
+
+  if (isBlockedMeetingEmployeeAttendee(option)) {
+    return null;
+  }
 
   upsertCallEmployeeDirectoryItem({
     loginName,
@@ -384,14 +405,7 @@ async function buildMeetingEmployeeOption(
     updatedAt: new Date().toISOString(),
   });
 
-  return {
-    key: `employee:${loginName}`,
-    loginName,
-    employeeName,
-    email: emailCandidate,
-    contactId,
-    isInternal: true,
-  };
+  return option;
 }
 
 function dedupeMeetingEmployeeOptions(items: MeetingEmployeeOption[]): MeetingEmployeeOption[] {

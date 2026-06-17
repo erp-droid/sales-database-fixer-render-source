@@ -10,7 +10,12 @@ import {
   findMeetingContactByEmail,
   findMeetingContactByLoginName,
   findMeetingContactOptionById,
+  isBlockedMeetingAttendeeEmail,
+  isBlockedMeetingEmployeeAttendee,
   isDeliverableMeetingEmail,
+  isPositiveMeetingContactId,
+  normalizeMeetingContactId,
+  normalizeMeetingContactIds,
   normalizeMeetingEmail,
 } from "@/lib/meeting-create";
 import {
@@ -310,7 +315,7 @@ function isMeetingEmployeeOption(payload: unknown): payload is MeetingEmployeeOp
     typeof record.loginName === "string" &&
     typeof record.employeeName === "string" &&
     typeof record.email === "string" &&
-    (typeof record.contactId === "number" || record.contactId === null) &&
+    (isPositiveMeetingContactId(record.contactId) || record.contactId === null) &&
     record.isInternal === true
   );
 }
@@ -459,14 +464,15 @@ function compareMeetingContacts(left: MeetingContactOption, right: MeetingContac
 function buildFallbackSourceContactOption(
   source: MeetingSourceContext | null,
 ): MeetingContactOption | null {
-  if (!source || source.contactId === null) {
+  const contactId = normalizeMeetingContactId(source?.contactId);
+  if (!source || contactId === null) {
     return null;
   }
 
   return {
-    key: `${source.contactId}:${source.accountRecordId ?? source.accountKey}`,
-    contactId: source.contactId,
-    contactName: source.contactName?.trim() || `Contact ${source.contactId}`,
+    key: `${contactId}:${source.accountRecordId ?? source.accountKey}`,
+    contactId,
+    contactName: source.contactName?.trim() || `Contact ${contactId}`,
     email: source.contactEmail?.trim() || null,
     phone: source.contactPhone?.trim() || null,
     businessAccountRecordId: source.accountRecordId?.trim() || null,
@@ -531,7 +537,7 @@ function matchMeetingEmployee(
 }
 
 function uniqueContactIds(ids: Array<number | null | undefined>): number[] {
-  return [...new Set(ids.filter((value): value is number => typeof value === "number"))];
+  return normalizeMeetingContactIds(ids);
 }
 
 function uniqueAttendeeEmails(emails: Array<string | null | undefined>): string[] {
@@ -541,11 +547,11 @@ function uniqueAttendeeEmails(emails: Array<string | null | undefined>): string[
         .map((email) => normalizeMeetingEmail(email))
         .filter((email): email is string => Boolean(email)),
     ),
-  ];
+  ].filter((email) => !isBlockedMeetingAttendeeEmail(email));
 }
 
 function isValidAttendeeEmail(value: string | null | undefined): value is string {
-  return extractDeliverableMeetingEmail(value) !== null;
+  return extractDeliverableMeetingEmail(value) !== null && !isBlockedMeetingAttendeeEmail(value);
 }
 
 function normalizeNullableInput(value: string): string | null {
@@ -634,7 +640,12 @@ export function CreateMeetingDrawer({
     [...(options?.contacts ?? []), ...localContacts]
       .sort(compareMeetingContacts)
       .forEach((contact) => {
-        byId.set(contact.contactId, contact);
+        const contactId = normalizeMeetingContactId(contact.contactId);
+        if (contactId === null) {
+          return;
+        }
+
+        byId.set(contactId, { ...contact, contactId });
       });
 
     if (fallbackIssueContact) {
@@ -654,13 +665,18 @@ export function CreateMeetingDrawer({
     const byKey = new Map<string, MeetingEmployeeOption>();
 
     [...(options?.employees ?? []), ...remoteEmployeeMatches].forEach((employee) => {
+      if (isBlockedMeetingEmployeeAttendee(employee)) {
+        return;
+      }
+
+      const contactId = normalizeMeetingContactId(employee.contactId);
       const dedupeKey =
         normalizeMeetingEmail(employee.email) ?? employee.loginName.trim().toLowerCase();
       if (!dedupeKey || byKey.has(dedupeKey)) {
         return;
       }
 
-      byKey.set(dedupeKey, employee);
+      byKey.set(dedupeKey, { ...employee, contactId });
     });
 
     return [...byKey.values()].sort((left, right) =>
@@ -686,6 +702,7 @@ export function CreateMeetingDrawer({
     [contactDirectory, viewerLoginName],
   );
   const viewerContactId = viewerContact?.contactId ?? null;
+  const sourceContactId = normalizeMeetingContactId(source?.contactId);
   const categoryLabel = form.category;
   const categoryLowerLabel = categoryLabel === "Drop Off" ? "drop off" : "meeting";
   const createLabel = form.category === "Drop Off" ? "Schedule drop off" : "Schedule meeting";
@@ -729,8 +746,8 @@ export function CreateMeetingDrawer({
 
     const nextTimeZone = options?.defaultTimeZone ?? DEFAULT_MEETING_TIME_ZONE;
     setForm(buildEmptyMeetingForm(nextTimeZone, defaultCategory));
-    setRelatedContactId(source?.contactId ?? null);
-    setAttendeeContactIds(source?.contactId !== null && source?.contactId !== undefined ? [source.contactId] : []);
+    setRelatedContactId(sourceContactId);
+    setAttendeeContactIds(sourceContactId !== null ? [sourceContactId] : []);
     setAttendeeEmails([]);
     setRelatedContactSearchTerm(source?.contactName?.trim() ?? "");
     setAttendeeSearchTerm("");
@@ -763,6 +780,7 @@ export function CreateMeetingDrawer({
     source?.companyName,
     source?.contactId,
     source?.contactName,
+    sourceContactId,
     defaultCategory,
     options?.defaultTimeZone,
     viewerContact,
@@ -936,7 +954,9 @@ export function CreateMeetingDrawer({
         }
 
         if (!controller.signal.aborted) {
-          setRemoteEmployeeMatches(payload.items);
+          setRemoteEmployeeMatches(
+            payload.items.filter((employee) => !isBlockedMeetingEmployeeAttendee(employee)),
+          );
         }
       })
       .catch((error) => {
@@ -958,7 +978,7 @@ export function CreateMeetingDrawer({
     return () => controller.abort();
   }, [debouncedAttendeeSearchTerm, isOpen]);
 
-  const relatedContactLocked = source?.contactId !== null && source?.contactId !== undefined;
+  const relatedContactLocked = sourceContactId !== null;
   const createContactAccountOptions = useMemo(
     () =>
       (options?.accounts ?? []).map((account) => ({
@@ -1018,7 +1038,9 @@ export function CreateMeetingDrawer({
   );
   const selectedExternalAttendeeEmails = useMemo(
     () =>
-      normalizedAttendeeEmails.filter((email) => !selectedAttendeeEmailSet.has(email)),
+      normalizedAttendeeEmails.filter(
+        (email) => !selectedAttendeeEmailSet.has(email) && !isBlockedMeetingAttendeeEmail(email),
+      ),
     [normalizedAttendeeEmails, selectedAttendeeEmailSet],
   );
   const selectedInviteEmailSet = useMemo(
@@ -1063,6 +1085,10 @@ export function CreateMeetingDrawer({
 
     const employeeSuggestions: MeetingAttendeeSuggestion[] = employeeDirectory
       .filter((employee) => {
+        if (isBlockedMeetingEmployeeAttendee(employee)) {
+          return false;
+        }
+
         const inviteEmail =
           extractDeliverableMeetingEmail(employee.email) ??
           normalizeMeetingEmail(employee.email);
@@ -1118,7 +1144,8 @@ export function CreateMeetingDrawer({
   const canInviteDirectEmail =
     isValidAttendeeEmail(attendeeSearchTerm) &&
     normalizedAttendeeSearchEmail !== null &&
-    !selectedInviteEmailSet.has(normalizedAttendeeSearchEmail);
+    !selectedInviteEmailSet.has(normalizedAttendeeSearchEmail) &&
+    !isBlockedMeetingAttendeeEmail(normalizedAttendeeSearchEmail);
   const isOptionsPending = isLoadingOptions && !options;
 
   function updateForm<K extends keyof MeetingFormState>(
@@ -1236,8 +1263,13 @@ export function CreateMeetingDrawer({
   }
 
   function handleSelectRelatedContact(contact: MeetingContactOption) {
+    const selectedContactId = normalizeMeetingContactId(contact.contactId);
+    if (selectedContactId === null) {
+      return;
+    }
+
     setRelatedContactId((current) => {
-      const nextRelatedId = contact.contactId;
+      const nextRelatedId = selectedContactId;
       setAttendeeContactIds((currentAttendees) =>
         uniqueContactIds([
           nextRelatedId,
@@ -1253,12 +1285,17 @@ export function CreateMeetingDrawer({
   }
 
   function handleAddAttendee(contact: MeetingContactOption) {
-    setAttendeeContactIds((current) => uniqueContactIds([...current, contact.contactId]));
+    const contactId = normalizeMeetingContactId(contact.contactId);
+    if (contactId === null) {
+      return;
+    }
+
+    setAttendeeContactIds((current) => uniqueContactIds([...current, contactId]));
     if (relatedContactId === null) {
-      setRelatedContactId(contact.contactId);
+      setRelatedContactId(contactId);
       setRelatedContactSearchTerm(contact.contactName);
       setIncludeRelatedInInvite(true);
-    } else if (contact.contactId === relatedContactId) {
+    } else if (contactId === relatedContactId) {
       setIncludeRelatedInInvite(true);
     }
     removeMatchingAttendeeEmail(contact.email);
@@ -1268,7 +1305,7 @@ export function CreateMeetingDrawer({
 
   function handleAddAttendeeEmail(email: string) {
     const deliverableEmail = extractDeliverableMeetingEmail(email);
-    if (!deliverableEmail) {
+    if (!deliverableEmail || isBlockedMeetingAttendeeEmail(deliverableEmail)) {
       return;
     }
 
@@ -1291,8 +1328,13 @@ export function CreateMeetingDrawer({
   }
 
   function handleAddEmployeeAttendee(employee: MeetingEmployeeOption) {
+    if (isBlockedMeetingEmployeeAttendee(employee)) {
+      setAttendeeSearchTerm("");
+      return;
+    }
+
     const deliverableEmail = extractDeliverableMeetingEmail(employee.email);
-    if (!deliverableEmail) {
+    if (!deliverableEmail || isBlockedMeetingAttendeeEmail(deliverableEmail)) {
       setAttendeeSearchTerm("");
       setFormError(
         `${employee.employeeName} cannot be invited because their directory email ("${employee.email}") is not a valid email address. Ask an admin to fix it, or type their correct email to invite them directly.`,
@@ -1306,11 +1348,16 @@ export function CreateMeetingDrawer({
   }
 
   function handleRemoveAttendee(contactId: number) {
-    if (contactId === relatedContactId) {
+    const normalizedContactId = normalizeMeetingContactId(contactId);
+    if (normalizedContactId === null) {
+      return;
+    }
+
+    if (normalizedContactId === relatedContactId) {
       setIncludeRelatedInInvite(false);
     }
 
-    setAttendeeContactIds((current) => current.filter((value) => value !== contactId));
+    setAttendeeContactIds((current) => current.filter((value) => value !== normalizedContactId));
   }
 
   function handleRestoreRelatedAttendee() {
@@ -1392,20 +1439,24 @@ export function CreateMeetingDrawer({
       null;
 
     if (createdContact) {
-      setLocalContacts((current) => {
-        const byId = new Map(current.map((contact) => [contact.contactId, contact]));
-        byId.set(createdContact.contactId, createdContact);
-        return [...byId.values()].sort(compareMeetingContacts);
-      });
-      setAttendeeContactIds((current) =>
-        uniqueContactIds([...current, createdContact.contactId]),
-      );
-      removeMatchingAttendeeEmail(createdContact.email);
-      if (!relatedContactLocked) {
-        setRelatedContactId(createdContact.contactId);
-        setIncludeRelatedInInvite(true);
+      const createdContactId = normalizeMeetingContactId(createdContact.contactId);
+      if (createdContactId !== null) {
+        const normalizedCreatedContact = { ...createdContact, contactId: createdContactId };
+        setLocalContacts((current) => {
+          const byId = new Map(current.map((contact) => [contact.contactId, contact]));
+          byId.set(createdContactId, normalizedCreatedContact);
+          return [...byId.values()].sort(compareMeetingContacts);
+        });
+        setAttendeeContactIds((current) =>
+          uniqueContactIds([...current, createdContactId]),
+        );
+        removeMatchingAttendeeEmail(createdContact.email);
+        if (!relatedContactLocked) {
+          setRelatedContactId(createdContactId);
+          setIncludeRelatedInInvite(true);
+        }
+        setRelatedContactSearchTerm(createdContact.contactName);
       }
-      setRelatedContactSearchTerm(createdContact.contactName);
     }
 
     if (result.created) {
@@ -1444,7 +1495,10 @@ export function CreateMeetingDrawer({
       return;
     }
 
-    const effectiveRelatedContactId = relatedContactId ?? normalizedAttendeeIds[0] ?? null;
+    const effectiveRelatedContactId =
+      normalizeMeetingContactId(relatedContactId) ?? normalizedAttendeeIds[0] ?? null;
+    const organizerContactId =
+      includeOrganizerInAcumatica ? normalizeMeetingContactId(viewerContactId) : null;
     try {
       buildMeetingDateTimeRange({
         startDate: form.startDate,
@@ -1467,8 +1521,8 @@ export function CreateMeetingDrawer({
       const requestPayload = {
         businessAccountRecordId: source?.accountRecordId ?? null,
         businessAccountId: source?.businessAccountId ?? null,
-        sourceContactId: source?.contactId ?? null,
-        organizerContactId: includeOrganizerInAcumatica ? viewerContactId : null,
+        sourceContactId,
+        organizerContactId,
         includeOrganizerInAcumatica,
         includeRelatedContactInInvite: includeRelatedInInvite,
         relatedContactId: effectiveRelatedContactId,
@@ -1486,7 +1540,9 @@ export function CreateMeetingDrawer({
         includeGoogleMeet: form.includeGoogleMeet,
         attachmentLinks: [],
         attendeeContactIds: normalizedAttendeeIds,
-        attendeeEmails: selectedExternalAttendeeEmails,
+        attendeeEmails: selectedExternalAttendeeEmails.filter(
+          (email) => !isBlockedMeetingAttendeeEmail(email),
+        ),
       } satisfies MeetingCreateRequest;
       const requestBody =
         attachmentFiles.length > 0

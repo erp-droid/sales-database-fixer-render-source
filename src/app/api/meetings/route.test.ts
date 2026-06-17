@@ -412,14 +412,31 @@ describe("POST /api/meetings", () => {
         organizerContactId: null,
         attendeeContactIds: [],
         relatedContactId: null,
-        attendeeEmails: ["Alex Buhagiar <abuhagiar@meadowb.com>"],
+        attendeeEmails: ["Jordan Guest <jordan.guest@example.com>"],
       }),
     );
     expect(messyResponse.status).toBe(201);
     expect(createMeetingInviteInGoogleCalendar).toHaveBeenCalledWith(
       "jserrano",
       expect.objectContaining({
-        attendees: [expect.objectContaining({ email: "abuhagiar@meadowb.com" })],
+        attendees: [expect.objectContaining({ email: "jordan.guest@example.com" })],
+      }),
+    );
+
+    const blockedResponse = await POST(
+      buildRequest({
+        includeOrganizerInAcumatica: false,
+        organizerContactId: null,
+        attendeeContactIds: [],
+        relatedContactId: null,
+        attendeeEmails: ["Alex Buhagiar <abuhagiar@meadowb.com>"],
+      }),
+    );
+    expect(blockedResponse.status).toBe(201);
+    expect(createMeetingInviteInGoogleCalendar).toHaveBeenLastCalledWith(
+      "jserrano",
+      expect.objectContaining({
+        attendees: [],
       }),
     );
 
@@ -438,7 +455,7 @@ describe("POST /api/meetings", () => {
     expect(invalidPayload.details.fieldErrors.attendeeEmails?.[0]).toContain(
       "is not a valid email address",
     );
-    expect(upsertMeetingBooking).toHaveBeenCalledTimes(1);
+    expect(upsertMeetingBooking).toHaveBeenCalledTimes(2);
   });
 
   it("fails before local storage when Google invite creation fails", async () => {

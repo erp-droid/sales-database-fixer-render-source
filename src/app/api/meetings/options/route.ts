@@ -25,6 +25,9 @@ import {
   buildMeetingAccountOptionsFromRows,
   buildMeetingContactOptionsFromRows,
   DEFAULT_MEETING_TIME_ZONE,
+  isBlockedMeetingEmployeeAttendee,
+  isPositiveMeetingContactId,
+  normalizeMeetingContactId,
 } from "@/lib/meeting-create";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import {
@@ -194,14 +197,18 @@ function buildMeetingEmployeeOptions(
 ): MeetingEmployeeOption[] {
   return internalEmployees
     .filter((employee) => typeof employee.email === "string" && employee.email.trim())
-    .map((employee) => ({
-      key: `employee:${employee.loginName}`,
-      loginName: employee.loginName,
-      employeeName: employee.displayName,
-      email: employee.email!.trim(),
-      contactId: employee.contactId,
-      isInternal: true,
-    }));
+    .map(
+      (employee) =>
+        ({
+          key: `employee:${employee.loginName}`,
+          loginName: employee.loginName,
+          employeeName: employee.displayName,
+          email: employee.email!.trim(),
+          contactId: normalizeMeetingContactId(employee.contactId),
+          isInternal: true,
+        }) satisfies MeetingEmployeeOption,
+    )
+    .filter((employee) => !isBlockedMeetingEmployeeAttendee(employee));
 }
 
 function buildMeetingEmployeeOptionsFromDirectoryItems(
@@ -227,11 +234,12 @@ function buildMeetingEmployeeOptionsFromDirectoryItems(
         loginName,
         employeeName: employee.name.trim(),
         email,
-        contactId: employee.contactId ?? null,
+        contactId: normalizeMeetingContactId(employee.contactId),
         isInternal: true,
       } satisfies MeetingEmployeeOption;
     })
     .filter((employee): employee is MeetingEmployeeOption => employee !== null)
+    .filter((employee) => !isBlockedMeetingEmployeeAttendee(employee))
     .sort((left, right) =>
       left.employeeName.localeCompare(right.employeeName, undefined, {
         sensitivity: "base",
@@ -244,7 +252,9 @@ function buildInternalEmployeeContactOptions(
   employees: MeetingEmployeeOption[],
 ): MeetingContactOption[] {
   return employees
-    .filter((employee): employee is MeetingEmployeeOption & { contactId: number } => employee.contactId !== null)
+    .filter((employee): employee is MeetingEmployeeOption & { contactId: number } =>
+      isPositiveMeetingContactId(employee.contactId),
+    )
     .map((employee) => ({
       key: `${employee.contactId}:employee:${employee.loginName}`,
       contactId: employee.contactId,

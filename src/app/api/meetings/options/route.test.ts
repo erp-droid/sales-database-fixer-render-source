@@ -48,28 +48,6 @@ vi.mock("@/lib/read-model/employees", () => ({
   readEmployeeDirectorySnapshot,
 }));
 
-function buildContact(input: {
-  businessAccountId?: string;
-  companyName?: string;
-  contactId: number;
-  displayName: string;
-  email: string;
-  id?: string;
-  phone?: string | null;
-}): Record<string, unknown> {
-  return {
-    id: input.id ?? `contact-note-${input.contactId}`,
-    ContactID: { value: input.contactId },
-    DisplayName: { value: input.displayName },
-    Email: { value: input.email },
-    BusinessAccount: { value: input.businessAccountId ?? "" },
-    CompanyName: { value: input.companyName ?? "" },
-    ...(input.phone === null
-      ? {}
-      : { Phone1: { value: input.phone ?? "905-555-0100" } }),
-  };
-}
-
 function buildEmployee(input: {
   loginName: string;
   contactId?: number | null;
@@ -207,6 +185,12 @@ describe("GET /api/meetings/options", () => {
         displayName: "Simon MeadowBrook",
         email: "simon@meadowb.com",
       }),
+      buildEmployee({
+        loginName: "abuhagiar",
+        contactId: 1005,
+        displayName: "Alex Buhagiar",
+        email: "abuhagiar@meadowb.com",
+      }),
     ]);
 
     const { GET } = await import("@/app/api/meetings/options/route");
@@ -259,6 +243,8 @@ describe("GET /api/meetings/options", () => {
       ]),
     );
     expect(payload.contacts.some((contact) => contact.contactId === 1003)).toBe(false);
+    expect(payload.contacts.some((contact) => contact.contactId === 1005)).toBe(false);
+    expect(payload.employees.some((employee) => employee.employeeName === "Alex Buhagiar")).toBe(false);
     expect(fetchBusinessAccounts).not.toHaveBeenCalled();
     expect(fetchContacts).not.toHaveBeenCalled();
     expect(withServiceAcumaticaSession).toHaveBeenCalledTimes(1);

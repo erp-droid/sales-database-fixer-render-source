@@ -6,6 +6,7 @@ import type {
   MeetingContactOption,
   MeetingCreateOptionsResponse,
   MeetingCreateRequest,
+  MeetingEmployeeOption,
 } from "@/types/meeting-create";
 import {
   isExcludedInternalCompanyName,
@@ -13,6 +14,17 @@ import {
 } from "@/lib/internal-records";
 
 export const DEFAULT_MEETING_TIME_ZONE = "America/Toronto";
+
+const BLOCKED_MEETING_EMPLOYEE_NAMES = new Set(["alex buhagiar"]);
+const BLOCKED_MEETING_EMPLOYEE_LOGIN_NAMES = new Set([
+  "abuhagiar",
+  "alex.buhagiar",
+  "alexbuhagiar",
+]);
+const BLOCKED_MEETING_EMPLOYEE_EMAILS = new Set([
+  "abuhagiar@meadowb.com",
+  "alex.buhagiar@meadowb.com",
+]);
 
 export type ResolvedMeetingContact = {
   contactId: number;
@@ -115,6 +127,87 @@ export function normalizeMeetingLoginName(value: string | null | undefined): str
 
   const atIndex = comparable.indexOf("@");
   return atIndex >= 0 ? comparable.slice(0, atIndex) || null : comparable;
+}
+
+function normalizeMeetingNameKey(value: string | null | undefined): string {
+  return normalizeComparable(value).replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+function normalizeMeetingCompactKey(value: string | null | undefined): string {
+  return normalizeComparable(value).replace(/[^a-z0-9]+/g, "");
+}
+
+export function isPositiveMeetingContactId(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+export function normalizeMeetingContactId(value: unknown): number | null {
+  if (isPositiveMeetingContactId(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+
+  const numeric = Number(trimmed);
+  return isPositiveMeetingContactId(numeric) ? numeric : null;
+}
+
+export function normalizeMeetingContactIds(values: readonly unknown[]): number[] {
+  const ids = new Set<number>();
+  values.forEach((value) => {
+    const contactId = normalizeMeetingContactId(value);
+    if (contactId !== null) {
+      ids.add(contactId);
+    }
+  });
+  return [...ids];
+}
+
+export function isBlockedMeetingAttendeeEmail(value: string | null | undefined): boolean {
+  const email = extractDeliverableMeetingEmail(value) ?? normalizeMeetingEmail(value);
+  if (!email) {
+    return false;
+  }
+
+  if (BLOCKED_MEETING_EMPLOYEE_EMAILS.has(email)) {
+    return true;
+  }
+
+  const loginName = normalizeMeetingLoginName(email);
+  return loginName !== null && BLOCKED_MEETING_EMPLOYEE_LOGIN_NAMES.has(loginName);
+}
+
+export function isBlockedMeetingEmployeeAttendee(
+  employee: Pick<MeetingEmployeeOption, "email" | "employeeName" | "loginName">,
+): boolean {
+  const nameKey = normalizeMeetingNameKey(employee.employeeName);
+  if (BLOCKED_MEETING_EMPLOYEE_NAMES.has(nameKey)) {
+    return true;
+  }
+
+  const loginName = normalizeMeetingLoginName(employee.loginName);
+  if (loginName !== null && BLOCKED_MEETING_EMPLOYEE_LOGIN_NAMES.has(loginName)) {
+    return true;
+  }
+
+  const email = normalizeMeetingEmail(employee.email);
+  if (email !== null && BLOCKED_MEETING_EMPLOYEE_EMAILS.has(email)) {
+    return true;
+  }
+
+  const emailLoginName = normalizeMeetingLoginName(employee.email);
+  if (emailLoginName !== null && BLOCKED_MEETING_EMPLOYEE_LOGIN_NAMES.has(emailLoginName)) {
+    return true;
+  }
+
+  return normalizeMeetingCompactKey(employee.employeeName) === "alexbuhagiar";
 }
 
 function readMeetingContactEmailLocalPart(value: string | null | undefined): string | null {
@@ -377,8 +470,9 @@ export function buildMeetingContactOptionsFromRows(
   const byContactId = new Map<number, MeetingContactOption>();
 
   rows.forEach((row) => {
-    const contactId = row.contactId ?? row.primaryContactId ?? null;
-    if (contactId === null || !Number.isFinite(contactId)) {
+    const contactId =
+      normalizeMeetingContactId(row.contactId) ?? normalizeMeetingContactId(row.primaryContactId);
+    if (contactId === null) {
       return;
     }
 

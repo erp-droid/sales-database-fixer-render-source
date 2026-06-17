@@ -944,6 +944,35 @@ describe("parseMeetingCreatePayload", () => {
     });
   });
 
+  it("normalizes contact IDs only when they are positive integers", () => {
+    const parsed = parseMeetingCreatePayload({
+      ...validPayload,
+      sourceContactId: "157497",
+      organizerContactId: 0,
+      relatedContactId: "157498",
+      attendeeContactIds: ["157498", 157499, "157498"],
+    });
+
+    expect(parsed.sourceContactId).toBe(157497);
+    expect(parsed.organizerContactId).toBeNull();
+    expect(parsed.relatedContactId).toBe(157498);
+    expect(parsed.attendeeContactIds).toEqual([157498, 157499, 157498]);
+  });
+
+  it("rejects invalid attendee contact IDs without coercing null to zero", () => {
+    try {
+      parseMeetingCreatePayload({
+        ...validPayload,
+        attendeeContactIds: [157498, null, 0, "contact-157499"],
+      });
+      expect.unreachable("expected a ZodError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ZodError);
+      const issues = (error as ZodError).issues.map((issue) => issue.message);
+      expect(issues).toContain("Attendee contact IDs must be positive numbers.");
+    }
+  });
+
   it("extracts deliverable addresses from messy attendee emails", () => {
     const parsed = parseMeetingCreatePayload({
       ...validPayload,

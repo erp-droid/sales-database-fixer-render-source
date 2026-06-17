@@ -6,8 +6,12 @@ import {
   extractDeliverableMeetingEmail,
   findMeetingContactByEmail,
   findMeetingContactByLoginName,
+  isBlockedMeetingAttendeeEmail,
+  isBlockedMeetingEmployeeAttendee,
   isDeliverableMeetingEmail,
   isMeetingOrganizerContactForLogin,
+  normalizeMeetingContactId,
+  normalizeMeetingContactIds,
   normalizeMeetingLoginName,
 } from "@/lib/meeting-create";
 import type { MeetingContactOption, MeetingCreateRequest } from "@/types/meeting-create";
@@ -31,6 +35,46 @@ describe("normalizeMeetingLoginName", () => {
 
   it("normalizes plain login names", () => {
     expect(normalizeMeetingLoginName(" JSerrano ")).toBe("jserrano");
+  });
+});
+
+describe("normalizeMeetingContactId", () => {
+  it("keeps only positive integer contact IDs", () => {
+    expect(normalizeMeetingContactId(157497)).toBe(157497);
+    expect(normalizeMeetingContactId("157497")).toBe(157497);
+    expect(normalizeMeetingContactId(0)).toBeNull();
+    expect(normalizeMeetingContactId(-1)).toBeNull();
+    expect(normalizeMeetingContactId(1.5)).toBeNull();
+    expect(normalizeMeetingContactId("contact-157497")).toBeNull();
+    expect(normalizeMeetingContactId(null)).toBeNull();
+  });
+
+  it("dedupes and filters contact ID lists", () => {
+    expect(normalizeMeetingContactIds([157497, "157497", 0, null, "157498"])).toEqual([
+      157497,
+      157498,
+    ]);
+  });
+});
+
+describe("blocked meeting attendees", () => {
+  it("blocks Alex Buhagiar from employee and direct-email invite paths", () => {
+    expect(
+      isBlockedMeetingEmployeeAttendee({
+        employeeName: "Alex Buhagiar",
+        email: "alex@example.com",
+        loginName: "alex",
+      }),
+    ).toBe(true);
+    expect(
+      isBlockedMeetingEmployeeAttendee({
+        employeeName: "Other Person",
+        email: "other@meadowb.com",
+        loginName: "abuhagiar",
+      }),
+    ).toBe(true);
+    expect(isBlockedMeetingAttendeeEmail("Alex Buhagiar <abuhagiar@meadowb.com>")).toBe(true);
+    expect(isBlockedMeetingAttendeeEmail("sdoal@meadowb.com")).toBe(false);
   });
 });
 
