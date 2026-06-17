@@ -3917,23 +3917,28 @@ export function AccountsClient({
     ],
   );
 
-  const hasActiveQueryFilters = useMemo(
+  const hasTypedQueryFilters = useMemo(
     () =>
       debouncedQ.trim().length > 0 ||
       Object.values(debouncedHeaderFilters).some((value) =>
         typeof value === "string" ? value.trim().length > 0 : Boolean(value),
-      ) ||
-      selectedCategoryFilters.length > 0 ||
-      selectedWeekFilters.length > 0 ||
-      selectedSalesRepFilters.length > 0,
+      ),
     [
       debouncedHeaderFilters,
       debouncedQ,
-      selectedCategoryFilters.length,
-      selectedSalesRepFilters.length,
-      selectedWeekFilters.length,
     ],
   );
+  const tableFallbackRows = useMemo(() => {
+    if (workbenchFilteredRows.length > 0) {
+      return workbenchFilteredRows;
+    }
+
+    if (displayRows.length > 0 && !hasTypedQueryFilters) {
+      return displayRows;
+    }
+
+    return workbenchFilteredRows;
+  }, [displayRows, hasTypedQueryFilters, workbenchFilteredRows]);
 
   const rawQueryResult = useMemo(
     () =>
@@ -3947,10 +3952,10 @@ export function AccountsClient({
   const queryResult = useMemo(() => {
     if (
       rawQueryResult.total === 0 &&
-      workbenchFilteredRows.length > 0 &&
-      !hasActiveQueryFilters
+      tableFallbackRows.length > 0 &&
+      !hasTypedQueryFilters
     ) {
-      return buildVisibleRowsFallback(workbenchFilteredRows, {
+      return buildVisibleRowsFallback(tableFallbackRows, {
         page,
         pageSize: PAGE_SIZE,
         sortBy,
@@ -3960,12 +3965,12 @@ export function AccountsClient({
 
     return rawQueryResult;
   }, [
-    hasActiveQueryFilters,
+    hasTypedQueryFilters,
     page,
     rawQueryResult,
     sortBy,
     sortDir,
-    workbenchFilteredRows,
+    tableFallbackRows,
   ]);
   const rawAccountViewMetricRows = useMemo(
     () =>
@@ -3979,11 +3984,11 @@ export function AccountsClient({
   const accountViewMetricRows = useMemo(
     () =>
       rawAccountViewMetricRows.length === 0 &&
-      workbenchFilteredRows.length > 0 &&
-      !hasActiveQueryFilters
-        ? workbenchFilteredRows
+      tableFallbackRows.length > 0 &&
+      !hasTypedQueryFilters
+        ? tableFallbackRows
         : rawAccountViewMetricRows,
-    [hasActiveQueryFilters, rawAccountViewMetricRows, workbenchFilteredRows],
+    [hasTypedQueryFilters, rawAccountViewMetricRows, tableFallbackRows],
   );
   const accountViewMetrics = useMemo(
     () => buildAccountViewMetrics(accountViewMetricRows),
