@@ -11,6 +11,8 @@ const SESSION_CHECK_INTERVAL_MS = 30_000;
 const INITIAL_SESSION_CHECK_DELAY_MS = 5_000;
 const SESSION_INVALID_CONFIRMATION_DELAY_MS = 750;
 const FORCED_SIGN_OUT_BROADCAST_KEY = "businessAccounts.authSignedOutAt.v1";
+const RECENT_SIGN_IN_STORAGE_KEY = "businessAccounts.authJustSignedInAt.v1";
+const RECENT_SIGN_IN_GRACE_MS = 60_000;
 
 function isPublicPath(pathname: string | null): boolean {
   return pathname === "/signin";
@@ -47,6 +49,27 @@ function buildSignInHref(): string {
 
   const query = params.toString();
   return query ? `/signin?${query}` : "/signin";
+}
+
+function isWithinRecentSignInGrace(): boolean {
+  try {
+    const rawSignedInAt = window.sessionStorage.getItem(RECENT_SIGN_IN_STORAGE_KEY);
+    const signedInAt = rawSignedInAt ? Number(rawSignedInAt) : 0;
+    if (!Number.isFinite(signedInAt) || signedInAt <= 0) {
+      return false;
+    }
+
+    const ageMs = Date.now() - signedInAt;
+    if (ageMs >= 0 && ageMs < RECENT_SIGN_IN_GRACE_MS) {
+      return true;
+    }
+
+    window.sessionStorage.removeItem(RECENT_SIGN_IN_STORAGE_KEY);
+  } catch {
+    // If storage is unavailable, fall through to normal session checks.
+  }
+
+  return false;
 }
 
 export function AuthSessionGuard() {
@@ -132,7 +155,7 @@ export function AuthSessionGuard() {
         }
 
         const confirmedOutcome = await fetchSessionCheckOutcome(originalFetch);
-        if (confirmedOutcome === "unauthenticated") {
+        if (confirmedOutcome === "unauthenticated" && !isWithinRecentSignInGrace()) {
           await performForcedSignOut();
         }
       } catch {
@@ -156,6 +179,7 @@ export function AuthSessionGuard() {
         !cancelled &&
         !signingOutRef.current &&
         shouldForceLogoutForApiResponse(requestPath, response.status, responsePayload) &&
+        !isWithinRecentSignInGrace() &&
         !isPublicPath(pathnameRef.current)
       ) {
         void performForcedSignOut();
@@ -190,8 +214,6 @@ export function AuthSessionGuard() {
     window.addEventListener("focus", handleVisibilityChange);
     window.addEventListener("storage", handleStorage);
     document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    void checkSession();
 
     return () => {
       cancelled = true;

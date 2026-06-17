@@ -355,6 +355,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       upstreamResponse.status,
       parseUpstreamErrorMessage(rawText),
     );
+    console.warn("[auth-login] upstream sign-in failed", {
+      loginName: username,
+      status: upstreamResponse.status,
+      responseStatus: normalizedError.status,
+      message: normalizedError.message,
+    });
     return buildLoginErrorResponse(
       request,
       env,
@@ -369,6 +375,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const cookieValue = buildStoredAuthCookieValueFromSetCookies(setCookies);
 
   if (!cookieValue) {
+    console.warn("[auth-login] upstream sign-in did not return an auth cookie", {
+      loginName: username,
+      cookieName: env.AUTH_COOKIE_NAME,
+    });
     return buildLoginErrorResponse(
       request,
       env,
@@ -403,6 +413,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       });
     }
   }
+
+  console.info("[auth-login] sign-in accepted", {
+    loginName: username,
+    mode,
+  });
 
   return response;
 }

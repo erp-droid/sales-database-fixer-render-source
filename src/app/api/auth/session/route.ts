@@ -247,6 +247,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       if (storedUser?.id) {
         callerIdentityRefreshByUser.delete(storedUser.id);
       }
+      console.warn("[auth-session] upstream rejected stored session", {
+        loginName: storedUser?.id ?? null,
+      });
       return buildInvalidSessionResponse();
     }
 
