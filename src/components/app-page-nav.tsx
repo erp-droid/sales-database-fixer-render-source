@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 type AppNavIconName =
@@ -127,7 +126,7 @@ export function AppPageNav({ activeClassName, iconClassName, linkClassName }: Ap
       .join(" ");
 
     return (
-      <Link
+      <a
         aria-current={isCurrent ? "page" : undefined}
         className={className}
         href={item.href}
@@ -135,7 +134,7 @@ export function AppPageNav({ activeClassName, iconClassName, linkClassName }: Ap
       >
         {iconClassName ? <AppNavIcon className={iconClassName} icon={item.icon} /> : null}
         <span>{item.label}</span>
-      </Link>
+      </a>
     );
   });
 }

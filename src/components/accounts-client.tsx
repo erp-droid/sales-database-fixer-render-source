@@ -2152,6 +2152,83 @@ function buildVisibleRowsFallback(
   };
 }
 
+function matchesFallbackTextFilters(
+  row: BusinessAccountRow,
+  options: {
+    q: string;
+    headerFilters: HeaderFilters;
+  },
+): boolean {
+  const q = options.q.trim().toLowerCase();
+  const headerFilters = options.headerFilters;
+
+  const matchesText = (value: string | number | null | undefined, filter: string) => {
+    const normalizedFilter = filter.trim().toLowerCase();
+    if (!normalizedFilter) {
+      return true;
+    }
+
+    return String(value ?? "").toLowerCase().includes(normalizedFilter);
+  };
+
+  if (!matchesText(row.companyName, headerFilters.companyName)) return false;
+  if (!matchesText(row.accountType, headerFilters.accountType)) return false;
+  if (!matchesText(row.opportunityCount, headerFilters.opportunityCount)) return false;
+  if (!matchesText(row.salesRepName, headerFilters.salesRepName)) return false;
+  if (!matchesText(row.industryType, headerFilters.industryType)) return false;
+  if (!matchesText(row.subCategory, headerFilters.subCategory)) return false;
+  if (!matchesText(row.companyRegion, headerFilters.companyRegion)) return false;
+  if (!matchesText(row.week, headerFilters.week)) return false;
+  if (!matchesText(row.address, headerFilters.address)) return false;
+  if (!matchesText(row.companyPhone, headerFilters.companyPhone)) return false;
+  if (!matchesText(row.primaryContactName, headerFilters.primaryContactName)) return false;
+  if (!matchesText(row.primaryContactJobTitle, headerFilters.primaryContactJobTitle)) return false;
+  if (!matchesText(row.primaryContactPhone, headerFilters.primaryContactPhone)) return false;
+  if (!matchesText(row.primaryContactExtension, headerFilters.primaryContactExtension)) return false;
+  if (!matchesText(row.primaryContactEmail, headerFilters.primaryContactEmail)) return false;
+  if (!matchesText(row.notes, headerFilters.notes)) return false;
+  if (!matchesText(row.lastCalledAt, headerFilters.lastCalled)) return false;
+  if (!matchesText(row.lastCalendarInvitedAt, headerFilters.lastCalendarInvited)) return false;
+  if (!matchesText(row.lastEmailedAt, headerFilters.lastEmailed)) return false;
+  if (!matchesText(row.lastModifiedIso, headerFilters.lastModified)) return false;
+
+  if (headerFilters.category && row.category !== headerFilters.category) {
+    return false;
+  }
+
+  if (!q) {
+    return true;
+  }
+
+  return [
+    row.companyName,
+    row.accountType,
+    row.opportunityCount,
+    row.salesRepName,
+    row.industryType,
+    row.subCategory,
+    row.companyRegion,
+    row.week,
+    row.address,
+    row.companyPhone,
+    row.primaryContactName,
+    row.primaryContactJobTitle,
+    row.primaryContactPhone,
+    row.primaryContactExtension,
+    row.primaryContactEmail,
+    row.notes,
+    row.lastCalledAt,
+    row.lastCalendarInvitedAt,
+    row.lastEmailedAt,
+    row.businessAccountId,
+    row.companyDescription,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .includes(q);
+}
+
 function normalizeCachedSyncTimestamp(value: string | null | undefined): string | null {
   const trimmed = value?.trim() ?? "";
   return trimmed || null;
@@ -3917,28 +3994,54 @@ export function AccountsClient({
     ],
   );
 
-  const hasTypedQueryFilters = useMemo(
-    () =>
-      debouncedQ.trim().length > 0 ||
-      Object.values(debouncedHeaderFilters).some((value) =>
-        typeof value === "string" ? value.trim().length > 0 : Boolean(value),
-      ),
-    [
-      debouncedHeaderFilters,
-      debouncedQ,
-    ],
-  );
   const tableFallbackRows = useMemo(() => {
     if (workbenchFilteredRows.length > 0) {
       return workbenchFilteredRows;
     }
 
-    if (displayRows.length > 0 && !hasTypedQueryFilters) {
-      return displayRows;
+    let fallbackRows =
+      activeFilterView === "marketingOnly"
+        ? displayRows.filter((row) => row.marketingEligible !== false)
+        : displayRows;
+
+    if (selectedCategoryFilterSet.size > 0) {
+      fallbackRows = fallbackRows.filter(
+        (row) => row.category !== null && selectedCategoryFilterSet.has(row.category),
+      );
     }
 
-    return workbenchFilteredRows;
-  }, [displayRows, hasTypedQueryFilters, workbenchFilteredRows]);
+    if (selectedWeekFilterSet.size > 0) {
+      fallbackRows = fallbackRows.filter((row) => {
+        const week = normalizeWeekValue(row.week);
+        return week ? selectedWeekFilterSet.has(normalizeOptionComparable(week)) : false;
+      });
+    }
+
+    if (selectedSalesRepFilterSet.size > 0) {
+      fallbackRows = fallbackRows.filter((row) => {
+        const salesRepName = row.salesRepName?.trim();
+        return salesRepName ? selectedSalesRepFilterSet.has(salesRepName) : false;
+      });
+    }
+
+    fallbackRows = fallbackRows.filter((row) =>
+      matchesFallbackTextFilters(row, {
+        q: debouncedQ,
+        headerFilters: debouncedHeaderFilters,
+      }),
+    );
+
+    return fallbackRows;
+  }, [
+    activeFilterView,
+    debouncedHeaderFilters,
+    debouncedQ,
+    displayRows,
+    selectedCategoryFilterSet,
+    selectedSalesRepFilterSet,
+    selectedWeekFilterSet,
+    workbenchFilteredRows,
+  ]);
 
   const rawQueryResult = useMemo(
     () =>
@@ -3952,8 +4055,7 @@ export function AccountsClient({
   const queryResult = useMemo(() => {
     if (
       rawQueryResult.total === 0 &&
-      tableFallbackRows.length > 0 &&
-      !hasTypedQueryFilters
+      tableFallbackRows.length > 0
     ) {
       return buildVisibleRowsFallback(tableFallbackRows, {
         page,
@@ -3965,7 +4067,6 @@ export function AccountsClient({
 
     return rawQueryResult;
   }, [
-    hasTypedQueryFilters,
     page,
     rawQueryResult,
     sortBy,
@@ -3984,11 +4085,10 @@ export function AccountsClient({
   const accountViewMetricRows = useMemo(
     () =>
       rawAccountViewMetricRows.length === 0 &&
-      tableFallbackRows.length > 0 &&
-      !hasTypedQueryFilters
+      tableFallbackRows.length > 0
         ? tableFallbackRows
         : rawAccountViewMetricRows,
-    [hasTypedQueryFilters, rawAccountViewMetricRows, tableFallbackRows],
+    [rawAccountViewMetricRows, tableFallbackRows],
   );
   const accountViewMetrics = useMemo(
     () => buildAccountViewMetrics(accountViewMetricRows),
