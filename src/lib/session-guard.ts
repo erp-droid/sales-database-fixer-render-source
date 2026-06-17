@@ -21,23 +21,6 @@ const PUBLIC_API_PREFIXES = [
   "/api/mail/oauth/",
 ] as const;
 
-const PROTECTED_APP_API_PREFIXES = [
-  "/api/address-complete",
-  "/api/audit",
-  "/api/business-accounts",
-  "/api/calendar",
-  "/api/contacts",
-  "/api/dashboard",
-  "/api/data-quality",
-  "/api/deletions",
-  "/api/employees",
-  "/api/mail",
-  "/api/meetings",
-  "/api/opportunities",
-  "/api/sync",
-  "/api/twilio",
-] as const;
-
 export function resolveSessionCheckOutcome(
   responseStatus: number,
   payload: SessionPayload,
@@ -113,7 +96,7 @@ export function shouldForceLogoutForApiResponse(
     return isAppAuthErrorMessage(errorMessage);
   }
 
-  return PROTECTED_APP_API_PREFIXES.some((prefix) => pathMatchesPrefix(path, prefix));
+  return false;
 }
 
 export async function fetchSessionCheckOutcome(

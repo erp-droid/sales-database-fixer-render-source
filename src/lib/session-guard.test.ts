@@ -52,9 +52,9 @@ describe("session-guard helpers", () => {
     ).toBe(true);
   });
 
-  it("falls back to protected API paths when a 401 has no readable body", () => {
-    expect(shouldForceLogoutForApiResponse("/api/business-accounts", 401)).toBe(true);
-    expect(shouldForceLogoutForApiResponse("/api/contacts/merge", 401)).toBe(true);
+  it("does not force logout when a protected API 401 has no readable auth body", () => {
+    expect(shouldForceLogoutForApiResponse("/api/business-accounts", 401)).toBe(false);
+    expect(shouldForceLogoutForApiResponse("/api/contacts/merge", 401)).toBe(false);
   });
 
   it("does not force logout for non-auth failures or non-api paths", () => {

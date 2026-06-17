@@ -8,6 +8,7 @@ import {
 } from "@/lib/session-guard";
 
 const SESSION_CHECK_INTERVAL_MS = 30_000;
+const INITIAL_SESSION_CHECK_DELAY_MS = 5_000;
 const SESSION_INVALID_CONFIRMATION_DELAY_MS = 750;
 const FORCED_SIGN_OUT_BROADCAST_KEY = "businessAccounts.authSignedOutAt.v1";
 
@@ -163,6 +164,9 @@ export function AuthSessionGuard() {
       return response;
     };
 
+    const initialCheckId = window.setTimeout(() => {
+      void checkSession();
+    }, INITIAL_SESSION_CHECK_DELAY_MS);
     const intervalId = window.setInterval(() => {
       void checkSession();
     }, SESSION_CHECK_INTERVAL_MS);
@@ -192,6 +196,7 @@ export function AuthSessionGuard() {
     return () => {
       cancelled = true;
       window.fetch = originalFetch;
+      window.clearTimeout(initialCheckId);
       window.clearInterval(intervalId);
       window.removeEventListener("focus", handleVisibilityChange);
       window.removeEventListener("storage", handleStorage);
