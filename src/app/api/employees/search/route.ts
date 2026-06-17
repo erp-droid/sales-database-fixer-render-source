@@ -512,6 +512,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ items: cachedItems });
     }
 
+    if (!cookieValue) {
+      return NextResponse.json({ items: [] });
+    }
+
     let items: MeetingEmployeeOption[] = [];
     let serviceError: unknown = null;
 

@@ -165,6 +165,7 @@ export function SignInForm({
         "/api/auth/login",
         {
           method: "POST",
+          credentials: "same-origin",
           headers: {
             "Content-Type": "application/json",
           },
@@ -201,8 +202,7 @@ export function SignInForm({
 
       window.sessionStorage.setItem(COLUMN_PREF_RESET_STORAGE_KEY, "1");
       window.sessionStorage.setItem(RECENT_SIGN_IN_STORAGE_KEY, String(Date.now()));
-      router.replace(nextPath);
-      router.refresh();
+      window.location.assign(nextPath);
     } catch (submitError) {
       if (isAbortError(submitError)) {
         setError("Sign-in timed out. Please retry.");

@@ -409,7 +409,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     let accountOptions = buildMeetingAccountOptionsFromRows(cachedRows);
     let contacts = buildMeetingContactOptionsFromRows(cachedRows);
 
-    if (accountOptions.length === 0 && contacts.length === 0) {
+    if (accountOptions.length === 0 && contacts.length === 0 && cookieValue) {
       const { rawAccounts, rawContacts } = await fetchLiveMeetingDirectory(
         cookieValue,
         authCookieRefresh,
@@ -474,9 +474,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       isCompleteEnoughEmployeeDirectory(cachedEmployeeDirectory.length);
 
     let employees = cachedMeetingEmployees;
-    if (!shouldTrustCachedEmployees && !callEmployeeDirectoryIsFresh && cachedMeetingEmployees.length > 0) {
+    if (
+      cookieValue &&
+      !shouldTrustCachedEmployees &&
+      !callEmployeeDirectoryIsFresh &&
+      cachedMeetingEmployees.length > 0
+    ) {
       void refreshMeetingEmployeeDirectory(cookieValue, { value: null }).catch(() => undefined);
-    } else if (cachedMeetingEmployees.length === 0) {
+    } else if (cookieValue && cachedMeetingEmployees.length === 0) {
       employees = buildMeetingEmployeeOptions(
         await refreshMeetingEmployeeDirectory(cookieValue, authCookieRefresh),
       );
