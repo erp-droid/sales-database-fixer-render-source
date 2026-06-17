@@ -2108,6 +2108,50 @@ function isBusinessAccountRows(payload: unknown): payload is BusinessAccountRow[
   return Array.isArray(payload) && payload.every((item) => isBusinessAccountRow(item));
 }
 
+function readFallbackSortValue(row: BusinessAccountRow, field: SortBy): string {
+  const value = row[field as keyof BusinessAccountRow];
+  if (typeof value === "number") {
+    return String(value).padStart(12, "0");
+  }
+
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  return "";
+}
+
+function buildVisibleRowsFallback(
+  rows: BusinessAccountRow[],
+  options: {
+    page: number;
+    pageSize: number;
+    sortBy: SortBy;
+    sortDir: SortDir;
+  },
+): { items: BusinessAccountRow[]; total: number; page: number; pageSize: number } {
+  const sorted = [...rows].sort((left, right) => {
+    const leftValue = readFallbackSortValue(left, options.sortBy);
+    const rightValue = readFallbackSortValue(right, options.sortBy);
+    const compare = leftValue.localeCompare(rightValue, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+
+    return options.sortDir === "asc" ? compare : -compare;
+  });
+  const page = Math.max(options.page, 1);
+  const pageSize = Math.max(options.pageSize, 1);
+  const start = (page - 1) * pageSize;
+
+  return {
+    items: sorted.slice(start, start + pageSize),
+    total: sorted.length,
+    page,
+    pageSize,
+  };
+}
+
 function normalizeCachedSyncTimestamp(value: string | null | undefined): string | null {
   const trimmed = value?.trim() ?? "";
   return trimmed || null;
@@ -3873,7 +3917,25 @@ export function AccountsClient({
     ],
   );
 
-  const queryResult = useMemo(
+  const hasActiveQueryFilters = useMemo(
+    () =>
+      debouncedQ.trim().length > 0 ||
+      Object.values(debouncedHeaderFilters).some((value) =>
+        typeof value === "string" ? value.trim().length > 0 : Boolean(value),
+      ) ||
+      selectedCategoryFilters.length > 0 ||
+      selectedWeekFilters.length > 0 ||
+      selectedSalesRepFilters.length > 0,
+    [
+      debouncedHeaderFilters,
+      debouncedQ,
+      selectedCategoryFilters.length,
+      selectedSalesRepFilters.length,
+      selectedWeekFilters.length,
+    ],
+  );
+
+  const rawQueryResult = useMemo(
     () =>
       queryBusinessAccounts(workbenchFilteredRows, {
         ...queryFilterOptions,
@@ -3882,7 +3944,30 @@ export function AccountsClient({
       }),
     [workbenchFilteredRows, queryFilterOptions, page],
   );
-  const accountViewMetricRows = useMemo(
+  const queryResult = useMemo(() => {
+    if (
+      rawQueryResult.total === 0 &&
+      workbenchFilteredRows.length > 0 &&
+      !hasActiveQueryFilters
+    ) {
+      return buildVisibleRowsFallback(workbenchFilteredRows, {
+        page,
+        pageSize: PAGE_SIZE,
+        sortBy,
+        sortDir,
+      });
+    }
+
+    return rawQueryResult;
+  }, [
+    hasActiveQueryFilters,
+    page,
+    rawQueryResult,
+    sortBy,
+    sortDir,
+    workbenchFilteredRows,
+  ]);
+  const rawAccountViewMetricRows = useMemo(
     () =>
       queryBusinessAccounts(workbenchFilteredRows, {
         ...queryFilterOptions,
@@ -3890,6 +3975,15 @@ export function AccountsClient({
         pageSize: Math.max(workbenchFilteredRows.length, 1),
       }).items,
     [workbenchFilteredRows, queryFilterOptions],
+  );
+  const accountViewMetricRows = useMemo(
+    () =>
+      rawAccountViewMetricRows.length === 0 &&
+      workbenchFilteredRows.length > 0 &&
+      !hasActiveQueryFilters
+        ? workbenchFilteredRows
+        : rawAccountViewMetricRows,
+    [hasActiveQueryFilters, rawAccountViewMetricRows, workbenchFilteredRows],
   );
   const accountViewMetrics = useMemo(
     () => buildAccountViewMetrics(accountViewMetricRows),
