@@ -390,11 +390,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     clearStoredLoginName(response);
   }
   if (env.AUTH_PROVIDER === "acumatica") {
-    storeUserCredentials({
-      loginName: username,
-      username,
-      password,
-    });
+    try {
+      storeUserCredentials({
+        loginName: username,
+        username,
+        password,
+      });
+    } catch (error) {
+      console.warn("[auth-login] failed to store user credentials", {
+        error: error instanceof Error ? error.message : String(error),
+        loginName: username,
+      });
+    }
   }
 
   return response;

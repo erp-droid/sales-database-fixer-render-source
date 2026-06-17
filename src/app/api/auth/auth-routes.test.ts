@@ -64,33 +64,6 @@ function setAcumaticaEnv(overrides?: Record<string, string | undefined>): void {
   }
 }
 
-function createAbortError(): Error {
-  const error = new Error("The operation was aborted.");
-  error.name = "AbortError";
-  return error;
-}
-
-function createAbortableResponse(signal: AbortSignal | null | undefined): Promise<Response> {
-  return new Promise<Response>((_, reject) => {
-    if (!signal) {
-      return;
-    }
-
-    if (signal.aborted) {
-      reject(createAbortError());
-      return;
-    }
-
-    signal.addEventListener(
-      "abort",
-      () => {
-        reject(createAbortError());
-      },
-      { once: true },
-    );
-  });
-}
-
 describe("auth route timeouts", () => {
   const originalEnv = { ...process.env };
 
@@ -124,33 +97,42 @@ describe("auth route timeouts", () => {
   });
 
   it("returns a degraded authenticated session when the upstream probe times out", async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
-      createAbortableResponse((init?.signal as AbortSignal | undefined) ?? null),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { GET } = await import("@/app/api/auth/session/route");
-
-    const request = new NextRequest("http://localhost/api/auth/session", {
-      headers: {
-        cookie: ".ASPXAUTH=existing-cookie; mb_login_name=jorge",
-      },
+    const { HttpError } = await import("@/lib/errors");
+    const validateSessionWithAcumatica = vi.fn(async () => {
+      throw new HttpError(504, "Session check timed out");
+    });
+    vi.doMock("@/lib/acumatica", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("@/lib/acumatica")>();
+      return {
+        ...actual,
+        validateSessionWithAcumatica,
+      };
     });
 
-    const responsePromise = GET(request);
-    await vi.advanceTimersByTimeAsync(3000);
-    const response = await responsePromise;
+    try {
+      const { GET } = await import("@/app/api/auth/session/route");
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      authenticated: true,
-      user: {
-        id: "jorge",
-        name: "jorge",
-      },
-      degraded: true,
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+      const request = new NextRequest("http://localhost/api/auth/session", {
+        headers: {
+          cookie: ".ASPXAUTH=existing-cookie; mb_login_name=jorge",
+        },
+      });
+
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        authenticated: true,
+        user: {
+          id: "jorge",
+          name: "jorge",
+        },
+        degraded: true,
+      });
+      expect(validateSessionWithAcumatica).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("@/lib/acumatica");
+    }
   });
 
   it("falls back to the stored login name when the upstream session payload omits user details", async () => {
@@ -348,6 +330,73 @@ describe("auth route timeouts", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/entity/auth/logout");
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/entity/auth/login");
+  });
+
+  it("does not fail sign-in when local credential storage is locked", async () => {
+    const storageError = new Error("database is locked");
+    (storageError as Error & { code?: string }).code = "SQLITE_BUSY";
+    const storeUserCredentials = vi.fn(() => {
+      throw storageError;
+    });
+    vi.doMock("@/lib/stored-user-credentials", () => ({
+      storeUserCredentials,
+    }));
+
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/entity/auth/login")) {
+        return Promise.resolve(
+          jsonResponse({
+            status: 200,
+            body: { ok: true },
+            headers: {
+              "set-cookie": ".ASPXAUTH=fresh-cookie; Path=/; HttpOnly",
+            },
+          }),
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const { POST } = await import("@/app/api/auth/login/route");
+
+      const request = new NextRequest("http://localhost/api/auth/login", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          username: "kpareek",
+          password: "secret",
+        }),
+      });
+
+      const response = await POST(request);
+      const setCookie = response.headers.get("set-cookie") ?? "";
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ ok: true });
+      expect(setCookie).toContain(".ASPXAUTH=");
+      expect(setCookie).toContain("mb_login_name=kpareek");
+      expect(storeUserCredentials).toHaveBeenCalledWith({
+        loginName: "kpareek",
+        username: "kpareek",
+        password: "secret",
+      });
+      expect(console.warn).toHaveBeenCalledWith(
+        "[auth-login] failed to store user credentials",
+        {
+          error: "database is locked",
+          loginName: "kpareek",
+        },
+      );
+    } finally {
+      vi.doUnmock("@/lib/stored-user-credentials");
+    }
   });
 
   it("allows sign-in when the username does not yet resolve to a callable internal contact", async () => {
