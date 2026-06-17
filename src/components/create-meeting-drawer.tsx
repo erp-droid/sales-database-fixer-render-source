@@ -1,6 +1,14 @@
 "use client";
 
-import { type ChangeEvent, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { CreateContactDrawer } from "@/components/create-contact-drawer";
 import {
@@ -625,6 +633,9 @@ export function CreateMeetingDrawer({
   const [attendeeSearchTerm, setAttendeeSearchTerm] = useState("");
   const [attachmentFiles, setAttachmentFiles] = useState<PendingMeetingAttachment[]>([]);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const attendeeInputRef = useRef<HTMLInputElement | null>(null);
+  const resetKeyRef = useRef<string | null>(null);
+  const calendarSessionRequestRef = useRef(0);
   const debouncedAttendeeSearchTerm = useDebouncedValue(attendeeSearchTerm, 220);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -725,6 +736,67 @@ export function CreateMeetingDrawer({
   const isScheduleDisabled =
     isSubmitting || !isGoogleCalendarConnected || !canUploadSelectedAttachments;
 
+  const refreshCalendarSession = useCallback(
+    async (input?: { signal?: AbortSignal; showLoading?: boolean }) => {
+      const requestId = calendarSessionRequestRef.current + 1;
+      calendarSessionRequestRef.current = requestId;
+      const showLoading = input?.showLoading ?? true;
+
+      if (showLoading) {
+        setIsLoadingCalendarSession(true);
+      }
+
+      try {
+        const response = await fetch("/api/calendar/session", {
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: buildLoginNameHeaders(viewerLoginName),
+          signal: input?.signal,
+        });
+        const payload = await readJsonResponse<GoogleCalendarSessionResponse | { error?: string }>(
+          response,
+        );
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+        if (!isGoogleCalendarSessionResponse(payload)) {
+          throw new Error("Unexpected Google Calendar session response.");
+        }
+
+        if (!input?.signal?.aborted && calendarSessionRequestRef.current === requestId) {
+          setCalendarSession(payload);
+        }
+
+        return payload;
+      } catch (error) {
+        if (input?.signal?.aborted) {
+          return null;
+        }
+
+        const fallback: GoogleCalendarSessionResponse = {
+          status: "disconnected",
+          connectedGoogleEmail: null,
+          connectionError:
+            error instanceof Error ? error.message : "Unable to load Google Calendar status.",
+          expectedRedirectUri: null,
+          canUploadAttachments: false,
+          requiresReconnectForAttachments: false,
+        };
+
+        if (calendarSessionRequestRef.current === requestId) {
+          setCalendarSession(fallback);
+        }
+
+        return fallback;
+      } finally {
+        if (!input?.signal?.aborted && calendarSessionRequestRef.current === requestId) {
+          setIsLoadingCalendarSession(false);
+        }
+      }
+    },
+    [viewerLoginName],
+  );
+
   useEffect(() => {
     if (!isOpen) {
       setForm(buildEmptyMeetingForm(defaultTimeZone, defaultCategory));
@@ -753,8 +825,21 @@ export function CreateMeetingDrawer({
       setRemoteEmployeeMatches([]);
       setRemoteEmployeeSearchError(null);
       setIsSearchingRemoteEmployees(false);
+      resetKeyRef.current = null;
       return;
     }
+
+    const nextResetKey = [
+      defaultCategory,
+      source?.accountRecordId ?? "",
+      source?.businessAccountId ?? "",
+      source?.accountKey ?? "",
+      sourceContactId ?? "",
+    ].join("|");
+    if (resetKeyRef.current === nextResetKey) {
+      return;
+    }
+    resetKeyRef.current = nextResetKey;
 
     const nextTimeZone = options?.defaultTimeZone ?? DEFAULT_MEETING_TIME_ZONE;
     setForm(buildEmptyMeetingForm(nextTimeZone, defaultCategory));
@@ -804,52 +889,10 @@ export function CreateMeetingDrawer({
     }
 
     const controller = new AbortController();
-    setIsLoadingCalendarSession(true);
-
-    fetch("/api/calendar/session", {
-      cache: "no-store",
-      credentials: "same-origin",
-      headers: buildLoginNameHeaders(viewerLoginName),
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        const payload = await readJsonResponse<GoogleCalendarSessionResponse | { error?: string }>(
-          response,
-        );
-        if (!response.ok) {
-          throw new Error(parseError(payload));
-        }
-        if (!isGoogleCalendarSessionResponse(payload)) {
-          throw new Error("Unexpected Google Calendar session response.");
-        }
-
-        if (!controller.signal.aborted) {
-          setCalendarSession(payload);
-        }
-      })
-      .catch((error) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-
-        setCalendarSession({
-          status: "disconnected",
-          connectedGoogleEmail: null,
-          connectionError:
-            error instanceof Error ? error.message : "Unable to load Google Calendar status.",
-          expectedRedirectUri: null,
-          canUploadAttachments: false,
-          requiresReconnectForAttachments: false,
-        });
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setIsLoadingCalendarSession(false);
-        }
-      });
+    void refreshCalendarSession({ signal: controller.signal });
 
     return () => controller.abort();
-  }, [isOpen, viewerLoginName]);
+  }, [isOpen, refreshCalendarSession]);
 
   useEffect(() => {
     function handleCalendarOauthMessage(event: MessageEvent) {
@@ -870,13 +913,14 @@ export function CreateMeetingDrawer({
         canUploadAttachments: true,
         requiresReconnectForAttachments: false,
       }));
+      void refreshCalendarSession({ showLoading: false });
     }
 
     window.addEventListener("message", handleCalendarOauthMessage);
     return () => {
       window.removeEventListener("message", handleCalendarOauthMessage);
     };
-  }, []);
+  }, [refreshCalendarSession]);
 
   useEffect(() => {
     const normalizedSearchTerm = debouncedLocationSearchTerm.trim();
@@ -1194,6 +1238,40 @@ export function CreateMeetingDrawer({
     }
 
     popup.focus();
+
+    let hasRefreshedAfterClose = false;
+    let focusRefreshTimeoutId: number | null = null;
+    const refreshAfterPopupClose = () => {
+      if (hasRefreshedAfterClose) {
+        return;
+      }
+      hasRefreshedAfterClose = true;
+      window.clearInterval(closeCheckId);
+      window.removeEventListener("focus", handleWindowFocus);
+      if (focusRefreshTimeoutId !== null) {
+        window.clearTimeout(focusRefreshTimeoutId);
+      }
+      void refreshCalendarSession({ showLoading: true });
+    };
+    const closeCheckId = window.setInterval(() => {
+      if (popup.closed) {
+        refreshAfterPopupClose();
+      }
+    }, 700);
+    const handleWindowFocus = () => {
+      if (focusRefreshTimeoutId !== null) {
+        window.clearTimeout(focusRefreshTimeoutId);
+      }
+      focusRefreshTimeoutId = window.setTimeout(() => {
+        if (popup.closed) {
+          refreshAfterPopupClose();
+          return;
+        }
+
+        void refreshCalendarSession({ showLoading: false });
+      }, 500);
+    };
+    window.addEventListener("focus", handleWindowFocus);
   }
 
   async function handleDisconnectGoogleCalendar() {
@@ -1782,7 +1860,7 @@ export function CreateMeetingDrawer({
             <div className={styles.calendarRow}>
               <span className={styles.rowIcon}>Guests</span>
               <div className={styles.rowContent}>
-                <div className={styles.chipInput}>
+                <div className={styles.chipInput} onClick={() => attendeeInputRef.current?.focus()}>
                   {selectedAttendees.map((attendee) => {
                     const isRelatedAttendee = attendee.contactId === relatedContactId;
 
@@ -1824,6 +1902,7 @@ export function CreateMeetingDrawer({
                     </span>
                   ))}
                   <input
+                    autoComplete="off"
                     onChange={(event) => handleAttendeeInputChange(event.target.value)}
                     onKeyDown={handleAttendeeInputKeyDown}
                     placeholder={
@@ -1831,6 +1910,7 @@ export function CreateMeetingDrawer({
                         ? "Type an email, or wait for contacts..."
                         : "Add guests by name or email"
                     }
+                    ref={attendeeInputRef}
                     value={attendeeSearchTerm}
                   />
                 </div>
