@@ -100,10 +100,12 @@ describe("client dataset cache", () => {
     const localStorage = (
       globalThis.window as unknown as { localStorage: LocalStorageMock }
     ).localStorage;
+    localStorage.setItem("businessAccounts.dataset.v12", legacyPayload);
     localStorage.setItem("businessAccounts.dataset.v3", legacyPayload);
 
     const cache = await import("@/lib/client-dataset-cache");
     expect(cache.readCachedDatasetFromStorage()).toBeNull();
+    expect(localStorage.getItem("businessAccounts.dataset.v12")).toBeNull();
     expect(localStorage.getItem("businessAccounts.dataset.v8")).toBeNull();
     expect(localStorage.getItem("businessAccounts.dataset.v5")).toBeNull();
     expect(localStorage.getItem("businessAccounts.dataset.v4")).toBeNull();

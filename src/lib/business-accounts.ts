@@ -552,6 +552,16 @@ function hasUsableAddress(row: BusinessAccountRow): boolean {
   return hasText(row.address) || hasAnyCanonicalAddressField(row);
 }
 
+function hasVisibleAccountOrContactIdentity(row: BusinessAccountRow): boolean {
+  return (
+    hasText(row.businessAccountId) ||
+    isUsableContactRow(row) ||
+    hasText(row.primaryContactEmail) ||
+    row.contactId !== null ||
+    row.primaryContactId !== null
+  );
+}
+
 function isContactlessUnidentifiedCompanyRow(row: BusinessAccountRow): boolean {
   if (hasText(row.businessAccountId)) {
     return false;
@@ -1738,7 +1748,7 @@ export function queryBusinessAccounts(
   const effectiveCategory = options.filterCategory ?? options.category;
 
   const filtered = sourceRows.filter((row) => {
-    if (!hasUsableAddress(row)) {
+    if (!hasUsableAddress(row) && !hasVisibleAccountOrContactIdentity(row)) {
       return false;
     }
 

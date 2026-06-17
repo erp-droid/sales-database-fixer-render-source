@@ -1255,6 +1255,57 @@ describe("queryBusinessAccounts", () => {
     expect(result.items[0]?.companyName).toBe("Beta Ltd");
   });
 
+  it("keeps addressless rows when they have real account or contact identity", () => {
+    const result = queryBusinessAccounts(
+      [
+        {
+          ...rows[0],
+          businessAccountId: "AC-ADDRESSLESS",
+          companyName: "Addressless Account",
+          address: "",
+          addressLine1: "",
+          addressLine2: "",
+          city: "",
+          state: "",
+          postalCode: "",
+          country: "",
+          primaryContactName: null,
+          primaryContactEmail: null,
+          primaryContactId: null,
+          contactId: null,
+        },
+        {
+          ...rows[1],
+          businessAccountId: "",
+          companyName: "Addressless Contact Account",
+          address: "",
+          addressLine1: "",
+          addressLine2: "",
+          city: "",
+          state: "",
+          postalCode: "",
+          country: "",
+          primaryContactName: "Visible Contact",
+          primaryContactEmail: "visible@example.com",
+          primaryContactId: 321,
+          contactId: 321,
+        },
+      ],
+      {
+        page: 1,
+        pageSize: 25,
+        sortBy: "companyName",
+        sortDir: "asc",
+      },
+    );
+
+    expect(result.total).toBe(2);
+    expect(result.items.map((row) => row.companyName)).toEqual([
+      "Addressless Account",
+      "Addressless Contact Account",
+    ]);
+  });
+
   it("hides contactless shell rows when no address is present", () => {
     const result = queryBusinessAccounts(
       [
