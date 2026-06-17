@@ -146,11 +146,15 @@ export function AuthSessionGuard() {
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const response = await originalFetch(input, init);
       const requestPath = resolveRequestPath(input);
+      const responsePayload =
+        response.status === 401
+          ? await response.clone().json().catch(() => null)
+          : undefined;
 
       if (
         !cancelled &&
         !signingOutRef.current &&
-        shouldForceLogoutForApiResponse(requestPath, response.status) &&
+        shouldForceLogoutForApiResponse(requestPath, response.status, responsePayload) &&
         !isPublicPath(pathnameRef.current)
       ) {
         void performForcedSignOut();
