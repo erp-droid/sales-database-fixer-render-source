@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 
 import { AuthSessionGuard } from "@/components/auth-session-guard";
+import { DeployRefreshGuard } from "@/components/deploy-refresh-guard";
 import { TwilioCallProvider } from "@/components/twilio-call-provider";
 
 import "./globals.css";
@@ -27,10 +28,14 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const currentCommit =
+    process.env.RENDER_GIT_COMMIT?.trim() || process.env.GIT_COMMIT_SHA?.trim() || null;
+
   return (
     <html lang="en">
       <body className={`${displayFont.variable} ${monoFont.variable}`}>
         <TwilioCallProvider>
+          <DeployRefreshGuard currentCommit={currentCommit} />
           <AuthSessionGuard />
           {children}
         </TwilioCallProvider>
