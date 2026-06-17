@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const requireAuthCookieValue = vi.fn(() => "user-cookie");
+const getAuthCookieValue = vi.fn(() => "user-cookie");
 const setAuthCookie = vi.fn();
 const withServiceAcumaticaSession = vi.fn();
 const fetchEmployees = vi.fn();
@@ -14,7 +14,7 @@ const syncCallEmployeeDirectory = vi.fn();
 const upsertCallEmployeeDirectoryItem = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
-  requireAuthCookieValue,
+  getAuthCookieValue,
   setAuthCookie,
 }));
 
@@ -56,7 +56,7 @@ describe("GET /api/employees/search", () => {
     vi.resetModules();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-17T17:00:00.000Z"));
-    requireAuthCookieValue.mockReturnValue("user-cookie");
+    getAuthCookieValue.mockReturnValue("user-cookie");
     readCallEmployeeDirectory.mockReturnValue([]);
     syncCallEmployeeDirectory.mockResolvedValue([]);
     readEmployeeDirectorySnapshot.mockReturnValue({

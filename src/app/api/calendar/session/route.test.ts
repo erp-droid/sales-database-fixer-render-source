@@ -1,11 +1,11 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const requireStoredLoginName = vi.fn();
+const requireRequestLoginName = vi.fn();
 const readGoogleCalendarSession = vi.fn();
 
-vi.mock("@/lib/auth", () => ({
-  requireStoredLoginName,
+vi.mock("@/lib/request-login", () => ({
+  requireRequestLoginName,
 }));
 
 vi.mock("@/lib/google-calendar", () => ({
@@ -20,7 +20,7 @@ describe("GET /api/calendar/session", () => {
 
   it("returns 401 when the app username is unavailable", async () => {
     const { HttpError } = await import("@/lib/errors");
-    requireStoredLoginName.mockImplementation(() => {
+    requireRequestLoginName.mockImplementation(() => {
       throw new HttpError(401, "Signed-in username is unavailable. Sign out and sign in again.");
     });
 
@@ -35,7 +35,7 @@ describe("GET /api/calendar/session", () => {
   });
 
   it("returns the calendar session payload for an app signed-in request", async () => {
-    requireStoredLoginName.mockReturnValue("jserrano");
+    requireRequestLoginName.mockReturnValue("jserrano");
     readGoogleCalendarSession.mockReturnValue({
       status: "connected",
       connectedGoogleEmail: "jserrano@example.com",
@@ -61,7 +61,7 @@ describe("GET /api/calendar/session", () => {
   });
 
   it("returns 500 with message for unexpected errors", async () => {
-    requireStoredLoginName.mockReturnValue("jserrano");
+    requireRequestLoginName.mockReturnValue("jserrano");
     readGoogleCalendarSession.mockImplementation(() => {
       throw new Error("calendar lookup failed");
     });

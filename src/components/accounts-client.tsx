@@ -3631,6 +3631,12 @@ export function AccountsClient({
     try {
       const response = await fetch("/api/meetings/options", {
         cache: "no-store",
+        credentials: "same-origin",
+        headers: session?.user?.id
+          ? {
+              "x-mb-login-name": session.user.id,
+            }
+          : undefined,
       });
       const payload = await readJsonResponse<MeetingCreateOptionsResponse | { error?: string }>(
         response,

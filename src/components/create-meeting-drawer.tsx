@@ -7,6 +7,7 @@ import {
   buildMeetingDateTimeRange,
   DEFAULT_MEETING_TIME_ZONE,
   extractDeliverableMeetingEmail,
+  extractDeliverableMeetingEmails,
   findMeetingContactByEmail,
   findMeetingContactByLoginName,
   findMeetingContactOptionById,
@@ -554,6 +555,17 @@ function isValidAttendeeEmail(value: string | null | undefined): value is string
   return extractDeliverableMeetingEmail(value) !== null && !isBlockedMeetingAttendeeEmail(value);
 }
 
+function extractAllowedAttendeeEmails(value: string): string[] {
+  return extractDeliverableMeetingEmails(value).filter(
+    (email) => !isBlockedMeetingAttendeeEmail(email),
+  );
+}
+
+function buildLoginNameHeaders(loginName: string | null): HeadersInit | undefined {
+  const normalized = loginName?.trim();
+  return normalized ? { "x-mb-login-name": normalized } : undefined;
+}
+
 function normalizeNullableInput(value: string): string | null {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
@@ -796,6 +808,8 @@ export function CreateMeetingDrawer({
 
     fetch("/api/calendar/session", {
       cache: "no-store",
+      credentials: "same-origin",
+      headers: buildLoginNameHeaders(viewerLoginName),
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -835,7 +849,7 @@ export function CreateMeetingDrawer({
       });
 
     return () => controller.abort();
-  }, [isOpen]);
+  }, [isOpen, viewerLoginName]);
 
   useEffect(() => {
     function handleCalendarOauthMessage(event: MessageEvent) {
@@ -940,6 +954,8 @@ export function CreateMeetingDrawer({
 
     fetch(`/api/employees/search?q=${encodeURIComponent(normalizedSearchTerm)}`, {
       cache: "no-store",
+      credentials: "same-origin",
+      headers: buildLoginNameHeaders(viewerLoginName),
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -976,7 +992,7 @@ export function CreateMeetingDrawer({
       });
 
     return () => controller.abort();
-  }, [debouncedAttendeeSearchTerm, isOpen]);
+  }, [debouncedAttendeeSearchTerm, isOpen, viewerLoginName]);
 
   const relatedContactLocked = sourceContactId !== null;
   const createContactAccountOptions = useMemo(
@@ -1161,8 +1177,14 @@ export function CreateMeetingDrawer({
 
   function handleConnectGoogleCalendar() {
     setFormError(null);
+    const params = new URLSearchParams({
+      returnTo: "/calendar/oauth/complete",
+    });
+    if (viewerLoginName?.trim()) {
+      params.set("loginName", viewerLoginName.trim());
+    }
     const popup = window.open(
-      "/api/calendar/oauth/start?returnTo=/calendar/oauth/complete",
+      `/api/calendar/oauth/start?${params.toString()}`,
       "calendar-oauth",
       "popup=yes,width=540,height=720,resizable=yes,scrollbars=yes",
     );
@@ -1180,6 +1202,8 @@ export function CreateMeetingDrawer({
 
     try {
       const response = await fetch("/api/calendar/oauth/disconnect", {
+        credentials: "same-origin",
+        headers: buildLoginNameHeaders(viewerLoginName),
         method: "POST",
       });
       const payload = await readJsonResponse<{ disconnected?: boolean; error?: string }>(response);
@@ -1303,15 +1327,34 @@ export function CreateMeetingDrawer({
     setFormError(null);
   }
 
-  function handleAddAttendeeEmail(email: string) {
-    const deliverableEmail = extractDeliverableMeetingEmail(email);
-    if (!deliverableEmail || isBlockedMeetingAttendeeEmail(deliverableEmail)) {
+  function handleAddAttendeeEmails(value: string): boolean {
+    const deliverableEmails = extractAllowedAttendeeEmails(value);
+    if (deliverableEmails.length === 0) {
+      return false;
+    }
+
+    setAttendeeEmails((current) => uniqueAttendeeEmails([...current, ...deliverableEmails]));
+    setAttendeeSearchTerm("");
+    setFormError(null);
+    return true;
+  }
+
+  function handleAttendeeInputChange(value: string) {
+    if (!/[;,]/.test(value)) {
+      setAttendeeSearchTerm(value);
       return;
     }
 
-    setAttendeeEmails((current) => uniqueAttendeeEmails([...current, deliverableEmail]));
-    setAttendeeSearchTerm("");
-    setFormError(null);
+    const parts = value.split(/[;,]/);
+    const trailingInput = parts.pop() ?? "";
+    const addedEmails = extractAllowedAttendeeEmails(parts.join(","));
+
+    if (addedEmails.length > 0) {
+      setAttendeeEmails((current) => uniqueAttendeeEmails([...current, ...addedEmails]));
+      setFormError(null);
+    }
+
+    setAttendeeSearchTerm(trailingInput.trimStart());
   }
 
   function handleAttendeeInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -1319,12 +1362,11 @@ export function CreateMeetingDrawer({
       return;
     }
 
-    if (!canInviteDirectEmail) {
+    if (!handleAddAttendeeEmails(attendeeSearchTerm)) {
       return;
     }
 
     event.preventDefault();
-    handleAddAttendeeEmail(attendeeSearchTerm);
   }
 
   function handleAddEmployeeAttendee(employee: MeetingEmployeeOption) {
@@ -1563,8 +1605,12 @@ export function CreateMeetingDrawer({
             };
       const response = await fetch("/api/meetings", {
         method: "POST",
-        ...(requestHeaders ? { headers: requestHeaders } : {}),
         body: requestBody,
+        credentials: "same-origin",
+        headers: {
+          ...requestHeaders,
+          ...buildLoginNameHeaders(viewerLoginName),
+        },
       });
 
       const payload = await readJsonResponse<MeetingCreateResponse | { error?: string }>(
@@ -1778,7 +1824,7 @@ export function CreateMeetingDrawer({
                     </span>
                   ))}
                   <input
-                    onChange={(event) => setAttendeeSearchTerm(event.target.value)}
+                    onChange={(event) => handleAttendeeInputChange(event.target.value)}
                     onKeyDown={handleAttendeeInputKeyDown}
                     placeholder={
                       isOptionsPending
@@ -1852,7 +1898,7 @@ export function CreateMeetingDrawer({
                 {canInviteDirectEmail ? (
                   <button
                     className={styles.linkButton}
-                    onClick={() => handleAddAttendeeEmail(attendeeSearchTerm)}
+                    onClick={() => handleAddAttendeeEmails(attendeeSearchTerm)}
                     type="button"
                   >
                     Add {normalizedAttendeeSearchEmail}

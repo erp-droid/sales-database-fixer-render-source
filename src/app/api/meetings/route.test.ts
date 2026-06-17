@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "@/lib/errors";
 import type { BusinessAccountRow } from "@/types/business-account";
 
-const requireStoredLoginName = vi.fn(() => "jserrano");
+const requireRequestLoginName = vi.fn(() => "jserrano");
 const createMeetingInviteInGoogleCalendar = vi.fn();
 const upsertMeetingBooking = vi.fn();
 const upsertMeetingAuditEvent = vi.fn();
@@ -17,8 +17,8 @@ const readBusinessAccountDetailFromReadModel = vi.fn(() => ({
 const markReadModelCalendarInviteSent = vi.fn(() => 1);
 const publishBusinessAccountChanged = vi.fn();
 
-vi.mock("@/lib/auth", () => ({
-  requireStoredLoginName,
+vi.mock("@/lib/request-login", () => ({
+  requireRequestLoginName,
 }));
 
 vi.mock("@/lib/google-calendar", () => ({
@@ -135,7 +135,7 @@ function buildRequest(
 describe("POST /api/meetings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireStoredLoginName.mockReturnValue("jserrano");
+    requireRequestLoginName.mockReturnValue("jserrano");
     readAllAccountRowsFromReadModel.mockReturnValue([
       buildAccountRow({
         contactId: 157497,
@@ -248,6 +248,39 @@ describe("POST /api/meetings", () => {
       targetContactId: 157497,
       reason: "calendar-invite-sent",
     });
+  });
+
+  it("passes a directly typed jserrano email guest to Google Calendar", async () => {
+    createMeetingInviteInGoogleCalendar.mockResolvedValue({
+      status: "created",
+      eventId: "google-event-direct-email",
+      connectedGoogleEmail: "jserrano@gmail.com",
+    });
+
+    const { POST } = await import("@/app/api/meetings/route");
+
+    const response = await POST(
+      buildRequest({
+        includeOrganizerInAcumatica: false,
+        organizerContactId: null,
+        attendeeContactIds: [],
+        relatedContactId: null,
+        attendeeEmails: ["jserrano@meadowb.com"],
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(createMeetingInviteInGoogleCalendar).toHaveBeenCalledWith(
+      "jserrano",
+      expect.objectContaining({
+        attendees: [
+          expect.objectContaining({
+            contactId: null,
+            email: "jserrano@meadowb.com",
+          }),
+        ],
+      }),
+    );
   });
 
   it("passes multipart attachment files to the Google invite creator", async () => {

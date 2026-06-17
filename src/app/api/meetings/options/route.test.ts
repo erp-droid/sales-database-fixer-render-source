@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const requireAuthCookieValue = vi.fn(() => "cookie");
+const getAuthCookieValue = vi.fn(() => "cookie");
 const setAuthCookie = vi.fn();
 const fetchBusinessAccounts = vi.fn();
 const fetchContacts = vi.fn();
@@ -13,7 +13,7 @@ const readEmployeeDirectorySnapshot = vi.fn();
 const withServiceAcumaticaSession = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
-  requireAuthCookieValue,
+  getAuthCookieValue,
   setAuthCookie,
 }));
 
@@ -94,7 +94,7 @@ function buildAccount(input: {
 describe("GET /api/meetings/options", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireAuthCookieValue.mockReturnValue("cookie");
+    getAuthCookieValue.mockReturnValue("cookie");
     readAllAccountRowsFromReadModel.mockReturnValue([]);
     readCallEmployeeDirectory.mockReturnValue([]);
     readCallEmployeeDirectoryMeta.mockReturnValue({

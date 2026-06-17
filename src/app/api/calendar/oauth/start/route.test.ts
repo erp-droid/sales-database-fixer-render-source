@@ -1,12 +1,12 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const requireStoredLoginName = vi.fn();
+const requireRequestLoginName = vi.fn();
 const buildGoogleCalendarOauthStartUrl = vi.fn();
 const readGoogleCalendarExpectedRedirectUri = vi.fn();
 
-vi.mock("@/lib/auth", () => ({
-  requireStoredLoginName,
+vi.mock("@/lib/request-login", () => ({
+  requireRequestLoginName,
 }));
 
 vi.mock("@/lib/google-calendar", () => ({
@@ -18,7 +18,7 @@ describe("GET /api/calendar/oauth/start", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
-    requireStoredLoginName.mockReturnValue("jserrano");
+    requireRequestLoginName.mockReturnValue("jserrano");
     buildGoogleCalendarOauthStartUrl.mockReturnValue(
       new URL("https://accounts.google.com/o/oauth2/v2/auth?client_id=test"),
     );
@@ -80,7 +80,7 @@ describe("GET /api/calendar/oauth/start", () => {
 
   it("falls back to the configured public origin when an internal Render request errors", async () => {
     const { HttpError } = await import("@/lib/errors");
-    requireStoredLoginName.mockImplementation(() => {
+    requireRequestLoginName.mockImplementation(() => {
       throw new HttpError(401, "Signed-in username is unavailable.");
     });
     readGoogleCalendarExpectedRedirectUri.mockReturnValue(

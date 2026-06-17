@@ -4,6 +4,7 @@ import {
   buildMeetingEventPayloadVariants,
   buildMeetingInviteAttendees,
   extractDeliverableMeetingEmail,
+  extractDeliverableMeetingEmails,
   findMeetingContactByEmail,
   findMeetingContactByLoginName,
   isBlockedMeetingAttendeeEmail,
@@ -201,6 +202,19 @@ describe("extractDeliverableMeetingEmail", () => {
     expect(extractDeliverableMeetingEmail("double..dot@example.com")).toBeNull();
     expect(extractDeliverableMeetingEmail("")).toBeNull();
     expect(extractDeliverableMeetingEmail(null)).toBeNull();
+  });
+});
+
+describe("extractDeliverableMeetingEmails", () => {
+  it("extracts one or many comma-separated guest emails", () => {
+    expect(extractDeliverableMeetingEmails("jserrano@meadowb.com,")).toEqual([
+      "jserrano@meadowb.com",
+    ]);
+    expect(
+      extractDeliverableMeetingEmails(
+        "Jorge <jserrano@meadowb.com>, guest@example.com, another@example.com",
+      ),
+    ).toEqual(["jserrano@meadowb.com", "guest@example.com", "another@example.com"]);
   });
 });
 

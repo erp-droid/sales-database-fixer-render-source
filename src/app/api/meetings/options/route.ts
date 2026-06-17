@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import { getAuthCookieValue, setAuthCookie } from "@/lib/auth";
 import {
   fetchBusinessAccounts,
   fetchContacts,
@@ -337,12 +337,65 @@ function isCompleteEnoughMeetingEmployeeOptions(
 }
 
 async function refreshMeetingEmployeeDirectory(
-  cookieValue: string,
+  cookieValue: string | null,
   authCookieRefresh?: { value: string | null },
 ): Promise<CallEmployeeDirectoryItem[]> {
   return withServiceAcumaticaSession(null, (serviceCookieValue, serviceRefresh) =>
     syncCallEmployeeDirectory(serviceCookieValue, serviceRefresh),
-  ).catch(() => syncCallEmployeeDirectory(cookieValue, authCookieRefresh));
+  ).catch((error) => {
+    if (!cookieValue) {
+      throw error;
+    }
+
+    return syncCallEmployeeDirectory(cookieValue, authCookieRefresh);
+  });
+}
+
+async function fetchLiveMeetingDirectory(
+  cookieValue: string | null,
+  authCookieRefresh: { value: string | null },
+): Promise<{ rawAccounts: unknown[]; rawContacts: unknown[] }> {
+  if (cookieValue) {
+    const [rawAccounts, rawContacts] = await Promise.all([
+      fetchBusinessAccounts(
+        cookieValue,
+        {
+          batchSize: 300,
+          ensureMainAddress: true,
+        },
+        authCookieRefresh,
+      ),
+      fetchContacts(
+        cookieValue,
+        {
+          batchSize: 300,
+        },
+        authCookieRefresh,
+      ),
+    ]);
+    return { rawAccounts, rawContacts };
+  }
+
+  return withServiceAcumaticaSession(null, async (serviceCookieValue, serviceRefresh) => {
+    const [rawAccounts, rawContacts] = await Promise.all([
+      fetchBusinessAccounts(
+        serviceCookieValue,
+        {
+          batchSize: 300,
+          ensureMainAddress: true,
+        },
+        serviceRefresh,
+      ),
+      fetchContacts(
+        serviceCookieValue,
+        {
+          batchSize: 300,
+        },
+        serviceRefresh,
+      ),
+    ]);
+    return { rawAccounts, rawContacts };
+  });
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -351,29 +404,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   };
 
   try {
-    const cookieValue = requireAuthCookieValue(request);
+    const cookieValue = getAuthCookieValue(request);
     const cachedRows = readAllAccountRowsFromReadModel();
     let accountOptions = buildMeetingAccountOptionsFromRows(cachedRows);
     let contacts = buildMeetingContactOptionsFromRows(cachedRows);
 
     if (accountOptions.length === 0 && contacts.length === 0) {
-      const [rawAccounts, rawContacts] = await Promise.all([
-        fetchBusinessAccounts(
-          cookieValue,
-          {
-            batchSize: 300,
-            ensureMainAddress: true,
-          },
-          authCookieRefresh,
-        ),
-        fetchContacts(
-          cookieValue,
-          {
-            batchSize: 300,
-          },
-          authCookieRefresh,
-        ),
-      ]);
+      const { rawAccounts, rawContacts } = await fetchLiveMeetingDirectory(
+        cookieValue,
+        authCookieRefresh,
+      );
       const accountRows = rawAccounts
         .filter((account) => isAllowedMeetingBusinessAccount(account))
         .flatMap((account) => normalizeBusinessAccountRows(account));

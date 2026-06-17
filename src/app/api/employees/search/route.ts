@@ -3,7 +3,7 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 
 import { withServiceAcumaticaSession } from "@/lib/acumatica-service-auth";
-import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import { getAuthCookieValue, setAuthCookie } from "@/lib/auth";
 import {
   type AuthCookieRefreshState,
   type EmployeeDirectoryItem,
@@ -500,7 +500,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh: AuthCookieRefreshState = { value: null };
 
   try {
-    const cookieValue = requireAuthCookieValue(request);
+    const cookieValue = getAuthCookieValue(request);
     const query = request.nextUrl.searchParams.get("q")?.trim() ?? "";
 
     if (query.length < 2) {
@@ -523,12 +523,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       serviceError = error;
     }
 
-    if (items.length === 0) {
+    if (items.length === 0 && cookieValue) {
       try {
         items = await searchEmployeeOptions(cookieValue, authCookieRefresh, query);
       } catch (error) {
         throw serviceError ?? error;
       }
+    } else if (items.length === 0 && serviceError) {
+      throw serviceError;
     }
 
     const response = NextResponse.json({ items });

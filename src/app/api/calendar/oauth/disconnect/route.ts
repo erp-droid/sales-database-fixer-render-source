@@ -2,13 +2,13 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireStoredLoginName } from "@/lib/auth";
 import { disconnectGoogleCalendar } from "@/lib/google-calendar";
+import { requireRequestLoginName } from "@/lib/request-login";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
-    const loginName = requireStoredLoginName(request);
+    const loginName = requireRequestLoginName(request);
 
     disconnectGoogleCalendar(loginName);
     return NextResponse.json({ disconnected: true });

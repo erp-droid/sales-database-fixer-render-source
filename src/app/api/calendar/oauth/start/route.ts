@@ -2,11 +2,11 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireStoredLoginName } from "@/lib/auth";
 import {
   buildGoogleCalendarOauthStartUrl,
   readGoogleCalendarExpectedRedirectUri,
 } from "@/lib/google-calendar";
+import { requireRequestLoginName } from "@/lib/request-login";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 
 function sanitizeReturnTo(returnTo: string | null | undefined): string {
@@ -94,7 +94,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const returnTo = request.nextUrl.searchParams.get("returnTo");
 
   try {
-    const loginName = requireStoredLoginName(request);
+    const loginName = requireRequestLoginName(request);
     assertCalendarRedirectOriginMatchesRequest(request);
 
     return NextResponse.redirect(

@@ -5,7 +5,6 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { ZodError, type ZodIssue } from "zod";
 
-import { requireStoredLoginName } from "@/lib/auth";
 import { upsertMeetingAuditEvent } from "@/lib/audit-log-store";
 import { publishBusinessAccountChanged } from "@/lib/business-account-live";
 import { HttpError, getErrorMessage } from "@/lib/errors";
@@ -28,6 +27,7 @@ import {
   readAllAccountRowsFromReadModel,
   readBusinessAccountDetailFromReadModel,
 } from "@/lib/read-model/accounts";
+import { requireRequestLoginName } from "@/lib/request-login";
 import { parseMeetingCreatePayload } from "@/lib/validation";
 import type { MeetingContactOption, MeetingCreateResponse } from "@/types/meeting-create";
 
@@ -171,7 +171,7 @@ function requireGoogleCalendarResult(
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
-    const storedLoginName = requireStoredLoginName(request);
+    const storedLoginName = requireRequestLoginName(request);
     const { body, attachmentFiles } = await readMeetingCreateInput(request);
     const meetingRequest = parseMeetingCreatePayload(body);
     const allRows = readAllAccountRowsFromReadModel();

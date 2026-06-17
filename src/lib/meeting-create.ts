@@ -76,6 +76,7 @@ export function normalizeMeetingEmail(value: string | null | undefined): string 
 }
 
 const deliverableMeetingEmailSchema = z.string().email();
+const EMAIL_LIKE_REGEX = /[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+/gi;
 
 export function isDeliverableMeetingEmail(value: string | null | undefined): boolean {
   const normalized = normalizeMeetingEmail(value);
@@ -91,20 +92,31 @@ export function isDeliverableMeetingEmail(value: string | null | undefined): boo
 export function extractDeliverableMeetingEmail(
   value: string | null | undefined,
 ): string | null {
+  return extractDeliverableMeetingEmails(value)[0] ?? null;
+}
+
+export function extractDeliverableMeetingEmails(
+  value: string | null | undefined,
+): string[] {
   const normalized = normalizeMeetingEmail(value);
   if (!normalized) {
-    return null;
+    return [];
   }
 
   if (deliverableMeetingEmailSchema.safeParse(normalized).success) {
-    return normalized;
+    return [normalized];
   }
 
-  const angleMatch = normalized.match(/<([^<>]+)>/);
+  const angleMatches = [...normalized.matchAll(/<([^<>]+)>/g)]
+    .map((match) => match[1])
+    .filter((candidate): candidate is string => Boolean(candidate));
+  const emailLikeMatches = normalized.match(EMAIL_LIKE_REGEX) ?? [];
   const candidates = [
-    ...(angleMatch ? [angleMatch[1]] : []),
+    ...angleMatches,
+    ...emailLikeMatches,
     ...normalized.split(/[\s;,]+/),
   ];
+  const emails = new Set<string>();
 
   for (const candidate of candidates) {
     const cleaned = candidate
@@ -112,11 +124,11 @@ export function extractDeliverableMeetingEmail(
       .replace(/^[<("']+/, "")
       .replace(/[>)"'.,;:]+$/, "");
     if (cleaned && deliverableMeetingEmailSchema.safeParse(cleaned).success) {
-      return cleaned;
+      emails.add(cleaned);
     }
   }
 
-  return null;
+  return [...emails];
 }
 
 export function normalizeMeetingLoginName(value: string | null | undefined): string | null {
