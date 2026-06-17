@@ -744,6 +744,7 @@ const LEGACY_COLUMN_VISIBILITY_STORAGE_KEYS = [
 ] as const;
 const COLUMN_PREF_RESET_STORAGE_KEY = "businessAccounts.resetColumnsOnNextLoad.v1";
 const FILTER_PREFERENCES_STORAGE_KEY = "businessAccounts.filters.v1";
+const ACCOUNT_BROWSER_STORAGE_PREFIX = "businessAccounts.";
 
 type AttributeOption = {
   value: string;
@@ -3060,6 +3061,30 @@ function clearCachedMapData() {
   }
 }
 
+function clearAccountBrowserStorage() {
+  try {
+    for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith(ACCOUNT_BROWSER_STORAGE_PREFIX)) {
+        window.localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // Ignore storage failures while resetting browser-side app state.
+  }
+
+  try {
+    for (let index = window.sessionStorage.length - 1; index >= 0; index -= 1) {
+      const key = window.sessionStorage.key(index);
+      if (key?.startsWith(ACCOUNT_BROWSER_STORAGE_PREFIX)) {
+        window.sessionStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // Ignore storage failures while resetting browser-side app state.
+  }
+}
+
 function replaceRowsForAccount(
   currentRows: BusinessAccountRow[],
   incomingRows: BusinessAccountRow[],
@@ -4190,6 +4215,21 @@ export function AccountsClient({
       window.clearInterval(interval);
     };
   }, [isSyncing, syncStartedAt]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("reset") !== "1" && params.get("resetCache") !== "1") {
+      return;
+    }
+
+    clearAccountBrowserStorage();
+    params.delete("reset");
+    params.delete("resetCache");
+
+    const nextQuery = params.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
+    window.location.replace(nextUrl);
+  }, []);
 
   useEffect(() => {
     const shouldResetColumnPrefs =
