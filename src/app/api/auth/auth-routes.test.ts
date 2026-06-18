@@ -96,56 +96,35 @@ describe("auth route timeouts", () => {
     Object.assign(process.env, originalEnv);
   });
 
-  it("returns a degraded authenticated session when the upstream probe times out", async () => {
-    const { HttpError } = await import("@/lib/errors");
-    const validateSessionWithAcumatica = vi.fn(async () => {
-      throw new HttpError(504, "Session check timed out");
+  it("trusts the local CRM session without probing Acumatica", async () => {
+    const fetchMock = vi.fn(() => {
+      throw new Error("Session checks should not call Acumatica.");
     });
-    vi.doMock("@/lib/acumatica", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("@/lib/acumatica")>();
-      return {
-        ...actual,
-        validateSessionWithAcumatica,
-      };
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { GET } = await import("@/app/api/auth/session/route");
+
+    const request = new NextRequest("http://localhost/api/auth/session", {
+      headers: {
+        cookie: ".ASPXAUTH=existing-cookie; mb_login_name=jorge",
+      },
     });
 
-    try {
-      const { GET } = await import("@/app/api/auth/session/route");
+    const response = await GET(request);
 
-      const request = new NextRequest("http://localhost/api/auth/session", {
-        headers: {
-          cookie: ".ASPXAUTH=existing-cookie; mb_login_name=jorge",
-        },
-      });
-
-      const response = await GET(request);
-
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual({
-        authenticated: true,
-        user: {
-          id: "jorge",
-          name: "jorge",
-        },
-        degraded: true,
-      });
-      expect(validateSessionWithAcumatica).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.doUnmock("@/lib/acumatica");
-    }
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      authenticated: true,
+      user: {
+        id: "jorge",
+        name: "jorge",
+      },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to the stored login name when the upstream session payload omits user details", async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
-        jsonResponse({
-          status: 200,
-          body: {
-            ok: true,
-          },
-        }),
-      ),
-    );
+  it("uses the stored login name as the session identity", async () => {
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
     const { GET } = await import("@/app/api/auth/session/route");
@@ -166,20 +145,11 @@ describe("auth route timeouts", () => {
         name: "jserrano",
       },
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reuses a short-lived cached session response for repeated probes", async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
-        jsonResponse({
-          status: 200,
-          body: {
-            ok: true,
-          },
-        }),
-      ),
-    );
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
     const { GET } = await import("@/app/api/auth/session/route");
@@ -213,7 +183,7 @@ describe("auth route timeouts", () => {
         name: "jserrano",
       },
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("keeps the session active when caller identity cannot be resolved", async () => {
@@ -251,87 +221,43 @@ describe("auth route timeouts", () => {
     });
   });
 
-  it("refreshes an expired upstream session from stored credentials", async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/Contact?$top=1")) {
-        return Promise.resolve(
-          jsonResponse({
-            status: 401,
-            body: {
-              message: "Session is invalid or expired",
-            },
-          }),
-        );
-      }
-
-      if (url.endsWith("/entity/auth/login")) {
-        return Promise.resolve(
-          jsonResponse({
-            status: 200,
-            body: {
-              ok: true,
-            },
-            headers: {
-              "set-cookie": ".ASPXAUTH=fresh-cookie; Path=/; HttpOnly",
-            },
-          }),
-        );
-      }
-
-      throw new Error(`Unexpected fetch: ${url}`);
+  it("keeps the local session active even when the upstream cookie value is stale", async () => {
+    const fetchMock = vi.fn(() => {
+      throw new Error("Session checks should not refresh Acumatica.");
     });
     vi.stubGlobal("fetch", fetchMock);
-
-    const { storeUserCredentials } = await import("@/lib/stored-user-credentials");
-    storeUserCredentials({
-      loginName: "smessih-refresh",
-      username: "smessih-refresh",
-      password: "stored-password",
-    });
 
     const { GET } = await import("@/app/api/auth/session/route");
 
     const request = new NextRequest("http://localhost/api/auth/session", {
       headers: {
-        cookie: ".ASPXAUTH=expired-cookie; mb_login_name=smessih-refresh",
+        cookie: ".ASPXAUTH=expired-cookie; mb_login_name=smessih",
       },
     });
 
     const response = await GET(request);
-    const setCookie = response.headers.get("set-cookie") ?? "";
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       authenticated: true,
       user: {
-        id: "smessih-refresh",
-        name: "smessih-refresh",
+        id: "smessih",
+        name: "smessih",
       },
     });
-    expect(setCookie).toContain(".ASPXAUTH=v1.");
-    expect(setCookie).toContain("mb_login_name=smessih-refresh");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("clears local auth cookies when the upstream session is expired and cannot be refreshed", async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
-        jsonResponse({
-          status: 401,
-          body: {
-            message: "Session is invalid or expired",
-          },
-        }),
-      ),
-    );
+  it("clears local auth cookies when the signed-in username cookie is missing", async () => {
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
     const { GET } = await import("@/app/api/auth/session/route");
 
     const request = new NextRequest("http://localhost/api/auth/session", {
       headers: {
-        cookie: ".ASPXAUTH=expired-cookie; mb_login_name=expired-without-stored-creds",
+        cookie: ".ASPXAUTH=existing-cookie",
       },
     });
 
@@ -345,7 +271,7 @@ describe("auth route timeouts", () => {
     });
     expect(setCookie).toContain(".ASPXAUTH=");
     expect(setCookie).toContain("mb_login_name=");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("starts a fresh login immediately even when the browser still has an old session cookie", async () => {
