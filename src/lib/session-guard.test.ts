@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   fetchSessionCheckOutcome,
   resolveSessionCheckOutcome,
-  shouldForceLogoutForApiResponse,
 } from "@/lib/session-guard";
 
 describe("session-guard helpers", () => {
@@ -29,43 +28,6 @@ describe("session-guard helpers", () => {
         error: "unexpected",
       }),
     ).toBe("indeterminate");
-  });
-
-  it("does not force logout for public auth and health probes", () => {
-    expect(shouldForceLogoutForApiResponse("/api/auth/session", 401)).toBe(false);
-    expect(shouldForceLogoutForApiResponse("/api/auth/login", 401)).toBe(false);
-    expect(shouldForceLogoutForApiResponse("/api/auth/logout", 401)).toBe(false);
-    expect(shouldForceLogoutForApiResponse("/api/health", 401)).toBe(false);
-    expect(shouldForceLogoutForApiResponse("/api/healthz", 401)).toBe(false);
-  });
-
-  it("forces logout for protected app auth failures", () => {
-    expect(
-      shouldForceLogoutForApiResponse("/api/business-accounts", 401, {
-        error: "Not authenticated",
-      }),
-    ).toBe(true);
-    expect(
-      shouldForceLogoutForApiResponse("/api/contacts/merge", 401, {
-        error: "Signed-in username is unavailable. Sign out and sign in again.",
-      }),
-    ).toBe(true);
-  });
-
-  it("does not force logout when a protected API 401 has no readable auth body", () => {
-    expect(shouldForceLogoutForApiResponse("/api/business-accounts", 401)).toBe(false);
-    expect(shouldForceLogoutForApiResponse("/api/contacts/merge", 401)).toBe(false);
-  });
-
-  it("does not force logout for non-auth failures or non-api paths", () => {
-    expect(
-      shouldForceLogoutForApiResponse("/api/mail/session", 401, {
-        error: "Unauthorized",
-      }),
-    ).toBe(false);
-    expect(shouldForceLogoutForApiResponse("/api/business-accounts", 500)).toBe(false);
-    expect(shouldForceLogoutForApiResponse("/accounts", 401)).toBe(false);
-    expect(shouldForceLogoutForApiResponse(null, 401)).toBe(false);
   });
 
   it("reads the session outcome from the probe response", async () => {

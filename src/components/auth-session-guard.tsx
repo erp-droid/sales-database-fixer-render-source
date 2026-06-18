@@ -2,10 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import {
-  fetchSessionCheckOutcome,
-  shouldForceLogoutForApiResponse,
-} from "@/lib/session-guard";
+import { fetchSessionCheckOutcome } from "@/lib/session-guard";
 
 const SESSION_CHECK_INTERVAL_MS = 30_000;
 const INITIAL_SESSION_CHECK_DELAY_MS = 5_000;
@@ -16,28 +13,6 @@ const RECENT_SIGN_IN_GRACE_MS = 60_000;
 
 function isPublicPath(pathname: string | null): boolean {
   return pathname === "/signin";
-}
-
-function resolveRequestPath(input: RequestInfo | URL): string | null {
-  try {
-    if (typeof input === "string") {
-      const url = new URL(input, window.location.origin);
-      return url.origin === window.location.origin ? url.pathname : null;
-    }
-
-    if (input instanceof URL) {
-      return input.origin === window.location.origin ? input.pathname : null;
-    }
-
-    if (typeof Request !== "undefined" && input instanceof Request) {
-      const url = new URL(input.url, window.location.origin);
-      return url.origin === window.location.origin ? url.pathname : null;
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
 }
 
 function buildSignInHref(): string {
@@ -93,6 +68,7 @@ export function AuthSessionGuard() {
     }
 
     let cancelled = false;
+    const sessionFetch = window.fetch.bind(window);
 
     async function performForcedSignOut(): Promise<void> {
       if (cancelled || signingOutRef.current) {
@@ -140,7 +116,7 @@ export function AuthSessionGuard() {
       sessionCheckInFlightRef.current = true;
 
       try {
-        const outcome = await fetchSessionCheckOutcome(originalFetch);
+        const outcome = await fetchSessionCheckOutcome(sessionFetch);
 
         if (cancelled || signingOutRef.current || outcome !== "unauthenticated") {
           return;
@@ -154,7 +130,7 @@ export function AuthSessionGuard() {
           return;
         }
 
-        const confirmedOutcome = await fetchSessionCheckOutcome(originalFetch);
+        const confirmedOutcome = await fetchSessionCheckOutcome(sessionFetch);
         if (confirmedOutcome === "unauthenticated" && !isWithinRecentSignInGrace()) {
           await performForcedSignOut();
         }
@@ -164,29 +140,6 @@ export function AuthSessionGuard() {
         sessionCheckInFlightRef.current = false;
       }
     }
-
-    const originalFetch = window.fetch.bind(window);
-
-    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-      const response = await originalFetch(input, init);
-      const requestPath = resolveRequestPath(input);
-      const responsePayload =
-        response.status === 401
-          ? await response.clone().json().catch(() => null)
-          : undefined;
-
-      if (
-        !cancelled &&
-        !signingOutRef.current &&
-        shouldForceLogoutForApiResponse(requestPath, response.status, responsePayload) &&
-        !isWithinRecentSignInGrace() &&
-        !isPublicPath(pathnameRef.current)
-      ) {
-        void performForcedSignOut();
-      }
-
-      return response;
-    };
 
     const initialCheckId = window.setTimeout(() => {
       void checkSession();
@@ -217,7 +170,6 @@ export function AuthSessionGuard() {
 
     return () => {
       cancelled = true;
-      window.fetch = originalFetch;
       window.clearTimeout(initialCheckId);
       window.clearInterval(intervalId);
       window.removeEventListener("focus", handleVisibilityChange);
