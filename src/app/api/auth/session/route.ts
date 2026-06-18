@@ -1,12 +1,15 @@
 import { after, NextRequest, NextResponse } from "next/server";
 
 import {
+  buildStoredAuthCookieValueFromSetCookies,
   clearAuthCookie,
   clearStoredLoginName,
   getAuthCookieValue,
+  getSetCookieHeaders,
   getStoredLoginName,
   normalizeSessionUser,
   setAuthCookie,
+  setStoredLoginName,
 } from "@/lib/auth";
 import { type AuthCookieRefreshState, validateSessionWithAcumatica } from "@/lib/acumatica";
 import { resolveSignedInCallerIdentity } from "@/lib/caller-identity";
@@ -16,8 +19,11 @@ import {
 } from "@/lib/deferred-actions-store";
 import { runDueDeferredActions } from "@/lib/deferred-actions-executor";
 import { HttpError, getErrorMessage } from "@/lib/errors";
+import { getEnv } from "@/lib/env";
+import { readStoredUserCredentials } from "@/lib/stored-user-credentials";
 
 const SESSION_CHECK_TIMEOUT_MS = 3000;
+const UPSTREAM_RELOGIN_TIMEOUT_MS = 10000;
 const AUTHENTICATED_SESSION_CACHE_TTL_MS = 60_000;
 const DEGRADED_SESSION_CACHE_TTL_MS = 20_000;
 const CALLER_IDENTITY_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -84,6 +90,72 @@ function buildInvalidSessionResponse(): NextResponse {
   clearAuthCookie(response);
   clearStoredLoginName(response);
   return response;
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function refreshExpiredAcumaticaSession(
+  loginName: string,
+): Promise<string | null> {
+  const env = getEnv();
+  if (env.AUTH_PROVIDER !== "acumatica") {
+    return null;
+  }
+
+  const storedCredentials = readStoredUserCredentials(loginName);
+  if (!storedCredentials) {
+    return null;
+  }
+
+  const loginUrl = env.AUTH_LOGIN_URL ?? `${env.ACUMATICA_BASE_URL}/entity/auth/login`;
+  const response = await fetchWithTimeout(
+    loginUrl,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        name: storedCredentials.username,
+        password: storedCredentials.password,
+        company: env.ACUMATICA_COMPANY ?? "MeadowBrook Live",
+        ...(env.ACUMATICA_BRANCH ? { branch: env.ACUMATICA_BRANCH } : {}),
+        ...(env.ACUMATICA_LOCALE ? { locale: env.ACUMATICA_LOCALE } : {}),
+      }),
+      redirect: "manual",
+      cache: "no-store",
+    },
+    UPSTREAM_RELOGIN_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    console.warn("[auth-session] upstream re-login failed", {
+      loginName,
+      status: response.status,
+    });
+    return null;
+  }
+
+  return buildStoredAuthCookieValueFromSetCookies(getSetCookieHeaders(response.headers));
 }
 
 function buildSessionCacheKey(
@@ -245,6 +317,37 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (error instanceof HttpError && error.status === 401) {
       cachedSessionResponses.delete(cacheKey);
       if (storedUser?.id) {
+        const refreshedCookieValue = await refreshExpiredAcumaticaSession(storedUser.id).catch(
+          (refreshError) => {
+            console.warn("[auth-session] failed to refresh expired upstream session", {
+              error: getErrorMessage(refreshError),
+              loginName: storedUser.id,
+            });
+            return null;
+          },
+        );
+
+        if (refreshedCookieValue) {
+          const responsePayload: SessionResponsePayload = {
+            authenticated: true,
+            user: storedUser,
+          };
+          const nextCacheKey = buildSessionCacheKey(refreshedCookieValue, storedUser);
+          storeCachedSessionResponse(
+            nextCacheKey,
+            responsePayload,
+            refreshedCookieValue,
+            AUTHENTICATED_SESSION_CACHE_TTL_MS,
+          );
+
+          const response = buildSessionResponse(responsePayload, refreshedCookieValue);
+          setStoredLoginName(response, storedUser.id);
+          console.info("[auth-session] refreshed expired upstream session", {
+            loginName: storedUser.id,
+          });
+          return response;
+        }
+
         callerIdentityRefreshByUser.delete(storedUser.id);
       }
       console.warn("[auth-session] upstream rejected stored session", {

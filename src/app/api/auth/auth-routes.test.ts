@@ -251,7 +251,70 @@ describe("auth route timeouts", () => {
     });
   });
 
-  it("clears local auth cookies when the upstream session is expired", async () => {
+  it("refreshes an expired upstream session from stored credentials", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/Contact?$top=1")) {
+        return Promise.resolve(
+          jsonResponse({
+            status: 401,
+            body: {
+              message: "Session is invalid or expired",
+            },
+          }),
+        );
+      }
+
+      if (url.endsWith("/entity/auth/login")) {
+        return Promise.resolve(
+          jsonResponse({
+            status: 200,
+            body: {
+              ok: true,
+            },
+            headers: {
+              "set-cookie": ".ASPXAUTH=fresh-cookie; Path=/; HttpOnly",
+            },
+          }),
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { storeUserCredentials } = await import("@/lib/stored-user-credentials");
+    storeUserCredentials({
+      loginName: "smessih-refresh",
+      username: "smessih-refresh",
+      password: "stored-password",
+    });
+
+    const { GET } = await import("@/app/api/auth/session/route");
+
+    const request = new NextRequest("http://localhost/api/auth/session", {
+      headers: {
+        cookie: ".ASPXAUTH=expired-cookie; mb_login_name=smessih-refresh",
+      },
+    });
+
+    const response = await GET(request);
+    const setCookie = response.headers.get("set-cookie") ?? "";
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      authenticated: true,
+      user: {
+        id: "smessih-refresh",
+        name: "smessih-refresh",
+      },
+    });
+    expect(setCookie).toContain(".ASPXAUTH=v1.");
+    expect(setCookie).toContain("mb_login_name=smessih-refresh");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears local auth cookies when the upstream session is expired and cannot be refreshed", async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(
         jsonResponse({
@@ -268,7 +331,7 @@ describe("auth route timeouts", () => {
 
     const request = new NextRequest("http://localhost/api/auth/session", {
       headers: {
-        cookie: ".ASPXAUTH=expired-cookie; mb_login_name=jserrano",
+        cookie: ".ASPXAUTH=expired-cookie; mb_login_name=expired-without-stored-creds",
       },
     });
 
