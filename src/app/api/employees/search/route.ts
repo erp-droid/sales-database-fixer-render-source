@@ -19,6 +19,7 @@ import {
   syncCallEmployeeDirectory,
   upsertCallEmployeeDirectoryItem,
 } from "@/lib/call-analytics/employee-directory";
+import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import {
   INTERNAL_EMPLOYEE_EMAIL_DOMAINS,
@@ -29,10 +30,16 @@ import {
   hasDetailedEmployeeDirectory,
   readEmployeeDirectorySnapshot,
 } from "@/lib/read-model/employees";
+import {
+  readSalesRepDirectorySnapshot,
+  type SalesRepDirectoryItem,
+} from "@/lib/read-model/sales-reps";
 import { normalizeTwilioPhoneNumber } from "@/lib/twilio";
 import {
   isBlockedMeetingEmployeeAttendee,
+  normalizeMeetingEmployeeDisplayName,
   normalizeMeetingContactId,
+  normalizeMeetingLoginName,
 } from "@/lib/meeting-create";
 import type { MeetingEmployeeOption } from "@/types/meeting-create";
 
@@ -43,6 +50,16 @@ let employeeDirectoryRefreshPromise: Promise<EmployeeDirectoryItem[]> | null = n
 
 function normalizeComparable(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? "";
+}
+
+function normalizeEmailLocalPart(value: string | null | undefined): string | null {
+  const email = normalizeComparable(value);
+  if (!email) {
+    return null;
+  }
+
+  const atIndex = email.indexOf("@");
+  return atIndex >= 0 ? email.slice(0, atIndex) || null : email;
 }
 
 function tokenizeSearch(value: string): string[] {
@@ -162,6 +179,22 @@ function filterEmployeesByQuery(
   return items.filter((item) => matchesEmployeeQuery(item.name, tokens));
 }
 
+function matchesMeetingEmployeeOptionQuery(
+  employee: MeetingEmployeeOption,
+  tokens: string[],
+): boolean {
+  if (tokens.length === 0) {
+    return false;
+  }
+
+  const haystacks = [
+    normalizeComparable(employee.employeeName),
+    normalizeComparable(employee.email),
+    normalizeComparable(employee.loginName),
+  ];
+  return tokens.every((token) => haystacks.some((haystack) => haystack.includes(token)));
+}
+
 async function refreshEmployeeDirectory(
   cookieValue: string,
   authCookieRefresh: AuthCookieRefreshState,
@@ -270,9 +303,8 @@ async function findBestInternalContactByName(
 function buildCachedMeetingEmployeeOption(
   employee: EmployeeDirectoryItem,
 ): MeetingEmployeeOption | null {
-  const employeeName = employee.name.trim();
   const emailCandidate = employee.email?.trim().toLowerCase() ?? null;
-  if (!employeeName || !emailCandidate || !isExcludedInternalContactEmail(emailCandidate)) {
+  if (!emailCandidate || !isExcludedInternalContactEmail(emailCandidate)) {
     return null;
   }
 
@@ -281,6 +313,15 @@ function buildCachedMeetingEmployeeOption(
     emailCandidate.split("@")[0]?.trim().toLowerCase() ??
     "";
   if (!loginName) {
+    return null;
+  }
+
+  const employeeName = normalizeMeetingEmployeeDisplayName({
+    employeeName: employee.name,
+    email: emailCandidate,
+    loginName,
+  });
+  if (!employeeName) {
     return null;
   }
 
@@ -299,9 +340,8 @@ function buildCachedMeetingEmployeeOption(
 function buildMeetingEmployeeOptionFromCachedDirectoryItem(
   employee: ReturnType<typeof readCallEmployeeDirectory>[number],
 ): MeetingEmployeeOption | null {
-  const employeeName = employee.displayName.trim();
   const emailCandidate = employee.email?.trim().toLowerCase() ?? null;
-  if (!employeeName || !emailCandidate || !isExcludedInternalContactEmail(emailCandidate)) {
+  if (!emailCandidate || !isExcludedInternalContactEmail(emailCandidate)) {
     return null;
   }
 
@@ -310,6 +350,15 @@ function buildMeetingEmployeeOptionFromCachedDirectoryItem(
     emailCandidate.split("@")[0]?.trim().toLowerCase() ??
     "";
   if (!loginName) {
+    return null;
+  }
+
+  const employeeName = normalizeMeetingEmployeeDisplayName({
+    employeeName: employee.displayName,
+    email: emailCandidate,
+    loginName,
+  });
+  if (!employeeName) {
     return null;
   }
 
@@ -323,6 +372,171 @@ function buildMeetingEmployeeOptionFromCachedDirectoryItem(
   } satisfies MeetingEmployeeOption;
 
   return isBlockedMeetingEmployeeAttendee(option) ? null : option;
+}
+
+type EmployeeInviteLookupCandidate = {
+  loginName: string;
+  email: string;
+  contactId: number | null;
+  isActive: boolean | null;
+};
+
+function buildEmployeeInviteLookupCandidates(): EmployeeInviteLookupCandidate[] {
+  const byKey = new Map<string, EmployeeInviteLookupCandidate>();
+  const addCandidate = (candidate: EmployeeInviteLookupCandidate) => {
+    if (!candidate.email || !isExcludedInternalContactEmail(candidate.email)) {
+      return;
+    }
+
+    const key = candidate.loginName || normalizeEmailLocalPart(candidate.email);
+    if (!key || byKey.has(key)) {
+      return;
+    }
+
+    byKey.set(key, candidate);
+  };
+
+  readCallEmployeeDirectory().forEach((employee) => {
+    const email = employee.email?.trim().toLowerCase() ?? "";
+    const loginName =
+      employee.loginName?.trim().toLowerCase() ??
+      normalizeEmailLocalPart(email) ??
+      "";
+    if (!loginName || !email) {
+      return;
+    }
+
+    addCandidate({
+      loginName,
+      email,
+      contactId: normalizeMeetingContactId(employee.contactId),
+      isActive: employee.isActive,
+    });
+  });
+
+  readEmployeeDirectorySnapshot().items.forEach((employee) => {
+    const email = employee.email?.trim().toLowerCase() ?? "";
+    const loginName =
+      employee.loginName?.trim().toLowerCase() ??
+      normalizeEmailLocalPart(email) ??
+      "";
+    if (!loginName || !email) {
+      return;
+    }
+
+    addCandidate({
+      loginName,
+      email,
+      contactId: normalizeMeetingContactId(employee.contactId),
+      isActive: typeof employee.isActive === "boolean" ? employee.isActive : null,
+    });
+  });
+
+  return [...byKey.values()];
+}
+
+function buildSalesRepLoginAlias(name: string): string | null {
+  const tokens = tokenizeSearch(name);
+  const first = tokens[0];
+  const last = tokens[tokens.length - 1];
+  if (!first || !last || first === last) {
+    return null;
+  }
+
+  return `${first.charAt(0)}${last}`;
+}
+
+function findEmployeeInviteCandidateForSalesRep(
+  salesRep: SalesRepDirectoryItem,
+  candidates: EmployeeInviteLookupCandidate[],
+): EmployeeInviteLookupCandidate | null {
+  const directEmail = salesRep.email?.trim().toLowerCase() ?? "";
+  const directLogin =
+    salesRep.loginName?.trim().toLowerCase() ??
+    normalizeEmailLocalPart(directEmail);
+  if (directEmail && directLogin && isExcludedInternalContactEmail(directEmail)) {
+    return {
+      loginName: directLogin,
+      email: directEmail,
+      contactId: null,
+      isActive: salesRep.isActive,
+    };
+  }
+
+  const alias = buildSalesRepLoginAlias(salesRep.name);
+  if (!alias) {
+    return null;
+  }
+
+  const matches = candidates.filter((candidate) => {
+    if (candidate.isActive === false) {
+      return false;
+    }
+
+    return (
+      candidate.loginName === alias ||
+      normalizeEmailLocalPart(candidate.email) === alias
+    );
+  });
+
+  return matches.length === 1 ? matches[0] ?? null : null;
+}
+
+function buildMeetingEmployeeOptionFromSalesRep(
+  salesRep: SalesRepDirectoryItem,
+  candidates: EmployeeInviteLookupCandidate[],
+): MeetingEmployeeOption | null {
+  const inviteCandidate = findEmployeeInviteCandidateForSalesRep(salesRep, candidates);
+  if (!inviteCandidate) {
+    return null;
+  }
+
+  const employeeName = normalizeMeetingEmployeeDisplayName({
+    employeeName: salesRep.name,
+    email: inviteCandidate.email,
+    loginName: inviteCandidate.loginName,
+  });
+  if (!employeeName) {
+    return null;
+  }
+
+  const loginName =
+    normalizeMeetingLoginName(inviteCandidate.loginName) ??
+    normalizeEmailLocalPart(inviteCandidate.email) ??
+    "";
+  if (!loginName) {
+    return null;
+  }
+
+  const option = {
+    key: `employee:${loginName}`,
+    loginName,
+    employeeName,
+    email: inviteCandidate.email,
+    contactId: normalizeMeetingContactId(inviteCandidate.contactId),
+    isInternal: true,
+  } satisfies MeetingEmployeeOption;
+
+  return isBlockedMeetingEmployeeAttendee(option) ? null : option;
+}
+
+function searchSalesRepDirectoryForMeetingEmployees(query: string): MeetingEmployeeOption[] {
+  const tokens = tokenizeSearch(query);
+  if (tokens.length === 0) {
+    return [];
+  }
+
+  const matchingSalesReps = readSalesRepDirectorySnapshot().items.filter(
+    (salesRep) => salesRep.usageCount > 0 && matchesEmployeeQuery(salesRep.name, tokens),
+  );
+  if (matchingSalesReps.length === 0) {
+    return [];
+  }
+
+  const inviteCandidates = buildEmployeeInviteLookupCandidates();
+  return matchingSalesReps
+    .map((salesRep) => buildMeetingEmployeeOptionFromSalesRep(salesRep, inviteCandidates))
+    .filter((employee): employee is MeetingEmployeeOption => employee !== null);
 }
 
 async function buildMeetingEmployeeOption(
@@ -437,10 +651,11 @@ function searchCachedEmployeeOptions(query: string): MeetingEmployeeOption[] | n
   }
 
   return dedupeMeetingEmployeeOptions(
-    filterEmployeesByQuery(snapshot.items, query)
-      .slice(0, MAX_RESULTS)
+    snapshot.items
       .map((employee) => buildCachedMeetingEmployeeOption(employee))
-      .filter((employee): employee is MeetingEmployeeOption => employee !== null),
+      .filter((employee): employee is MeetingEmployeeOption => employee !== null)
+      .filter((employee) => matchesMeetingEmployeeOptionQuery(employee, tokenizeSearch(query)))
+      .slice(0, MAX_RESULTS),
   );
 }
 
@@ -451,19 +666,14 @@ function searchCachedCallEmployeeDirectory(query: string): MeetingEmployeeOption
   }
 
   return dedupeMeetingEmployeeOptions(
-    readCallEmployeeDirectory()
-      .filter((employee) => {
-        const haystacks = [
-          normalizeComparable(employee.displayName),
-          normalizeComparable(employee.email),
-          normalizeComparable(employee.loginName),
-        ];
-        return tokens.every((token) => haystacks.some((haystack) => haystack.includes(token)));
-      })
-      .map((employee) => buildMeetingEmployeeOptionFromCachedDirectoryItem(employee))
-      .filter((employee): employee is MeetingEmployeeOption => employee !== null)
-      .slice(0, MAX_RESULTS),
-  );
+    [
+      ...readCallEmployeeDirectory()
+        .map((employee) => buildMeetingEmployeeOptionFromCachedDirectoryItem(employee))
+        .filter((employee): employee is MeetingEmployeeOption => employee !== null)
+        .filter((employee) => matchesMeetingEmployeeOptionQuery(employee, tokens)),
+      ...searchSalesRepDirectoryForMeetingEmployees(query),
+    ],
+  ).slice(0, MAX_RESULTS);
 }
 
 async function searchEmployeeOptions(
@@ -510,6 +720,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const cachedItems = searchCachedEmployeeOptions(query);
     if (cachedItems !== null) {
       return NextResponse.json({ items: cachedItems });
+    }
+
+    if (getEnv().LOCAL_DATABASE_ONLY) {
+      return NextResponse.json({ items: searchCachedCallEmployeeDirectory(query) });
     }
 
     if (!cookieValue) {

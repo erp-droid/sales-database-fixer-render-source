@@ -19,6 +19,7 @@ import {
   markDeferredActionRetryScheduled,
   type StoredDeferredActionRecord,
 } from "@/lib/deferred-actions-store";
+import { getEnv } from "@/lib/env";
 import { getErrorMessage, HttpError } from "@/lib/errors";
 import {
   removeReadModelRowsByAccount,
@@ -106,6 +107,14 @@ async function executeDeferredDeleteContact(
   authCookieRefresh: AuthCookieRefreshState,
 ): Promise<void> {
   const payload = parseDeletePayload(record);
+
+  // Local-database-only mode: Acumatica is sign-in only, so complete the
+  // approved deletion directly against the local read-model.
+  if (getEnv().LOCAL_DATABASE_ONLY) {
+    removeReadModelRowsByContactId(payload.contactId);
+    return;
+  }
+
   try {
     await deleteContact(cookieValue, payload.contactId, authCookieRefresh);
   } catch (error) {
@@ -170,6 +179,18 @@ async function executeDeferredDeleteBusinessAccount(
   authCookieRefresh: AuthCookieRefreshState,
 ): Promise<void> {
   const payload = parseDeleteBusinessAccountPayload(record);
+
+  // Local-database-only mode: Acumatica is sign-in only, so complete the
+  // approved deletion directly against the local read-model. Removing the
+  // account row set also clears its contact rows, so no orphan check is needed.
+  if (getEnv().LOCAL_DATABASE_ONLY) {
+    removeReadModelRowsByAccount(
+      record.businessAccountRecordId?.trim() ?? payload.businessAccountId,
+      payload.businessAccountId,
+    );
+    return;
+  }
+
   try {
     await deleteBusinessAccount(cookieValue, payload.businessAccountId, authCookieRefresh);
   } catch (error) {
@@ -289,6 +310,15 @@ async function executeDeferredMergeContacts(
   cookieValue: string,
   authCookieRefresh: AuthCookieRefreshState,
 ): Promise<void> {
+  // Contact merge still relies on Acumatica and has no local implementation yet.
+  // Fail with a clear message instead of a confusing "Acumatica disabled" error.
+  if (getEnv().LOCAL_DATABASE_ONLY) {
+    throw new HttpError(
+      501,
+      "Contact merge is not available in local-database-only mode yet.",
+    );
+  }
+
   const parsed = JSON.parse(record.payloadJson);
   const payload = parseContactMergePayload(parsed);
   if (record.preview.actionType !== "mergeContacts") {
@@ -344,7 +374,10 @@ export async function runDueDeferredActions(
   let failedCount = 0;
 
   for (const record of dueActions) {
-    if (record.actionType === "deleteBusinessAccount") {
+    // The "delete remaining contacts first" pre-check inspects Acumatica, which
+    // is disconnected in local-database-only mode. Local account deletion
+    // removes the whole row set (contacts included), so skip the pre-check.
+    if (record.actionType === "deleteBusinessAccount" && !getEnv().LOCAL_DATABASE_ONLY) {
       const deferred = await resolveDeleteBusinessAccountDeferral(
         record,
         cookieValue,

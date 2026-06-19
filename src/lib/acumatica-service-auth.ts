@@ -130,6 +130,13 @@ export async function withServiceAcumaticaSession<T>(
   preferredLoginName: string | null | undefined,
   operation: (cookieValue: string, authCookieRefresh: AuthCookieRefreshState) => Promise<T>,
 ): Promise<T> {
+  if (getEnv().LOCAL_DATABASE_ONLY) {
+    throw new HttpError(
+      409,
+      "Acumatica service sessions are disabled in local database only mode.",
+    );
+  }
+
   let forceRefresh = false;
   const cacheKey = readServiceCredentials(preferredLoginName).loginNameKey;
 

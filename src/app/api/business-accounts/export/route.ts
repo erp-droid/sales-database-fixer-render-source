@@ -26,11 +26,15 @@ import {
   type Category,
 } from "@/types/business-account";
 
+const BLANK_CATEGORY_FILTER = "__blank_category__";
+const UNASSIGNED_SALES_REP_FILTER = "__unassigned__";
+
 type ExportFilterView = "allCompanies" | "marketingOnly";
+type CategoryFilterValue = Category | typeof BLANK_CATEGORY_FILTER;
 
 type ExportViewFilters = {
   filterView: ExportFilterView;
-  selectedCategories: Category[];
+  selectedCategories: CategoryFilterValue[];
   selectedWeeks: string[];
   selectedSalesReps: string[];
 };
@@ -57,6 +61,10 @@ function readMultiValueParams(searchParams: URLSearchParams, key: string): strin
 
 function isCategory(value: string): value is Category {
   return CATEGORY_VALUES.includes(value as Category);
+}
+
+function isCategoryFilterValue(value: string): value is CategoryFilterValue {
+  return isCategory(value) || value === BLANK_CATEGORY_FILTER;
 }
 
 function normalizeWeekValue(value: string | null | undefined): string | null {
@@ -93,7 +101,9 @@ function parseExportViewFilters(searchParams: URLSearchParams): ExportViewFilter
   return {
     filterView,
     selectedCategories: [
-      ...new Set(readMultiValueParams(searchParams, "selectedCategory").filter(isCategory)),
+      ...new Set(
+        readMultiValueParams(searchParams, "selectedCategory").filter(isCategoryFilterValue),
+      ),
     ],
     selectedWeeks: [
       ...new Set(
@@ -121,8 +131,14 @@ function applyExportViewFilters(
       return false;
     }
 
-    if (categorySet.size > 0 && (!row.category || !categorySet.has(row.category))) {
-      return false;
+    if (categorySet.size > 0) {
+      const matchesBlankCategory =
+        categorySet.has(BLANK_CATEGORY_FILTER) && row.category === null;
+      const matchesNamedCategory =
+        row.category !== null && categorySet.has(row.category);
+      if (!matchesBlankCategory && !matchesNamedCategory) {
+        return false;
+      }
     }
 
     if (weekSet.size > 0) {
@@ -134,7 +150,12 @@ function applyExportViewFilters(
 
     if (salesRepSet.size > 0) {
       const salesRepName = row.salesRepName?.trim();
-      if (!salesRepName || !salesRepSet.has(salesRepName)) {
+      const matchesUnassignedSalesRep =
+        salesRepSet.has(UNASSIGNED_SALES_REP_FILTER) &&
+        !row.salesRepId?.trim() &&
+        !salesRepName;
+      const matchesNamedSalesRep = Boolean(salesRepName && salesRepSet.has(salesRepName));
+      if (!matchesUnassignedSalesRep && !matchesNamedSalesRep) {
         return false;
       }
     }

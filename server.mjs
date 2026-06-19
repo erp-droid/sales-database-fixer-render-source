@@ -1,7 +1,9 @@
 import "dotenv/config";
 import express from "express";
 import next from "next";
+import { execFile } from "node:child_process";
 import { monitorEventLoopDelay } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 
 import { app as pricingBookApp, startPricingBookAutoSync } from "./embedded/pricing-book-app/src/index.js";
 
@@ -1117,6 +1119,53 @@ server.listen(port, hostname, () => {
       trackAllRoutes: runtimeTrackAllRoutes,
       priorityRoutes: Array.from(RUNTIME_PRIORITY_ROUTE_KEYS),
     });
+  }
+
+  // Scheduled local backups of the read-model SQLite database. In
+  // local-database-only mode this file is the sole system of record, so we
+  // snapshot it on an interval (online backup API, safe during writes) and
+  // prune to the most recent copies. Runs only on the background worker.
+  const readModelBackupEnabled =
+    (process.env.READ_MODEL_BACKUP_ENABLED ?? "true") !== "false";
+  if (clusterBackgroundTasksEnabled && readModelBackupEnabled) {
+    const BACKUP_INTERVAL_MS = Math.max(
+      30 * 60 * 1000,
+      (Number(process.env.READ_MODEL_BACKUP_INTERVAL_HOURS) || 3) * 60 * 60 * 1000,
+    );
+    const backupScriptPath = fileURLToPath(
+      new URL("./scripts/backup-read-model.cjs", import.meta.url),
+    );
+    let backupInFlight = false;
+    const runReadModelBackup = () => {
+      if (backupInFlight) {
+        console.warn("[backup] previous backup still running; skipping overlap");
+        return;
+      }
+      backupInFlight = true;
+      execFile(
+        process.execPath,
+        [backupScriptPath],
+        { env: process.env, timeout: 10 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 },
+        (error, stdout, stderr) => {
+          backupInFlight = false;
+          if (stdout && stdout.trim()) console.log(stdout.trim());
+          if (error) {
+            console.error("[backup] scheduled backup failed", {
+              message: error.message,
+              stderr: stderr && stderr.trim() ? stderr.trim() : undefined,
+            });
+          }
+        },
+      );
+    };
+    setInterval(runReadModelBackup, BACKUP_INTERVAL_MS);
+    // Take one shortly after boot so a fresh restart is protected quickly.
+    setTimeout(runReadModelBackup, 60 * 1000);
+    console.log(
+      `[backup] scheduled read-model backups every ${Math.round(BACKUP_INTERVAL_MS / 3600000)}h`,
+    );
+  } else if (clusterBackgroundTasksEnabled) {
+    console.log("[backup] scheduled read-model backups disabled via env");
   }
 
   if (clusterBackgroundTasksEnabled) {

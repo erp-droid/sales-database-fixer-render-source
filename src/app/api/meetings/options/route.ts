@@ -26,6 +26,7 @@ import {
   buildMeetingContactOptionsFromRows,
   DEFAULT_MEETING_TIME_ZONE,
   isBlockedMeetingEmployeeAttendee,
+  normalizeMeetingEmployeeDisplayName,
   isPositiveMeetingContactId,
   normalizeMeetingContactId,
 } from "@/lib/meeting-create";
@@ -197,17 +198,22 @@ function buildMeetingEmployeeOptions(
 ): MeetingEmployeeOption[] {
   return internalEmployees
     .filter((employee) => typeof employee.email === "string" && employee.email.trim())
-    .map(
-      (employee) =>
-        ({
-          key: `employee:${employee.loginName}`,
-          loginName: employee.loginName,
+    .map((employee) => {
+      const email = employee.email!.trim().toLowerCase();
+      const loginName = employee.loginName.trim().toLowerCase();
+      return {
+        key: `employee:${loginName}`,
+        loginName,
+        employeeName: normalizeMeetingEmployeeDisplayName({
           employeeName: employee.displayName,
-          email: employee.email!.trim(),
-          contactId: normalizeMeetingContactId(employee.contactId),
-          isInternal: true,
-        }) satisfies MeetingEmployeeOption,
-    )
+          email,
+          loginName,
+        }),
+        email,
+        contactId: normalizeMeetingContactId(employee.contactId),
+        isInternal: true,
+      } satisfies MeetingEmployeeOption;
+    })
     .filter((employee) => !isBlockedMeetingEmployeeAttendee(employee));
 }
 
@@ -232,7 +238,11 @@ function buildMeetingEmployeeOptionsFromDirectoryItems(
       return {
         key: `employee:${loginName}`,
         loginName,
-        employeeName: employee.name.trim(),
+        employeeName: normalizeMeetingEmployeeDisplayName({
+          employeeName: employee.name,
+          email,
+          loginName,
+        }),
         email,
         contactId: normalizeMeetingContactId(employee.contactId),
         isInternal: true,
@@ -405,11 +415,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   try {
     const cookieValue = getAuthCookieValue(request);
+    const localDatabaseOnly = getEnv().LOCAL_DATABASE_ONLY;
     const cachedRows = readAllAccountRowsFromReadModel();
     let accountOptions = buildMeetingAccountOptionsFromRows(cachedRows);
     let contacts = buildMeetingContactOptionsFromRows(cachedRows);
 
-    if (accountOptions.length === 0 && contacts.length === 0 && cookieValue) {
+    if (!localDatabaseOnly && accountOptions.length === 0 && contacts.length === 0 && cookieValue) {
       const { rawAccounts, rawContacts } = await fetchLiveMeetingDirectory(
         cookieValue,
         authCookieRefresh,
@@ -475,13 +486,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     let employees = cachedMeetingEmployees;
     if (
+      !localDatabaseOnly &&
       cookieValue &&
       !shouldTrustCachedEmployees &&
       !callEmployeeDirectoryIsFresh &&
       cachedMeetingEmployees.length > 0
     ) {
       void refreshMeetingEmployeeDirectory(cookieValue, { value: null }).catch(() => undefined);
-    } else if (cookieValue && cachedMeetingEmployees.length === 0) {
+    } else if (!localDatabaseOnly && cookieValue && cachedMeetingEmployees.length === 0) {
       employees = buildMeetingEmployeeOptions(
         await refreshMeetingEmployeeDirectory(cookieValue, authCookieRefresh),
       );

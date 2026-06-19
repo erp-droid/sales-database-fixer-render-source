@@ -23,6 +23,7 @@ import {
   buildBusinessAccountCreatePayload,
   normalizeCreatedBusinessAccountRows,
 } from "@/lib/business-account-create";
+import { buildLocalBusinessAccountRows } from "@/lib/local-account-rows";
 import { logBusinessAccountCreateAudit } from "@/lib/audit-log-store";
 import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
 import { getEnv } from "@/lib/env";
@@ -831,9 +832,11 @@ async function queryAccountsWithCookie(
   authCookieRefresh: AuthCookieRefresh,
   options?: QueryAccountsOptions,
 ) {
-  const { READ_MODEL_ENABLED } = getEnv();
-  if (READ_MODEL_ENABLED && !options?.forceLive) {
-    maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+  const { LOCAL_DATABASE_ONLY, READ_MODEL_ENABLED } = getEnv();
+  if (READ_MODEL_ENABLED && (LOCAL_DATABASE_ONLY || !options?.forceLive)) {
+    if (!LOCAL_DATABASE_ONLY) {
+      maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+    }
     const total = options?.full
       ? queryReadModelBusinessAccounts({
           ...params,
@@ -850,6 +853,13 @@ async function queryAccountsWithCookie(
     });
 
     return result;
+  }
+
+  if (LOCAL_DATABASE_ONLY) {
+    throw new HttpError(
+      409,
+      "Local database only mode requires READ_MODEL_ENABLED=true for account lists.",
+    );
   }
 
   const isFullDatasetRequest = Boolean(options?.full);
@@ -912,9 +922,11 @@ async function querySyncBatchWithCookie(
   authCookieRefresh: AuthCookieRefresh,
   options?: QueryAccountsOptions,
 ) {
-  const { READ_MODEL_ENABLED } = getEnv();
-  if (READ_MODEL_ENABLED && !options?.forceLive) {
-    maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+  const { LOCAL_DATABASE_ONLY, READ_MODEL_ENABLED } = getEnv();
+  if (READ_MODEL_ENABLED && (LOCAL_DATABASE_ONLY || !options?.forceLive)) {
+    if (!LOCAL_DATABASE_ONLY) {
+      maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+    }
     if (options?.full) {
       const total = queryReadModelBusinessAccounts({
         ...params,
@@ -938,6 +950,13 @@ async function querySyncBatchWithCookie(
       ...result,
       hasMore: params.page * params.pageSize < result.total,
     };
+  }
+
+  if (LOCAL_DATABASE_ONLY) {
+    throw new HttpError(
+      409,
+      "Local database only mode requires READ_MODEL_ENABLED=true for account sync lists.",
+    );
   }
 
   if (options?.full) {
@@ -1062,6 +1081,61 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       postalCode: normalizedAddress.postalCode,
       country: "CA" as const,
     };
+
+    if (getEnv().LOCAL_DATABASE_ONLY) {
+      const localAccount = buildLocalBusinessAccountRows(effectiveRequest);
+      const responseBody: BusinessAccountCreateResponse = {
+        created: true,
+        businessAccountRecordId: localAccount.businessAccountRecordId,
+        businessAccountId: localAccount.businessAccountId,
+        accountRows: localAccount.accountRows,
+        createdRow: localAccount.createdRow,
+        warnings: ["Saved in Sales MeadowBrook only. Acumatica account creation is disabled."],
+      };
+
+      saveAccountCompanyDescription({
+        accountRecordId: responseBody.businessAccountRecordId,
+        businessAccountId: responseBody.businessAccountId,
+        companyDescription: createRequest.companyDescription,
+        category: createRequest.category,
+      });
+
+      const responseRows = applyLocalAccountMetadataToRows(responseBody.accountRows);
+      const responseCreatedRow =
+        applyLocalAccountMetadataToRow(responseBody.createdRow) ?? responseBody.createdRow;
+
+      if (getEnv().READ_MODEL_ENABLED) {
+        replaceReadModelAccountRows(
+          responseBody.businessAccountRecordId,
+          responseRows,
+        );
+      }
+
+      logBusinessAccountCreateAudit({
+        actor,
+        request: createRequest,
+        resultCode: "succeeded",
+        sourceSurface: "accounts",
+        businessAccountRecordId: responseBody.businessAccountRecordId,
+        businessAccountId: responseBody.businessAccountId,
+        companyName: responseBody.createdRow.companyName,
+        createdRow: responseBody.createdRow,
+      });
+
+      const response = NextResponse.json(
+        {
+          ...responseBody,
+          accountRows: responseRows,
+          createdRow: responseCreatedRow,
+        },
+        { status: 201 },
+      );
+      if (authCookieRefresh.value) {
+        setAuthCookie(response, authCookieRefresh.value);
+      }
+
+      return response;
+    }
 
     const createdRaw = await createBusinessAccount(
       cookieValue,

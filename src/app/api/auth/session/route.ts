@@ -13,6 +13,7 @@ import {
   hasRunnableDeferredActions,
 } from "@/lib/deferred-actions-store";
 import { runDueDeferredActions } from "@/lib/deferred-actions-executor";
+import { getEnv } from "@/lib/env";
 import { HttpError } from "@/lib/errors";
 
 const AUTHENTICATED_SESSION_CACHE_TTL_MS = 60_000;
@@ -153,9 +154,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
 
+  const localDatabaseOnly = getEnv().LOCAL_DATABASE_ONLY;
   const activeCookieValue = cookieValue;
-  const shouldRunDeferredActions = hasRunnableDeferredActions();
-  const shouldRunIdentityRefresh = shouldRefreshCallerIdentity(storedUser.id);
+  const shouldRunDeferredActions = !localDatabaseOnly && hasRunnableDeferredActions();
+  const shouldRunIdentityRefresh =
+    !localDatabaseOnly && shouldRefreshCallerIdentity(storedUser.id);
   if (shouldRunDeferredActions || shouldRunIdentityRefresh) {
     runInBackground(async () => {
       if (shouldRunIdentityRefresh) {

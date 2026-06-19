@@ -799,6 +799,12 @@ export function CreateMeetingDrawer({
 
   useEffect(() => {
     if (!isOpen) {
+      const closedResetKey = `closed|${defaultTimeZone}|${defaultCategory}`;
+      if (resetKeyRef.current === closedResetKey) {
+        return;
+      }
+      resetKeyRef.current = closedResetKey;
+
       setForm(buildEmptyMeetingForm(defaultTimeZone, defaultCategory));
       setRelatedContactId(null);
       setAttendeeContactIds([]);
@@ -825,7 +831,6 @@ export function CreateMeetingDrawer({
       setRemoteEmployeeMatches([]);
       setRemoteEmployeeSearchError(null);
       setIsSearchingRemoteEmployees(false);
-      resetKeyRef.current = null;
       return;
     }
 

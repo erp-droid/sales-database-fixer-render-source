@@ -29,6 +29,7 @@ import {
   normalizeSessionIdentity,
   setAuthCookie,
 } from "@/lib/auth";
+import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import {
   clearTwilioPhoneInventoryCache,
@@ -226,6 +227,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   try {
     if (!storedOverridePhone) {
+      if (getEnv().LOCAL_DATABASE_ONLY) {
+        throw new HttpError(
+          422,
+          "Calling is unavailable until your phone number is configured locally.",
+        );
+      }
+
       const sessionPayload = await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
       const sessionIdentity = normalizeSessionIdentity(sessionPayload);
       const callerIdentity = await resolveSignedInEmployeePhone(

@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
 import {
   type AuthCookieRefreshState,
+  type EmployeeDirectoryItem,
   fetchEmployees,
 } from "@/lib/acumatica";
 import { getEnv } from "@/lib/env";
@@ -28,8 +29,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   try {
     const cookieValue = requireAuthCookieValue(request);
-    const { READ_MODEL_ENABLED } = getEnv();
-    let items;
+    const { LOCAL_DATABASE_ONLY, READ_MODEL_ENABLED } = getEnv();
+    let items: Array<Pick<EmployeeDirectoryItem, "id" | "name">>;
     if (READ_MODEL_ENABLED) {
       const rows = readAllAccountRowsFromReadModel();
       const employeeSnapshot = readEmployeeDirectorySnapshot();
@@ -40,6 +41,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           replaceSalesRepDirectory(directoryItems);
         }
         items = buildSalesRepOptions(directoryItems);
+      } else if (LOCAL_DATABASE_ONLY) {
+        items = [];
       } else {
         const employeeItems = await fetchEmployees(cookieValue, authCookieRefresh);
         replaceEmployeeDirectory(employeeItems, FULL_EMPLOYEE_DIRECTORY_SOURCE);
@@ -47,6 +50,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         replaceSalesRepDirectory(directoryItems);
         items = buildSalesRepOptions(directoryItems);
       }
+    } else if (LOCAL_DATABASE_ONLY) {
+      items = [];
     } else {
       const employeeItems = await fetchEmployees(cookieValue, authCookieRefresh);
       items = buildSalesRepOptions(buildSalesRepDirectory([], employeeItems));

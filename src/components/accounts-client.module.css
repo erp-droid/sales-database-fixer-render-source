@@ -12,6 +12,8 @@
   --accounts-red-soft: var(--app-red-soft);
   --accounts-red: var(--app-red);
   --accounts-shadow: var(--app-shadow);
+  --filter-control-height: 36px;
+  --filter-control-font-size: 13px;
   color: var(--accounts-text);
 }
 
@@ -71,7 +73,6 @@
 }
 
 .userMenu,
-.columnsMenu,
 .createMenu,
 .sortMenu,
 .rowMenu {
@@ -209,148 +210,6 @@
 
 .createDropdownAction {
   font-weight: 600;
-}
-
-.columnsPopover {
-  position: absolute;
-  top: calc(100% + 10px);
-  right: 0;
-  z-index: 20;
-  width: min(340px, 82vw);
-  max-height: min(68vh, 520px);
-  overflow: auto;
-  padding: 10px;
-  border: 1px solid var(--accounts-border);
-  border-radius: 16px;
-  background: var(--accounts-surface);
-  box-shadow: var(--accounts-shadow);
-  display: grid;
-  gap: 8px;
-}
-
-.columnsPopoverHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  padding: 2px 2px 6px;
-}
-
-.columnsPopoverHeader strong {
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.columnsPopoverAction {
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--accounts-green);
-  font-size: 12px;
-  font-weight: 700;
-  padding: 6px 8px;
-}
-
-.columnsPopoverAction:hover {
-  background: var(--accounts-green-soft);
-}
-
-.columnsPopoverList {
-  display: grid;
-  gap: 6px;
-}
-
-.columnsPopoverItem {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 6px 6px 10px;
-  border: 1px solid var(--accounts-border);
-  border-radius: 12px;
-  background: #fbfcfe;
-}
-
-.columnsPopoverItemDragging {
-  opacity: 0.6;
-}
-
-.columnsPopoverItemDropTarget {
-  border-color: var(--accounts-green);
-  background: var(--accounts-green-soft);
-}
-
-.columnsPopoverDragHandle {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--accounts-text-soft);
-  cursor: grab;
-}
-
-.columnsPopoverDragHandle:hover {
-  background: #f1f5fa;
-  color: var(--accounts-text-secondary);
-}
-
-.columnsPopoverDragHandle:active {
-  cursor: grabbing;
-}
-
-.columnsPopoverDragHandle svg {
-  width: 14px;
-  height: 14px;
-}
-
-.columnsPopoverToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.columnsPopoverToggle span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.columnsPopoverReorder {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.columnsPopoverMoveButton {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 1px solid var(--accounts-border);
-  border-radius: 10px;
-  background: var(--accounts-surface);
-  color: var(--accounts-text);
-  font-size: 13px;
-}
-
-.columnsPopoverMoveButton:hover {
-  border-color: var(--accounts-border-strong);
-  background: #f4f7fb;
-}
-
-.columnsPopoverMoveButton:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 .pageHeader {
@@ -596,22 +455,29 @@
   min-width: 0;
   display: grid;
   align-content: end;
-  gap: 10px;
+  gap: 8px;
 }
 
 .filterRailGroupViews {
   min-width: 240px;
+  order: 1;
+}
+
+.filterRailGroupCategory {
+  order: 2;
 }
 
 .filterRailGroupWeeks {
+  width: 100%;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  flex: 1 1 100%;
+  order: 4;
+  padding-top: 2px;
 }
 
 .filterRailGroupSalesReps {
   justify-self: start;
+  order: 3;
 }
 
 .filterRailLabel {
@@ -619,6 +485,7 @@
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.04em;
+  line-height: 1;
   text-transform: uppercase;
 }
 
@@ -627,11 +494,12 @@
 .salesRepFilterCluster {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
 }
 
 .filterSegment {
-  padding: 4px;
+  min-height: var(--filter-control-height);
+  padding: 3px;
   border: 1px solid var(--accounts-border);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.94);
@@ -644,12 +512,13 @@
 .filterTextButton,
 .salesRepFilterChip,
 .salesRepMoreButton {
-  min-height: 38px;
+  min-height: var(--filter-control-height);
   border: 1px solid var(--accounts-border);
   background: var(--accounts-surface);
   color: var(--accounts-text-secondary);
-  font-size: 13px;
+  font-size: var(--filter-control-font-size);
   font-weight: 800;
+  line-height: 1;
   transition:
     background-color 0.18s ease,
     border-color 0.18s ease,
@@ -658,10 +527,11 @@
 }
 
 .filterSegmentButton {
+  min-height: calc(var(--filter-control-height) - 8px);
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 0 14px;
+  padding: 0 12px;
   border-color: transparent;
   border-radius: 999px;
   background: transparent;
@@ -704,15 +574,22 @@
 
 .weekFilterGroup {
   flex: 1 1 auto;
+  width: 100%;
   max-width: none;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 7px;
   padding: 0;
 }
 
 .weekFilterGroup .compactFilterChip {
+  min-height: var(--filter-control-height);
+  min-width: 66px;
+  padding: 0 12px;
+  font-size: var(--filter-control-font-size);
+}
+
+.weekFilterGroup .filterTextButton {
   min-height: 30px;
-  min-width: 58px;
   padding: 0 10px;
   font-size: 12px;
 }
@@ -722,19 +599,26 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 68px;
-  padding: 0 13px;
+  min-width: 56px;
+  padding: 0 11px;
   border-radius: 999px;
 }
 
 .categoryFilterChip {
-  width: 38px;
-  min-width: 38px;
+  width: var(--filter-control-height);
+  min-width: var(--filter-control-height);
   padding: 0;
+  font-size: var(--filter-control-font-size);
+}
+
+.blankCategoryFilterChip {
+  width: auto;
+  min-width: 56px;
+  padding: 0 11px;
 }
 
 .filterResetButton {
-  width: 38px;
+  width: var(--filter-control-height);
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -771,14 +655,14 @@
 }
 
 .salesRepFilterChip {
-  width: 38px;
-  min-width: 38px;
+  width: var(--filter-control-height);
+  min-width: var(--filter-control-height);
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .salesRepFilterChipActive {
@@ -814,6 +698,12 @@
   border-color: rgba(13, 148, 136, 0.28);
   background: #ccfbf1;
   color: #0f766e;
+}
+
+.salesRepFilterChipUnassigned {
+  border-color: rgba(100, 116, 139, 0.34);
+  background: #f1f5f9;
+  color: #475569;
 }
 
 .salesRepMoreButton {
@@ -926,11 +816,16 @@
   justify-content: space-between;
   gap: 18px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
+}
+
+.tableControlsToolbar > .toolbarActions {
+  display: none;
 }
 
 .toolbarFilterControls {
   min-width: 0;
+  flex: 1 1 100%;
   display: flex;
   align-items: flex-end;
   gap: 18px;
@@ -984,6 +879,270 @@
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.accountListsRail {
+  margin-bottom: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  display: grid;
+  gap: 10px;
+}
+
+.accountListsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.accountListsMeta,
+.accountListsError {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.accountListsMeta {
+  color: var(--accounts-text-secondary);
+}
+
+.accountListsError {
+  color: var(--accounts-red);
+}
+
+.accountListChips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.accountListChip {
+  min-height: var(--filter-control-height);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--accounts-text);
+  font-size: var(--filter-control-font-size);
+  font-weight: 800;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.accountListChip:hover {
+  border-color: var(--accounts-border-strong);
+  background: #fbfcfe;
+}
+
+.accountListChipActive {
+  border-color: rgba(47, 143, 99, 0.34);
+  background: var(--accounts-green-soft);
+  color: var(--accounts-green);
+  box-shadow: 0 8px 18px rgba(47, 143, 99, 0.14);
+}
+
+.accountListChipDeleting {
+  opacity: 0.62;
+}
+
+.accountListChipMain {
+  min-height: calc(var(--filter-control-height) - 2px);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+}
+
+.accountListChipMain:disabled {
+  cursor: wait;
+}
+
+.accountListCount {
+  min-width: 24px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(47, 143, 99, 0.12);
+  color: var(--accounts-green);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.accountListScope {
+  color: var(--accounts-text-secondary);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.accountListCreateChip {
+  color: var(--accounts-text);
+  background: #fff;
+}
+
+.accountListDeleteButton {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accounts-text-soft);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.accountListDeleteButton:hover:not(:disabled) {
+  background: var(--accounts-red-soft);
+  color: var(--accounts-red);
+}
+
+.accountListDeleteButton:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.tableActionBar {
+  margin-bottom: 12px;
+  min-height: 62px;
+  padding: 10px 12px;
+  border: 1px solid rgba(215, 225, 239, 0.95);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tableActionBarLeft,
+.tableActionBarRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tableActionBarRight {
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+.tableActiveFilters {
+  min-width: 220px;
+  flex: 1 1 360px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.tableActiveFiltersLabel {
+  color: var(--accounts-text-secondary);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tableActiveFilterChip {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  padding: 0 10px;
+  border: 1px solid rgba(47, 143, 99, 0.22);
+  border-radius: 999px;
+  background: var(--accounts-green-soft);
+  color: var(--accounts-green);
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tableSelectionStatus,
+.tableActionButton,
+.tableActionDangerButton {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 14px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 10px;
+  background: var(--accounts-surface);
+  color: var(--accounts-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.tableSelectionStatus input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.tableActionButton:hover:not(:disabled),
+.tableActionDangerButton:hover:not(:disabled) {
+  border-color: var(--accounts-border-strong);
+  background: #fbfcfe;
+}
+
+.tableActionButton:disabled,
+.tableActionDangerButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.tableActionDangerButton {
+  border-color: #f2d3cf;
+  background: var(--accounts-red-soft);
+  color: var(--accounts-red);
+}
+
+.tableActionHint {
+  max-width: 280px;
+  color: #b54708;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tableCreateButton {
+  border-color: #2a7d57;
+  background: var(--accounts-green);
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(47, 143, 99, 0.18);
+}
+
+.tableCreateButton:hover {
+  border-color: #256c4d;
+  background: #2a7d57;
+  box-shadow: 0 12px 28px rgba(47, 143, 99, 0.22);
 }
 
 .toolbarButton {
@@ -1546,6 +1705,48 @@
   padding-left: 10px !important;
   padding-right: 10px !important;
   text-align: center !important;
+}
+
+.columnSelectorHeaderCell,
+.columnSelectorBodyCell {
+  width: 42px;
+  min-width: 42px;
+  padding-left: 5px !important;
+  padding-right: 5px !important;
+  text-align: center !important;
+}
+
+.columnSelectorHeaderCell {
+  overflow: visible;
+}
+
+.columnSelectorMenu {
+  display: inline-flex;
+  justify-content: center;
+}
+
+.columnSelectorButton {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--accounts-border);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--accounts-green);
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 6px 14px rgba(23, 32, 51, 0.06);
+}
+
+.columnSelectorButton:hover,
+.columnSelectorButtonActive {
+  border-color: rgba(47, 143, 99, 0.34);
+  background: var(--accounts-green-soft);
+  color: var(--accounts-green);
 }
 
 .actionsHeader,
@@ -2182,6 +2383,351 @@
   gap: 6px;
 }
 
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(23, 32, 51, 0.28);
+}
+
+.createListModal {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 16px;
+  background: var(--accounts-surface);
+  box-shadow: 0 24px 58px rgba(23, 32, 51, 0.2);
+}
+
+.columnsModal {
+  width: min(560px, 100%);
+  max-height: min(82vh, 720px);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 16px;
+  background: var(--accounts-surface);
+  box-shadow: 0 24px 58px rgba(23, 32, 51, 0.2);
+}
+
+.columnsModalHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.columnsModalHeader h2 {
+  margin: 0;
+  color: var(--accounts-text);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.columnsModalHeader span {
+  display: block;
+  margin-top: 4px;
+  color: var(--accounts-text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.columnsModalToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(215, 225, 239, 0.85);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.columnsModalStatus {
+  min-width: 0;
+  color: var(--accounts-text-secondary);
+  font-size: 12px;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.columnsModalStatusError {
+  color: #b42318;
+}
+
+.columnsModalActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.columnsModalActions .secondaryButton {
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.columnsModalList {
+  min-height: 0;
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.columnsModalRow {
+  position: relative;
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.columnsModalRowDragging {
+  opacity: 0.58;
+}
+
+.columnsModalRowDropBefore,
+.columnsModalRowDropAfter {
+  border-color: rgba(47, 143, 99, 0.38);
+  background: #fbfffd;
+}
+
+.columnsModalRowDropBefore::before,
+.columnsModalRowDropAfter::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accounts-green);
+  box-shadow: 0 0 0 3px rgba(47, 143, 99, 0.12);
+}
+
+.columnsModalRowDropBefore::before {
+  top: -5px;
+}
+
+.columnsModalRowDropAfter::after {
+  bottom: -5px;
+}
+
+.columnsModalToggle {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.columnsModalToggle input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: var(--accounts-green);
+}
+
+.columnsModalToggle input:disabled {
+  cursor: not-allowed;
+}
+
+.columnsModalCheckLabel {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.columnsModalCheckLabel strong {
+  color: var(--accounts-text);
+  font-size: 14px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.columnsModalCheckLabel small {
+  color: var(--accounts-text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.columnsModalDragHandle {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--accounts-border);
+  border-radius: 10px;
+  background: var(--accounts-surface);
+  color: var(--accounts-text-soft);
+  cursor: grab;
+}
+
+.columnsModalDragHandle:hover {
+  border-color: rgba(47, 143, 99, 0.32);
+  background: var(--accounts-green-soft);
+  color: var(--accounts-green);
+}
+
+.columnsModalDragHandle:active {
+  cursor: grabbing;
+}
+
+.columnsModalDragHandle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.createListModalHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.createListModalHeader h2 {
+  margin: 0;
+  color: var(--accounts-text);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.createListModalHeader span {
+  display: block;
+  margin-top: 4px;
+  color: var(--accounts-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.modalCloseButton {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 10px;
+  background: var(--accounts-surface);
+  color: var(--accounts-text-secondary);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.modalCloseButton:hover:not(:disabled) {
+  border-color: var(--accounts-border-strong);
+  color: var(--accounts-text);
+}
+
+.createListField {
+  display: grid;
+  gap: 8px;
+  color: var(--accounts-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.createListField input[type="text"] {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: var(--accounts-surface);
+  color: var(--accounts-text);
+  font: inherit;
+}
+
+.scopeSegment {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.scopeOption {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid var(--accounts-border);
+  border-radius: 12px;
+  background: #fbfcfe;
+  color: var(--accounts-text);
+  cursor: pointer;
+}
+
+.scopeOption input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.scopeOption span {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.scopeOption small {
+  color: var(--accounts-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.scopeOptionActive {
+  border-color: rgba(47, 143, 99, 0.34);
+  background: var(--accounts-green-soft);
+  color: var(--accounts-green);
+}
+
+.createListError {
+  margin: 0;
+  color: var(--accounts-red);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.deleteListWarning,
+.deleteListWarningMuted {
+  margin: 0;
+  color: var(--accounts-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.deleteListWarningMuted {
+  color: var(--accounts-text-secondary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.createListActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .backdrop {
   position: fixed;
   inset: 0;
@@ -2296,6 +2842,11 @@
     flex-wrap: wrap;
   }
 
+  .accountListChip {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
   .pageHeaderActions,
   .toolbarActions {
     justify-content: stretch;
@@ -2317,6 +2868,10 @@
 
   .table {
     min-width: 860px;
+  }
+
+  .scopeSegment {
+    grid-template-columns: 1fr;
   }
 }
 

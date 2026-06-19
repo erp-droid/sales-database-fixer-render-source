@@ -408,6 +408,10 @@ async function resolveDeleteCandidateRows(
   authCookieRefresh: AuthCookieRefreshState,
 ): Promise<BusinessAccountRow[]> {
   const storedRows = readStoredBusinessAccountRowsFromReadModel(accountRecordId);
+  if (getEnv().LOCAL_DATABASE_ONLY) {
+    return storedRows;
+  }
+
   if (storedRows.length > 0 && !storedAccountStillHasContacts(storedRows)) {
     return storedRows;
   }
@@ -532,6 +536,7 @@ function shouldUseReadModelWritePath(input: {
   }
 
   return (
+    getEnv().LOCAL_DATABASE_ONLY ||
     getEnv().READ_MODEL_LOCAL_WRITES_ENABLED ||
     isLocalContactId(input.targetContactId) ||
     input.rows.some(isLocalOnlyStoredRow)
@@ -1148,9 +1153,12 @@ export async function GET(
   try {
     const { id } = await context.params;
     cookieValue = requireAuthCookieValue(request);
-    const forceLive = request.nextUrl.searchParams.get("live") === "1";
-    if (getEnv().READ_MODEL_ENABLED && !forceLive) {
-      maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+    const env = getEnv();
+    const forceLive = !env.LOCAL_DATABASE_ONLY && request.nextUrl.searchParams.get("live") === "1";
+    if (env.READ_MODEL_ENABLED && (env.LOCAL_DATABASE_ONLY || !forceLive)) {
+      if (!env.LOCAL_DATABASE_ONLY) {
+        maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
+      }
       const cached = readBusinessAccountDetailFromReadModel(id, requestedContactId);
       if (cached) {
         if (isAlwaysExcludedBusinessAccountRow(cached.row)) {
@@ -1169,7 +1177,16 @@ export async function GET(
 
       throw new HttpError(
         404,
-        "Business account is not in the local SQLite snapshot. Click Sync records to refresh.",
+        env.LOCAL_DATABASE_ONLY
+          ? "Business account is not in the local SQLite snapshot."
+          : "Business account is not in the local SQLite snapshot. Click Sync records to refresh.",
+      );
+    }
+
+    if (env.LOCAL_DATABASE_ONLY) {
+      throw new HttpError(
+        409,
+        "Local database only mode requires READ_MODEL_ENABLED=true for account details.",
       );
     }
 
@@ -1359,6 +1376,13 @@ export async function PUT(
       );
     }
     const storedRows = readStoredBusinessAccountRowsFromReadModel(id) ?? [];
+    if (getEnv().LOCAL_DATABASE_ONLY && storedRows.length === 0) {
+      throw new HttpError(
+        404,
+        "Business account is not in the local SQLite snapshot. Reload the account and try again.",
+      );
+    }
+
     const implicitContactOnlyIntent =
       cachedCurrentRow !== null &&
       cachedTargetContactId !== null &&

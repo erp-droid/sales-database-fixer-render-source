@@ -583,6 +583,74 @@ describe("ensureReadModelSchema", () => {
     );
   });
 
+  it("creates the account_filter_lists table", () => {
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(account_filter_lists)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "id",
+        "name",
+        "scope",
+        "owner_login_name",
+        "filters_json",
+        "created_at",
+        "updated_at",
+      ]),
+    );
+  });
+
+  it("creates the account_user_preferences table", () => {
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(account_user_preferences)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "login_name",
+        "preference_key",
+        "value_json",
+        "created_at",
+        "updated_at",
+      ]),
+    );
+  });
+
+  it("adds contact note columns to legacy account_notes tables", () => {
+    db.exec(`
+      CREATE TABLE account_notes (
+        id TEXT PRIMARY KEY,
+        account_record_id TEXT NOT NULL,
+        business_account_id TEXT,
+        company_name TEXT,
+        note TEXT NOT NULL,
+        author TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
+    ensureReadModelSchema(db);
+
+    const columns = db
+      .prepare("PRAGMA table_info(account_notes)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["contact_id", "contact_name"]),
+    );
+
+    const indexes = db.prepare("PRAGMA index_list(account_notes)").all() as Array<{
+      name: string;
+    }>;
+    expect(indexes.map((index) => index.name)).toContain("idx_account_notes_contact");
+  });
+
   it("creates the call_sessions active lookup index", () => {
     ensureReadModelSchema(db);
 

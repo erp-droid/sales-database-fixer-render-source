@@ -5,6 +5,7 @@ import type { AuthCookieRefreshState } from "@/lib/acumatica";
 import { parseDashboardFilters } from "@/lib/call-analytics/filter-params";
 import { validateSessionWithAcumatica } from "@/lib/acumatica";
 import { getAuthCookieValue, getStoredLoginName, normalizeSessionUser, setAuthCookie } from "@/lib/auth";
+import { getEnv } from "@/lib/env";
 import { HttpError } from "@/lib/errors";
 
 export type AuthenticatedDashboardReadRequest = {
@@ -45,13 +46,17 @@ export async function authenticateDashboardRefreshRequest(
   }
 
   const authCookieRefresh: AuthCookieRefreshState = { value: null };
-  const payload = await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
-  const sessionUser = normalizeSessionUser(payload);
+  const storedLoginName = getStoredLoginName(request);
+  const sessionUser = getEnv().LOCAL_DATABASE_ONLY
+    ? storedLoginName
+      ? { id: storedLoginName, name: storedLoginName }
+      : null
+    : normalizeSessionUser(await validateSessionWithAcumatica(cookieValue, authCookieRefresh));
 
   return {
     cookieValue: authCookieRefresh.value ?? cookieValue,
     authCookieRefresh,
-    viewerLoginName: getStoredLoginName(request),
+    viewerLoginName: storedLoginName,
     viewerDisplayName: sessionUser?.name ?? null,
     filters: parseDashboardFilters(request.nextUrl.searchParams),
   };

@@ -13,6 +13,7 @@ import {
   isMeetingOrganizerContactForLogin,
   normalizeMeetingContactId,
   normalizeMeetingContactIds,
+  normalizeMeetingEmployeeDisplayName,
   normalizeMeetingLoginName,
 } from "@/lib/meeting-create";
 import type { MeetingContactOption, MeetingCreateRequest } from "@/types/meeting-create";
@@ -59,6 +60,16 @@ describe("normalizeMeetingContactId", () => {
 });
 
 describe("blocked meeting attendees", () => {
+  it("normalizes the jbuhagiar employee identity to Jeff Buhagiar", () => {
+    expect(
+      normalizeMeetingEmployeeDisplayName({
+        employeeName: "Alex Buhagiar",
+        email: "jbuhagiar@meadowb.com",
+        loginName: "jbuhagiar",
+      }),
+    ).toBe("Jeff Buhagiar");
+  });
+
   it("blocks Alex Buhagiar from employee and direct-email invite paths", () => {
     expect(
       isBlockedMeetingEmployeeAttendee({

@@ -12,6 +12,7 @@ import {
   readCallerPhoneOverride,
   saveCallerPhoneOverride,
 } from "@/lib/caller-phone-overrides";
+import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 
 function readRequestPhoneNumber(body: unknown): string {
@@ -42,7 +43,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh: AuthCookieRefreshState = { value: null };
 
   try {
-    await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
+    if (!getEnv().LOCAL_DATABASE_ONLY) {
+      await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
+    }
 
     const body = await request.json().catch(() => null);
     const saved = saveCallerPhoneOverride(loginName, readRequestPhoneNumber(body));

@@ -2275,9 +2275,14 @@ export function CalendarClient() {
     const { event } = segment;
     const isPreviewSource = dragPreview?.eventId === event.id;
     const widthPercent = 100 / segment.columnCount;
+    const eventHeightPx = Math.max(
+      18,
+      ((segment.endMinutes - segment.startMinutes) / 60) * HOUR_HEIGHT_PX - 2,
+    );
+    const isCompact = eventHeightPx < 32;
     const style = buildCalendarEventStyle(event, {
       top: `${minutesToGridOffsetPx(segment.startMinutes)}px`,
-      height: `${Math.max(18, ((segment.endMinutes - segment.startMinutes) / 60) * HOUR_HEIGHT_PX - 2)}px`,
+      height: `${eventHeightPx}px`,
       left: `calc(${segment.columnIndex * widthPercent}% + 2px)`,
       width: `calc(${widthPercent}% - 4px)`,
     });
@@ -2289,9 +2294,11 @@ export function CalendarClient() {
       event.canReschedule ? styles.eventBlockDraggable : null,
       isPreviewSource ? styles.eventBlockDragSource : null,
       pendingMoveEventId === event.id ? styles.eventBlockSaving : null,
+      isCompact ? styles.eventBlockCompact : null,
     ]
       .filter(Boolean)
       .join(" ");
+    const timeRangeLabel = formatEventTimeRange(event);
 
     return (
       <button
@@ -2308,8 +2315,8 @@ export function CalendarClient() {
       >
         <span className={styles.eventBlockTitle}>{event.summary}</span>
         <span className={styles.eventBlockMeta}>
-          {formatEventTimeRange(event)}
-          {event.location ? `, ${event.location}` : ""}
+          {timeRangeLabel}
+          {!isCompact && event.location ? `, ${event.location}` : ""}
         </span>
       </button>
     );

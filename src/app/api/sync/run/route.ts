@@ -19,6 +19,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const forceUnlock = request.nextUrl.searchParams.get("forceUnlock") === "1";
 
   try {
+    if (getEnv().LOCAL_DATABASE_ONLY) {
+      throw new HttpError(
+        409,
+        "Full Acumatica sync is disabled in local database only mode.",
+      );
+    }
+
     if (!getEnv().READ_MODEL_FULL_SYNC_ENABLED) {
       throw new HttpError(409, FULL_READ_MODEL_SYNC_DISABLED_REASON);
     }

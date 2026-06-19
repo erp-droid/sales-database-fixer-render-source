@@ -126,6 +126,7 @@ const schema = z.object({
       "https://ws1.postescanada-canadapost.ca/AddressComplete/Interactive/Retrieve/v2.10/json3.ws",
     ),
   ADDRESS_COMPLETE_GEOCODE_ENABLED: z.enum(["true", "false"]).optional(),
+  LOCAL_DATABASE_ONLY: z.enum(["true", "false"]).optional(),
   READ_MODEL_ENABLED: z.enum(["true", "false"]).optional(),
   READ_MODEL_AUTO_SYNC_ENABLED: z.enum(["true", "false"]).optional(),
   READ_MODEL_FULL_SYNC_ENABLED: z.enum(["true", "false"]).optional(),
@@ -230,6 +231,7 @@ export type AppEnv = {
   ADDRESS_COMPLETE_FIND_URL: string;
   ADDRESS_COMPLETE_RETRIEVE_URL: string;
   ADDRESS_COMPLETE_GEOCODE_ENABLED: boolean;
+  LOCAL_DATABASE_ONLY: boolean;
   READ_MODEL_ENABLED: boolean;
   READ_MODEL_AUTO_SYNC_ENABLED: boolean;
   READ_MODEL_FULL_SYNC_ENABLED: boolean;
@@ -385,6 +387,7 @@ export function getEnv(): AppEnv {
       process.env.ADDRESS_COMPLETE_RETRIEVE_URL,
     ),
     ADDRESS_COMPLETE_GEOCODE_ENABLED: process.env.ADDRESS_COMPLETE_GEOCODE_ENABLED,
+    LOCAL_DATABASE_ONLY: process.env.LOCAL_DATABASE_ONLY,
     READ_MODEL_ENABLED: process.env.READ_MODEL_ENABLED,
     READ_MODEL_AUTO_SYNC_ENABLED: process.env.READ_MODEL_AUTO_SYNC_ENABLED,
     READ_MODEL_FULL_SYNC_ENABLED: process.env.READ_MODEL_FULL_SYNC_ENABLED,
@@ -500,6 +503,8 @@ export function getEnv(): AppEnv {
     ONBOARDING_SMTP_SECURE: parsed.data.ONBOARDING_SMTP_SECURE === "true",
     ADDRESS_COMPLETE_GEOCODE_ENABLED:
       parsed.data.ADDRESS_COMPLETE_GEOCODE_ENABLED === "true",
+    LOCAL_DATABASE_ONLY:
+      parsed.data.LOCAL_DATABASE_ONLY === "true",
     READ_MODEL_ENABLED: parsed.data.READ_MODEL_ENABLED === "true",
     READ_MODEL_AUTO_SYNC_ENABLED:
       parsed.data.READ_MODEL_AUTO_SYNC_ENABLED === "true",

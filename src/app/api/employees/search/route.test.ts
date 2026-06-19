@@ -10,6 +10,7 @@ const findContactsByDisplayName = vi.fn();
 const searchContacts = vi.fn();
 const readEmployeeDirectorySnapshot = vi.fn();
 const readCallEmployeeDirectory = vi.fn();
+const readSalesRepDirectorySnapshot = vi.fn();
 const syncCallEmployeeDirectory = vi.fn();
 const upsertCallEmployeeDirectoryItem = vi.fn();
 
@@ -50,6 +51,10 @@ vi.mock("@/lib/call-analytics/employee-directory", () => ({
   upsertCallEmployeeDirectoryItem,
 }));
 
+vi.mock("@/lib/read-model/sales-reps", () => ({
+  readSalesRepDirectorySnapshot,
+}));
+
 describe("GET /api/employees/search", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -58,6 +63,10 @@ describe("GET /api/employees/search", () => {
     vi.setSystemTime(new Date("2026-03-17T17:00:00.000Z"));
     getAuthCookieValue.mockReturnValue("user-cookie");
     readCallEmployeeDirectory.mockReturnValue([]);
+    readSalesRepDirectorySnapshot.mockReturnValue({
+      items: [],
+      updatedAt: null,
+    });
     syncCallEmployeeDirectory.mockResolvedValue([]);
     readEmployeeDirectorySnapshot.mockReturnValue({
       items: [],
@@ -223,6 +232,65 @@ describe("GET /api/employees/search", () => {
     expect(response.status).toBe(200);
     expect(payload.items).toEqual([]);
     expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
+  });
+
+  it("resolves a sales rep name through a unique internal login alias when employee display names differ", async () => {
+    readCallEmployeeDirectory.mockReturnValue([
+      {
+        loginName: "jbuhagiar",
+        contactId: null,
+        displayName: "Alex Buhagiar",
+        email: "jbuhagiar@meadowb.com",
+        normalizedPhone: null,
+        callerIdPhone: null,
+        isActive: true,
+        updatedAt: "2026-03-17T16:00:00.000Z",
+      },
+    ]);
+    readSalesRepDirectorySnapshot.mockReturnValue({
+      items: [
+        {
+          id: "109337",
+          name: "Jeffery Buhagiar",
+          normalizedName: "jeffery buhagiar",
+          usageCount: 1242,
+          ownerReferenceId: "109337",
+          loginName: null,
+          email: null,
+          isActive: null,
+          updatedAt: "2026-03-17T16:00:00.000Z",
+        },
+      ],
+      updatedAt: "2026-03-17T16:00:00.000Z",
+    });
+
+    const { GET } = await import("@/app/api/employees/search/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/employees/search?q=jeff%20buhagiar"),
+    );
+    const payload = (await response.json()) as {
+      items: Array<{
+        key: string;
+        loginName: string;
+        employeeName: string;
+        email: string;
+        contactId: number | null;
+        isInternal: true;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.items).toEqual([
+      {
+        key: "employee:jbuhagiar",
+        loginName: "jbuhagiar",
+        employeeName: "Jeff Buhagiar",
+        email: "jbuhagiar@meadowb.com",
+        contactId: null,
+        isInternal: true,
+      },
+    ]);
+    expect(withServiceAcumaticaSession).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to a broader internal contact search when Acumatica contact display names differ", async () => {

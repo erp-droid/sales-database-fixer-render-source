@@ -5,10 +5,12 @@ import twilio from "twilio";
 
 import {
   getAuthCookieValue,
+  getStoredLoginName,
   normalizeSessionUser,
   setAuthCookie,
 } from "@/lib/auth";
 import { type AuthCookieRefreshState, validateSessionWithAcumatica } from "@/lib/acumatica";
+import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { buildTwilioIdentity, getTwilioVoiceConfig } from "@/lib/twilio";
 
@@ -30,11 +32,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   try {
     const authCookieRefresh: AuthCookieRefreshState = { value: null };
-    const sessionPayload = await validateSessionWithAcumatica(
-      cookieValue,
-      authCookieRefresh,
-    );
-    const user = normalizeSessionUser(sessionPayload);
+    const user = getEnv().LOCAL_DATABASE_ONLY
+      ? (() => {
+          const loginName = getStoredLoginName(request);
+          return loginName ? { id: loginName, name: loginName } : null;
+        })()
+      : normalizeSessionUser(
+          await validateSessionWithAcumatica(
+            cookieValue,
+            authCookieRefresh,
+          ),
+        );
     const identity = buildTwilioIdentity(user);
 
     const accessToken = new twilio.jwt.AccessToken(

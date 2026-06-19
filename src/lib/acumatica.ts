@@ -27,6 +27,17 @@ function getActiveCookieValue(
   return authCookieRefresh?.value ?? cookieValue;
 }
 
+function assertAcumaticaNonAuthEnabled(resourcePath: string): void {
+  if (!getEnv().LOCAL_DATABASE_ONLY) {
+    return;
+  }
+
+  throw new HttpError(
+    409,
+    `Acumatica non-auth access is disabled in local database only mode. Blocked '${resourcePath}'.`,
+  );
+}
+
 function buildAcumaticaUrl(resourcePath: string, entityPath?: string): string {
   const { ACUMATICA_BASE_URL, ACUMATICA_ENTITY_PATH } = getEnv();
 
@@ -677,6 +688,7 @@ async function requestAcumatica<T>(
   resourcePath: string,
   init?: RequestAcumaticaInit,
 ): Promise<T> {
+  assertAcumaticaNonAuthEnabled(resourcePath);
   const { response } = await performAcumaticaRequestWithEndpointFallback(
     cookieValue,
     resourcePath,
@@ -705,6 +717,7 @@ async function requestAcumaticaAtEntityPath<T>(
   resourcePath: string,
   init?: RequestAcumaticaInit,
 ): Promise<T> {
+  assertAcumaticaNonAuthEnabled(resourcePath);
   const response = await performAcumaticaFetchAtEntityPath(
     cookieValue,
     entityPath,
@@ -3773,6 +3786,7 @@ export async function deleteBusinessAccount(
   }
 
   const resourcePath = `/BusinessAccount/${encodeURIComponent(normalizedBusinessAccountId)}`;
+  assertAcumaticaNonAuthEnabled(resourcePath);
   const { response } = await performAcumaticaRequestWithEndpointFallback(
     cookieValue,
     resourcePath,
@@ -3821,6 +3835,7 @@ export async function deleteContact(
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<void> {
   const resourcePath = `/Contact/${encodeURIComponent(String(contactId))}`;
+  assertAcumaticaNonAuthEnabled(resourcePath);
   const { response } = await performAcumaticaRequestWithEndpointFallback(
     cookieValue,
     resourcePath,

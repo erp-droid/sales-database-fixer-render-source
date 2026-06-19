@@ -24,6 +24,7 @@ import { readCallIngestState } from "@/lib/call-analytics/ingest";
 import { publishBusinessAccountChanged } from "@/lib/business-account-live";
 import { withServiceAcumaticaSession } from "@/lib/acumatica-service-auth";
 import { getEnv } from "@/lib/env";
+import { HttpError } from "@/lib/errors";
 import { syncMeetingBookings } from "@/lib/meeting-bookings";
 import type { BusinessAccountRow } from "@/types/business-account";
 import type { SyncRunResponse, SyncStatusResponse } from "@/types/sync";
@@ -592,10 +593,15 @@ export function hasReadModelSnapshot(): boolean {
 
 export function shouldTriggerAutoSync(): boolean {
   const {
+    LOCAL_DATABASE_ONLY,
     READ_MODEL_AUTO_SYNC_ENABLED,
     READ_MODEL_STALE_AFTER_MS,
     READ_MODEL_SYNC_INTERVAL_MS,
   } = getEnv();
+  if (LOCAL_DATABASE_ONLY) {
+    return false;
+  }
+
   if (!READ_MODEL_AUTO_SYNC_ENABLED) {
     return false;
   }
@@ -641,6 +647,13 @@ export function triggerReadModelSync(
     force?: boolean;
   },
 ): Promise<SyncRunResponse> {
+  if (getEnv().LOCAL_DATABASE_ONLY) {
+    throw new HttpError(
+      409,
+      "Full Acumatica sync is disabled in local database only mode.",
+    );
+  }
+
   if (syncInFlight) {
     return Promise.resolve({
       accepted: true,

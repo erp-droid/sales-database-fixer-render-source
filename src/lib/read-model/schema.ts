@@ -106,6 +106,35 @@ CREATE INDEX IF NOT EXISTS idx_contact_identity_notes_company_contact
 CREATE INDEX IF NOT EXISTS idx_contact_identity_notes_updated_at
   ON contact_identity_notes(updated_at);
 
+CREATE TABLE IF NOT EXISTS account_filter_lists (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK(scope IN ('user', 'company')),
+  owner_login_name TEXT NOT NULL,
+  filters_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_filter_lists_scope
+  ON account_filter_lists(scope);
+CREATE INDEX IF NOT EXISTS idx_account_filter_lists_owner
+  ON account_filter_lists(owner_login_name);
+CREATE INDEX IF NOT EXISTS idx_account_filter_lists_updated_at
+  ON account_filter_lists(updated_at);
+
+CREATE TABLE IF NOT EXISTS account_user_preferences (
+  login_name TEXT NOT NULL,
+  preference_key TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(login_name, preference_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_user_preferences_updated_at
+  ON account_user_preferences(updated_at);
+
 CREATE TABLE IF NOT EXISTS employee_directory (
   employee_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -571,6 +600,22 @@ CREATE INDEX IF NOT EXISTS idx_audit_event_links_account_record_id
   ON audit_event_links(business_account_record_id);
 CREATE INDEX IF NOT EXISTS idx_audit_event_links_contact_id
   ON audit_event_links(contact_id);
+
+CREATE TABLE IF NOT EXISTS account_notes (
+  id TEXT PRIMARY KEY,
+  account_record_id TEXT NOT NULL,
+  business_account_id TEXT,
+  company_name TEXT,
+  contact_id INTEGER,
+  contact_name TEXT,
+  note TEXT NOT NULL,
+  author TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_notes_account
+  ON account_notes(account_record_id, created_at);
 `;
 
 function readPayloadText(record: unknown, key: string): string | null {
@@ -685,6 +730,25 @@ export function ensureReadModelSchema(db: Database.Database): void {
     "CREATE INDEX IF NOT EXISTS idx_account_rows_last_calendar_invited_at ON account_rows(last_calendar_invited_at)",
   );
   backfillAccountRowSupplementalColumns(db);
+
+  const accountNoteColumns = db
+    .prepare("PRAGMA table_info(account_notes)")
+    .all() as Array<{ name: string }>;
+  const hasAccountNotesContactIdColumn = accountNoteColumns.some(
+    (column) => column.name === "contact_id",
+  );
+  if (!hasAccountNotesContactIdColumn) {
+    db.exec("ALTER TABLE account_notes ADD COLUMN contact_id INTEGER");
+  }
+  const hasAccountNotesContactNameColumn = accountNoteColumns.some(
+    (column) => column.name === "contact_name",
+  );
+  if (!hasAccountNotesContactNameColumn) {
+    db.exec("ALTER TABLE account_notes ADD COLUMN contact_name TEXT");
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_account_notes_contact ON account_notes(account_record_id, contact_id)",
+  );
 
   const accountLocalMetadataColumns = db
     .prepare("PRAGMA table_info(account_local_metadata)")

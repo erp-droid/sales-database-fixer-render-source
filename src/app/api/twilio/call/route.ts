@@ -21,6 +21,7 @@ import {
   recordProvisionalBridgeCall,
 } from "@/lib/call-analytics/ingest";
 import type { CallSessionRecord } from "@/lib/call-analytics/types";
+import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { formatPhoneForTwilioDial } from "@/lib/phone";
 import { endBridgeCall, resolveCallerProfile, startBridgeCall } from "@/lib/twilio-outbound";
@@ -242,7 +243,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     try {
       callerProfile = await resolveCallerProfile(cookieValue, loginName);
     } catch (error) {
-      if (!shouldRetryCallerProfileWithSession(error)) {
+      if (getEnv().LOCAL_DATABASE_ONLY || !shouldRetryCallerProfileWithSession(error)) {
         throw error;
       }
 
@@ -364,7 +365,9 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh: AuthCookieRefreshState = { value: null };
 
   try {
-    await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
+    if (!getEnv().LOCAL_DATABASE_ONLY) {
+      await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
+    }
 
     const body = (await request.json().catch(() => null)) as EndPayload | null;
     const callSid = typeof body?.callSid === "string" ? body.callSid : "";

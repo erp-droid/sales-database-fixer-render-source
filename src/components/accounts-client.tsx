@@ -3,6 +3,7 @@
 import {
   type ComponentProps,
   type DragEvent as ReactDragEvent,
+  type FormEvent as ReactFormEvent,
   type ReactNode,
   useDeferredValue,
   useEffect,
@@ -109,6 +110,22 @@ import type {
   MeetingSourceContext,
 } from "@/types/meeting-create";
 import type {
+  AccountListCreateResponse,
+  AccountListFilters,
+  AccountListScope,
+  AccountListSummary,
+  AccountListsResponse,
+} from "@/types/account-list";
+import {
+  DEFAULT_ACCOUNT_COLUMN_ORDER,
+  DEFAULT_ACCOUNT_VISIBLE_COLUMNS,
+  isKnownAccountColumnList,
+  isValidAccountColumnOrder,
+  mergeAccountColumnList,
+  normalizeAccountColumnPreferences,
+  type AccountColumnPreferencesResponse,
+} from "@/types/account-column-preferences";
+import type {
   ContactEnhanceCandidate,
   ContactEnhanceRequest,
   ContactEnhanceResponse,
@@ -131,6 +148,11 @@ import type { SyncStatusResponse } from "@/types/sync";
 
 const PAGE_SIZE = 25;
 const SALES_REP_FILTER_VISIBLE_SELECTION_LIMIT = 5;
+const BLANK_CATEGORY_FILTER = "__blank_category__";
+const BLANK_CATEGORY_FILTER_LABEL = "Blank";
+const CATEGORY_FILTER_OPTIONS = [...CATEGORY_VALUES, BLANK_CATEGORY_FILTER] as const;
+const UNASSIGNED_SALES_REP_FILTER = "__unassigned__";
+const UNASSIGNED_SALES_REP_LABEL = "Blank";
 
 type SessionResponse = {
   authenticated: boolean;
@@ -169,6 +191,11 @@ type EmployeeOption = {
 
 type EmployeeLookupResponse = {
   items: EmployeeOption[];
+};
+
+type AccountListWithCount = AccountListSummary & {
+  resultCount: number;
+  isActive: boolean;
 };
 
 type SyncProgress = {
@@ -526,10 +553,11 @@ type HeaderFilters = {
 };
 
 type AccountsFilterView = "allCompanies" | "marketingOnly";
+type CategoryFilterValue = Category | typeof BLANK_CATEGORY_FILTER;
 
 type StoredAccountsFilterPreferences = {
   activeFilterView?: AccountsFilterView;
-  selectedCategoryFilters?: Category[];
+  selectedCategoryFilters?: CategoryFilterValue[];
   selectedWeekFilters?: string[];
   selectedSalesRepFilters?: string[];
   q?: string;
@@ -566,6 +594,10 @@ function isAccountsFilterView(value: unknown): value is AccountsFilterView {
 
 function isCategoryValue(value: unknown): value is Category {
   return typeof value === "string" && CATEGORY_VALUES.includes(value as Category);
+}
+
+function isCategoryFilterValue(value: unknown): value is CategoryFilterValue {
+  return isCategoryValue(value) || value === BLANK_CATEGORY_FILTER;
 }
 
 function compareWeekFilterValues(left: string, right: string): number {
@@ -657,7 +689,7 @@ function normalizeStoredAccountsFilterPreferences(
       ? record.activeFilterView
       : "allCompanies",
     selectedCategoryFilters: Array.isArray(record.selectedCategoryFilters)
-      ? [...new Set(record.selectedCategoryFilters.filter(isCategoryValue))]
+      ? [...new Set(record.selectedCategoryFilters.filter(isCategoryFilterValue))]
       : [],
     selectedWeekFilters: normalizeWeekFilterValues(record.selectedWeekFilters),
     selectedSalesRepFilters: Array.isArray(record.selectedSalesRepFilters)
@@ -677,7 +709,7 @@ function normalizeStoredAccountsFilterPreferences(
 
 function buildAccountsCsvExportHref(input: {
   activeFilterView: AccountsFilterView;
-  selectedCategoryFilters: Category[];
+  selectedCategoryFilters: CategoryFilterValue[];
   selectedWeekFilters: string[];
   selectedSalesRepFilters: string[];
   q: string;
@@ -851,6 +883,12 @@ const COLUMN_CONFIGS: ColumnConfig[] = [
     filterPlaceholder: "Filter email",
   },
   {
+    id: "notes",
+    label: "Notes",
+    filterKey: "notes",
+    filterPlaceholder: "Filter notes",
+  },
+  {
     id: "lastCalledAt",
     label: "Last Called",
     filterKey: "lastCalled",
@@ -898,6 +936,7 @@ const COLUMN_MIN_WIDTHS: Partial<Record<SortBy, number>> = {
   primaryContactPhone: 140,
   primaryContactExtension: 112,
   primaryContactEmail: 260,
+  notes: 240,
   lastCalledAt: 150,
   lastCalendarInvitedAt: 150,
   lastEmailedAt: 150,
@@ -905,29 +944,8 @@ const COLUMN_MIN_WIDTHS: Partial<Record<SortBy, number>> = {
   lastModifiedIso: 150,
 };
 
-const DEFAULT_VISIBLE_COLUMNS: SortBy[] = [
-  "companyName",
-  "accountType",
-  "opportunityCount",
-  "address",
-  "companyPhone",
-  "primaryContactName",
-  "primaryContactJobTitle",
-  "primaryContactPhone",
-  "primaryContactExtension",
-  "primaryContactEmail",
-  "lastCalledAt",
-  "lastCalendarInvitedAt",
-  "lastEmailedAt",
-  "category",
-];
-
-const DEFAULT_COLUMN_ORDER: SortBy[] = [
-  ...DEFAULT_VISIBLE_COLUMNS,
-  ...COLUMN_CONFIGS.map((column) => column.id).filter(
-    (columnId) => !DEFAULT_VISIBLE_COLUMNS.includes(columnId),
-  ),
-];
+const DEFAULT_VISIBLE_COLUMNS: SortBy[] = [...DEFAULT_ACCOUNT_VISIBLE_COLUMNS];
+const DEFAULT_COLUMN_ORDER: SortBy[] = [...DEFAULT_ACCOUNT_COLUMN_ORDER];
 
 const CATEGORY_OPTIONS: AttributeOption[] = [
   { value: "A", label: "A - Type Customers", aliases: ["A - Type Clients"] },
@@ -1064,29 +1082,11 @@ function withCurrentOption(
 }
 
 function isValidColumnOrder(value: unknown): value is SortBy[] {
-  if (!Array.isArray(value) || value.length !== DEFAULT_COLUMN_ORDER.length) {
-    return false;
-  }
-
-  const unique = new Set(value);
-  if (unique.size !== DEFAULT_COLUMN_ORDER.length) {
-    return false;
-  }
-
-  return DEFAULT_COLUMN_ORDER.every((column) => unique.has(column));
+  return isValidAccountColumnOrder(value);
 }
 
 function isKnownColumnList(value: unknown): value is SortBy[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    return false;
-  }
-
-  const unique = new Set(value);
-  if (unique.size !== value.length) {
-    return false;
-  }
-
-  return value.every((column) => DEFAULT_COLUMN_ORDER.includes(column));
+  return isKnownAccountColumnList(value);
 }
 
 function getColumnConfig(columnId: SortBy): ColumnConfig {
@@ -1102,27 +1102,11 @@ function mergeStoredColumnList(
   storedColumns: SortBy[],
   requiredColumns: readonly SortBy[],
 ): SortBy[] {
-  const next = [...storedColumns.filter((column) => DEFAULT_COLUMN_ORDER.includes(column))];
+  return mergeAccountColumnList(storedColumns, requiredColumns);
+}
 
-  for (const column of requiredColumns) {
-    if (next.includes(column)) {
-      continue;
-    }
-
-    const defaultIndex = DEFAULT_COLUMN_ORDER.indexOf(column);
-    const nextKnownColumn = DEFAULT_COLUMN_ORDER.slice(defaultIndex + 1).find((candidate) =>
-      next.includes(candidate),
-    );
-
-    if (!nextKnownColumn) {
-      next.push(column);
-      continue;
-    }
-
-    next.splice(next.indexOf(nextKnownColumn), 0, column);
-  }
-
-  return next;
+function areColumnListsEqual(left: readonly SortBy[], right: readonly SortBy[]): boolean {
+  return left.length === right.length && left.every((column, index) => column === right[index]);
 }
 
 function reorderColumns(order: SortBy[], source: SortBy, target: SortBy): SortBy[] {
@@ -1139,6 +1123,32 @@ function reorderColumns(order: SortBy[], source: SortBy, target: SortBy): SortBy
   const result = [...order];
   result.splice(sourceIndex, 1);
   result.splice(targetIndex, 0, source);
+  return result;
+}
+
+function reorderColumnsAtPosition(
+  order: SortBy[],
+  source: SortBy,
+  target: SortBy,
+  position: "before" | "after",
+): SortBy[] {
+  if (source === target) {
+    return order;
+  }
+
+  const sourceIndex = order.indexOf(source);
+  if (sourceIndex < 0 || !order.includes(target)) {
+    return order;
+  }
+
+  const result = [...order];
+  result.splice(sourceIndex, 1);
+  const targetIndex = result.indexOf(target);
+  if (targetIndex < 0) {
+    return order;
+  }
+
+  result.splice(position === "after" ? targetIndex + 1 : targetIndex, 0, source);
   return result;
 }
 
@@ -2376,6 +2386,42 @@ function isMailLastEmailedResponse(payload: unknown): payload is MailLastEmailed
   return Array.isArray(record.items);
 }
 
+function isAccountListSummary(payload: unknown): payload is AccountListSummary {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const record = payload as Record<string, unknown>;
+  return (
+    typeof record.id === "string" &&
+    typeof record.name === "string" &&
+    (record.scope === "user" || record.scope === "company") &&
+    typeof record.ownerLoginName === "string" &&
+    Boolean(record.filters) &&
+    typeof record.filters === "object" &&
+    typeof record.createdAt === "string" &&
+    typeof record.updatedAt === "string"
+  );
+}
+
+function isAccountListsResponse(payload: unknown): payload is AccountListsResponse {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const record = payload as Record<string, unknown>;
+  return Array.isArray(record.items) && record.items.every(isAccountListSummary);
+}
+
+function isAccountListCreateResponse(payload: unknown): payload is AccountListCreateResponse {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const record = payload as Record<string, unknown>;
+  return isAccountListSummary(record.item);
+}
+
 function buildFallbackMailSession(
   status: MailSessionResponse["status"],
   connectionError: string,
@@ -2632,6 +2678,10 @@ function getViewMetricBadgeToneClass(tone: NonNullable<AccountViewMetric["badge"
 }
 
 function buildSalesRepInitials(name: string): string {
+  if (name === UNASSIGNED_SALES_REP_FILTER) {
+    return "NA";
+  }
+
   const parts = name
     .trim()
     .split(/\s+/)
@@ -2648,7 +2698,172 @@ function buildSalesRepInitials(name: string): string {
   return initials.toUpperCase();
 }
 
+function getCategoryFilterLabel(value: CategoryFilterValue): string {
+  return value === BLANK_CATEGORY_FILTER ? BLANK_CATEGORY_FILTER_LABEL : value;
+}
+
+function isBlankCategoryRow(row: BusinessAccountRow): boolean {
+  return row.category === null;
+}
+
+function rowMatchesSelectedCategoryFilters(
+  row: BusinessAccountRow,
+  selectedCategoryFilterSet: Set<CategoryFilterValue>,
+): boolean {
+  if (selectedCategoryFilterSet.size === 0) {
+    return true;
+  }
+
+  if (
+    selectedCategoryFilterSet.has(BLANK_CATEGORY_FILTER) &&
+    isBlankCategoryRow(row)
+  ) {
+    return true;
+  }
+
+  return row.category !== null && selectedCategoryFilterSet.has(row.category);
+}
+
+function getSalesRepFilterLabel(value: string): string {
+  return value === UNASSIGNED_SALES_REP_FILTER ? UNASSIGNED_SALES_REP_LABEL : value;
+}
+
+function isUnassignedSalesRepRow(row: BusinessAccountRow): boolean {
+  return !row.salesRepId?.trim() && !row.salesRepName?.trim();
+}
+
+function rowMatchesSelectedSalesRepFilters(
+  row: BusinessAccountRow,
+  selectedSalesRepFilterSet: Set<string>,
+): boolean {
+  if (selectedSalesRepFilterSet.size === 0) {
+    return true;
+  }
+
+  if (
+    selectedSalesRepFilterSet.has(UNASSIGNED_SALES_REP_FILTER) &&
+    isUnassignedSalesRepRow(row)
+  ) {
+    return true;
+  }
+
+  const salesRepName = row.salesRepName?.trim();
+  return salesRepName ? selectedSalesRepFilterSet.has(salesRepName) : false;
+}
+
+function normalizeAccountListFiltersForClient(value: unknown): AccountListFilters {
+  const normalized = normalizeStoredAccountsFilterPreferences(value);
+  return {
+    activeFilterView: normalized.activeFilterView,
+    selectedCategoryFilters: normalized.selectedCategoryFilters,
+    selectedWeekFilters: normalized.selectedWeekFilters,
+    selectedSalesRepFilters: normalized.selectedSalesRepFilters,
+    q: normalized.q,
+    headerFilters: normalized.headerFilters,
+  };
+}
+
+function normalizeAccountListSummaryForClient(list: AccountListSummary): AccountListSummary {
+  return {
+    ...list,
+    filters: normalizeAccountListFiltersForClient(list.filters),
+  };
+}
+
+function buildAccountListFiltersSignature(value: unknown): string {
+  const normalized = normalizeStoredAccountsFilterPreferences(value);
+  return JSON.stringify({
+    activeFilterView: normalized.activeFilterView,
+    selectedCategoryFilters: [...normalized.selectedCategoryFilters].sort((left, right) =>
+      left.localeCompare(right, undefined, { sensitivity: "base", numeric: true }),
+    ),
+    selectedWeekFilters: [...normalized.selectedWeekFilters].sort(compareWeekFilterValues),
+    selectedSalesRepFilters: [...normalized.selectedSalesRepFilters].sort((left, right) =>
+      left.localeCompare(right, undefined, { sensitivity: "base", numeric: true }),
+    ),
+    q: normalized.q.trim(),
+    headerFilters: normalized.headerFilters,
+  });
+}
+
+function filterRowsForAccountList(
+  rows: BusinessAccountRow[],
+  filters: AccountListFilters,
+): BusinessAccountRow[] {
+  const normalized = normalizeStoredAccountsFilterPreferences(filters);
+  let candidateRows =
+    normalized.activeFilterView === "marketingOnly"
+      ? rows.filter((row) => row.marketingEligible !== false)
+      : rows;
+
+  const selectedCategoryFilterSet = new Set(normalized.selectedCategoryFilters);
+  if (selectedCategoryFilterSet.size > 0) {
+    candidateRows = candidateRows.filter((row) =>
+      rowMatchesSelectedCategoryFilters(row, selectedCategoryFilterSet),
+    );
+  }
+
+  const selectedWeekFilterSet = new Set(
+    normalized.selectedWeekFilters.map((week) => normalizeOptionComparable(week)),
+  );
+  if (selectedWeekFilterSet.size > 0) {
+    candidateRows = candidateRows.filter((row) => {
+      const week = normalizeWeekValue(row.week);
+      return week ? selectedWeekFilterSet.has(normalizeOptionComparable(week)) : false;
+    });
+  }
+
+  const selectedSalesRepFilterSet = new Set(normalized.selectedSalesRepFilters);
+  if (selectedSalesRepFilterSet.size > 0) {
+    candidateRows = candidateRows.filter((row) =>
+      rowMatchesSelectedSalesRepFilters(row, selectedSalesRepFilterSet),
+    );
+  }
+
+  const matchedRows = queryBusinessAccounts(candidateRows, {
+    includeInternalRows: true,
+    q: normalized.q,
+    filterCompanyName: normalized.headerFilters.companyName,
+    filterAccountType: normalized.headerFilters.accountType,
+    filterOpportunityCount: normalized.headerFilters.opportunityCount,
+    filterSalesRep: normalized.headerFilters.salesRepName,
+    filterIndustryType: normalized.headerFilters.industryType,
+    filterSubCategory: normalized.headerFilters.subCategory,
+    filterCompanyRegion: normalized.headerFilters.companyRegion,
+    filterWeek: normalized.headerFilters.week,
+    filterAddress: normalized.headerFilters.address,
+    filterCompanyPhone: normalized.headerFilters.companyPhone,
+    filterPrimaryContactName: normalized.headerFilters.primaryContactName,
+    filterPrimaryContactJobTitle: normalized.headerFilters.primaryContactJobTitle,
+    filterPrimaryContactPhone: normalized.headerFilters.primaryContactPhone,
+    filterPrimaryContactExtension: normalized.headerFilters.primaryContactExtension,
+    filterPrimaryContactEmail: normalized.headerFilters.primaryContactEmail,
+    filterNotes: normalized.headerFilters.notes,
+    filterCategory: normalized.headerFilters.category || undefined,
+    filterLastCalled: normalized.headerFilters.lastCalled,
+    filterLastCalendarInvited: normalized.headerFilters.lastCalendarInvited,
+    filterLastEmailed: normalized.headerFilters.lastEmailed,
+    filterLastModified: normalized.headerFilters.lastModified,
+    sortBy: "companyName",
+    sortDir: "asc",
+    page: 1,
+    pageSize: Math.max(candidateRows.length, 1),
+  }).items;
+  const fallbackRows = candidateRows.filter((row) =>
+    matchesFallbackTextFilters(row, {
+      q: normalized.q,
+      headerFilters: normalized.headerFilters,
+    }),
+  );
+
+  return matchedRows.length === 0 && fallbackRows.length > 0 ? fallbackRows : matchedRows;
+}
+
 function getSalesRepToneClass(name: string): string {
+  if (name === UNASSIGNED_SALES_REP_FILTER) {
+    return styles.salesRepFilterChipUnassigned;
+  }
+
   const tones = [
     styles.salesRepFilterChipGreen,
     styles.salesRepFilterChipPurple,
@@ -2671,6 +2886,27 @@ function canEditRowNote(row: BusinessAccountRow): boolean {
   return resolveRowContactId(row) !== null;
 }
 
+type AccountNote = {
+  id: string;
+  accountRecordId: string;
+  businessAccountId: string | null;
+  companyName: string | null;
+  contactId: number | null;
+  contactName: string | null;
+  note: string;
+  author: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function formatAccountNoteTimestamp(iso: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    return iso;
+  }
+  return parsed.toLocaleString();
+}
+
 function canDeleteRowContact(row: BusinessAccountRow): boolean {
   return resolveRowContactId(row) !== null;
 }
@@ -2678,6 +2914,16 @@ function canDeleteRowContact(row: BusinessAccountRow): boolean {
 function canDeleteBusinessAccountRow(row: BusinessAccountRow): boolean {
   return (
     resolveRowContactId(row) === null &&
+    row.businessAccountId.trim().length > 0 &&
+    resolveRowBusinessAccountRecordId(row).trim().length > 0
+  );
+}
+
+// Whole-company deletion (the company AND all of its contacts in one action).
+// Unlike canDeleteBusinessAccountRow, this does not require the company to be
+// empty first — it is available on any row that resolves to a company.
+function canDeleteCompanyRow(row: BusinessAccountRow): boolean {
+  return (
     row.businessAccountId.trim().length > 0 &&
     resolveRowBusinessAccountRecordId(row).trim().length > 0
   );
@@ -3298,6 +3544,19 @@ export function AccountsClient({
   const [callHistory, setCallHistory] = useState<BusinessAccountCallHistoryItem[]>([]);
   const [callHistoryLoading, setCallHistoryLoading] = useState(false);
   const [callHistoryError, setCallHistoryError] = useState<string | null>(null);
+  const [accountNotes, setAccountNotes] = useState<AccountNote[]>([]);
+  const [accountNotesLoading, setAccountNotesLoading] = useState(false);
+  const [accountNotesError, setAccountNotesError] = useState<string | null>(null);
+  const [newAccountNote, setNewAccountNote] = useState("");
+  const [newContactNote, setNewContactNote] = useState("");
+  const [isSavingAccountNote, setIsSavingAccountNote] = useState(false);
+  const [isSavingContactNote, setIsSavingContactNote] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteText, setEditingNoteText] = useState("");
+  const [accountNoteBusyId, setAccountNoteBusyId] = useState<string | null>(null);
+  const [activityFilter, setActivityFilter] = useState<"all" | "notes" | "calls" | "history">(
+    "all",
+  );
   const [auditHistory, setAuditHistory] = useState<AuditLogRow[]>([]);
   const [auditHistoryLoading, setAuditHistoryLoading] = useState(false);
   const [auditHistoryError, setAuditHistoryError] = useState<string | null>(null);
@@ -3306,7 +3565,7 @@ export function AccountsClient({
   const [cacheHydrated, setCacheHydrated] = useState(false);
   const [serverSnapshotHydrated, setServerSnapshotHydrated] = useState(false);
   const [activeFilterView, setActiveFilterView] = useState<AccountsFilterView>("allCompanies");
-  const [selectedCategoryFilters, setSelectedCategoryFilters] = useState<Category[]>([]);
+  const [selectedCategoryFilters, setSelectedCategoryFilters] = useState<CategoryFilterValue[]>([]);
   const [selectedWeekFilters, setSelectedWeekFilters] = useState<string[]>([]);
   const [selectedSalesRepFilters, setSelectedSalesRepFilters] = useState<string[]>([]);
   const [q, setQ] = useState("");
@@ -3316,6 +3575,11 @@ export function AccountsClient({
   const [columnOrder, setColumnOrder] = useState<SortBy[]>(DEFAULT_COLUMN_ORDER);
   const [visibleColumns, setVisibleColumns] = useState<SortBy[]>(DEFAULT_VISIBLE_COLUMNS);
   const [columnPrefsHydrated, setColumnPrefsHydrated] = useState(false);
+  const [columnPrefsServerHydrated, setColumnPrefsServerHydrated] = useState(false);
+  const [columnPrefsSaveStatus, setColumnPrefsSaveStatus] = useState<
+    "idle" | "loading" | "saving" | "saved" | "error"
+  >("idle");
+  const [columnPrefsError, setColumnPrefsError] = useState<string | null>(null);
   const [filterPrefsHydrated, setFilterPrefsHydrated] = useState(false);
   const [sortBy, setSortBy] = useState<SortBy>("companyName");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -3335,6 +3599,17 @@ export function AccountsClient({
   const [deferredVisibilityVersion, setDeferredVisibilityVersion] = useState<string | null>(null);
   const [pageInput, setPageInput] = useState("1");
   const [error, setError] = useState<string | null>(null);
+  const [accountLists, setAccountLists] = useState<AccountListSummary[]>([]);
+  const [accountListsError, setAccountListsError] = useState<string | null>(null);
+  const [isLoadingAccountLists, setIsLoadingAccountLists] = useState(false);
+  const [deletingAccountListId, setDeletingAccountListId] = useState<string | null>(null);
+  const [accountListDeleteTarget, setAccountListDeleteTarget] =
+    useState<AccountListWithCount | null>(null);
+  const [isCreateAccountListModalOpen, setIsCreateAccountListModalOpen] = useState(false);
+  const [newAccountListName, setNewAccountListName] = useState("");
+  const [newAccountListScope, setNewAccountListScope] = useState<AccountListScope>("user");
+  const [isSavingAccountList, setIsSavingAccountList] = useState(false);
+  const [createAccountListError, setCreateAccountListError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<BusinessAccountRow | null>(null);
   const selectedRef = useRef<BusinessAccountRow | null>(null);
@@ -3359,6 +3634,9 @@ export function AccountsClient({
   const [deleteBusinessAccountRow, setDeleteBusinessAccountRow] = useState<BusinessAccountRow | null>(
     null,
   );
+  const [selectedAccountDeleteRows, setSelectedAccountDeleteRows] = useState<BusinessAccountRow[]>(
+    [],
+  );
   const [opportunityDrawerContext, setOpportunityDrawerContext] =
     useState<OpportunityDrawerContext>({
       initialAccountRecordId: null,
@@ -3381,6 +3659,9 @@ export function AccountsClient({
   const [rowMenuPosition, setRowMenuPosition] = useState<RowMenuPosition | null>(null);
   const [draggedColumnId, setDraggedColumnId] = useState<SortBy | null>(null);
   const [columnDropTargetId, setColumnDropTargetId] = useState<SortBy | null>(null);
+  const [columnDropPosition, setColumnDropPosition] = useState<"before" | "after" | null>(
+    null,
+  );
   const [drawerFocusTarget, setDrawerFocusTarget] = useState<"notes" | null>(null);
   const [draft, setDraft] = useState<BusinessAccountUpdateRequest | null>(null);
   const draftRef = useRef<BusinessAccountUpdateRequest | null>(null);
@@ -3927,8 +4208,8 @@ export function AccountsClient({
       return viewFilteredRows;
     }
 
-    return viewFilteredRows.filter(
-      (row) => row.category !== null && selectedCategoryFilterSet.has(row.category),
+    return viewFilteredRows.filter((row) =>
+      rowMatchesSelectedCategoryFilters(row, selectedCategoryFilterSet),
     );
   }, [selectedCategoryFilterSet, viewFilteredRows]);
   const weekViewFilteredRows = useMemo(() => {
@@ -3946,10 +4227,9 @@ export function AccountsClient({
       return weekViewFilteredRows;
     }
 
-    return weekViewFilteredRows.filter((row) => {
-      const salesRepName = row.salesRepName?.trim();
-      return salesRepName ? selectedSalesRepFilterSet.has(salesRepName) : false;
-    });
+    return weekViewFilteredRows.filter((row) =>
+      rowMatchesSelectedSalesRepFilters(row, selectedSalesRepFilterSet),
+    );
   }, [selectedSalesRepFilterSet, weekViewFilteredRows]);
 
   useEffect(() => {
@@ -4011,8 +4291,8 @@ export function AccountsClient({
         : displayRows;
 
     if (selectedCategoryFilterSet.size > 0) {
-      fallbackRows = fallbackRows.filter(
-        (row) => row.category !== null && selectedCategoryFilterSet.has(row.category),
+      fallbackRows = fallbackRows.filter((row) =>
+        rowMatchesSelectedCategoryFilters(row, selectedCategoryFilterSet),
       );
     }
 
@@ -4024,10 +4304,9 @@ export function AccountsClient({
     }
 
     if (selectedSalesRepFilterSet.size > 0) {
-      fallbackRows = fallbackRows.filter((row) => {
-        const salesRepName = row.salesRepName?.trim();
-        return salesRepName ? selectedSalesRepFilterSet.has(salesRepName) : false;
-      });
+      fallbackRows = fallbackRows.filter((row) =>
+        rowMatchesSelectedSalesRepFilters(row, selectedSalesRepFilterSet),
+      );
     }
 
     fallbackRows = fallbackRows.filter((row) =>
@@ -4100,6 +4379,48 @@ export function AccountsClient({
     () => buildAccountViewMetrics(accountViewMetricRows),
     [accountViewMetricRows],
   );
+  const currentAccountListFilters = useMemo<AccountListFilters>(
+    () =>
+      normalizeAccountListFiltersForClient({
+        activeFilterView,
+        selectedCategoryFilters,
+        selectedWeekFilters,
+        selectedSalesRepFilters,
+        q,
+        headerFilters,
+      }),
+    [
+      activeFilterView,
+      headerFilters,
+      q,
+      selectedCategoryFilters,
+      selectedSalesRepFilters,
+      selectedWeekFilters,
+    ],
+  );
+  const currentAccountListSignature = useMemo(
+    () => buildAccountListFiltersSignature(currentAccountListFilters),
+    [currentAccountListFilters],
+  );
+  const defaultAccountListSignature = useMemo(
+    () => buildAccountListFiltersSignature(null),
+    [],
+  );
+  const accountListItemsWithCounts = useMemo<AccountListWithCount[]>(
+    () =>
+      accountLists.map((list) => {
+        const filters = normalizeAccountListFiltersForClient(list.filters);
+        const signature = buildAccountListFiltersSignature(filters);
+        return {
+          ...list,
+          filters,
+          resultCount: filterRowsForAccountList(displayRows, filters).length,
+          isActive: signature === currentAccountListSignature,
+        };
+      }),
+    [accountLists, currentAccountListSignature, displayRows],
+  );
+  const isAllAccountsListActive = currentAccountListSignature === defaultAccountListSignature;
 
   const canExportAccountsCsv =
     session?.authenticated === true &&
@@ -4137,6 +4458,25 @@ export function AccountsClient({
       (row) => selectedRowKeySet.has(getRowKey(row)) && isContactSelectableRow(row),
     );
   }, [selectedContactRowKeys, workbenchFilteredRows]);
+  const selectedBusinessAccountRows = useMemo(() => {
+    const selectedRowKeySet = new Set(selectedContactRowKeys);
+    return workbenchFilteredRows.filter(
+      (row) => selectedRowKeySet.has(getRowKey(row)) && canDeleteBusinessAccountRow(row),
+    );
+  }, [selectedContactRowKeys, workbenchFilteredRows]);
+  const selectedNotesContactId = selected ? resolveRowContactId(selected) : null;
+  const companyNotes = useMemo(
+    () => accountNotes.filter((note) => note.contactId === null),
+    [accountNotes],
+  );
+  const contactNotes = useMemo(
+    () =>
+      selectedNotesContactId === null
+        ? []
+        : accountNotes.filter((note) => note.contactId === selectedNotesContactId),
+    [accountNotes, selectedNotesContactId],
+  );
+
   const visibleColumnOrder = useMemo(
     () => columnOrder.filter((columnId) => visibleColumns.includes(columnId)),
     [columnOrder, visibleColumns],
@@ -4162,6 +4502,67 @@ export function AccountsClient({
     selectedCategoryFilters.length > 0 ||
     selectedWeekFilters.length > 0 ||
     selectedSalesRepFilters.length > 0;
+  const activeFilterSummaryItems = useMemo(() => {
+    const summarizeValues = (
+      label: string,
+      values: string[],
+      formatValue: (value: string) => string = (value) => value,
+    ) => {
+      const formattedValues = values.map(formatValue);
+      const visibleValues = formattedValues.slice(0, 2).join(", ");
+      const hiddenCount = Math.max(formattedValues.length - 2, 0);
+      return `${label}: ${visibleValues}${hiddenCount > 0 ? ` +${hiddenCount}` : ""}`;
+    };
+
+    const items: Array<{ key: string; label: string }> = [];
+    if (activeFilterView === "marketingOnly") {
+      items.push({ key: "view", label: "Marketing Only" });
+    }
+    if (selectedCategoryFilters.length > 0) {
+      items.push({
+        key: "categories",
+        label: summarizeValues("Category", selectedCategoryFilters, (category) =>
+          getCategoryFilterLabel(category as CategoryFilterValue),
+        ),
+      });
+    }
+    if (selectedSalesRepFilters.length > 0) {
+      items.push({
+        key: "sales-reps",
+        label: summarizeValues("Rep", selectedSalesRepFilters, (salesRepName) =>
+          getSalesRepFilterLabel(salesRepName),
+        ),
+      });
+    }
+    if (selectedWeekFilters.length > 0) {
+      items.push({
+        key: "weeks",
+        label: summarizeValues("Weeks", selectedWeekFilters),
+      });
+    }
+    const trimmedSearch = q.trim();
+    if (trimmedSearch) {
+      items.push({
+        key: "search",
+        label: `Search: ${trimmedSearch.length > 24 ? `${trimmedSearch.slice(0, 24)}...` : trimmedSearch}`,
+      });
+    }
+    if (activeFilterCount > 0) {
+      items.push({
+        key: "column-filters",
+        label: `${activeFilterCount} column filter${activeFilterCount === 1 ? "" : "s"}`,
+      });
+    }
+
+    return items;
+  }, [
+    activeFilterCount,
+    activeFilterView,
+    q,
+    selectedCategoryFilters,
+    selectedSalesRepFilters,
+    selectedWeekFilters,
+  ]);
   const syncUpdatedLabel = useMemo(() => formatRelativeTime(lastSyncedAt), [lastSyncedAt]);
   const hasSnapshot = Boolean(lastSyncedAt) || allRows.length > 0;
   const companyRegionOptions = useMemo(() => {
@@ -4284,8 +4685,8 @@ export function AccountsClient({
     );
   }, [draft?.salesRepId, draft?.salesRepName, sortedEmployeeOptions]);
   const availableSalesRepFilters = useMemo(
-    () =>
-      [
+    () => {
+      const namedSalesReps = [
         ...new Set(
           displayRows
             .map((row) => row.salesRepName?.trim())
@@ -4296,19 +4697,33 @@ export function AccountsClient({
           sensitivity: "base",
           numeric: true,
         }),
-      ),
+      );
+
+      return displayRows.some(isUnassignedSalesRepRow)
+        ? [UNASSIGNED_SALES_REP_FILTER, ...namedSalesReps]
+        : namedSalesReps;
+    },
     [displayRows],
   );
   const salesRepFilterOptions = useMemo(
-    () =>
-      [
+    () => {
+      const options = [
         ...new Set([...selectedSalesRepFilters, ...availableSalesRepFilters]),
-      ].sort((left, right) =>
+      ];
+      const hasUnassignedOption = options.includes(UNASSIGNED_SALES_REP_FILTER);
+      const namedOptions = options
+        .filter((option) => option !== UNASSIGNED_SALES_REP_FILTER)
+        .sort((left, right) =>
         left.localeCompare(right, undefined, {
           sensitivity: "base",
           numeric: true,
         }),
-      ),
+        );
+
+      return hasUnassignedOption
+        ? [UNASSIGNED_SALES_REP_FILTER, ...namedOptions]
+        : namedOptions;
+    },
     [availableSalesRepFilters, selectedSalesRepFilters],
   );
   const salesRepFilterPreviewItems = useMemo(() => {
@@ -4328,7 +4743,7 @@ export function AccountsClient({
     return Math.max(1, Math.ceil(total / PAGE_SIZE));
   }, [total]);
   const currentPageSelectableRows = useMemo(
-    () => rows.filter((row) => isContactSelectableRow(row)),
+    () => rows.filter((row) => isContactSelectableRow(row) || canDeleteBusinessAccountRow(row)),
     [rows],
   );
   const currentPageSelectedCount = useMemo(() => {
@@ -4518,6 +4933,70 @@ export function AccountsClient({
   }, []);
 
   useEffect(() => {
+    if (!session?.authenticated) {
+      setColumnPrefsServerHydrated(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setColumnPrefsSaveStatus("loading");
+    setColumnPrefsError(null);
+
+    async function hydrateColumnPreferences() {
+      try {
+        const response = await fetch("/api/account-preferences/columns", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = (await response.json().catch(() => null)) as unknown;
+
+        if (!response.ok) {
+          throw new Error(parseApiErrorMessage(payload));
+        }
+
+        const preferencesPayload = payload as AccountColumnPreferencesResponse;
+        const normalizedPreferences = normalizeAccountColumnPreferences(
+          preferencesPayload.preferences,
+        );
+        setColumnOrder((current) =>
+          areColumnListsEqual(current, normalizedPreferences.columnOrder)
+            ? current
+            : normalizedPreferences.columnOrder,
+        );
+        setVisibleColumns((current) =>
+          areColumnListsEqual(current, normalizedPreferences.visibleColumns)
+            ? current
+            : normalizedPreferences.visibleColumns,
+        );
+        setColumnPrefsHydrated(true);
+        setColumnPrefsServerHydrated(true);
+        setColumnPrefsSaveStatus("saved");
+      } catch (columnPreferenceError) {
+        if (
+          columnPreferenceError instanceof DOMException &&
+          columnPreferenceError.name === "AbortError"
+        ) {
+          return;
+        }
+
+        setColumnPrefsServerHydrated(false);
+        setColumnPrefsSaveStatus("error");
+        setColumnPrefsError(
+          columnPreferenceError instanceof Error
+            ? columnPreferenceError.message
+            : "Unable to load column preferences.",
+        );
+      }
+    }
+
+    void hydrateColumnPreferences();
+
+    return () => {
+      controller.abort();
+    };
+  }, [session?.authenticated, session?.user?.id]);
+
+  useEffect(() => {
     if (!columnPrefsHydrated) {
       return;
     }
@@ -4535,6 +5014,81 @@ export function AccountsClient({
       JSON.stringify(visibleColumns),
     );
   }, [columnPrefsHydrated, visibleColumns]);
+
+  useEffect(() => {
+    if (!session?.authenticated || !columnPrefsServerHydrated || !columnPrefsHydrated) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      setColumnPrefsSaveStatus("saving");
+      setColumnPrefsError(null);
+
+      void (async () => {
+        try {
+          const response = await fetch("/api/account-preferences/columns", {
+            body: JSON.stringify({
+              columnOrder,
+              visibleColumns,
+            }),
+            headers: {
+              "content-type": "application/json",
+            },
+            method: "PUT",
+            signal: controller.signal,
+          });
+          const payload = (await response.json().catch(() => null)) as unknown;
+
+          if (!response.ok) {
+            throw new Error(parseApiErrorMessage(payload));
+          }
+
+          const preferencesPayload = payload as AccountColumnPreferencesResponse;
+          const normalizedPreferences = normalizeAccountColumnPreferences(
+            preferencesPayload.preferences,
+          );
+          setColumnOrder((current) =>
+            areColumnListsEqual(current, normalizedPreferences.columnOrder)
+              ? current
+              : normalizedPreferences.columnOrder,
+          );
+          setVisibleColumns((current) =>
+            areColumnListsEqual(current, normalizedPreferences.visibleColumns)
+              ? current
+              : normalizedPreferences.visibleColumns,
+          );
+          setColumnPrefsSaveStatus("saved");
+        } catch (columnPreferenceError) {
+          if (
+            columnPreferenceError instanceof DOMException &&
+            columnPreferenceError.name === "AbortError"
+          ) {
+            return;
+          }
+
+          setColumnPrefsSaveStatus("error");
+          setColumnPrefsError(
+            columnPreferenceError instanceof Error
+              ? columnPreferenceError.message
+              : "Unable to save column preferences.",
+          );
+        }
+      })();
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [
+    columnOrder,
+    columnPrefsHydrated,
+    columnPrefsServerHydrated,
+    session?.authenticated,
+    session?.user?.id,
+    visibleColumns,
+  ]);
 
   useEffect(() => {
     try {
@@ -4652,6 +5206,57 @@ export function AccountsClient({
       );
     });
   }, [router]);
+
+  useEffect(() => {
+    if (!session?.authenticated) {
+      setAccountLists([]);
+      setAccountListsError(null);
+      setIsLoadingAccountLists(false);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function loadAccountLists() {
+      setIsLoadingAccountLists(true);
+      setAccountListsError(null);
+
+      try {
+        const response = await fetch("/api/account-lists", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = await readJsonResponse<AccountListsResponse | { error?: string }>(
+          response,
+        );
+
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+        if (!isAccountListsResponse(payload)) {
+          throw new Error("Unexpected saved lists response.");
+        }
+
+        if (!controller.signal.aborted) {
+          setAccountLists(payload.items.map(normalizeAccountListSummaryForClient));
+        }
+      } catch (loadError) {
+        if (!controller.signal.aborted) {
+          setAccountListsError(
+            loadError instanceof Error ? loadError.message : "Unable to load saved lists.",
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoadingAccountLists(false);
+        }
+      }
+    }
+
+    void loadAccountLists();
+
+    return () => controller.abort();
+  }, [session?.authenticated, session?.user?.id]);
 
   const refreshLiveUpdatedAccount = useEffectEvent(
     async (event: BusinessAccountLiveEvent): Promise<void> => {
@@ -4847,6 +5452,66 @@ export function AccountsClient({
     }
 
     void loadCallHistory();
+
+    return () => {
+      controller.abort();
+    };
+  }, [selected, session?.authenticated]);
+
+  // Load the company notes log whenever the drawer opens for a different account.
+  useEffect(() => {
+    setNewAccountNote("");
+    setNewContactNote("");
+    setEditingNoteId(null);
+    setEditingNoteText("");
+    setAccountNoteBusyId(null);
+
+    if (!session?.authenticated || !selected) {
+      setAccountNotes([]);
+      setAccountNotesLoading(false);
+      setAccountNotesError(null);
+      return;
+    }
+
+    const accountRecordId = resolveRowBusinessAccountRecordId(selected);
+    if (!accountRecordId) {
+      setAccountNotes([]);
+      setAccountNotesLoading(false);
+      setAccountNotesError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    setAccountNotesLoading(true);
+    setAccountNotesError(null);
+
+    async function loadAccountNotes() {
+      try {
+        const response = await fetch(
+          `/api/business-accounts/${encodeURIComponent(accountRecordId)}/notes`,
+          { cache: "no-store", signal: controller.signal },
+        );
+        const payload = await readJsonResponse<{ notes?: AccountNote[]; error?: string }>(response);
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+        setAccountNotes(payload && Array.isArray(payload.notes) ? payload.notes : []);
+      } catch (notesError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setAccountNotes([]);
+        setAccountNotesError(
+          notesError instanceof Error ? notesError.message : "Unable to load notes.",
+        );
+      } finally {
+        if (!controller.signal.aborted) {
+          setAccountNotesLoading(false);
+        }
+      }
+    }
+
+    void loadAccountNotes();
 
     return () => {
       controller.abort();
@@ -5699,6 +6364,7 @@ export function AccountsClient({
     setRowMenuPosition(null);
     setDraggedColumnId(null);
     setColumnDropTargetId(null);
+    setColumnDropPosition(null);
   }
 
   function openCreateMenu() {
@@ -5798,7 +6464,7 @@ export function AccountsClient({
     }));
   }
 
-  function toggleCategoryFilter(category: Category) {
+  function toggleCategoryFilter(category: CategoryFilterValue) {
     setPage(1);
     setSelectedCategoryFilters((current) => {
       if (current.includes(category)) {
@@ -5840,6 +6506,153 @@ export function AccountsClient({
     setSelectedCategoryFilters([]);
     setSelectedWeekFilters([]);
     setSelectedSalesRepFilters([]);
+  }
+
+  function applyAccountListFilterSnapshot(filters: AccountListFilters) {
+    const normalized = normalizeStoredAccountsFilterPreferences(filters);
+    setPage(1);
+    setActiveFilterView(normalized.activeFilterView);
+    setSelectedCategoryFilters(normalized.selectedCategoryFilters);
+    setSelectedWeekFilters(normalized.selectedWeekFilters);
+    setSelectedSalesRepFilters(normalized.selectedSalesRepFilters);
+    setQ(normalized.q);
+    setHeaderFilters(normalized.headerFilters);
+    closeTransientMenus();
+  }
+
+  function applyAllAccountsList() {
+    setPage(1);
+    setActiveFilterView("allCompanies");
+    setQ("");
+    setHeaderFilters(DEFAULT_HEADER_FILTERS);
+    setSelectedCategoryFilters([]);
+    setSelectedWeekFilters([]);
+    setSelectedSalesRepFilters([]);
+    closeTransientMenus();
+  }
+
+  function openCreateAccountListModal() {
+    closeTransientMenus();
+    setNewAccountListName("");
+    setNewAccountListScope("user");
+    setCreateAccountListError(null);
+    setIsCreateAccountListModalOpen(true);
+  }
+
+  function closeCreateAccountListModal() {
+    if (isSavingAccountList) {
+      return;
+    }
+
+    setIsCreateAccountListModalOpen(false);
+    setCreateAccountListError(null);
+  }
+
+  async function handleCreateAccountListSubmit(event: ReactFormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = newAccountListName.trim();
+    if (!name) {
+      setCreateAccountListError("List name is required.");
+      return;
+    }
+
+    setIsSavingAccountList(true);
+    setCreateAccountListError(null);
+
+    try {
+      const response = await fetch("/api/account-lists", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name,
+          scope: newAccountListScope,
+          filters: currentAccountListFilters,
+        }),
+      });
+      const payload = await readJsonResponse<AccountListCreateResponse | { error?: string }>(
+        response,
+      );
+
+      if (!response.ok) {
+        throw new Error(parseError(payload));
+      }
+      if (!isAccountListCreateResponse(payload)) {
+        throw new Error("Unexpected response while saving list.");
+      }
+
+      const savedList = normalizeAccountListSummaryForClient(payload.item);
+      setAccountLists((current) => [
+        savedList,
+        ...current.filter((list) => list.id !== savedList.id),
+      ]);
+      applyAccountListFilterSnapshot(savedList.filters);
+      setIsCreateAccountListModalOpen(false);
+      setNewAccountListName("");
+      setSaveNotice(`List "${savedList.name}" saved.`);
+    } catch (saveListError) {
+      setCreateAccountListError(
+        saveListError instanceof Error ? saveListError.message : "Unable to save list.",
+      );
+    } finally {
+      setIsSavingAccountList(false);
+    }
+  }
+
+  function openDeleteAccountListConfirmation(list: AccountListWithCount) {
+    if (deletingAccountListId) {
+      return;
+    }
+
+    setAccountListsError(null);
+    setAccountListDeleteTarget(list);
+  }
+
+  function closeDeleteAccountListConfirmation() {
+    if (deletingAccountListId) {
+      return;
+    }
+
+    setAccountListDeleteTarget(null);
+  }
+
+  async function handleConfirmDeleteAccountList() {
+    const list = accountListDeleteTarget;
+    if (!list || deletingAccountListId) {
+      return;
+    }
+
+    setDeletingAccountListId(list.id);
+    setAccountListsError(null);
+
+    try {
+      const response = await fetch(`/api/account-lists/${encodeURIComponent(list.id)}`, {
+        method: "DELETE",
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+      const payload = await readJsonResponse<{ ok?: boolean; error?: string }>(response);
+
+      if (!response.ok) {
+        throw new Error(parseError(payload));
+      }
+
+      setAccountLists((current) => current.filter((item) => item.id !== list.id));
+      if (list.isActive) {
+        applyAllAccountsList();
+      }
+      setSaveNotice(`List "${list.name}" deleted.`);
+      setAccountListDeleteTarget(null);
+    } catch (deleteListError) {
+      setAccountListsError(
+        deleteListError instanceof Error ? deleteListError.message : "Unable to delete list.",
+      );
+    } finally {
+      setDeletingAccountListId(null);
+    }
   }
 
   async function handleSyncRecords() {
@@ -5968,6 +6781,11 @@ export function AccountsClient({
     setVisibleColumns(DEFAULT_COLUMN_ORDER);
   }
 
+  function handleResetColumnsToDefault() {
+    setColumnOrder(DEFAULT_COLUMN_ORDER);
+    setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
+  }
+
   function handleReorderColumn(source: SortBy, target: SortBy) {
     if (source === target) {
       return;
@@ -5976,27 +6794,12 @@ export function AccountsClient({
     setColumnOrder((current) => reorderColumns(current, source, target));
   }
 
-  function handleMoveColumn(column: SortBy, direction: "up" | "down") {
-    setColumnOrder((current) => {
-      const index = current.indexOf(column);
-      if (index < 0) {
-        return current;
-      }
-
-      const targetIndex = direction === "up" ? index - 1 : index + 1;
-      if (targetIndex < 0 || targetIndex >= current.length) {
-        return current;
-      }
-
-      return reorderColumns(current, column, current[targetIndex]);
-    });
-  }
-
   function handleColumnDragStart(event: ReactDragEvent<HTMLElement>, columnId: SortBy) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", columnId);
     setDraggedColumnId(columnId);
     setColumnDropTargetId(columnId);
+    setColumnDropPosition(null);
   }
 
   function handleColumnDragOver(event: ReactDragEvent<HTMLElement>, columnId: SortBy) {
@@ -6009,17 +6812,23 @@ export function AccountsClient({
     if (columnDropTargetId !== columnId) {
       setColumnDropTargetId(columnId);
     }
+    setColumnDropPosition(null);
+  }
+
+  function readColumnDragSource(event: ReactDragEvent<HTMLElement>): SortBy | null {
+    const dataTransferValue = event.dataTransfer.getData("text/plain").trim();
+    return (
+      draggedColumnId ??
+      (DEFAULT_COLUMN_ORDER.includes(dataTransferValue as SortBy)
+        ? (dataTransferValue as SortBy)
+        : null)
+    );
   }
 
   function handleColumnDrop(event: ReactDragEvent<HTMLElement>, targetColumnId: SortBy) {
     event.preventDefault();
 
-    const dataTransferValue = event.dataTransfer.getData("text/plain").trim();
-    const sourceColumnId =
-      draggedColumnId ??
-      (DEFAULT_COLUMN_ORDER.includes(dataTransferValue as SortBy)
-        ? (dataTransferValue as SortBy)
-        : null);
+    const sourceColumnId = readColumnDragSource(event);
 
     if (sourceColumnId) {
       handleReorderColumn(sourceColumnId, targetColumnId);
@@ -6027,11 +6836,49 @@ export function AccountsClient({
 
     setDraggedColumnId(null);
     setColumnDropTargetId(null);
+    setColumnDropPosition(null);
+  }
+
+  function handleColumnModalDragOver(event: ReactDragEvent<HTMLElement>, columnId: SortBy) {
+    if (!draggedColumnId || draggedColumnId === columnId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const nextPosition =
+      event.clientY >= bounds.top + bounds.height / 2 ? "after" : "before";
+
+    if (columnDropTargetId !== columnId) {
+      setColumnDropTargetId(columnId);
+    }
+    if (columnDropPosition !== nextPosition) {
+      setColumnDropPosition(nextPosition);
+    }
+  }
+
+  function handleColumnModalDrop(event: ReactDragEvent<HTMLElement>, targetColumnId: SortBy) {
+    event.preventDefault();
+
+    const sourceColumnId = readColumnDragSource(event);
+    const dropPosition = columnDropPosition ?? "before";
+    if (sourceColumnId) {
+      setColumnOrder((current) =>
+        reorderColumnsAtPosition(current, sourceColumnId, targetColumnId, dropPosition),
+      );
+    }
+
+    setDraggedColumnId(null);
+    setColumnDropTargetId(null);
+    setColumnDropPosition(null);
   }
 
   function handleColumnDragEnd() {
     setDraggedColumnId(null);
     setColumnDropTargetId(null);
+    setColumnDropPosition(null);
   }
 
   function openCreateDrawer() {
@@ -6386,6 +7233,240 @@ export function AccountsClient({
     closeTransientMenus();
     setDeleteBusinessAccountRow(row);
     setSaveError(null);
+  }
+
+  // Whole-company deletion: queues the business account (and, in local mode,
+  // removes all of its contacts in the same step). Always confirmed via modal.
+  function openDeleteCompanyConfirmation(row: BusinessAccountRow) {
+    if (!canDeleteCompanyRow(row)) {
+      setSaveError(
+        "This row has no business account ID, so the company cannot be deleted.",
+      );
+      setSaveNotice(null);
+      return;
+    }
+
+    closeTransientMenus();
+    setDeleteBusinessAccountRow(row);
+    setSaveError(null);
+  }
+
+  async function handleAddAccountNote(scope: "company" | "contact") {
+    if (!selected) {
+      return;
+    }
+    const accountRecordId = resolveRowBusinessAccountRecordId(selected);
+    const contactId = scope === "contact" ? resolveRowContactId(selected) : null;
+    if (scope === "contact" && contactId === null) {
+      setAccountNotesError("Open a specific contact to add a contact note.");
+      return;
+    }
+    const text = (scope === "contact" ? newContactNote : newAccountNote).trim();
+    if (!accountRecordId || !text) {
+      return;
+    }
+
+    if (scope === "contact") {
+      setIsSavingContactNote(true);
+    } else {
+      setIsSavingAccountNote(true);
+    }
+    setAccountNotesError(null);
+    try {
+      const response = await fetch(
+        `/api/business-accounts/${encodeURIComponent(accountRecordId)}/notes`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: text, contactId: contactId ?? undefined }),
+        },
+      );
+      const payload = await readJsonResponse<{ note?: AccountNote; error?: string }>(response);
+      if (!response.ok || !payload?.note) {
+        throw new Error(parseError(payload));
+      }
+      const created = payload.note;
+      setAccountNotes((current) => [created, ...current]);
+      if (scope === "contact") {
+        setNewContactNote("");
+      } else {
+        setNewAccountNote("");
+      }
+    } catch (error) {
+      setAccountNotesError(error instanceof Error ? error.message : "Unable to save note.");
+    } finally {
+      if (scope === "contact") {
+        setIsSavingContactNote(false);
+      } else {
+        setIsSavingAccountNote(false);
+      }
+    }
+  }
+
+  function startEditAccountNote(note: AccountNote) {
+    setEditingNoteId(note.id);
+    setEditingNoteText(note.note);
+  }
+
+  function renderAccountNote(note: AccountNote) {
+    const isEditing = editingNoteId === note.id;
+    const isBusy = accountNoteBusyId === note.id;
+    const edited = note.updatedAt && note.updatedAt !== note.createdAt;
+    return (
+      <li
+        key={note.id}
+        style={{
+          border: "1px solid var(--border-subtle, #e2e8f0)",
+          borderRadius: "0.5rem",
+          padding: "0.625rem 0.75rem",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "0.8rem",
+            color: "var(--text-muted, #64748b)",
+            marginBottom: "0.375rem",
+          }}
+        >
+          {formatAccountNoteTimestamp(note.createdAt)}
+          {note.author ? ` · ${note.author}` : ""}
+          {edited ? " · edited" : ""}
+        </div>
+        {isEditing ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+            <textarea
+              onChange={(event) => setEditingNoteText(event.target.value)}
+              rows={3}
+              value={editingNoteText}
+            />
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                className={styles.tableActionButton}
+                disabled={isBusy || editingNoteText.trim().length === 0}
+                onClick={() => {
+                  void handleSaveEditedAccountNote(note.id);
+                }}
+                type="button"
+              >
+                {isBusy ? "Saving…" : "Save"}
+              </button>
+              <button
+                className={styles.tableActionButton}
+                disabled={isBusy}
+                onClick={cancelEditAccountNote}
+                type="button"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{note.note}</p>
+            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+              <button
+                className={styles.tableActionButton}
+                disabled={isBusy}
+                onClick={() => startEditAccountNote(note)}
+                type="button"
+              >
+                Edit
+              </button>
+              <button
+                className={styles.tableActionDangerButton}
+                disabled={isBusy}
+                onClick={() => {
+                  void handleDeleteAccountNote(note.id);
+                }}
+                type="button"
+              >
+                {isBusy ? "Working…" : "Delete"}
+              </button>
+            </div>
+          </>
+        )}
+      </li>
+    );
+  }
+
+
+  function cancelEditAccountNote() {
+    setEditingNoteId(null);
+    setEditingNoteText("");
+  }
+
+  async function handleSaveEditedAccountNote(noteId: string) {
+    if (!selected) {
+      return;
+    }
+    const accountRecordId = resolveRowBusinessAccountRecordId(selected);
+    const text = editingNoteText.trim();
+    if (!accountRecordId || !text) {
+      return;
+    }
+
+    setAccountNoteBusyId(noteId);
+    setAccountNotesError(null);
+    try {
+      const response = await fetch(
+        `/api/business-accounts/${encodeURIComponent(accountRecordId)}/notes/${encodeURIComponent(noteId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: text }),
+        },
+      );
+      const payload = await readJsonResponse<{ note?: AccountNote; error?: string }>(response);
+      if (!response.ok || !payload?.note) {
+        throw new Error(parseError(payload));
+      }
+      const updated = payload.note;
+      setAccountNotes((current) => current.map((entry) => (entry.id === noteId ? updated : entry)));
+      setEditingNoteId(null);
+      setEditingNoteText("");
+    } catch (error) {
+      setAccountNotesError(error instanceof Error ? error.message : "Unable to update note.");
+    } finally {
+      setAccountNoteBusyId(null);
+    }
+  }
+
+  async function handleDeleteAccountNote(noteId: string) {
+    if (!selected) {
+      return;
+    }
+    const accountRecordId = resolveRowBusinessAccountRecordId(selected);
+    if (!accountRecordId) {
+      return;
+    }
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm("Delete this note? This cannot be undone.")
+    ) {
+      return;
+    }
+
+    setAccountNoteBusyId(noteId);
+    setAccountNotesError(null);
+    try {
+      const response = await fetch(
+        `/api/business-accounts/${encodeURIComponent(accountRecordId)}/notes/${encodeURIComponent(noteId)}`,
+        { method: "DELETE" },
+      );
+      const payload = await readJsonResponse<{ deleted?: boolean; error?: string }>(response);
+      if (!response.ok) {
+        throw new Error(parseError(payload));
+      }
+      setAccountNotes((current) => current.filter((entry) => entry.id !== noteId));
+      if (editingNoteId === noteId) {
+        setEditingNoteId(null);
+        setEditingNoteText("");
+      }
+    } catch (error) {
+      setAccountNotesError(error instanceof Error ? error.message : "Unable to delete note.");
+    } finally {
+      setAccountNoteBusyId(null);
+    }
   }
 
   function closeDeleteBusinessAccountConfirmation() {
@@ -7453,7 +8534,7 @@ export function AccountsClient({
   }
 
   function handleToggleSelectedContactRow(row: BusinessAccountRow, forceSelected?: boolean) {
-    if (!isContactSelectableRow(row)) {
+    if (!isContactSelectableRow(row) && !canDeleteBusinessAccountRow(row)) {
       return;
     }
 
@@ -7918,6 +8999,34 @@ export function AccountsClient({
     }
   }
 
+  async function handleConfirmDeleteSelectedBusinessAccounts(reason: string) {
+    if (selectedAccountDeleteRows.length === 0) {
+      return;
+    }
+
+    const queuedRowKeys: string[] = [];
+    for (const targetRow of selectedAccountDeleteRows) {
+      // Sequential so the per-account local state updates stay consistent.
+      const queued = await deleteBusinessAccountRowAction(targetRow, reason);
+      if (queued) {
+        queuedRowKeys.push(getRowKey(targetRow));
+      }
+    }
+
+    const queuedRowKeySet = new Set(queuedRowKeys);
+    setSelectedContactRowKeys((current) =>
+      current.filter((rowKey) => !queuedRowKeySet.has(rowKey)),
+    );
+    setSelectedAccountDeleteRows([]);
+    if (queuedRowKeys.length > 0) {
+      setSaveNotice(
+        queuedRowKeys.length === 1
+          ? "Business account queued for deletion."
+          : `${queuedRowKeys.length} business accounts queued for deletion.`,
+      );
+    }
+  }
+
   function renderBlankCell(label = "No value"): ReactNode {
     return (
       <span aria-label={label} className={styles.emptyCell}>
@@ -8309,22 +9418,25 @@ export function AccountsClient({
             </div>
           </div>
 
-          <div className={styles.filterRailGroup}>
+          <div className={`${styles.filterRailGroup} ${styles.filterRailGroupCategory}`}>
             <span className={styles.filterRailLabel}>Category</span>
             <div className={styles.compactFilterGroup}>
-              {CATEGORY_VALUES.map((category) => {
+              {CATEGORY_FILTER_OPTIONS.map((category) => {
                 const isActive = selectedCategoryFilterSet.has(category);
+                const categoryLabel = getCategoryFilterLabel(category);
                 return (
                   <button
                     aria-pressed={isActive}
                     className={`${styles.compactFilterChip} ${styles.categoryFilterChip} ${
+                      category === BLANK_CATEGORY_FILTER ? styles.blankCategoryFilterChip : ""
+                    } ${
                       isActive ? styles.compactFilterChipActive : ""
                     }`}
                     key={category}
                     onClick={() => toggleCategoryFilter(category)}
                     type="button"
                   >
-                    {category}
+                    {categoryLabel}
                   </button>
                 );
               })}
@@ -8350,16 +9462,17 @@ export function AccountsClient({
               {salesRepFilterPreviewItems.length > 0 ? (
                 salesRepFilterPreviewItems.map((salesRepName) => {
                   const isActive = selectedSalesRepFilterSet.has(salesRepName);
+                  const salesRepLabel = getSalesRepFilterLabel(salesRepName);
                   return (
                     <button
-                      aria-label={`${isActive ? "Remove" : "Add"} ${salesRepName}`}
+                      aria-label={`${isActive ? "Remove" : "Add"} ${salesRepLabel}`}
                       aria-pressed={isActive}
                       className={`${styles.salesRepFilterChip} ${getSalesRepToneClass(
                         salesRepName,
                       )} ${isActive ? styles.salesRepFilterChipActive : ""}`}
                       key={salesRepName}
                       onClick={() => toggleSalesRepFilter(salesRepName)}
-                      title={salesRepName}
+                      title={salesRepLabel}
                       type="button"
                     >
                       {buildSalesRepInitials(salesRepName)}
@@ -8367,7 +9480,7 @@ export function AccountsClient({
                   );
                 })
               ) : (
-                <span className={styles.salesRepFilterEmpty}>All reps</span>
+                null
               )}
               <button
                 aria-expanded={isSalesRepFilterMenuOpen}
@@ -8388,7 +9501,7 @@ export function AccountsClient({
                       ? "All selected"
                       : selectedSalesRepFilters.length > 0
                         ? "Edit reps"
-                        : "Select reps"}
+                        : "All reps"}
                 </span>
                 <ChevronDownIcon />
               </button>
@@ -8422,6 +9535,7 @@ export function AccountsClient({
                   <div className={styles.salesRepFilterDropdownList}>
                     {salesRepFilterOptions.map((salesRepName) => {
                       const isActive = selectedSalesRepFilterSet.has(salesRepName);
+                      const salesRepLabel = getSalesRepFilterLabel(salesRepName);
                       return (
                         <button
                           aria-selected={isActive}
@@ -8440,7 +9554,7 @@ export function AccountsClient({
                           >
                             {buildSalesRepInitials(salesRepName)}
                           </span>
-                          <span>{salesRepName}</span>
+                          <span>{salesRepLabel}</span>
                         </button>
                       );
                     })}
@@ -8449,9 +9563,38 @@ export function AccountsClient({
               ) : null}
             </div>
           </div>
+
+          <div className={`${styles.filterRailGroup} ${styles.filterRailGroupWeeks}`}>
+            <span className={styles.filterRailLabel}>Weeks</span>
+            <div className={`${styles.compactFilterGroup} ${styles.weekFilterGroup}`}>
+              {availableWeekFilters.map((week) => {
+                const isActive = selectedWeekFilterSet.has(normalizeOptionComparable(week));
+                return (
+                  <button
+                    aria-pressed={isActive}
+                    className={`${styles.compactFilterChip} ${
+                      isActive ? styles.compactFilterChipActive : ""
+                    }`}
+                    key={week}
+                    onClick={() => toggleWeekFilter(week)}
+                    type="button"
+                  >
+                    {week}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         <div className={styles.toolbarActions}>
+          <button
+            className={styles.toolbarButton}
+            onClick={openCreateAccountListModal}
+            type="button"
+          >
+            Create List
+          </button>
           {fullSyncEnabled ? (
             <button
               className={styles.syncNowButton}
@@ -8510,11 +9653,263 @@ export function AccountsClient({
                 <button
                   className={styles.createDropdownAction}
                   onClick={() => {
-                    openCreateOpportunityDrawer();
+                    openCreateMeetingDrawer("Meeting");
                   }}
                   type="button"
                 >
-                  Opportunity
+                  Schedule meeting
+                </button>
+                <button
+                  className={styles.createDropdownAction}
+                  onClick={() => {
+                    openCreateMeetingDrawer("Drop Off");
+                  }}
+                  type="button"
+                >
+                  Schedule drop off
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <button
+            className={styles.clearFiltersButton}
+            disabled={!hasActiveWorkbenchFilters}
+            onClick={clearAllFilters}
+            type="button"
+          >
+            Clear search and filters
+          </button>
+        </div>
+      </section>
+
+      <section aria-label="Saved account lists" className={styles.accountListsRail}>
+        <div className={styles.accountListsHeader}>
+          <span className={styles.filterRailLabel}>Lists</span>
+          {accountListsError ? (
+            <span className={styles.accountListsError}>{accountListsError}</span>
+          ) : isLoadingAccountLists ? (
+            <span className={styles.accountListsMeta}>Loading lists...</span>
+          ) : null}
+        </div>
+        <div className={styles.accountListChips}>
+          <button
+            aria-pressed={isAllAccountsListActive}
+            className={`${styles.accountListChip} ${
+              isAllAccountsListActive ? styles.accountListChipActive : ""
+            }`}
+            onClick={applyAllAccountsList}
+            type="button"
+          >
+            <span>All Accounts</span>
+            <span className={styles.accountListCount}>{displayRows.length.toLocaleString()}</span>
+          </button>
+          {accountListItemsWithCounts.map((list) => {
+            const canDeleteList =
+              session?.user?.id &&
+              normalizeComparable(list.ownerLoginName) === normalizeComparable(session.user.id);
+            const isDeletingList = deletingAccountListId === list.id;
+            return (
+              <span
+                className={`${styles.accountListChip} ${
+                  list.isActive ? styles.accountListChipActive : ""
+                } ${isDeletingList ? styles.accountListChipDeleting : ""}`.trim()}
+                key={list.id}
+              >
+                <button
+                  aria-pressed={list.isActive}
+                  className={styles.accountListChipMain}
+                  disabled={isDeletingList}
+                  onClick={() => applyAccountListFilterSnapshot(list.filters)}
+                  type="button"
+                >
+                  <span>{list.name}</span>
+                  <span className={styles.accountListCount}>
+                    {list.resultCount.toLocaleString()}
+                  </span>
+                  <span className={styles.accountListScope}>
+                    {list.scope === "company" ? "Company" : "Mine"}
+                  </span>
+                </button>
+                {canDeleteList ? (
+                  <button
+                    aria-label={`Delete ${list.name} list`}
+                    className={styles.accountListDeleteButton}
+                    disabled={isDeletingList}
+                    onClick={() => {
+                      openDeleteAccountListConfirmation(list);
+                    }}
+                    title="Delete list"
+                    type="button"
+                  >
+                    x
+                  </button>
+                ) : null}
+              </span>
+            );
+          })}
+          <button
+            className={`${styles.accountListChip} ${styles.accountListCreateChip}`}
+            onClick={openCreateAccountListModal}
+            type="button"
+          >
+            + New List
+          </button>
+        </div>
+      </section>
+
+      <section className={styles.tableActionBar}>
+        <div className={styles.tableActionBarLeft}>
+          <label className={styles.tableSelectionStatus}>
+            <input
+              aria-label="Select current page"
+              checked={allCurrentPageSelected}
+              disabled={!currentPageSelectableRows.length}
+              onChange={() => {
+                handleToggleCurrentPageSelection();
+              }}
+              type="checkbox"
+            />
+            <span>
+              {selectedContactRows.length + selectedBusinessAccountRows.length > 0
+                ? `${selectedContactRows.length + selectedBusinessAccountRows.length} selected`
+                : "0 selected"}
+            </span>
+          </label>
+          <button
+            className={styles.tableActionButton}
+            onClick={openCreateAccountListModal}
+            type="button"
+          >
+            Create List
+          </button>
+          {selectedContactRows.length ? (
+            <>
+              {mergeSelectionDisabledReason ? (
+                <span className={styles.tableActionHint}>{mergeSelectionDisabledReason}</span>
+              ) : null}
+              <button
+                className={styles.tableActionButton}
+                disabled={!mergeSelectionEligible || isDeletingSelectedContacts}
+                onClick={() => {
+                  setIsSelectionMergeOpen(true);
+                  setSaveError(null);
+                  setSaveNotice(null);
+                }}
+                type="button"
+              >
+                Merge contacts
+              </button>
+              <button
+                className={styles.tableActionDangerButton}
+                disabled={isDeletingSelectedContacts}
+                onClick={() => {
+                  openDeleteContactQueueModal(selectedContactRows);
+                }}
+                type="button"
+              >
+                {isDeletingSelectedContacts ? "Queueing..." : "Delete contacts"}
+              </button>
+            </>
+          ) : null}
+          {selectedBusinessAccountRows.length ? (
+            <button
+              className={styles.tableActionDangerButton}
+              disabled={isDeletingBusinessAccount}
+              onClick={() => {
+                setSelectedAccountDeleteRows(selectedBusinessAccountRows);
+                setSaveError(null);
+                setSaveNotice(null);
+              }}
+              type="button"
+            >
+              {isDeletingBusinessAccount
+                ? "Queueing..."
+                : `Delete ${
+                    selectedBusinessAccountRows.length === 1
+                      ? "business account"
+                      : "business accounts"
+                  }`}
+            </button>
+          ) : null}
+          {selectedContactRows.length + selectedBusinessAccountRows.length ? (
+            <button
+              className={styles.tableActionButton}
+              disabled={isDeletingSelectedContacts || isDeletingBusinessAccount}
+              onClick={() => {
+                setSelectedContactRowKeys([]);
+                setIsSelectionMergeOpen(false);
+              }}
+              type="button"
+            >
+              Clear selection
+            </button>
+          ) : null}
+        </div>
+        {activeFilterSummaryItems.length > 0 ? (
+          <div aria-label="Active filters" className={styles.tableActiveFilters}>
+            <span className={styles.tableActiveFiltersLabel}>Filters</span>
+            {activeFilterSummaryItems.map((item) => (
+              <span className={styles.tableActiveFilterChip} key={item.key}>
+                {item.label}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <div className={styles.tableActionBarRight}>
+          {fullSyncEnabled ? (
+            <button
+              className={styles.syncNowButton}
+              disabled={isSyncing || remoteSyncRunning || Boolean(syncBlockedReason)}
+              onClick={handleSyncRecords}
+              title={
+                syncBlockedReason ??
+                (remoteSyncRunning ? "A full account sync is already running." : undefined)
+              }
+              type="button"
+            >
+              <SyncIcon />
+              <span>{isSyncing || remoteSyncRunning ? "Syncing..." : "Sync now"}</span>
+            </button>
+          ) : null}
+          {canExportAccountsCsv ? (
+            <a className={styles.toolbarButton} href={accountsCsvExportHref}>
+              Export CSV
+            </a>
+          ) : null}
+          <div className={styles.createMenu} data-transient-menu="true">
+            <button
+              aria-expanded={isCreateMenuOpen}
+              aria-haspopup="menu"
+              className={`${styles.createButton} ${styles.tableCreateButton}`}
+              ref={createMenuButtonRef}
+              onClick={(event) => {
+                event.stopPropagation();
+                const next = !isCreateMenuOpen;
+                closeTransientMenus();
+                if (next) {
+                  openCreateMenu();
+                }
+              }}
+              type="button"
+            >
+              <span>Create</span>
+              <ChevronDownIcon />
+            </button>
+            {isCreateMenuOpen && createMenuPosition ? (
+              <div
+                className={styles.createDropdownMenu}
+                role="menu"
+                style={createMenuPosition}
+              >
+                <button className={styles.createDropdownAction} onClick={openCreateDrawer} type="button">
+                  Account
+                </button>
+                <button
+                  className={styles.createDropdownAction}
+                  onClick={openCreateContactDrawer}
+                  type="button"
+                >
+                  Contact
                 </button>
                 <button
                   className={styles.createDropdownAction}
@@ -8537,94 +9932,6 @@ export function AccountsClient({
               </div>
             ) : null}
           </div>
-          <div className={styles.columnsMenu} data-transient-menu="true">
-            <button
-              aria-expanded={isFiltersOpen}
-              aria-haspopup="dialog"
-              className={styles.toolbarButton}
-              onClick={(event) => {
-                event.stopPropagation();
-                const next = !isFiltersOpen;
-                closeTransientMenus();
-                setIsFiltersOpen(next);
-              }}
-              type="button"
-            >
-              <FilterIcon />
-              <span>Columns</span>
-            </button>
-            {isFiltersOpen ? (
-              <div aria-label="Visible columns" className={styles.columnsPopover} role="dialog">
-                <div className={styles.columnsPopoverHeader}>
-                  <strong>Visible columns</strong>
-                  <button
-                    className={styles.columnsPopoverAction}
-                    onClick={handleShowAllColumns}
-                    type="button"
-                  >
-                    Show all
-                  </button>
-                </div>
-                <div className={styles.columnsPopoverList}>
-                  {visibleColumnConfigs.map((column, index) => (
-                    <div
-                      className={`${styles.columnsPopoverItem} ${
-                        draggedColumnId === column.id ? styles.columnsPopoverItemDragging : ""
-                      } ${
-                        columnDropTargetId === column.id && draggedColumnId !== column.id
-                          ? styles.columnsPopoverItemDropTarget
-                          : ""
-                      }`.trim()}
-                      key={column.id}
-                      onDragOver={(event) => handleColumnDragOver(event, column.id)}
-                      onDrop={(event) => handleColumnDrop(event, column.id)}
-                    >
-                      <button
-                        aria-label={`Drag to reorder ${column.label}`}
-                        className={styles.columnsPopoverDragHandle}
-                        draggable
-                        onClick={(event) => event.preventDefault()}
-                        onDragEnd={handleColumnDragEnd}
-                        onDragStart={(event) => handleColumnDragStart(event, column.id)}
-                        type="button"
-                      >
-                        <DragHandleIcon />
-                      </button>
-                      <label className={styles.columnsPopoverToggle}>
-                        <input
-                          checked={column.isVisible}
-                          disabled={visibleColumns.length <= 1 && column.isVisible}
-                          onChange={() => handleToggleColumn(column.id)}
-                          type="checkbox"
-                        />
-                        <span>{column.label}</span>
-                      </label>
-                      <div className={styles.columnsPopoverReorder}>
-                        <button
-                          aria-label={`Move ${column.label} up`}
-                          className={styles.columnsPopoverMoveButton}
-                          disabled={index === 0}
-                          onClick={() => handleMoveColumn(column.id, "up")}
-                          type="button"
-                        >
-                          ↑
-                        </button>
-                        <button
-                          aria-label={`Move ${column.label} down`}
-                          className={styles.columnsPopoverMoveButton}
-                          disabled={index === visibleColumnConfigs.length - 1}
-                          onClick={() => handleMoveColumn(column.id, "down")}
-                          type="button"
-                        >
-                          ↓
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
           <button
             className={styles.clearFiltersButton}
             disabled={!hasActiveWorkbenchFilters}
@@ -8635,91 +9942,6 @@ export function AccountsClient({
           </button>
         </div>
       </section>
-
-      <section aria-label="Account filters" className={`${styles.filterRail} ${styles.weekRail}`}>
-        <div className={`${styles.filterRailGroup} ${styles.filterRailGroupWeeks}`}>
-          <span className={styles.filterRailLabel}>Weeks</span>
-          <div className={`${styles.compactFilterGroup} ${styles.weekFilterGroup}`}>
-            {availableWeekFilters.map((week) => {
-              const isActive = selectedWeekFilterSet.has(normalizeOptionComparable(week));
-              return (
-                <button
-                  aria-pressed={isActive}
-                  className={`${styles.compactFilterChip} ${
-                    isActive ? styles.compactFilterChipActive : ""
-                  }`}
-                  key={week}
-                  onClick={() => toggleWeekFilter(week)}
-                  type="button"
-                >
-                  {week}
-                </button>
-              );
-            })}
-          </div>
-          <button
-            className={styles.filterTextButton}
-            disabled={selectedWeekFilters.length === 0}
-            onClick={() => {
-              setPage(1);
-              setSelectedWeekFilters([]);
-            }}
-            type="button"
-          >
-            Clear weeks
-          </button>
-        </div>
-      </section>
-
-      {selectedContactRows.length ? (
-        <section className={styles.selectionBar}>
-          <div className={styles.selectionInfo}>
-            <strong>
-              {selectedContactRows.length} contact{selectedContactRows.length === 1 ? "" : "s"} selected
-            </strong>
-            {mergeSelectionDisabledReason ? (
-              <span className={styles.selectionHint}>{mergeSelectionDisabledReason}</span>
-            ) : (
-              <span className={styles.selectionSubtext}>Bulk actions stay on the current filtered set.</span>
-            )}
-          </div>
-          <div className={styles.selectionActions}>
-            <button
-              className={styles.selectionMergeButton}
-              disabled={!mergeSelectionEligible || isDeletingSelectedContacts}
-              onClick={() => {
-                setIsSelectionMergeOpen(true);
-                setSaveError(null);
-                setSaveNotice(null);
-              }}
-              type="button"
-            >
-              Merge contacts
-            </button>
-            <button
-              className={styles.selectionDeleteButton}
-              disabled={isDeletingSelectedContacts}
-              onClick={() => {
-                openDeleteContactQueueModal(selectedContactRows);
-              }}
-              type="button"
-            >
-              {isDeletingSelectedContacts ? "Queueing..." : "Delete contacts"}
-            </button>
-            <button
-              className={styles.selectionClearButton}
-              disabled={isDeletingSelectedContacts}
-              onClick={() => {
-                setSelectedContactRowKeys([]);
-                setIsSelectionMergeOpen(false);
-              }}
-              type="button"
-            >
-              Clear selection
-            </button>
-          </div>
-        </section>
-      ) : null}
 
       <section className={styles.tableCard}>
         {syncProgress ? (
@@ -8769,6 +9991,27 @@ export function AccountsClient({
           <table className={styles.table}>
             <thead>
               <tr className={styles.tableHeaderRow}>
+                <th className={styles.columnSelectorHeaderCell}>
+                  <div className={styles.columnSelectorMenu} data-transient-menu="true">
+                    <button
+                      aria-expanded={isFiltersOpen}
+                      aria-haspopup="dialog"
+                      aria-label="Select visible columns"
+                      className={`${styles.columnSelectorButton} ${
+                        isFiltersOpen ? styles.columnSelectorButtonActive : ""
+                      }`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        const next = !isFiltersOpen;
+                        closeTransientMenus();
+                        setIsFiltersOpen(next);
+                      }}
+                      type="button"
+                    >
+                      +
+                    </button>
+                  </div>
+                </th>
                 <th className={styles.selectionCheckboxCell}>
                   <input
                     aria-label="Select current page"
@@ -8887,13 +10130,13 @@ export function AccountsClient({
             <tbody>
               {loading ? (
                 <tr>
-                  <td className={styles.loadingCell} colSpan={visibleColumnOrder.length + 2}>
+                  <td className={styles.loadingCell} colSpan={visibleColumnOrder.length + 3}>
                     Loading contacts...
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td className={styles.loadingCell} colSpan={visibleColumnOrder.length + 2}>
+                  <td className={styles.loadingCell} colSpan={visibleColumnOrder.length + 3}>
                     No contacts found.
                   </td>
                 </tr>
@@ -8906,8 +10149,10 @@ export function AccountsClient({
                   const rowCanEditNote = canEditRowNote(row);
                   const rowCanDelete = canDeleteRowContact(row);
                   const rowCanDeleteBusinessAccount = canDeleteBusinessAccountRow(row);
+                  const rowCanDeleteCompany = canDeleteCompanyRow(row);
                   const rowCanAddContact = canAddContactToRow(row);
-                  const isRowSelectable = rowContactId !== null;
+                  const isRowSelectable =
+                    rowContactId !== null || rowCanDeleteBusinessAccount;
                   const isRowChecked = selectedContactRowKeys.includes(rowKey);
                   const selectedClass =
                     selected && getRowKey(selected) === rowKey ? styles.selectedRow : "";
@@ -8921,6 +10166,7 @@ export function AccountsClient({
                         void openDrawer(row);
                       }}
                     >
+                      <td className={styles.columnSelectorBodyCell} />
                       <td
                         className={styles.selectionCheckboxCell}
                         onClick={(event) => {
@@ -9026,15 +10272,6 @@ export function AccountsClient({
                                   Schedule drop off
                                 </button>
                                 <button
-                                  className={styles.rowMenuAction}
-                                  onClick={() => {
-                                    openCreateOpportunityDrawerFromRow(row);
-                                  }}
-                                  type="button"
-                                >
-                                  Create opportunity
-                                </button>
-                                <button
                                   className={`${styles.rowMenuAction} ${styles.rowMenuActionDanger}`}
                                   disabled={!rowCanDelete}
                                   onClick={() => {
@@ -9046,13 +10283,13 @@ export function AccountsClient({
                                 </button>
                                 <button
                                   className={`${styles.rowMenuAction} ${styles.rowMenuActionDanger}`}
-                                  disabled={!rowCanDeleteBusinessAccount}
+                                  disabled={!rowCanDeleteCompany}
                                   onClick={() => {
-                                    openDeleteBusinessAccountConfirmation(row);
+                                    openDeleteCompanyConfirmation(row);
                                   }}
                                   type="button"
                                 >
-                                  Delete business account
+                                  Delete company (with all contacts)
                                 </button>
                               </div>
                             ) : null}
@@ -9214,7 +10451,7 @@ export function AccountsClient({
       />
       <QueueDeleteContactsModal
         confirmLabel="Queue account deletion"
-        description="This request will go to the Deletion Queue for approval and will remove the business account after contacts have already been deleted."
+        description="This request will go to the Deletion Queue for approval and will remove the business account and all of its contacts."
         isOpen={deleteBusinessAccountRow !== null}
         isSubmitting={isDeletingBusinessAccount}
         onClose={closeDeleteBusinessAccountConfirmation}
@@ -9232,6 +10469,25 @@ export function AccountsClient({
             : []
         }
         title="Queue business account deletion"
+      />
+      <QueueDeleteContactsModal
+        confirmLabel="Queue account deletions"
+        description="These requests will go to the Deletion Queue for approval and will remove the selected business accounts."
+        isOpen={selectedAccountDeleteRows.length > 0}
+        isSubmitting={isDeletingBusinessAccount}
+        onClose={() => {
+          if (!isDeletingBusinessAccount) {
+            setSelectedAccountDeleteRows([]);
+          }
+        }}
+        onConfirm={handleConfirmDeleteSelectedBusinessAccounts}
+        reasonPlaceholder="Explain why these business accounts should be deleted."
+        targets={selectedAccountDeleteRows.map((row) => ({
+          key: resolveRowBusinessAccountRecordId(row),
+          contactName: null,
+          companyName: row.companyName ?? null,
+        }))}
+        title="Queue business account deletions"
       />
 
       <aside className={`${styles.drawer} ${selected ? styles.drawerOpen : ""}`}>
@@ -9995,7 +11251,7 @@ export function AccountsClient({
             </label>
 
             <label>
-              Contact Notes
+              Pinned Contact Note
               <textarea
                 aria-busy={isDrawerHydrating}
                 disabled={!selected.contactId || isDrawerHydrating}
@@ -10023,7 +11279,178 @@ export function AccountsClient({
 
             <p className={styles.lastModified}>Last modified: {formatLastModified(selected.lastModifiedIso)}</p>
 
-            <section className={styles.callHistorySection}>
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                flexWrap: "wrap",
+                margin: "0.75rem 0 0.5rem",
+              }}
+            >
+              {(
+                [
+                  { key: "all", label: "All" },
+                  { key: "notes", label: `Notes (${companyNotes.length + contactNotes.length})` },
+                  { key: "calls", label: `Calls (${callHistory.length})` },
+                  { key: "history", label: `Changes (${auditHistory.length})` },
+                ] as const
+              ).map((tab) => {
+                const isActive = activityFilter === tab.key;
+                return (
+                  <button
+                    className={styles.tableActionButton}
+                    key={tab.key}
+                    onClick={() => setActivityFilter(tab.key)}
+                    style={{
+                      fontWeight: isActive ? 700 : 400,
+                      opacity: isActive ? 1 : 0.55,
+                    }}
+                    type="button"
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <section
+              className={styles.callHistorySection}
+              style={{
+                display:
+                  activityFilter === "all" || activityFilter === "notes" ? undefined : "none",
+              }}
+            >
+              <div className={styles.callHistoryHeader}>
+                <h3>Company Notes</h3>
+                <span className={styles.callHistorySummary}>
+                  {accountNotesLoading
+                    ? "Loading…"
+                    : companyNotes.length === 0
+                      ? "No company notes yet"
+                      : `${companyNotes.length} note${companyNotes.length === 1 ? "" : "s"}`}
+                </span>
+              </div>
+              <p
+                style={{
+                  margin: "0 0 0.5rem",
+                  fontSize: "0.8rem",
+                  color: "var(--text-muted, #64748b)",
+                }}
+              >
+                Shared across the whole company — everyone sees these.
+              </p>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                <textarea
+                  onChange={(event) => setNewAccountNote(event.target.value)}
+                  placeholder="Add a note about this company. It will be timestamped and saved for everyone to see."
+                  rows={3}
+                  value={newAccountNote}
+                />
+                <div>
+                  <button
+                    className={styles.tableActionButton}
+                    disabled={isSavingAccountNote || newAccountNote.trim().length === 0}
+                    onClick={() => {
+                      void handleAddAccountNote("company");
+                    }}
+                    type="button"
+                  >
+                    {isSavingAccountNote ? "Saving…" : "Add company note"}
+                  </button>
+                </div>
+              </div>
+
+              {accountNotesError ? (
+                <p className={styles.fieldErrorText}>{accountNotesError}</p>
+              ) : null}
+
+              <ul
+                style={{
+                  listStyle: "none",
+                  margin: "0.75rem 0 0",
+                  padding: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.75rem",
+                }}
+              >
+                {companyNotes.map((note) => renderAccountNote(note))}
+              </ul>
+            </section>
+
+            {selectedNotesContactId !== null ? (
+              <section
+                className={styles.callHistorySection}
+                style={{
+                  display:
+                    activityFilter === "all" || activityFilter === "notes" ? undefined : "none",
+                }}
+              >
+                <div className={styles.callHistoryHeader}>
+                  <h3>Contact Notes</h3>
+                  <span className={styles.callHistorySummary}>
+                    {accountNotesLoading
+                      ? "Loading…"
+                      : contactNotes.length === 0
+                        ? "No contact notes yet"
+                        : `${contactNotes.length} note${contactNotes.length === 1 ? "" : "s"}`}
+                  </span>
+                </div>
+                <p
+                  style={{
+                    margin: "0 0 0.5rem",
+                    fontSize: "0.8rem",
+                    color: "var(--text-muted, #64748b)",
+                  }}
+                >
+                  Only for {selected?.primaryContactName?.trim() || "this contact"}. The pinned
+                  Contact Note at the top stays put.
+                </p>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                  <textarea
+                    onChange={(event) => setNewContactNote(event.target.value)}
+                    placeholder="Add a timestamped note for this contact."
+                    rows={3}
+                    value={newContactNote}
+                  />
+                  <div>
+                    <button
+                      className={styles.tableActionButton}
+                      disabled={isSavingContactNote || newContactNote.trim().length === 0}
+                      onClick={() => {
+                        void handleAddAccountNote("contact");
+                      }}
+                      type="button"
+                    >
+                      {isSavingContactNote ? "Saving…" : "Add contact note"}
+                    </button>
+                  </div>
+                </div>
+
+                <ul
+                  style={{
+                    listStyle: "none",
+                    margin: "0.75rem 0 0",
+                    padding: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.75rem",
+                  }}
+                >
+                  {contactNotes.map((note) => renderAccountNote(note))}
+                </ul>
+              </section>
+            ) : null}
+
+            <section
+              className={styles.callHistorySection}
+              style={{
+                display:
+                  activityFilter === "all" || activityFilter === "calls" ? undefined : "none",
+              }}
+            >
               <div className={styles.callHistoryHeader}>
                 <h3>Prior Calls</h3>
                 <span className={styles.callHistorySummary}>
@@ -10100,7 +11527,13 @@ export function AccountsClient({
               )}
             </section>
 
-            <section className={styles.auditHistorySection}>
+            <section
+              className={styles.auditHistorySection}
+              style={{
+                display:
+                  activityFilter === "all" || activityFilter === "history" ? undefined : "none",
+              }}
+            >
               <div className={styles.auditHistoryHeader}>
                 <h3>Audit History</h3>
                 <Link
@@ -10181,14 +11614,14 @@ export function AccountsClient({
                   isSaving ||
                   isDeletingContact ||
                   isDeletingBusinessAccount ||
-                  !canDeleteBusinessAccountRow(selected)
+                  !canDeleteCompanyRow(selected)
                 }
                 onClick={() => {
-                  openDeleteBusinessAccountConfirmation(selected);
+                  openDeleteCompanyConfirmation(selected);
                 }}
                 type="button"
               >
-                {isDeletingBusinessAccount ? "Deleting..." : "Delete business account"}
+                {isDeletingBusinessAccount ? "Deleting..." : "Delete company (with contacts)"}
               </button>
             </div>
           </div>
@@ -10207,6 +11640,291 @@ export function AccountsClient({
           }}
           type="button"
         />
+      ) : null}
+
+      {isFiltersOpen ? (
+        <div
+          className={styles.modalBackdrop}
+          onClick={() => setIsFiltersOpen(false)}
+        >
+          <section
+            aria-label="Visible columns"
+            aria-modal="true"
+            className={styles.columnsModal}
+            data-transient-menu="true"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <div className={styles.columnsModalHeader}>
+              <div>
+                <h2>Table Columns</h2>
+                <span>
+                  {visibleColumns.length.toLocaleString()} of{" "}
+                  {visibleColumnConfigs.length.toLocaleString()} shown
+                </span>
+              </div>
+              <button
+                aria-label="Close column selector"
+                className={styles.modalCloseButton}
+                onClick={() => setIsFiltersOpen(false)}
+                type="button"
+              >
+                x
+              </button>
+            </div>
+
+            <div className={styles.columnsModalToolbar}>
+              <div
+                className={`${styles.columnsModalStatus} ${
+                  columnPrefsSaveStatus === "error" ? styles.columnsModalStatusError : ""
+                }`.trim()}
+              >
+                {columnPrefsSaveStatus === "loading"
+                  ? "Loading saved layout"
+                  : columnPrefsSaveStatus === "saving"
+                    ? "Saving layout"
+                    : columnPrefsSaveStatus === "error"
+                      ? columnPrefsError ?? "Column layout could not be saved"
+                      : "Saved to your account"}
+              </div>
+              <div className={styles.columnsModalActions}>
+                <button
+                  className={styles.secondaryButton}
+                  onClick={handleResetColumnsToDefault}
+                  type="button"
+                >
+                  Reset
+                </button>
+                <button
+                  className={styles.secondaryButton}
+                  onClick={handleShowAllColumns}
+                  type="button"
+                >
+                  Show all
+                </button>
+              </div>
+            </div>
+
+            <div className={styles.columnsModalList}>
+              {visibleColumnConfigs.map((column) => (
+                <div
+                  className={`${styles.columnsModalRow} ${
+                    draggedColumnId === column.id ? styles.columnsModalRowDragging : ""
+                  } ${
+                    columnDropTargetId === column.id &&
+                    draggedColumnId !== column.id &&
+                    columnDropPosition === "before"
+                      ? styles.columnsModalRowDropBefore
+                      : ""
+                  } ${
+                    columnDropTargetId === column.id &&
+                    draggedColumnId !== column.id &&
+                    columnDropPosition === "after"
+                      ? styles.columnsModalRowDropAfter
+                      : ""
+                  }`.trim()}
+                  key={column.id}
+                  onDragOver={(event) => handleColumnModalDragOver(event, column.id)}
+                  onDrop={(event) => handleColumnModalDrop(event, column.id)}
+                >
+                  <label className={styles.columnsModalToggle}>
+                    <input
+                      checked={column.isVisible}
+                      disabled={visibleColumns.length <= 1 && column.isVisible}
+                      onChange={() => handleToggleColumn(column.id)}
+                      type="checkbox"
+                    />
+                    <span className={styles.columnsModalCheckLabel}>
+                      <strong>{column.label}</strong>
+                      <small>{column.isVisible ? "Shown" : "Hidden"}</small>
+                    </span>
+                  </label>
+                  <button
+                    aria-label={`Drag ${column.label} to reorder`}
+                    className={styles.columnsModalDragHandle}
+                    draggable
+                    onClick={(event) => event.preventDefault()}
+                    onDragEnd={handleColumnDragEnd}
+                    onDragStart={(event) => handleColumnDragStart(event, column.id)}
+                    title="Drag to reorder"
+                    type="button"
+                  >
+                    <DragHandleIcon />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {accountListDeleteTarget ? (
+        <div
+          className={styles.modalBackdrop}
+          onClick={closeDeleteAccountListConfirmation}
+        >
+          <section
+            aria-label="Delete account list"
+            aria-modal="true"
+            className={styles.createListModal}
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <div className={styles.createListModalHeader}>
+              <div>
+                <h2>Delete List</h2>
+                <span>{accountListDeleteTarget.name}</span>
+              </div>
+              <button
+                aria-label="Close"
+                className={styles.modalCloseButton}
+                disabled={Boolean(deletingAccountListId)}
+                onClick={closeDeleteAccountListConfirmation}
+                type="button"
+              >
+                x
+              </button>
+            </div>
+
+            <p className={styles.deleteListWarning}>
+              This removes the saved filter list only. It will not delete accounts,
+              contacts, notes, or activity history.
+            </p>
+            {accountListDeleteTarget.isActive ? (
+              <p className={styles.deleteListWarningMuted}>
+                This list is currently selected, so the page will return to All Accounts after
+                deletion.
+              </p>
+            ) : null}
+
+            <div className={styles.createListActions}>
+              <button
+                className={styles.secondaryButton}
+                disabled={Boolean(deletingAccountListId)}
+                onClick={closeDeleteAccountListConfirmation}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className={styles.tableActionDangerButton}
+                disabled={Boolean(deletingAccountListId)}
+                onClick={() => {
+                  void handleConfirmDeleteAccountList();
+                }}
+                type="button"
+              >
+                {deletingAccountListId ? "Deleting..." : "Delete List"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {isCreateAccountListModalOpen ? (
+        <div
+          aria-modal="true"
+          className={styles.modalBackdrop}
+          onClick={closeCreateAccountListModal}
+          role="dialog"
+        >
+          <form
+            className={styles.createListModal}
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={handleCreateAccountListSubmit}
+          >
+            <div className={styles.createListModalHeader}>
+              <div>
+                <h2>Create List</h2>
+                <span>{total.toLocaleString()} matching accounts</span>
+              </div>
+              <button
+                aria-label="Close"
+                className={styles.modalCloseButton}
+                disabled={isSavingAccountList}
+                onClick={closeCreateAccountListModal}
+                type="button"
+              >
+                x
+              </button>
+            </div>
+
+            <label className={styles.createListField}>
+              <span>List name</span>
+              <input
+                autoFocus
+                maxLength={80}
+                onChange={(event) => {
+                  setNewAccountListName(event.target.value);
+                  setCreateAccountListError(null);
+                }}
+                placeholder="Strategic Accounts"
+                type="text"
+                value={newAccountListName}
+              />
+            </label>
+
+            <div className={styles.createListField}>
+              <span>Visibility</span>
+              <div className={styles.scopeSegment}>
+                <label
+                  className={`${styles.scopeOption} ${
+                    newAccountListScope === "user" ? styles.scopeOptionActive : ""
+                  }`}
+                >
+                  <input
+                    checked={newAccountListScope === "user"}
+                    disabled={isSavingAccountList}
+                    name="account-list-scope"
+                    onChange={() => setNewAccountListScope("user")}
+                    type="radio"
+                    value="user"
+                  />
+                  <span>Only me</span>
+                  <small>Private</small>
+                </label>
+                <label
+                  className={`${styles.scopeOption} ${
+                    newAccountListScope === "company" ? styles.scopeOptionActive : ""
+                  }`}
+                >
+                  <input
+                    checked={newAccountListScope === "company"}
+                    disabled={isSavingAccountList}
+                    name="account-list-scope"
+                    onChange={() => setNewAccountListScope("company")}
+                    type="radio"
+                    value="company"
+                  />
+                  <span>Company</span>
+                  <small>Shared</small>
+                </label>
+              </div>
+            </div>
+
+            {createAccountListError ? (
+              <p className={styles.createListError}>{createAccountListError}</p>
+            ) : null}
+
+            <div className={styles.createListActions}>
+              <button
+                className={styles.secondaryButton}
+                disabled={isSavingAccountList}
+                onClick={closeCreateAccountListModal}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className={styles.saveButton}
+                disabled={isSavingAccountList}
+                type="submit"
+              >
+                {isSavingAccountList ? "Saving..." : "Create List"}
+              </button>
+            </div>
+          </form>
+        </div>
       ) : null}
 
       {isSelectionMergeOpen && selectedMergeAccountRecordId && selectedMergeBusinessAccountId ? (

@@ -120,6 +120,70 @@ export async function POST(
       auditCompanyName = storedAnchorRow.companyName;
     }
 
+    if (getEnv().LOCAL_DATABASE_ONLY) {
+      if (storedRows.length === 0) {
+        throw new HttpError(
+          404,
+          "Business account is not in the local SQLite snapshot. Reload the account and try again.",
+        );
+      }
+
+      const localBusinessAccountRecordId =
+        storedAnchorRow?.accountRecordId ?? storedAnchorRow?.id ?? id;
+      const localBusinessAccountId = storedAnchorRow?.businessAccountId?.trim() ?? "";
+      if (!localBusinessAccountId) {
+        throw new HttpError(
+          422,
+          "Business account ID is missing on this local account. Contact creation cannot continue.",
+        );
+      }
+
+      const localContact = appendLocalContactRow(storedRows, contactRequest);
+      const responseBody: BusinessAccountContactCreateResponse = {
+        created: true,
+        businessAccountRecordId: localBusinessAccountRecordId,
+        businessAccountId: localBusinessAccountId,
+        contactId: localContact.contactId,
+        accountRows: localContact.rows,
+        createdRow: localContact.createdRow,
+        setAsPrimary: true,
+        warnings: ["Saved in Sales MeadowBrook only. Acumatica contact creation is disabled."],
+      };
+
+      if (getEnv().READ_MODEL_ENABLED) {
+        replaceReadModelAccountRows(
+          localBusinessAccountRecordId,
+          responseBody.accountRows,
+        );
+      }
+
+      logContactCreateAudit({
+        actor,
+        request: contactRequest,
+        resultCode: "succeeded",
+        businessAccountRecordId: responseBody.businessAccountRecordId,
+        businessAccountId: responseBody.businessAccountId,
+        companyName: responseBody.createdRow.companyName,
+        contactId: responseBody.contactId,
+        createdRow: responseBody.createdRow,
+      });
+
+      const response = NextResponse.json(
+        {
+          ...responseBody,
+          accountRows: applyLocalAccountMetadataToRows(responseBody.accountRows),
+          createdRow:
+            applyLocalAccountMetadataToRow(responseBody.createdRow) ??
+            responseBody.createdRow,
+        },
+        { status: 201 },
+      );
+      if (authCookieRefresh.value) {
+        setAuthCookie(response, authCookieRefresh.value);
+      }
+      return response;
+    }
+
     let serverContext: Awaited<ReturnType<typeof fetchContactMergeServerContext>>;
     try {
       serverContext = await fetchContactMergeServerContext(

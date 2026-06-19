@@ -25,6 +25,9 @@ const BLOCKED_MEETING_EMPLOYEE_EMAILS = new Set([
   "abuhagiar@meadowb.com",
   "alex.buhagiar@meadowb.com",
 ]);
+const MEETING_EMPLOYEE_NAME_OVERRIDES_BY_LOGIN = new Map([
+  ["jbuhagiar", "Jeff Buhagiar"],
+]);
 
 export type ResolvedMeetingContact = {
   contactId: number;
@@ -139,6 +142,24 @@ export function normalizeMeetingLoginName(value: string | null | undefined): str
 
   const atIndex = comparable.indexOf("@");
   return atIndex >= 0 ? comparable.slice(0, atIndex) || null : comparable;
+}
+
+export function normalizeMeetingEmployeeDisplayName(input: {
+  employeeName: string | null | undefined;
+  email?: string | null | undefined;
+  loginName?: string | null | undefined;
+}): string {
+  const loginName =
+    normalizeMeetingLoginName(input.loginName) ??
+    normalizeMeetingLoginName(input.email);
+  if (loginName) {
+    const override = MEETING_EMPLOYEE_NAME_OVERRIDES_BY_LOGIN.get(loginName);
+    if (override) {
+      return override;
+    }
+  }
+
+  return input.employeeName?.trim() ?? "";
 }
 
 function normalizeMeetingNameKey(value: string | null | undefined): string {
