@@ -721,7 +721,7 @@ export function MailClient() {
 
       setSelectedThread(payload);
       setLinkSearch("");
-      setLinkNotice("Thread linked and synced to Acumatica.");
+      setLinkNotice("Thread linked and synced to source system.");
       setIsLinkPanelOpen(false);
       await loadThreads(folder, searchInput);
     } catch (error) {
@@ -795,7 +795,7 @@ export function MailClient() {
           </button>
         )
       }
-      subtitle="Gmail-backed mailbox with Acumatica CRM activity logging."
+      subtitle="Gmail-backed mailbox with source system CRM activity logging."
       title="Mail"
     >
 
@@ -892,7 +892,7 @@ export function MailClient() {
                   ? session?.connectionError ||
                     "Google sign-in may still be finishing. Retry mailbox in a few seconds."
                   : sessionError?.message ||
-                  "Mail stays read-only until your signed-in Acumatica login maps to a MeadowBrook mailbox and Gmail is connected."}
+                  "Mail stays read-only until your signed-in source system login maps to a MeadowBrook mailbox and Gmail is connected."}
               </p>
               <button
                 className={mailboxPending ? styles.secondaryButton : styles.primaryButton}
@@ -1085,7 +1085,7 @@ export function MailClient() {
                     </button>
                     {selectedThread.thread.linkedContact.contactId ? (
                       <button onClick={() => void handleRetryThreadSync()} type="button">
-                        Retry Acumatica log
+                        Retry source system log
                       </button>
                     ) : null}
                   </div>
@@ -1161,14 +1161,14 @@ export function MailClient() {
                 <section className={styles.linkCard}>
                   <div className={styles.linkCardHeader}>
                     <div className={styles.linkCardCopy}>
-                      <p className={styles.panelEyebrow}>Acumatica</p>
+                      <p className={styles.panelEyebrow}>source system</p>
                       <strong className={styles.linkCardTitle}>
                         {linkedContactSummaryName ? "Thread linked" : "Link this thread"}
                       </strong>
                       <p className={styles.linkCardDescription}>
                         {linkedContactSummaryName
-                          ? "This thread will log activity against the selected Acumatica contact."
-                          : "Choose the Acumatica contact this conversation should log against after it lands."}
+                          ? "This thread will log activity against the selected source system contact."
+                          : "Choose the source system contact this conversation should log against after it lands."}
                       </p>
                     </div>
                     <span
@@ -1194,7 +1194,7 @@ export function MailClient() {
                     </div>
                   ) : (
                     <div className={styles.linkCardEmpty}>
-                      Activity is not linked yet. Pick an Acumatica contact when you need to land this thread.
+                      Activity is not linked yet. Pick a known contact when you need to land this thread.
                     </div>
                   )}
 
@@ -1233,7 +1233,7 @@ export function MailClient() {
                 {isLinkPanelOpen ? (
                   <section className={styles.linkPanel}>
                     <div className={styles.linkPanelHeader}>
-                      <strong>Search Acumatica contacts</strong>
+                      <strong>Search source system contacts</strong>
                       <span>Match by name, email, or account</span>
                     </div>
                     <input
@@ -1262,7 +1262,7 @@ export function MailClient() {
                         ))
                       ) : (
                         <div className={styles.linkSuggestionEmpty}>
-                          No matching Acumatica contacts found for that search.
+                          No matching source system contacts found for that search.
                         </div>
                       )}
                     </div>

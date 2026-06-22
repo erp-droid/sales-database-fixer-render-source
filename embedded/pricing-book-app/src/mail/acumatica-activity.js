@@ -280,7 +280,7 @@ async function resolveEmailMeta(client) {
     }
   }
 
-  throw new Error("Could not resolve the Acumatica Email entity for mail logging.");
+  throw new Error("Could not resolve the source system Email entity for mail logging.");
 }
 
 async function resolveContactNoteId(client, linkedContact) {
@@ -495,7 +495,7 @@ async function syncMessageActivity(thread, message, client = sharedAcumaticaClie
           cleanString(target.noteId) || (await resolveContactNoteId(client, target));
         if (!contactNoteId) {
           throw new Error(
-            `Could not resolve Acumatica contact NoteID for contact ${target.contactId} on account ${target.businessAccountId || target.businessAccountRecordId || "-"}.`
+            `Could not resolve source system contact NoteID for contact ${target.contactId} on account ${target.businessAccountId || target.businessAccountRecordId || "-"}.`
           );
         }
 
@@ -511,7 +511,7 @@ async function syncMessageActivity(thread, message, client = sharedAcumaticaClie
         const created = await createEntityRecord(client, meta.entityName, payload);
         const createdActivityId = cleanString(created.activityId);
         if (!createdActivityId) {
-          throw new Error("Acumatica Email creation succeeded but did not return a NoteID.");
+          throw new Error("source system Email creation succeeded but did not return a NoteID.");
         }
         await updateEmailStatus(
           client,
@@ -544,7 +544,7 @@ async function syncMessageActivity(thread, message, client = sharedAcumaticaClie
 
     const successfulTargets = syncedTargets.filter((target) => cleanString(target.activityId));
     if (successfulTargets.length === 0) {
-      throw new Error(failures.join(" | ") || "No Acumatica Email records were created.");
+      throw new Error(failures.join(" | ") || "No source system Email records were created.");
     }
 
     const nextPrimaryTarget = successfulTargets[0] || primaryTarget;

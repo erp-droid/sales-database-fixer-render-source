@@ -123,7 +123,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     ) {
       throw new HttpError(
         409,
-        "These records were modified in Acumatica after you loaded the merge preview. Reload and try again.",
+        "These records were modified in source system after you loaded the merge preview. Reload and try again.",
       );
     }
 

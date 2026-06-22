@@ -74,7 +74,7 @@ function findExactLoginMatch(
 function buildNoMatchError(normalizedLogin: string): HttpError {
   return new HttpError(
     403,
-    `Calling is unavailable for '${normalizedLogin}'. The username must exactly match the local part of an internal Acumatica employee email.`,
+    `Calling is unavailable for '${normalizedLogin}'. The username must exactly match the local part of an internal source system employee email.`,
   );
 }
 
@@ -84,7 +84,7 @@ function buildMissingPhoneError(
 ): HttpError {
   return new HttpError(
     422,
-    `Calling is unavailable for '${normalizedLogin}'. Internal employee '${displayName}' does not have a valid phone number in Acumatica.`,
+    `Calling is unavailable for '${normalizedLogin}'. Internal employee '${displayName}' does not have a valid phone number in source system.`,
   );
 }
 

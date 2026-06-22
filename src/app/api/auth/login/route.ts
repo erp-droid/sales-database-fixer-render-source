@@ -204,7 +204,7 @@ function normalizeUpstreamError(status: number, message: string): NormalizedUpst
   if (status === 429 || isConcurrentLoginLimitMessage(lower)) {
     return {
       message:
-        "Acumatica API login limit reached for this user. Close old API sessions in Users (SM201010) or increase concurrent API logins, then sign in again.",
+        "Sign-in limit reached for this user. Close old API sessions or increase concurrent API logins, then sign in again.",
       status: 429,
     };
   }
@@ -224,7 +224,7 @@ function normalizeUpstreamError(status: number, message: string): NormalizedUpst
   if (lower.includes("proper company id cannot be determined")) {
     return {
       message:
-        'Acumatica company is required. Set ACUMATICA_COMPANY in .env.local to "MeadowBrook Live".',
+        'Company is required. Set the sign-in company in .env.local to "MeadowBrook Live".',
       status: 401,
     };
   }
@@ -343,7 +343,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         mode,
         nextPath,
         504,
-        "Sign-in timed out while waiting for Acumatica. Please retry in a few seconds.",
+        "Sign-in timed out. Please retry in a few seconds.",
       );
     }
     throw error;

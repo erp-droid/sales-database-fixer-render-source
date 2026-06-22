@@ -66,7 +66,7 @@ function isEmployeePhoneResolutionError(message: string | null | undefined): boo
     normalized.includes("custom error module does not recognize this error") ||
     normalized.includes("insufficient rights to access the employee") ||
     normalized.includes("employee (ep203000)") ||
-    normalized.includes("valid phone number in acumatica")
+    normalized.includes("valid phone number in source system")
   );
 }
 
@@ -74,14 +74,14 @@ function normalizeCallRouteError(error: unknown): HttpError | null {
   if (error instanceof HttpError && isEmployeePhoneResolutionError(error.message)) {
     return new HttpError(
       422,
-      "Calling is unavailable until the signed-in employee phone can be read from Acumatica.",
+      "Calling is unavailable until the signed-in employee phone can be read from source system.",
     );
   }
 
   if (error instanceof Error && isEmployeePhoneResolutionError(error.message)) {
     return new HttpError(
       422,
-      "Calling is unavailable until the signed-in employee phone can be read from Acumatica.",
+      "Calling is unavailable until the signed-in employee phone can be read from source system.",
     );
   }
 

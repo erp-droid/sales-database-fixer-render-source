@@ -182,6 +182,16 @@ function scheduleMailSendJobDrain(limit: number): void {
   });
 }
 
+function scheduleAfterWork(callback: () => void | Promise<void>): void {
+  try {
+    after(callback);
+  } catch {
+    queueMicrotask(() => {
+      void callback();
+    });
+  }
+}
+
 function buildDeferredMailActor(request: NextRequest): {
   loginName: string | null;
   name: string | null;
@@ -213,8 +223,8 @@ function assertResolvedMailRecipients(payload: Partial<MailComposePayload>): voi
   throw new HttpError(
     422,
     unresolvedRecipients.length === 1
-      ? `Recipient ${unresolvedRecipients[0]} is not an Acumatica contact. Add only recipients that exist in Acumatica.`
-      : `These recipients are not Acumatica contacts: ${unresolvedRecipients.join(", ")}. Add only recipients that exist in Acumatica.`,
+      ? `Recipient ${unresolvedRecipients[0]} is not a known contact. Add only recipients that exist in the app.`
+      : `These recipients are not known contacts: ${unresolvedRecipients.join(", ")}. Add only recipients that exist in the app.`,
   );
 }
 
@@ -341,11 +351,11 @@ export async function proxyAuditedMailSendJson(
     const response = NextResponse.json(immediatePayload ?? {}, { status: upstream.status });
 
     if (queuedDurableJob) {
-      after(() => {
+      scheduleAfterWork(() => {
         scheduleMailSendJobDrain(25);
       });
     } else {
-      after(async () => {
+      scheduleAfterWork(async () => {
         let repairedPayload = payload;
 
         try {
@@ -390,7 +400,7 @@ export async function proxyAuditedMailSendJson(
 
     return response;
   } catch (error) {
-    after(async () => {
+    scheduleAfterWork(async () => {
       try {
         const cookieValue = requireAuthCookieValue(request);
         const actor = await resolveDeferredActionActor(
@@ -436,7 +446,7 @@ export async function proxyMailSessionJson(
   let cacheKey: string | null = null;
 
   try {
-    after(async () => {
+    scheduleAfterWork(async () => {
       scheduleMailSendJobDrain(10);
     });
 
@@ -533,7 +543,7 @@ export async function proxyMailThreadListJson(
   let cacheKey: string | null = null;
 
   try {
-    after(async () => {
+    scheduleAfterWork(async () => {
       scheduleMailSendJobDrain(10);
     });
 

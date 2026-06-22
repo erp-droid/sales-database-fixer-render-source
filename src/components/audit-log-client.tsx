@@ -199,7 +199,7 @@ export function AuditLogClient() {
       if (sessionPayload && "authenticated" in sessionPayload) {
         setSession(sessionPayload);
         if (!sessionPayload.authenticated) {
-          setError("Your Acumatica session has expired. Sign in again to review the audit log.");
+          setError("Your source system session has expired. Sign in again to review the audit log.");
         }
       }
     }

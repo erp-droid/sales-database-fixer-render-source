@@ -330,7 +330,7 @@ function shouldOfferCallerPhoneSetup(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   return (
     normalized.includes("signed-in employee phone") ||
-    normalized.includes("phone can be read from acumatica") ||
+    normalized.includes("phone can be read from source system") ||
     normalized.includes("call setup timed out while resolving") ||
     normalized.includes("your phone number is configured")
   );

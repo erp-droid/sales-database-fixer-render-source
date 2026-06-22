@@ -374,7 +374,7 @@ function buildFixSteps(metric: DataQualityMetricKey): string[] {
       return [
         "Open Data Quality and compare the duplicate business account records for this company.",
         "Decide which record is the survivor and move any missing information to that record.",
-        "Complete the merge or cleanup in Acumatica, then refresh the issue list.",
+        "Complete the merge or cleanup in source system, then refresh the issue list.",
       ];
     case "duplicateContact":
       return [

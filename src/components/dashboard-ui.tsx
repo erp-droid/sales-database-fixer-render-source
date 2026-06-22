@@ -134,7 +134,7 @@ export function useDashboardSession(): DashboardSessionState {
           if (session.authenticated === false) {
             setState({
               userName: "Signed out",
-              warning: "Your Acumatica session has expired. Sign in again to refresh call data.",
+              warning: "Your source system session has expired. Sign in again to refresh call data.",
             });
             return;
           }
@@ -142,7 +142,7 @@ export function useDashboardSession(): DashboardSessionState {
           setState({
             userName: session.user?.name?.trim() || "Signed in",
             warning: session.degraded
-              ? "Acumatica session validation is temporarily unavailable. Cached call data is still available."
+              ? "source system session validation is temporarily unavailable. Cached call data is still available."
               : null,
           });
           return;
@@ -150,7 +150,7 @@ export function useDashboardSession(): DashboardSessionState {
 
         setState({
           userName: "Signed in",
-          warning: "Acumatica session validation is temporarily unavailable. Cached call data is still available.",
+          warning: "source system session validation is temporarily unavailable. Cached call data is still available.",
         });
       } catch {
         if (cancelled) {
@@ -159,7 +159,7 @@ export function useDashboardSession(): DashboardSessionState {
 
         setState({
           userName: "Signed in",
-          warning: "Acumatica session validation is temporarily unavailable. Cached call data is still available.",
+          warning: "source system session validation is temporarily unavailable. Cached call data is still available.",
         });
       }
     }
@@ -409,7 +409,7 @@ export function CallDetailDrawer({
                   <li className={styles.timelineItem}>
                     <strong>Activity ID</strong>
                     <span>{detail.activitySync.activityId}</span>
-                    <span>Created in Acumatica</span>
+                    <span>Created in source system</span>
                   </li>
                 ) : null}
                 {detail.activitySync?.error ? (

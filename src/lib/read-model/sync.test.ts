@@ -229,7 +229,7 @@ describe("readManualSyncBlockedReason", () => {
     const reason = readManualSyncBlockedReason(NOW_MS);
 
     expect(reason).toBe(
-      "Full Acumatica read-model sync is disabled because SQLite is the source of truth for local account edits.",
+      "Full source system read-model sync is disabled because SQLite is the source of truth for local account edits.",
     );
     expect(
       mockDbGet.mock.calls.some((call) => String(call[0]).includes("FROM call_sessions")),

@@ -80,7 +80,7 @@ describe("POST /api/twilio/call", () => {
     findRecentBridgeCallSessionForEmployee.mockReturnValue(null);
   });
 
-  it("normalizes generic Acumatica Employee-form failures into employee phone guidance", async () => {
+  it("normalizes generic employee-form failures into employee phone guidance", async () => {
     resolveCallerProfile.mockRejectedValueOnce(
       new Error("The custom error module does not recognize this error."),
     );
@@ -100,8 +100,7 @@ describe("POST /api/twilio/call", () => {
 
     expect(response.status).toBe(422);
     await expect(response.json()).resolves.toEqual({
-      error: "Calling is unavailable until the signed-in employee phone can be read from Acumatica.",
-      details: undefined,
+      error: "Calling is unavailable until the signed-in employee phone can be read from source system.",
     });
     expect(resolveCallerProfile).toHaveBeenCalledWith("cookie", "bkoczka");
     expect(startBridgeCall).not.toHaveBeenCalled();

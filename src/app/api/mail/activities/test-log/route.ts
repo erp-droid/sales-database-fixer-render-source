@@ -107,10 +107,10 @@ export async function GET(request: NextRequest) {
   const senderMatchMode = mode === "sender-match";
   const subject =
     request.nextUrl.searchParams.get("subject")?.trim() ||
-    `Acumatica email activity test ${senderMatchMode ? "sender-match" : "direct"} ${new Date().toISOString()}`;
+    `source system email activity test ${senderMatchMode ? "sender-match" : "direct"} ${new Date().toISOString()}`;
   const bodyText =
     request.nextUrl.searchParams.get("body")?.trim() ||
-    "This is a MeadowBrook Acumatica email activity verification entry created without sending Gmail.";
+    "This is a MeadowBrook source system email activity verification entry created without sending Gmail.";
 
   try {
     const basePayload = {

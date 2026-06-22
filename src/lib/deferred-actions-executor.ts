@@ -291,7 +291,7 @@ async function resolveDeleteBusinessAccountDeferral(
     const noun = liveContactIds.length === 1 ? "contact" : "contacts";
     const failureMessage = allLiveContactsQueued
       ? `Waiting for ${liveContactIds.length} queued ${noun} to be deleted before removing the business account.`
-      : `Business account deletion is queued, but ${liveContactIds.length} ${noun} still exist in Acumatica. Queue or complete those contact deletions first.`;
+      : `Business account deletion is queued, but ${liveContactIds.length} ${noun} still exist. Queue or complete those contact deletions first.`;
 
     return {
       failureMessage,

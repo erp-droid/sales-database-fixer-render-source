@@ -1082,7 +1082,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       country: "CA" as const,
     };
 
-    if (getEnv().LOCAL_DATABASE_ONLY) {
+    {
       const localAccount = buildLocalBusinessAccountRows(effectiveRequest);
       const responseBody: BusinessAccountCreateResponse = {
         created: true,
@@ -1090,7 +1090,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         businessAccountId: localAccount.businessAccountId,
         accountRows: localAccount.accountRows,
         createdRow: localAccount.createdRow,
-        warnings: ["Saved in Sales MeadowBrook only. Acumatica account creation is disabled."],
+        warnings: ["Saved locally."],
       };
 
       saveAccountCompanyDescription({
@@ -1137,120 +1137,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return response;
     }
 
-    const createdRaw = await createBusinessAccount(
-      cookieValue,
-      buildBusinessAccountCreatePayload(effectiveRequest),
-      authCookieRefresh,
-    );
-
-    let identifiers = readCreatedBusinessAccountIdentifiers(createdRaw);
-    const warnings: string[] = [];
-    let accountSource = createdRaw;
-    if (identifiers.businessAccountRecordId || identifiers.businessAccountId) {
-      try {
-        const refetchIdentifier =
-          identifiers.businessAccountRecordId || identifiers.businessAccountId;
-        if (!refetchIdentifier) {
-          throw new HttpError(500, "Created account identifier is missing.");
-        }
-        accountSource = await fetchBusinessAccountById(
-          cookieValue,
-          refetchIdentifier,
-          authCookieRefresh,
-        );
-        const refreshedIdentifiers = readCreatedBusinessAccountIdentifiers(accountSource);
-        identifiers = {
-          businessAccountRecordId:
-            refreshedIdentifiers.businessAccountRecordId ?? identifiers.businessAccountRecordId,
-          businessAccountId:
-            refreshedIdentifiers.businessAccountId ?? identifiers.businessAccountId,
-        };
-      } catch {
-        warnings.push(
-          "Business account was created, but the app could not refresh the full record. Sync records if details look incomplete.",
-        );
-      }
-    }
-
-    if (!identifiers.businessAccountId) {
-      throw new HttpError(
-        502,
-        "Acumatica created the account but did not return a Business Account ID.",
-      );
-    }
-
-    const normalizedCreatedRows = normalizeCreatedBusinessAccountRows(accountSource);
-    const accountRows = applyOptimisticCreatedAccountRequestToRows(
-      normalizedCreatedRows,
-      effectiveRequest,
-    );
-    const rawCreatedRow =
-      normalizedCreatedRows.find(
-        (row) => (row.accountRecordId ?? row.id) === identifiers.businessAccountRecordId,
-      ) ?? normalizedCreatedRows[0];
-    const createdRow = rawCreatedRow
-      ? applyOptimisticCreatedAccountRequestToRow(rawCreatedRow, effectiveRequest)
-      : null;
-
-    if (!createdRow) {
-      throw new HttpError(
-        502,
-        "Acumatica created the account but the app could not normalize the created record.",
-      );
-    }
-
-    const responseBody: BusinessAccountCreateResponse = {
-      created: true,
-      businessAccountRecordId:
-        identifiers.businessAccountRecordId ?? createdRow.accountRecordId ?? createdRow.id,
-      businessAccountId: identifiers.businessAccountId,
-      accountRows,
-      createdRow,
-      warnings,
-    };
-
-    saveAccountCompanyDescription({
-      accountRecordId: responseBody.businessAccountRecordId,
-      businessAccountId: responseBody.businessAccountId,
-      companyDescription: createRequest.companyDescription,
-      category: createRequest.category,
-    });
-
-    const responseRows = applyLocalAccountMetadataToRows(responseBody.accountRows);
-    const responseCreatedRow =
-      applyLocalAccountMetadataToRow(responseBody.createdRow) ?? responseBody.createdRow;
-
-    if (getEnv().READ_MODEL_ENABLED) {
-      replaceReadModelAccountRows(
-        responseBody.businessAccountRecordId,
-        responseRows,
-      );
-    }
-
-    logBusinessAccountCreateAudit({
-      actor,
-      request: createRequest,
-      resultCode: "succeeded",
-      sourceSurface: "accounts",
-      businessAccountRecordId: responseBody.businessAccountRecordId,
-      businessAccountId: responseBody.businessAccountId,
-      companyName: responseBody.createdRow.companyName,
-      createdRow: responseBody.createdRow,
-    });
-
-    const response = NextResponse.json(
-      {
-        ...responseBody,
-        accountRows: responseRows,
-        createdRow: responseCreatedRow,
-      },
-      { status: 201 },
-    );
-    if (authCookieRefresh.value) {
-      setAuthCookie(response, authCookieRefresh.value);
-    }
-
-    return response;
   } catch (error) {
     if (actor && createRequest) {
       logBusinessAccountCreateAudit({

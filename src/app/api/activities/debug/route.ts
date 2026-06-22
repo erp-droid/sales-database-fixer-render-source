@@ -53,7 +53,7 @@ async function proxyRequest(
     payload,
   };
   if (request.nextUrl.searchParams.get("dump") === "1") {
-    await writeFile("/tmp/acumatica-activity-debug.json", JSON.stringify(result, null, 2), "utf8");
+    await writeFile("/tmp/source-system-activity-debug.json", JSON.stringify(result, null, 2), "utf8");
   }
   return NextResponse.json(
     result,

@@ -763,7 +763,7 @@ function summarizeMailSend(
     return `Failed to send ${subjectLabel}`;
   }
   if (resultCode === "partial" || activitySyncStatus === "failed") {
-    return `Sent ${subjectLabel} to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}, but Acumatica activity sync failed`;
+    return `Sent ${subjectLabel} to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}, but source system activity sync failed`;
   }
   return `Sent ${subjectLabel} to ${recipientCount} recipient${recipientCount === 1 ? "" : "s"}`;
 }

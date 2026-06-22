@@ -20,7 +20,7 @@ const monoFont = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   title: "Sales MeadowBrook",
-  description: "Business account and contact management with live Acumatica updates",
+  description: "Local business account and contact management for MeadowBrook",
 };
 
 export default function RootLayout({

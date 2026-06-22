@@ -235,8 +235,8 @@ function assertResolvedRecipients(payload) {
 
   throw new MailAuthError(
     unresolved.length === 1
-      ? `Recipient ${unresolved[0]} is not an Acumatica contact.`
-      : `These recipients are not Acumatica contacts: ${unresolved.join(", ")}.`,
+      ? `Recipient ${unresolved[0]} is not a known contact.`
+      : `These recipients are not known contacts: ${unresolved.join(", ")}.`,
     422
   );
 }
@@ -906,7 +906,7 @@ router.post("/activities/log", async (req, res, next) => {
       synced?.messages?.find((message) => cleanString(message.messageId) === messageId) || null;
 
     if (!storedMessage) {
-      throw new MailAuthError("Acumatica activity logging did not return the stored message.", 500);
+      throw new MailAuthError("source system activity logging did not return the stored message.", 500);
     }
 
     res.json({

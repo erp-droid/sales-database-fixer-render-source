@@ -3391,7 +3391,7 @@ function buildMeetingSourceFromRow(row: BusinessAccountRow): MeetingSourceContex
 function isBusinessAccountStaleSaveMessage(message: string | null | undefined): boolean {
   const normalized = message?.trim().toLowerCase() ?? "";
   return (
-    normalized.includes("modified in acumatica after you loaded it") ||
+    normalized.includes("modified in source system after you loaded it") ||
     normalized.includes("changed while you were editing it")
   );
 }
@@ -5187,7 +5187,7 @@ export function AccountsClient({
 
         setSession(payload);
         setError(
-          "Your Acumatica session has expired. Sign in again to refresh data or run sync.",
+          "Your source system session has expired. Sign in again to refresh data or run sync.",
         );
         return;
       }
@@ -5195,14 +5195,14 @@ export function AccountsClient({
       // Avoid forcing a re-login on temporary auth probe failures (e.g. upstream 5xx).
       setSession({ authenticated: true, user: null });
       setError(
-        "Acumatica session check is temporarily unavailable. You are still signed in with your existing cookie. Click 'Sync records' to retry; only sign in again if this keeps failing for a few minutes.",
+        "source system session check is temporarily unavailable. You are still signed in with your existing cookie. Click 'Sync records' to retry; only sign in again if this keeps failing for a few minutes.",
       );
     }
 
     fetchSession().catch(() => {
       setSession({ authenticated: true, user: null });
       setError(
-        "Acumatica session check is temporarily unavailable. You are still signed in with your existing cookie. Click 'Sync records' to retry; only sign in again if this keeps failing for a few minutes.",
+        "source system session check is temporarily unavailable. You are still signed in with your existing cookie. Click 'Sync records' to retry; only sign in again if this keeps failing for a few minutes.",
       );
     });
   }, [router]);
@@ -5324,7 +5324,7 @@ export function AccountsClient({
             findMatchingAccountRow(refreshedRows, selectedRow) ?? responseRow;
           if (shouldPreserveCurrentDraftOnServerRefresh()) {
             setSaveNotice(
-              "This record changed in Acumatica while you were editing. Your draft is preserved.",
+              "This record changed while you were editing. Your draft is preserved.",
             );
             return;
           }
@@ -7149,7 +7149,7 @@ export function AccountsClient({
     const companyLabel = result.companyName?.trim() || "the selected account";
     const contactLabel = result.contactName?.trim() || `contact ${result.contactId}`;
     setSaveNotice(
-      `Opportunity ${result.opportunityId} created in Acumatica for ${companyLabel} (${contactLabel}).`,
+      `Opportunity ${result.opportunityId} created for ${companyLabel} (${contactLabel}).`,
     );
     setPendingOpportunityResumeAccountRecordId(null);
     setResumeOpportunityAfterContactCreate(null);
@@ -7159,14 +7159,14 @@ export function AccountsClient({
     setSaveError(null);
     if (result.activitySyncStatus === "synced" && result.activityId) {
       setSaveNotice(
-        `Email sent and logged to Acumatica. Gmail thread ${result.threadId}, activity ${result.activityId}.`,
+        `Email sent and logged to source system. Gmail thread ${result.threadId}, activity ${result.activityId}.`,
       );
     } else if (result.activitySyncStatus === "failed") {
       setSaveNotice(
-        `Email sent, but Acumatica logging failed${result.activityError ? `: ${result.activityError}` : "."}`,
+        `Email sent, but source system logging failed${result.activityError ? `: ${result.activityError}` : "."}`,
       );
     } else if (result.activitySyncStatus === "pending") {
-      setSaveNotice(`Email sent. Gmail thread ${result.threadId} is still syncing to Acumatica.`);
+      setSaveNotice(`Email sent. Gmail thread ${result.threadId} is still syncing to source system.`);
     } else {
       setSaveNotice(`Email sent. Gmail thread ${result.threadId} updated.`);
     }
@@ -7539,7 +7539,7 @@ export function AccountsClient({
     setMeetingSource(null);
     setSaveError(null);
     const categoryLabel = result.category === "Drop Off" ? "Drop off" : "Meeting";
-    const messageParts = [`${categoryLabel} "${result.summary}" created in Acumatica.`];
+    const messageParts = [`${categoryLabel} "${result.summary}" created.`];
     if (result.inviteAuthority === "google" && (
       result.calendarInviteStatus === "created" || result.calendarInviteStatus === "updated"
     )) {
@@ -7547,10 +7547,10 @@ export function AccountsClient({
         `Google Calendar invite ${result.calendarInviteStatus === "updated" ? "updated" : "created"}${result.connectedGoogleEmail ? ` from ${result.connectedGoogleEmail}` : ""}.`,
       );
     } else if (result.inviteAuthority === "acumatica") {
-      messageParts.push("Acumatica handled the invite sending.");
+      messageParts.push("The app handled the invite sending.");
     }
     if (result.includeOrganizerInAcumatica) {
-      messageParts.push("Your internal contact was included in Acumatica.");
+      messageParts.push("Your internal contact was included.");
     }
     if (result.warnings.length > 0) {
       messageParts.push(result.warnings.join(" "));
@@ -7671,7 +7671,7 @@ export function AccountsClient({
 
     if (response.status === 401) {
       throw new Error(
-        "Your Acumatica session expired while loading this record. Sign in again and retry.",
+        "Your source system session expired while loading this record. Sign in again and retry.",
       );
     }
 
@@ -7814,7 +7814,7 @@ export function AccountsClient({
       );
       setAddressSuggestions([]);
       setSaveNotice(
-        "Address autofill applied. Click Save to update this account in Acumatica.",
+        "Address autofill applied. Click Save to update this account in source system.",
       );
     } catch (lookupError) {
       setAddressLookupError(
@@ -7853,7 +7853,7 @@ export function AccountsClient({
         const matchedEmployee = matchEmployeeByName(employeeOptions, salesRepName);
         if (!matchedEmployee) {
           throw new Error(
-            "Select a valid Sales Rep from the list so Acumatica receives the correct employee ID.",
+            "Select a valid Sales Rep from the list so source system receives the correct employee ID.",
           );
         }
 
@@ -7884,7 +7884,7 @@ export function AccountsClient({
 
       if (response.status === 401) {
         throw new Error(
-          "Your Acumatica session expired while saving. Sign in again, then retry the save.",
+          "Your source system session expired while saving. Sign in again, then retry the save.",
         );
       }
 
@@ -8072,7 +8072,7 @@ export function AccountsClient({
         setLastSyncedAt(new Date().toISOString());
         applySharedContactNotesPatchToVisibleState();
         clearCachedMapData();
-        setSaveNotice("Saved to Acumatica.");
+        setSaveNotice("Saved locally.");
         saved = true;
         return saved;
       }
@@ -8108,7 +8108,7 @@ export function AccountsClient({
           setDraft(buildDraft(selectedAfterSave));
         }
 
-        setSaveNotice("Saved to Acumatica.");
+        setSaveNotice("Saved locally.");
         setLastSyncedAt(new Date().toISOString());
         applySharedContactNotesPatchToVisibleState();
         clearCachedMapData();
@@ -8273,7 +8273,7 @@ export function AccountsClient({
         setDraft(buildDraft(selectedAfterSave));
       }
 
-      setSaveNotice("Saved to Acumatica.");
+      setSaveNotice("Saved locally.");
       setLastSyncedAt(new Date().toISOString());
       applySharedContactNotesPatchToVisibleState();
       clearCachedMapData();
@@ -8290,7 +8290,7 @@ export function AccountsClient({
             setDraft(buildDraft(refreshedRow));
             setSaveFieldErrors({});
             setSaveError(
-              "This record changed in Acumatica. The latest version was loaded. Review it and save again.",
+              "This record changed while you were editing. The latest version was loaded. Review it and save again.",
             );
             return saved;
           }
@@ -8906,7 +8906,7 @@ export function AccountsClient({
     }
 
     if (!businessAccountId) {
-      setSaveError("This row has no Acumatica business account ID, so it cannot be deleted.");
+      setSaveError("This row has no source system business account ID, so it cannot be deleted.");
       return false;
     }
 
@@ -9331,7 +9331,7 @@ export function AccountsClient({
           </>
         ) : hasSnapshot ? (
           <>
-            <span>Synced with Acumatica</span>
+            <span>Synced with source system</span>
             <span>Edit in drawer</span>
             <span>Live sync</span>
             {syncUpdatedLabel ? <span>Updated {syncUpdatedLabel}</span> : null}
@@ -10518,7 +10518,7 @@ export function AccountsClient({
                           rel="noreferrer"
                           target="_blank"
                         >
-                          Open account in Acumatica
+                          Open account record
                         </a>
                       ) : null}
                       {contactUrl && contactLabel ? (
@@ -10530,7 +10530,7 @@ export function AccountsClient({
                             rel="noreferrer"
                             target="_blank"
                           >
-                            Open contact in Acumatica
+                            Open contact record
                           </a>
                         </>
                       ) : null}
@@ -10640,7 +10640,7 @@ export function AccountsClient({
                 value={draft.companyPhone ?? ""}
               />
               <span className={styles.lookupHint}>
-                Save writes the company phone to Acumatica and updates the local app database.
+                Save updates the local app database.
               </span>
             </label>
 
@@ -10654,11 +10654,11 @@ export function AccountsClient({
                       : current,
                   )
                 }
-                placeholder="Stored only in this app. Not sent to Acumatica."
+                placeholder="Stored only in this app."
                 value={draft.companyDescription ?? ""}
               />
               <span className={styles.lookupHint}>
-                This description stays in the app only. Save stores it locally and does not push it to Acumatica.
+                This description stays in the app only. Save stores it locally.
               </span>
             </label>
 
@@ -10725,7 +10725,7 @@ export function AccountsClient({
               ) : null}
               {!isEmployeesLoading && !employeesError ? (
                 <span className={styles.lookupHint}>
-                  Choose a Sales Rep from the employee list to update Acumatica owner.
+                  Choose a Sales Rep from the employee list.
                 </span>
               ) : null}
             </label>
@@ -10743,7 +10743,7 @@ export function AccountsClient({
                 value={draft.addressLine1}
               />
               <span className={styles.lookupHint}>
-                Type address and select a suggestion. Save writes the address to Acumatica.
+                Type address and select a suggestion. Save updates the local app database.
               </span>
               {isAddressLookupLoading ? (
                 <span className={styles.lookupLoading}>Looking up suggestions...</span>

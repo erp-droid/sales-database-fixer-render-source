@@ -268,7 +268,7 @@ function readOpenAiApiKey(): string {
 function readPhoneCallActivityType(): string {
   const type = getEnv().ACUMATICA_PHONE_CALL_ACTIVITY_TYPE?.trim();
   if (!type) {
-    throw new Error("ACUMATICA_PHONE_CALL_ACTIVITY_TYPE is required for phone call activity sync.");
+    throw new Error("Phone call activity type is required for phone call activity sync.");
   }
   return type;
 }
@@ -449,7 +449,7 @@ function buildDetailsHtml(session: CallSessionRecord): string {
 }
 
 function buildTranscriptSection(transcriptText: string, truncated: boolean): string {
-  const suffix = truncated ? "\n\n[Transcript truncated to fit Acumatica activity body.]" : "";
+  const suffix = truncated ? "\n\n[Transcript truncated to fit source system activity body.]" : "";
   return `<h3>Transcript</h3><div style="white-space:pre-wrap">${escapeHtml(
     transcriptText + suffix,
   )}</div>`;

@@ -141,11 +141,11 @@ class AcumaticaUpstreamError extends Error {
   constructor(step, cause) {
     const message = cause instanceof Error ? cause.message : String(cause || "Unknown upstream error");
     super(message);
-    this.name = "AcumaticaUpstreamError";
+    this.name = "SourceSystemUpstreamError";
     this.step = step;
     const isLoginLimit = /login limit reached|concurrent api login/i.test(message);
     this.status = isLoginLimit ? 503 : 502;
-    this.code = isLoginLimit ? "ACUMATICA_LOGIN_LIMIT" : "ACUMATICA_UPSTREAM_ERROR";
+    this.code = isLoginLimit ? "SOURCE_SYSTEM_LOGIN_LIMIT" : "SOURCE_SYSTEM_UPSTREAM_ERROR";
   }
 }
 
@@ -291,33 +291,33 @@ function decodeAuthToken(token, options = {}) {
   const raw = cleanString(token);
   const segments = raw.split(".");
   if (segments.length !== 4) {
-    throw new ApiAuthError("AUTH_REQUIRED", "Your Acumatica session is invalid. Sign in again.");
+    throw new ApiAuthError("AUTH_REQUIRED", "Your source system session is invalid. Sign in again.");
   }
 
   const [namespace, version, encodedPayload, signature] = segments;
   if (namespace !== AUTH_TOKEN_NAMESPACE || version !== AUTH_TOKEN_VERSION) {
-    throw new ApiAuthError("AUTH_REQUIRED", "Your Acumatica session is invalid. Sign in again.");
+    throw new ApiAuthError("AUTH_REQUIRED", "Your source system session is invalid. Sign in again.");
   }
 
   const expectedSignature = signAuthPayload(encodedPayload);
   if (!safeTokenEquals(signature, expectedSignature)) {
-    throw new ApiAuthError("AUTH_REQUIRED", "Your Acumatica session is invalid. Sign in again.");
+    throw new ApiAuthError("AUTH_REQUIRED", "Your source system session is invalid. Sign in again.");
   }
 
   let payload;
   try {
     payload = JSON.parse(base64UrlDecode(encodedPayload));
   } catch (_error) {
-    throw new ApiAuthError("AUTH_REQUIRED", "Your Acumatica session is invalid. Sign in again.");
+    throw new ApiAuthError("AUTH_REQUIRED", "Your source system session is invalid. Sign in again.");
   }
 
   if (!payload || typeof payload !== "object") {
-    throw new ApiAuthError("AUTH_REQUIRED", "Your Acumatica session is invalid. Sign in again.");
+    throw new ApiAuthError("AUTH_REQUIRED", "Your source system session is invalid. Sign in again.");
   }
 
   const expiresAt = Number(payload.exp);
   if (!Number.isFinite(expiresAt) || (expiresAt <= Date.now() && !allowExpired)) {
-    throw new ApiAuthError("AUTH_EXPIRED", "Your Acumatica session expired. Sign in again.");
+    throw new ApiAuthError("AUTH_EXPIRED", "Your source system session expired. Sign in again.");
   }
 
   return payload;
@@ -326,7 +326,7 @@ function decodeAuthToken(token, options = {}) {
 function buildClientFromTokenPayload(payload) {
   const cookie = cleanString(payload?.cookie);
   if (!cookie) {
-    throw new ApiAuthError("AUTH_EXPIRED", "Your Acumatica session expired. Sign in again.");
+    throw new ApiAuthError("AUTH_EXPIRED", "Your source system session expired. Sign in again.");
   }
 
   const client = new AcumaticaClient({
@@ -344,7 +344,7 @@ function getSharedAcumaticaClient() {
   if (!username || !password) {
     throw new ApiAuthError(
       "SERVICE_ACCOUNT_NOT_CONFIGURED",
-      "Shared Acumatica service account is not configured on the backend.",
+      "Shared service account is not configured on the backend.",
       500
     );
   }
@@ -629,7 +629,7 @@ async function resolveSignedInQuoteOwner({ req, acumatica, correlationId = "" } 
 
     if (!match) {
       console.warn(
-        `[${correlationId}] Quote owner lookup did not find an active Acumatica employee for signed-in user "${signedInUsername}".`
+        `[${correlationId}] Quote owner lookup did not find an active source system employee for signed-in user "${signedInUsername}".`
       );
       return null;
     }
@@ -2224,7 +2224,7 @@ app.post("/api/acumatica/login", async (req, res) => {
       if (!requestedUsername || !requestedPassword) {
         return res.status(400).json({
           code: "VALIDATION_ERROR",
-          error: "Acumatica username and password are required.",
+          error: "source system username and password are required.",
           correlationId
         });
       }
@@ -2273,7 +2273,7 @@ app.post("/api/acumatica/login", async (req, res) => {
     }
     if (error instanceof AcumaticaUpstreamError) {
       return res.status(error.status).json({
-        code: error.code || "ACUMATICA_UPSTREAM_ERROR",
+        code: error.code || "SOURCE_SYSTEM_UPSTREAM_ERROR",
         error: error.message,
         step: error.step,
         correlationId
@@ -2371,7 +2371,7 @@ app.get("/api/business-accounts", async (req, res) => {
     }
     if (error instanceof AcumaticaUpstreamError) {
       return res.status(error.status).json({
-        code: error.code || "ACUMATICA_UPSTREAM_ERROR",
+        code: error.code || "SOURCE_SYSTEM_UPSTREAM_ERROR",
         error: error.message,
         step: error.step,
         correlationId
@@ -2421,7 +2421,7 @@ app.get("/api/employees", async (req, res) => {
     }
     if (error instanceof AcumaticaUpstreamError) {
       return res.status(error.status).json({
-        code: error.code || "ACUMATICA_UPSTREAM_ERROR",
+        code: error.code || "SOURCE_SYSTEM_UPSTREAM_ERROR",
         error: error.message,
         step: error.step,
         correlationId
@@ -2535,7 +2535,7 @@ app.get("/api/business-accounts/:businessAccountId/contacts", async (req, res) =
     }
     if (error instanceof AcumaticaUpstreamError) {
       return res.status(error.status).json({
-        code: error.code || "ACUMATICA_UPSTREAM_ERROR",
+        code: error.code || "SOURCE_SYSTEM_UPSTREAM_ERROR",
         error: error.message,
         step: error.step,
         correlationId
@@ -2644,7 +2644,7 @@ app.post("/api/business-accounts", async (req, res) => {
     }
     if (error instanceof AcumaticaUpstreamError) {
       return res.status(error.status).json({
-        code: error.code || "ACUMATICA_UPSTREAM_ERROR",
+        code: error.code || "SOURCE_SYSTEM_UPSTREAM_ERROR",
         error: error.message,
         step: error.step,
         correlationId
@@ -2753,7 +2753,7 @@ app.post("/api/contacts", async (req, res) => {
     }
     if (error instanceof AcumaticaUpstreamError) {
       return res.status(error.status).json({
-        code: error.code || "ACUMATICA_UPSTREAM_ERROR",
+        code: error.code || "SOURCE_SYSTEM_UPSTREAM_ERROR",
         error: error.message,
         step: error.step,
         correlationId
@@ -3184,7 +3184,7 @@ app.post("/api/quote/preview", async (req, res) => {
     }
     if (error instanceof AcumaticaUpstreamError) {
       return res.status(error.status).json({
-        code: error.code || "ACUMATICA_UPSTREAM_ERROR",
+        code: error.code || "SOURCE_SYSTEM_UPSTREAM_ERROR",
         error: error.message,
         step: error.step,
         correlationId
@@ -3316,7 +3316,7 @@ app.post("/api/quote/backup-pdf", async (req, res) => {
     }
     if (error instanceof AcumaticaUpstreamError) {
       return res.status(error.status).json({
-        code: error.code || "ACUMATICA_UPSTREAM_ERROR",
+        code: error.code || "SOURCE_SYSTEM_UPSTREAM_ERROR",
         error: error.message,
         step: error.step,
         correlationId
@@ -3524,7 +3524,7 @@ app.post("/api/quote", async (req, res) => {
     }
 
     if (!opportunityId) {
-      throw new AcumaticaUpstreamError("opportunity_create", new Error("Acumatica did not return an opportunity id."));
+      throw new AcumaticaUpstreamError("opportunity_create", new Error("source system did not return an opportunity id."));
     }
 
     const signedInOwnerId = cleanFieldValue(signedInQuoteOwner?.ownerId);
@@ -3613,7 +3613,7 @@ app.post("/api/quote", async (req, res) => {
     const quoteId = quoteIdLooksLikeGuid && extractedQuoteId !== quoteNbr ? "" : extractedQuoteId;
 
     if (!quoteNbr) {
-      throw new AcumaticaUpstreamError("quote_create", new Error("Acumatica did not return a quote number."));
+      throw new AcumaticaUpstreamError("quote_create", new Error("source system did not return a quote number."));
     }
 
     if (signedInOwnerId) {
@@ -3982,7 +3982,7 @@ app.post("/api/quote", async (req, res) => {
                 cleanString(pricingBook.message),
                 isServiceMode
                   ? "Service workbook summary was incomplete; regenerated and switched to a fully seeded workbook."
-                  : "Workbook seed on Acumatica-created file failed; switched BACKUP link to service-generated seeded workbook."
+                  : "Workbook seed on the generated file failed; switched BACKUP link to service-generated seeded workbook."
               ]
                 .filter(Boolean)
                 .join(" | ");
@@ -4316,7 +4316,7 @@ app.post("/api/quote", async (req, res) => {
     }
     if (error instanceof AcumaticaUpstreamError) {
       return res.status(error.status).json({
-        code: error.code || "ACUMATICA_UPSTREAM_ERROR",
+        code: error.code || "SOURCE_SYSTEM_UPSTREAM_ERROR",
         error: error.message,
         step: error.step,
         correlationId
@@ -4386,7 +4386,7 @@ app.get("/api/opportunity-context/:opportunityId", async (req, res) => {
     }
     if (error instanceof AcumaticaUpstreamError) {
       return res.status(error.status).json({
-        code: error.code || "ACUMATICA_UPSTREAM_ERROR",
+        code: error.code || "SOURCE_SYSTEM_UPSTREAM_ERROR",
         error: error.message,
         step: error.step,
         correlationId
@@ -4417,7 +4417,7 @@ app.get("/api/quote/:quoteNbr/url", async (req, res) => {
     if (!quoteUrl) {
       return res.status(500).json({
         code: "CONFIGURATION_ERROR",
-        error: "Unable to build Acumatica quote URL. Check ACU_BASE_URL, ACU_COMPANY, and ACU_QUOTE_SCREEN_ID.",
+        error: "Unable to build source system quote URL. Check ACU_BASE_URL, ACU_COMPANY, and ACU_QUOTE_SCREEN_ID.",
         correlationId
       });
     }

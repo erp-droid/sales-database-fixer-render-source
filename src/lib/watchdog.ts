@@ -442,7 +442,7 @@ async function diagnoseAndRepairJob(job: {
         issue: "auth_failure",
         action: "clear_auth_retry",
         result: "requeued",
-        detail: "Cleared cached Acumatica session. Requeued for retry.",
+        detail: "Cleared cached source system session. Requeued for retry.",
       };
     }
 
@@ -463,7 +463,7 @@ async function diagnoseAndRepairJob(job: {
       requeueCallActivitySyncJob(sessionId, `Watchdog: retrying after transient error (attempt ${attempts + 1}).`);
       return {
         sessionId,
-        issue: "transient_acumatica_error",
+        issue: "transient_source_error",
         action: "requeue",
         result: "requeued",
         detail: `Transient error (${error}). Requeued for retry.`,
@@ -521,7 +521,7 @@ async function diagnoseAndRepairJob(job: {
           issue: "transcribed_not_synced",
           action: "process",
           result: "fixed",
-          detail: `Pushed through to Acumatica. Activity ${result.activityId ?? "created"}.`,
+          detail: `Pushed through to source system. Activity ${result.activityId ?? "created"}.`,
         };
       }
 

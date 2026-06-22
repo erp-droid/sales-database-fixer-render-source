@@ -2181,21 +2181,21 @@ export function AccountsMapClient() {
 
         setSession(payload);
         setError(
-          "Your Acumatica session has expired. Sign in again to refresh map data.",
+          "Your source system session has expired. Sign in again to refresh map data.",
         );
         return;
       }
 
       setSession({ authenticated: true, user: null });
       setError(
-        "Acumatica session check is temporarily unavailable. You are still signed in with your existing cookie. Refresh map data first; only sign in again if this keeps failing for a few minutes.",
+        "source system session check is temporarily unavailable. You are still signed in with your existing cookie. Refresh map data first; only sign in again if this keeps failing for a few minutes.",
       );
     }
 
     fetchSession().catch(() => {
       setSession({ authenticated: true, user: null });
       setError(
-        "Acumatica session check is temporarily unavailable. You are still signed in with your existing cookie. Refresh map data first; only sign in again if this keeps failing for a few minutes.",
+        "source system session check is temporarily unavailable. You are still signed in with your existing cookie. Refresh map data first; only sign in again if this keeps failing for a few minutes.",
       );
     });
   }, [router]);

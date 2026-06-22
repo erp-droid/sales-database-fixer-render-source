@@ -11,6 +11,13 @@ type ReadyGeocode = {
 
 let geocodeInFlight: Promise<void> | null = null;
 
+function isClosedDatabaseError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /database connection is not open/i.test(error.message)
+  );
+}
+
 function normalizeText(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? "";
 }
@@ -224,6 +231,12 @@ export function kickGeocodeWorker(): void {
     try {
       while ((await geocodePendingAddresses(150)) > 0) {
         // keep draining pending work
+      }
+    } catch (error) {
+      if (!isClosedDatabaseError(error)) {
+        console.warn("[geocode] background worker failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     } finally {
       geocodeInFlight = null;

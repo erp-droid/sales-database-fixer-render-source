@@ -1528,21 +1528,21 @@ export function DataQualityClient({
 
         setSession(payload);
         setSessionWarning(
-          "Your Acumatica session has expired. Sign in again to refresh quality data.",
+          "Your source system session has expired. Sign in again to refresh quality data.",
         );
         return;
       }
 
       setSession({ authenticated: true, user: null });
       setSessionWarning(
-        "Acumatica session validation is temporarily unavailable. You can still use cached data and retry refresh.",
+        "source system session validation is temporarily unavailable. You can still use cached data and retry refresh.",
       );
     }
 
     fetchSession().catch(() => {
       setSession({ authenticated: true, user: null });
       setSessionWarning(
-        "Acumatica session validation is temporarily unavailable. You can still use cached data and retry refresh.",
+        "source system session validation is temporarily unavailable. You can still use cached data and retry refresh.",
       );
     });
   }, [router]);
@@ -2177,7 +2177,7 @@ export function DataQualityClient({
       payloadOverrides.industryType = draft.industryType || null;
     } else if (metric === "invalidPhone") {
       if (item.contactId === null || item.businessAccountId.trim().length === 0) {
-        setIssuesError("This phone number must be fixed from the contact record in Acumatica.");
+        setIssuesError("This phone number must be fixed from the contact record in source system.");
         return;
       }
 
@@ -2213,7 +2213,7 @@ export function DataQualityClient({
       }
     } else if (metric === "missingContactEmail") {
       if (item.contactId === null || item.businessAccountId.trim().length === 0) {
-        setIssuesError("This email must be fixed from the contact record in Acumatica.");
+        setIssuesError("This email must be fixed from the contact record in source system.");
         return;
       }
 
@@ -2696,7 +2696,7 @@ export function DataQualityClient({
           {isRefreshingSummary ? "Refreshing..." : "Refresh now"}
         </button>
       }
-      subtitle="Fast cached snapshot + live Acumatica verification for missing fields, duplicates, and sales rep coverage."
+      subtitle="Fast cached snapshot + live source system verification for missing fields, duplicates, and sales rep coverage."
       title="Data Quality Check"
       userName={session?.user?.name ?? "Signed in"}
     >

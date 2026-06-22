@@ -160,7 +160,7 @@ export function DeletionQueueClient() {
       if (sessionPayload && "authenticated" in sessionPayload) {
         setSession(sessionPayload);
         if (!sessionPayload.authenticated) {
-          setError("Your Acumatica session has expired. Sign in again to review queued deletions.");
+          setError("Your source system session has expired. Sign in again to review queued deletions.");
         }
       }
     }
@@ -536,7 +536,7 @@ export function DeletionQueueClient() {
               <th>Company</th>
               <th>Account Type</th>
               <th>Opportunities</th>
-              <th>Acumatica</th>
+              <th>source system</th>
               <th>Affected Fields</th>
               <th>Reason</th>
               <th>Requested</th>

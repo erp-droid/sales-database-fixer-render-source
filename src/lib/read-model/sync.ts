@@ -60,7 +60,7 @@ const RECENT_CALL_ACTIVITY_BLOCK_WINDOW_MS = 5 * 60 * 1000;
 const MIN_STALE_RUNNING_SYNC_AFTER_MS = 10 * 60 * 1000;
 const MIN_STALE_ACTIVE_CALL_BLOCK_AFTER_MS = 30 * 60 * 1000;
 export const FULL_READ_MODEL_SYNC_DISABLED_REASON =
-  "Full Acumatica read-model sync is disabled because SQLite is the source of truth for local account edits.";
+  "Full source system read-model sync is disabled because SQLite is the source of truth for local account edits.";
 
 function toSyncStatusResponse(record: StoredSyncState | undefined): SyncStatusResponse {
   let progress: SyncStatusResponse["progress"] = null;
@@ -650,7 +650,7 @@ export function triggerReadModelSync(
   if (getEnv().LOCAL_DATABASE_ONLY) {
     throw new HttpError(
       409,
-      "Full Acumatica sync is disabled in local database only mode.",
+      "Full source system sync is disabled in local database only mode.",
     );
   }
 

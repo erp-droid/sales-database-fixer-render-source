@@ -508,7 +508,7 @@ function parseAcumaticaErrorText(rawText, fallback = "") {
   }
 
   if (text.startsWith("<!DOCTYPE html") || text.startsWith("<html")) {
-    return fallback || "Acumatica returned an HTML error page.";
+    return fallback || "source system returned an HTML error page.";
   }
 
   const singleLine = text.replace(/\s+/g, " ").trim();
@@ -771,7 +771,7 @@ function buildFilesPutUploadPath(filesPutLink, fileName) {
 
 function extractAcumaticaStatusCode(error) {
   if (!(error instanceof Error)) return 0;
-  const match = error.message.match(/Acumatica request failed \((\d{3})\)/);
+  const match = error.message.match(/source system request failed \((\d{3})\)/);
   return match ? Number(match[1]) : 0;
 }
 
@@ -808,7 +808,7 @@ function isConcurrentLoginLimitMessage(message) {
 export class AcumaticaValidationError extends Error {
   constructor(code, message, details = {}) {
     super(message);
-    this.name = "AcumaticaValidationError";
+    this.name = "SourceSystemValidationError";
     this.code = code;
     this.status = 422;
     this.details = details;
@@ -816,9 +816,9 @@ export class AcumaticaValidationError extends Error {
 }
 
 export class AcumaticaAuthExpiredError extends Error {
-  constructor(message = "Your Acumatica session is invalid. Sign in again.") {
+  constructor(message = "Your source system session is invalid. Sign in again.") {
     super(message);
-    this.name = "AcumaticaAuthExpiredError";
+    this.name = "SourceSystemAuthExpiredError";
     this.code = "AUTH_EXPIRED";
     this.status = 401;
   }
@@ -874,10 +874,10 @@ export class AcumaticaClient {
         const detail = parseAcumaticaErrorText(text, response.statusText);
         if (isConcurrentLoginLimitMessage(detail)) {
           throw new Error(
-            "Acumatica login limit reached for this API user. Close old API sessions or increase concurrent API logins on Users (SM201010), then retry."
+            "source system login limit reached for this API user. Close old API sessions or increase concurrent API logins on Users (SM201010), then retry."
           );
         }
-        throw new Error(`Acumatica login failed (${response.status}): ${detail || response.statusText}`);
+        throw new Error(`source system login failed (${response.status}): ${detail || response.statusText}`);
       }
 
       let cookies = [];
@@ -889,7 +889,7 @@ export class AcumaticaClient {
       }
       this.cookie = cookies.map((cookie) => cookie.split(";")[0]).join("; ");
       if (!this.cookie) {
-        throw new Error("Acumatica login did not return a session cookie.");
+        throw new Error("source system login did not return a session cookie.");
       }
     })();
 
@@ -957,7 +957,7 @@ export class AcumaticaClient {
     if (!response.ok) {
       const text = await response.text();
       const detail = parseAcumaticaErrorText(text, response.statusText);
-      throw new Error(`Acumatica request failed (${response.status}): ${detail || response.statusText}`);
+      throw new Error(`source system request failed (${response.status}): ${detail || response.statusText}`);
     }
 
     if (response.status === 204) return null;
@@ -1043,7 +1043,7 @@ export class AcumaticaClient {
   async resolveEntityMeta({ preferred, candidates, errorMessage }) {
     const entityName = await this.resolveEntityName(preferred, candidates);
     if (!entityName) {
-      throw new Error(errorMessage || "Could not resolve entity metadata from the Acumatica endpoint.");
+      throw new Error(errorMessage || "Could not resolve entity metadata from the source system endpoint.");
     }
     const meta = await this.getEntityMeta(entityName);
     return {
@@ -1062,7 +1062,7 @@ export class AcumaticaClient {
     return this.resolveEntityMeta({
       preferred: this.settings.quoteEntity,
       candidates: DEFAULT_QUOTE_ENTITY_CANDIDATES,
-      errorMessage: "Could not resolve a Project Quote entity from the Acumatica endpoint."
+      errorMessage: "Could not resolve a Project Quote entity from the source system endpoint."
     });
   }
 
@@ -1079,7 +1079,7 @@ export class AcumaticaClient {
     return this.resolveEntityMeta({
       preferred: this.settings.opportunity?.entity,
       candidates: DEFAULT_OPPORTUNITY_ENTITY_CANDIDATES,
-      errorMessage: "Could not resolve an Opportunity entity from the Acumatica endpoint."
+      errorMessage: "Could not resolve an Opportunity entity from the source system endpoint."
     });
   }
 
@@ -1133,7 +1133,7 @@ export class AcumaticaClient {
       throw new Error(`Opportunity update failed for attempted entities. ${summary}`);
     }
 
-    throw new Error("Could not resolve an Opportunity entity from the Acumatica endpoint.");
+    throw new Error("Could not resolve an Opportunity entity from the source system endpoint.");
   }
 
   async opportunityMatchesOwner(opportunityId, ownerId) {
@@ -1170,7 +1170,7 @@ export class AcumaticaClient {
     return this.resolveEntityMeta({
       preferred: this.settings.businessAccountEntity || "BusinessAccount",
       candidates: DEFAULT_BUSINESS_ACCOUNT_ENTITY_CANDIDATES,
-      errorMessage: "Could not resolve a Business Account entity from the Acumatica endpoint."
+      errorMessage: "Could not resolve a Business Account entity from the source system endpoint."
     });
   }
 
@@ -1178,7 +1178,7 @@ export class AcumaticaClient {
     return this.resolveEntityMeta({
       preferred: "",
       candidates: DEFAULT_CONTACT_ENTITY_CANDIDATES,
-      errorMessage: "Could not resolve a Contact entity from the Acumatica endpoint."
+      errorMessage: "Could not resolve a Contact entity from the source system endpoint."
     });
   }
 
@@ -1186,7 +1186,7 @@ export class AcumaticaClient {
     return this.resolveEntityMeta({
       preferred: this.settings.employeeEntity || "Employee",
       candidates: DEFAULT_EMPLOYEE_ENTITY_CANDIDATES,
-      errorMessage: "Could not resolve an Employee entity from the Acumatica endpoint."
+      errorMessage: "Could not resolve an Employee entity from the source system endpoint."
     });
   }
 
@@ -1416,7 +1416,7 @@ export class AcumaticaClient {
       throw new Error(`Business Account create failed for attempted entities. ${summary}`);
     }
 
-    throw new Error("Could not resolve a Business Account entity from the Acumatica endpoint.");
+    throw new Error("Could not resolve a Business Account entity from the source system endpoint.");
   }
 
   async createContact(input = {}) {
@@ -1496,7 +1496,7 @@ export class AcumaticaClient {
       throw new Error(`Contact create failed for attempted entities. ${summary}`);
     }
 
-    throw new Error("Could not resolve a Contact entity from the Acumatica endpoint.");
+    throw new Error("Could not resolve a Contact entity from the source system endpoint.");
   }
 
   async createQuote(payload) {
@@ -1554,7 +1554,7 @@ export class AcumaticaClient {
       throw new Error(`Quote create failed for attempted entities. ${summary}`);
     }
 
-    throw new Error("Could not resolve a Project Quote entity from the Acumatica endpoint.");
+    throw new Error("Could not resolve a Project Quote entity from the source system endpoint.");
   }
 
   async createOpportunity(payload) {
@@ -1611,14 +1611,14 @@ export class AcumaticaClient {
         .join(" | ");
       throw new Error(`Opportunity create failed for attempted entities. ${summary}`);
     }
-    throw new Error("Could not resolve an Opportunity entity from the Acumatica endpoint.");
+    throw new Error("Could not resolve an Opportunity entity from the source system endpoint.");
   }
 
   async updateQuote(entityName, payload) {
     try {
       return await this.request(entityName, { method: "PUT", body: payload });
     } catch (error) {
-      const isNotFound = error instanceof Error && error.message.includes("Acumatica request failed (404)");
+      const isNotFound = error instanceof Error && error.message.includes("source system request failed (404)");
       if (!isNotFound) throw error;
 
       const keyCandidates = Object.entries(payload || {})
@@ -1693,9 +1693,9 @@ export class AcumaticaClient {
     const isRecoverableStrategyError = (error) => {
       if (!(error instanceof Error)) return false;
       return (
-        error.message.includes("Acumatica request failed (400)") ||
-        error.message.includes("Acumatica request failed (404)") ||
-        error.message.includes("Acumatica request failed (500)")
+        error.message.includes("source system request failed (400)") ||
+        error.message.includes("source system request failed (404)") ||
+        error.message.includes("source system request failed (500)")
       );
     };
 
@@ -1733,7 +1733,7 @@ export class AcumaticaClient {
         offset += batch.length;
       }
     } catch (error) {
-      const isNotFound = error instanceof Error && error.message.includes("Acumatica request failed (404)");
+      const isNotFound = error instanceof Error && error.message.includes("source system request failed (404)");
       if (!isNotFound) throw error;
       rows.length = 0;
       offset = 0;
@@ -1850,9 +1850,9 @@ export class AcumaticaClient {
     const escapedId = accountId.replace(/'/g, "''");
     const isRecoverableQueryError = (error) =>
       error instanceof Error &&
-      (error.message.includes("Acumatica request failed (400)") ||
-        error.message.includes("Acumatica request failed (404)") ||
-        error.message.includes("Acumatica request failed (500)"));
+      (error.message.includes("source system request failed (400)") ||
+        error.message.includes("source system request failed (404)") ||
+        error.message.includes("source system request failed (500)"));
 
     const entityNames = [preferredEntity];
     try {
@@ -2491,9 +2491,9 @@ export class AcumaticaClient {
     const scopedFromBusinessAccount = await this.listBusinessAccountContacts(businessAccount.id || businessAccount.code);
     const isRecoverableContactLookupError = (error) =>
       error instanceof Error &&
-      (error.message.includes("Acumatica request failed (400)") ||
-        error.message.includes("Acumatica request failed (404)") ||
-        error.message.includes("Acumatica request failed (500)"));
+      (error.message.includes("source system request failed (400)") ||
+        error.message.includes("source system request failed (404)") ||
+        error.message.includes("source system request failed (500)"));
 
     let contacts = [];
     try {
@@ -2982,7 +2982,7 @@ export class AcumaticaClient {
         try {
           return await this.updateQuote(entityCandidate, payload);
         } catch (error) {
-          const isNotFound = error instanceof Error && error.message.includes("Acumatica request failed (404)");
+          const isNotFound = error instanceof Error && error.message.includes("source system request failed (404)");
           if (!isNotFound) throw error;
           lastNotFoundError = error;
         }
@@ -3746,7 +3746,7 @@ export class AcumaticaClient {
           }
 
           throw new Error(
-            `Acumatica action ${plan.actionName} failed (${response.status}): ${detail || response.statusText}`
+            `source system action ${plan.actionName} failed (${response.status}): ${detail || response.statusText}`
           );
         }
 
@@ -3758,10 +3758,10 @@ export class AcumaticaClient {
     if (recoverableErrors.length) {
       const summarized = Array.from(new Set(recoverableErrors)).slice(0, 6).join(" | ");
       throw new Error(
-        `Acumatica pricing-book action failed for all attempted entity/action variants. ${summarized}`
+        `source system pricing-book action failed for all attempted entity/action variants. ${summarized}`
       );
     }
-    throw new Error("Acumatica pricing-book action failed for all attempted variants.");
+    throw new Error("source system pricing-book action failed for all attempted variants.");
   }
 
   async fetchBinaryByAbsoluteUrl(url, options = {}) {
@@ -3771,7 +3771,7 @@ export class AcumaticaClient {
         ok: false,
         status: 0,
         contentType: "",
-        error: "Empty or invalid Acumatica URL."
+        error: "Empty or invalid source system URL."
       };
     }
 
@@ -4005,19 +4005,19 @@ export class AcumaticaClient {
         response.status === 422 &&
         (parsed?.QuoteID || parsed?.QuoteNbr || parsed?.id || parsed?.ID)
       ) {
-        lastRecoverableError = new Error(`Acumatica action ${actionName} validation mismatch (${response.status}).`);
+        lastRecoverableError = new Error(`source system action ${actionName} validation mismatch (${response.status}).`);
         continue;
       }
 
       if (response.status === 404 && /can't find action/i.test(rawText.toLowerCase())) {
-        throw new Error(`Acumatica action ${actionName} was not found on entity ${entityName}.`);
+        throw new Error(`source system action ${actionName} was not found on entity ${entityName}.`);
       }
 
-      throw new Error(`Acumatica action ${actionName} failed (${response.status}): ${detail || response.statusText}`);
+      throw new Error(`source system action ${actionName} failed (${response.status}): ${detail || response.statusText}`);
     }
 
     if (lastRecoverableError) throw lastRecoverableError;
-    throw new Error(`Acumatica action ${actionName} failed for all invocation variants.`);
+    throw new Error(`source system action ${actionName} failed for all invocation variants.`);
   }
 }
 

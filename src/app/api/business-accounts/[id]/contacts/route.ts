@@ -120,258 +120,40 @@ export async function POST(
       auditCompanyName = storedAnchorRow.companyName;
     }
 
-    if (getEnv().LOCAL_DATABASE_ONLY) {
-      if (storedRows.length === 0) {
-        throw new HttpError(
-          404,
-          "Business account is not in the local SQLite snapshot. Reload the account and try again.",
-        );
-      }
-
-      const localBusinessAccountRecordId =
-        storedAnchorRow?.accountRecordId ?? storedAnchorRow?.id ?? id;
-      const localBusinessAccountId = storedAnchorRow?.businessAccountId?.trim() ?? "";
-      if (!localBusinessAccountId) {
-        throw new HttpError(
-          422,
-          "Business account ID is missing on this local account. Contact creation cannot continue.",
-        );
-      }
-
-      const localContact = appendLocalContactRow(storedRows, contactRequest);
-      const responseBody: BusinessAccountContactCreateResponse = {
-        created: true,
-        businessAccountRecordId: localBusinessAccountRecordId,
-        businessAccountId: localBusinessAccountId,
-        contactId: localContact.contactId,
-        accountRows: localContact.rows,
-        createdRow: localContact.createdRow,
-        setAsPrimary: true,
-        warnings: ["Saved in Sales MeadowBrook only. Acumatica contact creation is disabled."],
-      };
-
-      if (getEnv().READ_MODEL_ENABLED) {
-        replaceReadModelAccountRows(
-          localBusinessAccountRecordId,
-          responseBody.accountRows,
-        );
-      }
-
-      logContactCreateAudit({
-        actor,
-        request: contactRequest,
-        resultCode: "succeeded",
-        businessAccountRecordId: responseBody.businessAccountRecordId,
-        businessAccountId: responseBody.businessAccountId,
-        companyName: responseBody.createdRow.companyName,
-        contactId: responseBody.contactId,
-        createdRow: responseBody.createdRow,
-      });
-
-      const response = NextResponse.json(
-        {
-          ...responseBody,
-          accountRows: applyLocalAccountMetadataToRows(responseBody.accountRows),
-          createdRow:
-            applyLocalAccountMetadataToRow(responseBody.createdRow) ??
-            responseBody.createdRow,
-        },
-        { status: 201 },
+    if (storedRows.length === 0) {
+      throw new HttpError(
+        404,
+        "Business account is not in the local database. Reload the account and try again.",
       );
-      if (authCookieRefresh.value) {
-        setAuthCookie(response, authCookieRefresh.value);
-      }
-      return response;
     }
 
-    let serverContext: Awaited<ReturnType<typeof fetchContactMergeServerContext>>;
-    try {
-      serverContext = await fetchContactMergeServerContext(
-        cookieValue,
-        id,
-        authCookieRefresh,
-      );
-    } catch (error) {
-      const canFallback =
-        storedRows.length > 0 && shouldFallbackToLocalContactCreate(error);
-      if (!canFallback) {
-        throw error;
-      }
-
-      const fallbackBusinessAccountRecordId =
-        storedAnchorRow?.accountRecordId ?? storedAnchorRow?.id ?? id;
-      const fallbackBusinessAccountId = storedAnchorRow?.businessAccountId?.trim() ?? "";
-      if (!fallbackBusinessAccountId) {
-        throw new HttpError(
-          422,
-          "Business account ID is missing on this local account. Contact creation cannot continue.",
-        );
-      }
-
-      const localContact = appendLocalContactRow(storedRows, contactRequest);
-      const responseBody: BusinessAccountContactCreateResponse = {
-        created: true,
-        businessAccountRecordId: fallbackBusinessAccountRecordId,
-        businessAccountId: fallbackBusinessAccountId,
-        contactId: localContact.contactId,
-        accountRows: localContact.rows,
-        createdRow: localContact.createdRow,
-        setAsPrimary: true,
-        warnings: [
-          "Saved in Sales MeadowBrook only. This account is not currently available in Acumatica.",
-        ],
-      };
-
-      if (getEnv().READ_MODEL_ENABLED) {
-        replaceReadModelAccountRows(
-          fallbackBusinessAccountRecordId,
-          responseBody.accountRows,
-        );
-      }
-
-      logContactCreateAudit({
-        actor,
-        request: contactRequest,
-        resultCode: "succeeded",
-        businessAccountRecordId: responseBody.businessAccountRecordId,
-        businessAccountId: responseBody.businessAccountId,
-        companyName: responseBody.createdRow.companyName,
-        contactId: responseBody.contactId,
-        createdRow: responseBody.createdRow,
-      });
-
-      const response = NextResponse.json(
-        {
-          ...responseBody,
-          accountRows: applyLocalAccountMetadataToRows(responseBody.accountRows),
-          createdRow:
-            applyLocalAccountMetadataToRow(responseBody.createdRow) ??
-            responseBody.createdRow,
-        },
-        { status: 201 },
-      );
-      if (authCookieRefresh.value) {
-        setAuthCookie(response, authCookieRefresh.value);
-      }
-      return response;
-    }
-    const currentRawAccount = serverContext.rawAccount;
-    const businessAccountId = readBusinessAccountId(currentRawAccount);
-    if (!businessAccountId) {
+    const localBusinessAccountRecordId =
+      storedAnchorRow?.accountRecordId ?? storedAnchorRow?.id ?? id;
+    const localBusinessAccountId = storedAnchorRow?.businessAccountId?.trim() ?? "";
+    if (!localBusinessAccountId) {
       throw new HttpError(
         422,
-        "Business account ID is missing on this account. Contact creation cannot continue.",
-      );
-    }
-    auditBusinessAccountRecordId = serverContext.resolvedRecordId;
-    auditBusinessAccountId = businessAccountId;
-    auditCompanyName = readBusinessAccountName(currentRawAccount);
-
-    const createdContact = await createContact(
-      cookieValue,
-      buildContactCreatePayload({
-        request: contactRequest,
-        businessAccountId,
-      }),
-      authCookieRefresh,
-    );
-
-    const contactId = readWrappedNumber(createdContact, "ContactID");
-    if (!contactId) {
-      throw new HttpError(
-        502,
-        "Acumatica created the contact but did not return a Contact ID.",
+        "Business account ID is missing on this local account. Contact creation cannot continue.",
       );
     }
 
-    try {
-      await setBusinessAccountPrimaryContact(
-        cookieValue,
-        serverContext,
-        contactId,
-        authCookieRefresh,
-        createdContact,
-      );
-    } catch (error) {
-      let refreshedRawAccount = currentRawAccount;
-      try {
-        refreshedRawAccount = await fetchBusinessAccountById(
-          cookieValue,
-          serverContext.resolvedRecordId,
-          authCookieRefresh,
-        );
-      } catch {
-        // Keep existing account state if refresh fails after a partial completion.
-      }
-
-      const refreshedRows = buildAccountRowsFromRawAccount(refreshedRawAccount);
-      const responseBody: BusinessAccountContactCreatePartialResponse = {
-        created: false,
-        partial: true,
-        businessAccountRecordId: serverContext.resolvedRecordId,
-        businessAccountId,
-        contactId,
-        accountRows: refreshedRows,
-        error:
-          error instanceof HttpError
-            ? error.message
-            : "Contact was created, but the primary contact switch failed.",
-      };
-      if (getEnv().READ_MODEL_ENABLED) {
-        replaceReadModelAccountRows(serverContext.resolvedRecordId, refreshedRows);
-      }
-      logContactCreateAudit({
-        actor,
-        request: contactRequest,
-        resultCode: "partial",
-        businessAccountRecordId: serverContext.resolvedRecordId,
-        businessAccountId,
-        companyName: auditCompanyName,
-        contactId,
-        createdRow: refreshedRows.find((row) => row.contactId === contactId) ?? null,
-      });
-      const response = NextResponse.json(
-        {
-          ...responseBody,
-          accountRows: applyLocalAccountMetadataToRows(responseBody.accountRows),
-        },
-        { status: 409 },
-      );
-      if (authCookieRefresh.value) {
-        setAuthCookie(response, authCookieRefresh.value);
-      }
-      return response;
-    }
-
-    const refreshedRawAccount = await fetchBusinessAccountById(
-      cookieValue,
-      serverContext.resolvedRecordId,
-      authCookieRefresh,
-    );
-    const accountRows = buildAccountRowsFromRawAccount(refreshedRawAccount);
-    const createdRow =
-      accountRows.find((row) => row.contactId === contactId) ?? accountRows[0];
-
-    if (!createdRow) {
-      throw new HttpError(
-        502,
-        "Contact was created, but the app could not normalize the refreshed account rows.",
-      );
-    }
-
+    const localContact = appendLocalContactRow(storedRows, contactRequest);
     const responseBody: BusinessAccountContactCreateResponse = {
       created: true,
-      businessAccountRecordId: serverContext.resolvedRecordId,
-      businessAccountId,
-      contactId,
-      accountRows,
-      createdRow,
+      businessAccountRecordId: localBusinessAccountRecordId,
+      businessAccountId: localBusinessAccountId,
+      contactId: localContact.contactId,
+      accountRows: localContact.rows,
+      createdRow: localContact.createdRow,
       setAsPrimary: true,
-      warnings: [],
+      warnings: ["Saved locally."],
     };
 
     if (getEnv().READ_MODEL_ENABLED) {
-      replaceReadModelAccountRows(serverContext.resolvedRecordId, accountRows);
+      replaceReadModelAccountRows(
+        localBusinessAccountRecordId,
+        responseBody.accountRows,
+      );
     }
 
     logContactCreateAudit({
@@ -380,24 +162,26 @@ export async function POST(
       resultCode: "succeeded",
       businessAccountRecordId: responseBody.businessAccountRecordId,
       businessAccountId: responseBody.businessAccountId,
-      companyName: createdRow.companyName,
-      contactId,
-      createdRow,
+      companyName: responseBody.createdRow.companyName,
+      contactId: responseBody.contactId,
+      createdRow: responseBody.createdRow,
     });
 
     const response = NextResponse.json(
       {
         ...responseBody,
         accountRows: applyLocalAccountMetadataToRows(responseBody.accountRows),
-        createdRow: applyLocalAccountMetadataToRow(responseBody.createdRow) ?? responseBody.createdRow,
+        createdRow:
+          applyLocalAccountMetadataToRow(responseBody.createdRow) ??
+          responseBody.createdRow,
       },
       { status: 201 },
     );
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
     }
-
     return response;
+
   } catch (error) {
     if (actor && contactRequest) {
       logContactCreateAudit({

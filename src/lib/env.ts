@@ -426,8 +426,8 @@ export function getEnv(): AppEnv {
     "http://127.0.0.1";
 
   if (!parsed.data.ACUMATICA_BASE_URL) {
-    console.error("[env] ACUMATICA_BASE_URL missing; using fallback base URL", {
-      authProvider: parsed.data.AUTH_PROVIDER,
+    console.error("[env] Source base URL missing; using fallback base URL", {
+      sourceAuthEnabled: parsed.data.AUTH_PROVIDER === "acumatica",
       fallbackBaseUrl: resolvedAcumaticaBaseUrl,
     });
   }
@@ -452,7 +452,7 @@ export function getEnv(): AppEnv {
     parsed.data.ACUMATICA_COMPANY ??
     (parsed.data.AUTH_PROVIDER === "acumatica" ? "MeadowBrook Live" : undefined);
   if (parsed.data.AUTH_PROVIDER === "acumatica" && !parsed.data.ACUMATICA_COMPANY) {
-    console.warn("[env] ACUMATICA_COMPANY missing; using fallback company", {
+    console.warn("[env] Sign-in company missing; using fallback company", {
       fallbackCompany: resolvedAcumaticaCompany,
     });
   }

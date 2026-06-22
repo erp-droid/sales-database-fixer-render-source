@@ -197,7 +197,7 @@ export function buildCompanyAttributeSuggestionInput(
     .join(", ");
 
   const contextLines = [
-    "Classify this company into MeadowBrook Acumatica attribute values using current public web information.",
+    "Classify this company into MeadowBrook source system attribute values using current public web information.",
     "Be conservative. If the evidence is weak, conflicting, or too generic, return NONE for that field.",
     "Category is an internal A/B/C/D client tier. Only suggest it when public evidence clearly supports a tier; otherwise return NONE.",
     "Use General only when a company does not clearly fit any narrower sub-category.",

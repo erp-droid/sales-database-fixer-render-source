@@ -335,7 +335,7 @@ async function repairMailActivitySyncWithResolver(
     } catch (error) {
       mergedError = mergeFailureMessage(
         mergedError,
-        `Local Acumatica fallback failed for ${target.label}: ${getErrorMessage(error)}`,
+        `Local source system fallback failed for ${target.label}: ${getErrorMessage(error)}`,
       );
     }
   }
@@ -345,7 +345,7 @@ async function repairMailActivitySyncWithResolver(
       ...upstreamPayload,
       activityError:
         mergedError ??
-        "Acumatica activity sync failed in both the mail service and the local fallback.",
+        "source system activity sync failed in both the mail service and the local fallback.",
     };
   }
 

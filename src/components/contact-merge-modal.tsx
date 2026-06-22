@@ -414,7 +414,7 @@ export function ContactMergeModal({
     const confirmed = window.confirm(
       `This will queue ${loserContacts.length} duplicate contact${
         loserContacts.length === 1 ? "" : "s"
-      } for merge. The loser contact${loserContacts.length === 1 ? "" : "s"} will disappear from the app immediately, but Acumatica will not be updated until the queued action is approved and reaches the scheduled cutoff.`,
+      } for merge. The loser contact${loserContacts.length === 1 ? "" : "s"} will disappear from the app immediately, but source system will not be updated until the queued action is approved and reaches the scheduled cutoff.`,
     );
     if (!confirmed) {
       return;

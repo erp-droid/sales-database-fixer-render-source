@@ -264,7 +264,7 @@ describe("watchdog", () => {
 
     const report = await runWatchdog();
     expect(report.actions).toHaveLength(1);
-    expect(report.actions[0].issue).toBe("transient_acumatica_error");
+    expect(report.actions[0].issue).toBe("transient_source_error");
     expect(report.actions[0].result).toBe("requeued");
   });
 

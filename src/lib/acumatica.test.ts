@@ -212,7 +212,7 @@ describe("Acumatica endpoint resolution", () => {
     await expect(validateSessionWithAcumatica("cookie")).rejects.toMatchObject({
       status: 502,
       message:
-        'Acumatica REST endpoint was not found for company "MeadowBrook Live". Tested:\n/entity/lightspeed/24.200.001\n/entity/eCommerce/24.200.001\n/entity/Default/24.200.001',
+        'source system REST endpoint was not found for company "MeadowBrook Live". Tested:\n/entity/lightspeed/24.200.001\n/entity/eCommerce/24.200.001\n/entity/Default/24.200.001',
     });
   });
 
@@ -1076,7 +1076,7 @@ describe("Acumatica request logging", () => {
     const { validateSessionWithAcumatica } = await import("@/lib/acumatica");
     await validateSessionWithAcumatica("cookie");
 
-    const requestLogs = infoSpy.mock.calls.filter((call) => call[0] === "[acumatica]");
+    const requestLogs = infoSpy.mock.calls.filter((call) => call[0] === "[source-system]");
     expect(requestLogs).toHaveLength(0);
   });
 
@@ -1094,7 +1094,7 @@ describe("Acumatica request logging", () => {
     const { validateSessionWithAcumatica } = await import("@/lib/acumatica");
     await validateSessionWithAcumatica("cookie");
 
-    const requestLogs = infoSpy.mock.calls.filter((call) => call[0] === "[acumatica]");
+    const requestLogs = infoSpy.mock.calls.filter((call) => call[0] === "[source-system]");
     expect(requestLogs).toHaveLength(1);
     expect(requestLogs[0]?.[1]).toMatchObject({
       status: 200,
@@ -1118,7 +1118,7 @@ describe("Acumatica request logging", () => {
       status: 500,
     });
 
-    const requestLogs = warnSpy.mock.calls.filter((call) => call[0] === "[acumatica]");
+    const requestLogs = warnSpy.mock.calls.filter((call) => call[0] === "[source-system]");
     expect(requestLogs).toHaveLength(1);
     expect(requestLogs[0]?.[1]).toMatchObject({
       status: 500,

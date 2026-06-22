@@ -156,7 +156,39 @@ describe("POST /api/business-accounts/[id]/contacts", () => {
     buildAccountRowsFromRawAccount.mockReturnValue([buildRow()]);
   });
 
-  it("passes normalized phone and extension to the Acumatica contact payload", async () => {
+  it("writes the new contact to the local read model", async () => {
+    const storedRows = [buildRow()];
+    readStoredBusinessAccountRowsFromReadModel.mockReturnValue(storedRows);
+    appendLocalContactRow.mockReturnValue({
+      contactId: -170001,
+      rows: [
+        {
+          ...storedRows[0],
+          rowKey: "record-1:contact:-170001",
+          contactId: -170001,
+          primaryContactName: "Jorge Serrano",
+          primaryContactJobTitle: "Sales",
+          primaryContactPhone: "416-230-4681",
+          primaryContactExtension: "31",
+          primaryContactEmail: "jserrano@meadowb.com",
+          primaryContactId: -170001,
+          isPrimaryContact: true,
+        },
+      ],
+      createdRow: {
+        ...storedRows[0],
+        rowKey: "record-1:contact:-170001",
+        contactId: -170001,
+        primaryContactName: "Jorge Serrano",
+        primaryContactJobTitle: "Sales",
+        primaryContactPhone: "416-230-4681",
+        primaryContactExtension: "31",
+        primaryContactEmail: "jserrano@meadowb.com",
+        primaryContactId: -170001,
+        isPrimaryContact: true,
+      },
+    });
+
     const { POST } = await import("@/app/api/business-accounts/[id]/contacts/route");
 
     const response = await POST(
@@ -182,32 +214,24 @@ describe("POST /api/business-accounts/[id]/contacts", () => {
     );
 
     expect(response.status).toBe(201);
-    expect(createContact).toHaveBeenCalledWith(
-      "cookie",
+    expect(createContact).not.toHaveBeenCalled();
+    expect(appendLocalContactRow).toHaveBeenCalledWith(
+      storedRows,
       expect.objectContaining({
-        Phone1: { value: "416-230-4681" },
-        Phone2: { value: "31" },
-        BusinessAccount: { value: "B200000003" },
+        phone1: "416-230-4681",
+        extension: "31",
       }),
-      expect.any(Object),
     );
     await expect(response.json()).resolves.toMatchObject({
       created: true,
-      contactId: 157497,
+      contactId: -170001,
       createdRow: expect.objectContaining({
         primaryContactExtension: "31",
       }),
     });
   });
 
-  it("falls back to local read-model contact creation when Acumatica cannot resolve the account", async () => {
-    const { HttpError } = await import("@/lib/errors");
-    fetchContactMergeServerContext.mockRejectedValue(
-      new HttpError(500, "No entity satisfies the condition.", {
-        message: "An error has occurred.",
-        exceptionMessage: "No entity satisfies the condition.",
-      }),
-    );
+  it("uses the local read-model contact creation path", async () => {
     getEnv.mockReturnValue({
       READ_MODEL_ENABLED: true,
     });
@@ -296,9 +320,7 @@ describe("POST /api/business-accounts/[id]/contacts", () => {
       created: true,
       businessAccountId: "L6IMP00126",
       contactId: -170001,
-      warnings: [
-        "Saved in Sales MeadowBrook only. This account is not currently available in Acumatica.",
-      ],
+      warnings: ["Saved locally."],
     });
   });
 });

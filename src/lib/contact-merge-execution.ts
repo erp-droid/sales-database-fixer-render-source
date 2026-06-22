@@ -96,7 +96,7 @@ export async function executeContactMergeRequest(
   ) {
     throw new HttpError(
       409,
-      "These records were modified in Acumatica after you loaded the merge preview. Reload and try again.",
+      "These records were modified in source system after you loaded the merge preview. Reload and try again.",
     );
   }
 
@@ -165,7 +165,7 @@ export async function executeContactMergeRequest(
   if (!updatedRow) {
     throw new HttpError(
       500,
-      "Merge completed, but the updated contact could not be reloaded from Acumatica.",
+      "Merge completed, but the updated contact could not be reloaded from source system.",
     );
   }
 
@@ -307,7 +307,7 @@ export async function executeDeferredContactMergeRequest(
     if (!fetchedKeepContact) {
       throw new HttpError(
         409,
-        "The kept contact no longer exists in Acumatica. Reload and queue the merge again.",
+        "The kept contact no longer exists in source system. Reload and queue the merge again.",
       );
     }
 
@@ -367,7 +367,7 @@ export async function executeDeferredContactMergeRequest(
   if (!keepContact) {
     throw new HttpError(
       409,
-      "The kept contact could not be reloaded from Acumatica. Reload and queue the merge again.",
+      "The kept contact could not be reloaded from source system. Reload and queue the merge again.",
     );
   }
 
@@ -450,7 +450,7 @@ export async function executeDeferredContactMergeRequest(
   if (!updatedRow) {
     throw new HttpError(
       500,
-      "Merge completed, but the updated contact could not be reloaded from Acumatica.",
+      "Merge completed, but the updated contact could not be reloaded from source system.",
     );
   }
 

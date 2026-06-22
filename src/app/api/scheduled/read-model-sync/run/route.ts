@@ -202,7 +202,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (!triggered) {
       throw new HttpError(
         500,
-        `Unable to establish an Acumatica session for full sync. ${credentialErrors.join(" | ")}`,
+        `Unable to establish a sync session for full sync. ${credentialErrors.join(" | ")}`,
       );
     }
 

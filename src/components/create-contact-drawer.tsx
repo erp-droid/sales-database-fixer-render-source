@@ -389,7 +389,7 @@ export function CreateContactDrawer({
         setContactPartialComplete(true);
         setContactError(payload.error);
         setContactNotice(
-          "Contact was created in Acumatica, but the primary contact switch did not complete.",
+          "Contact was saved locally, but the primary contact switch did not complete.",
         );
         return;
       }
@@ -419,7 +419,7 @@ export function CreateContactDrawer({
         <div className={styles.drawerHeader}>
           <div>
             <p className={styles.kicker}>New Contact</p>
-            <h2>Create in Acumatica</h2>
+            <h2>Create contact</h2>
             <p className={styles.headerMeta}>
               Choose the business account first, then create the contact and set it as primary.
             </p>
@@ -494,7 +494,7 @@ export function CreateContactDrawer({
           <section className={styles.section}>
             <h3>Contact Details</h3>
             <p className={styles.lookupHint}>
-              This flow uses the existing Acumatica contact-create route and then attempts to set the new contact as primary.
+              This creates a local contact row and makes it the primary contact for the selected account.
             </p>
 
             <label>

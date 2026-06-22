@@ -34,7 +34,7 @@ function assertAcumaticaNonAuthEnabled(resourcePath: string): void {
 
   throw new HttpError(
     409,
-    `Acumatica non-auth access is disabled in local database only mode. Blocked '${resourcePath}'.`,
+    `source system non-auth access is disabled in local database only mode. Blocked '${resourcePath}'.`,
   );
 }
 
@@ -189,7 +189,7 @@ function buildEndpointDiagnosticMessage(
         .filter((value): value is string => Boolean(value))
         .join("\n");
 
-  return `Acumatica REST endpoint was not found for company "${companyName}". Tested:\n${testedPaths}`;
+  return `source system REST endpoint was not found for company "${companyName}". Tested:\n${testedPaths}`;
 }
 
 function isCustomerManagementPreferencesError(
@@ -336,7 +336,7 @@ async function parseErrorResponse(
   const text = await response.text();
   if (!text) {
     return {
-      message: `Acumatica request failed with status ${response.status}`,
+      message: `source system request failed with status ${response.status}`,
     };
   }
 
@@ -397,7 +397,7 @@ async function fetchWithTimeout(
     if (error instanceof Error && error.name === "AbortError") {
       throw new HttpError(
         504,
-        `Acumatica request timed out after ${Math.round(timeoutMs / 1000)} seconds while ${context}.`,
+        `source system request timed out after ${Math.round(timeoutMs / 1000)} seconds while ${context}.`,
       );
     }
     throw error;
@@ -436,7 +436,7 @@ async function parseJsonPayload<T>(response: Response, context: string): Promise
 
     throw new HttpError(
       502,
-      `Acumatica returned unexpected content while ${context}.`,
+      `source system returned unexpected content while ${context}.`,
       { contentType: contentType || "unknown" },
     );
   }
@@ -446,7 +446,7 @@ async function parseJsonPayload<T>(response: Response, context: string): Promise
   } catch {
     throw new HttpError(
       502,
-      `Acumatica returned invalid JSON while ${context}.`,
+      `source system returned invalid JSON while ${context}.`,
     );
   }
 }
@@ -521,9 +521,9 @@ async function performAcumaticaFetchAtEntityPath(
       };
 
       if (finalStatus !== null && finalStatus >= 400) {
-        console.warn("[acumatica]", logPayload);
+        console.warn("[source-system]", logPayload);
       } else {
-        console.info("[acumatica]", logPayload);
+        console.info("[source-system]", logPayload);
       }
     }
   }
@@ -589,7 +589,7 @@ function cacheResolvedAcumaticaEndpoint(
     previous.entityPath !== resolved.entityPath ||
     previous.source !== resolved.source
   ) {
-    console.info("[acumatica-endpoint]", {
+    console.info("[source-endpoint]", {
       company: env.ACUMATICA_COMPANY ?? null,
       configured: env.ACUMATICA_ENTITY_PATH,
       resourceScope: readAcumaticaResourceScope(resourcePath),
@@ -673,7 +673,7 @@ async function performAcumaticaRequestWithEndpointFallback(
     ),
     failures,
   );
-  console.warn("[acumatica-endpoint]", {
+  console.warn("[source-endpoint]", {
     company: env.ACUMATICA_COMPANY ?? null,
     configured: configuredEntityPath,
     resourceScope: readAcumaticaResourceScope(resourcePath),
@@ -2053,7 +2053,7 @@ export async function createEvent(
     throw lastRecoverableError;
   }
 
-  throw new HttpError(500, "Failed to create event in Acumatica.");
+  throw new HttpError(500, "Failed to create event in source system.");
 }
 
 export async function fetchEvents(
@@ -2267,7 +2267,7 @@ export async function fetchOpportunities(
       if (lastRecoverableError instanceof Error) {
         throw lastRecoverableError;
       }
-      throw new HttpError(500, "Failed to fetch opportunities from Acumatica.");
+      throw new HttpError(500, "Failed to fetch opportunities from source system.");
     }
 
     activeResourcePath = resolvedResourcePath;
@@ -3735,7 +3735,7 @@ export async function createOpportunity(
     throw lastRecoverableError;
   }
 
-  throw new HttpError(500, "Failed to create opportunity in Acumatica.");
+  throw new HttpError(500, "Failed to create opportunity in source system.");
 }
 
 export async function updateCustomer(
@@ -3824,7 +3824,7 @@ export async function deleteBusinessAccount(
   } catch {
     throw new HttpError(
       502,
-      `Acumatica returned invalid JSON while deleting business account '${normalizedBusinessAccountId}'.`,
+      `source system returned invalid JSON while deleting business account '${normalizedBusinessAccountId}'.`,
     );
   }
 }
@@ -3873,7 +3873,7 @@ export async function deleteContact(
   } catch {
     throw new HttpError(
       502,
-      `Acumatica returned invalid JSON while deleting contact '${contactId}'.`,
+      `source system returned invalid JSON while deleting contact '${contactId}'.`,
     );
   }
 }

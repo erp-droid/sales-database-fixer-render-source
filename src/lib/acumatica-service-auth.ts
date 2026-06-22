@@ -44,7 +44,7 @@ function readServiceCredentials(preferredLoginName?: string | null): ServiceCred
     }
 
     throw new Error(
-      `No stored Acumatica credentials are available for '${normalizedLoginName}'. Sign in through the app first.`,
+      `No stored source system credentials are available for '${normalizedLoginName}'. Sign in through the app first.`,
     );
   }
 
@@ -53,7 +53,7 @@ function readServiceCredentials(preferredLoginName?: string | null): ServiceCred
 
   if (!username || !password) {
     throw new Error(
-      "Acumatica service credentials are not configured. Set ACUMATICA_SERVICE_USERNAME / ACUMATICA_SERVICE_PASSWORD or ACUMATICA_USERNAME / ACUMATICA_PASSWORD.",
+      "Service credentials are not configured. Set the service sign-in username and password in the environment.",
     );
   }
 
@@ -93,14 +93,14 @@ async function loginServiceSession(preferredLoginName?: string | null): Promise<
 
     if (!response.ok) {
       const message = await response.text();
-      throw new Error(`Acumatica service login failed (${response.status}): ${message || "Unknown error"}`);
+      throw new Error(`Service login failed (${response.status}): ${message || "Unknown error"}`);
     }
 
     const cookieValue = buildStoredAuthCookieValueFromSetCookies(
       getSetCookieHeaders(response.headers),
     );
     if (!cookieValue) {
-      throw new Error("Acumatica service login did not return a reusable auth cookie.");
+      throw new Error("Service login did not return a reusable auth cookie.");
     }
 
     cachedCookieValues.set(cacheKey, cookieValue);
@@ -133,7 +133,7 @@ export async function withServiceAcumaticaSession<T>(
   if (getEnv().LOCAL_DATABASE_ONLY) {
     throw new HttpError(
       409,
-      "Acumatica service sessions are disabled in local database only mode.",
+      "Service sessions are disabled in local database only mode.",
     );
   }
 
@@ -165,7 +165,7 @@ export async function withServiceAcumaticaSession<T>(
     }
   }
 
-  throw new Error("Unable to establish an Acumatica service session.");
+  throw new Error("Unable to establish a service session.");
 }
 
 export async function serviceFetchContactById(

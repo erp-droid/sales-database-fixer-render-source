@@ -775,7 +775,7 @@ export function CreateOpportunityDrawer({
         <div className={styles.drawerHeader}>
           <div>
             <p className={styles.kicker}>New Opportunity</p>
-            <h2>Create in Acumatica</h2>
+            <h2>Create opportunity</h2>
             <p className={styles.headerMeta}>
               Create only the opportunity record. This flow does not create project quotes.
             </p>

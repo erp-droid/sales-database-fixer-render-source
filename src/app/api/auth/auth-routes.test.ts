@@ -603,7 +603,7 @@ describe("auth route timeouts", () => {
     expect(response.status).toBe(429);
     await expect(response.json()).resolves.toEqual({
       error:
-        "Acumatica API login limit reached for this user. Close old API sessions in Users (SM201010) or increase concurrent API logins, then sign in again.",
+        "Sign-in limit reached for this user. Close old API sessions or increase concurrent API logins, then sign in again.",
     });
   });
 });

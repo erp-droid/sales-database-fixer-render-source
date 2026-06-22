@@ -446,7 +446,7 @@ export async function setBusinessAccountPrimaryContact(
   if (verifiedPrimaryContactId !== targetContactId) {
     throw new HttpError(
       422,
-      "Acumatica accepted the update but did not switch the primary contact. Please sync records and try again.",
+      "source system accepted the update but did not switch the primary contact. Please sync records and try again.",
     );
   }
 

@@ -219,7 +219,7 @@ export async function resolveCallerProfile(
 
     throw new HttpError(
       422,
-      "Calling is unavailable until the signed-in employee phone can be read from Acumatica.",
+      "Calling is unavailable until the signed-in employee phone can be read from source system.",
     );
   }
 
@@ -227,7 +227,7 @@ export async function resolveCallerProfile(
   if (!resolvedUserPhone) {
     throw new HttpError(
       422,
-      `Calling is unavailable for '${normalizedLoginName}'. Internal employee '${callerIdentity.displayName}' does not have a valid phone number in Acumatica.`,
+      `Calling is unavailable for '${normalizedLoginName}'. Internal employee '${callerIdentity.displayName}' does not have a valid phone number in source system.`,
     );
   }
   if (!inventory.allowedCallerIds.has(resolvedUserPhone)) {

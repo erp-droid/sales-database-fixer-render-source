@@ -549,7 +549,7 @@ function isAcumaticaLookupMiss(error: unknown): boolean {
     (error instanceof HttpError && (error.status === 401 || error.status === 404)) ||
     message.includes("no entity satisfies the condition") ||
     message.includes("invalid uri structure") ||
-    message.includes("acumatica request failed with status 401")
+    message.includes("source system request failed with status 401")
   );
 }
 
@@ -1130,7 +1130,7 @@ function saveReadModelFallbackUpdate(
 
 function buildConcurrencyConflictMessage(conflictingFields: string[]): string {
   if (conflictingFields.length === 0) {
-    return "This record was modified in Acumatica after you loaded it. Reload and try again.";
+    return "This record was modified in source system after you loaded it. Reload and try again.";
   }
 
   if (conflictingFields.length === 1) {
@@ -1451,7 +1451,7 @@ export async function PUT(
       if (isOrphanContactAssignment || isCachedContactReassignment) {
         throw new HttpError(
           422,
-          "Contact reassignment still requires an Acumatica-backed contact. Save ordinary account and contact edits locally, or create/import the target contact first.",
+          "Contact reassignment still requires an existing contact record. Save ordinary account and contact edits locally, or create/import the target contact first.",
         );
       }
 
@@ -1471,7 +1471,7 @@ export async function PUT(
       ) {
         throw new HttpError(
           409,
-          "This record was modified in Acumatica after you loaded it. Reload and try again.",
+          "This record was modified in source system after you loaded it. Reload and try again.",
         );
       }
 
@@ -1523,7 +1523,7 @@ export async function PUT(
       ) {
         throw new HttpError(
           409,
-          "This record was modified in Acumatica after you loaded it. Reload and try again.",
+          "This record was modified in source system after you loaded it. Reload and try again.",
         );
       }
 
@@ -1784,7 +1784,7 @@ export async function PUT(
     ) {
       throw new HttpError(
         422,
-        "Contact ID is missing on this row. Contact fields cannot be saved until the contact exists in Acumatica.",
+        "Contact ID is missing on this row. Contact fields cannot be saved until the contact exists in source system.",
       );
     }
 
@@ -2289,7 +2289,7 @@ export async function DELETE(
     if (!businessAccountId) {
       throw new HttpError(
         400,
-        "This business account does not have an Acumatica account ID, so it cannot be queued for deletion.",
+        "This business account does not have an external account ID, so it cannot be queued for deletion.",
       );
     }
 

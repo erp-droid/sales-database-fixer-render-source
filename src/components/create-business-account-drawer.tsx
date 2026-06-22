@@ -726,7 +726,7 @@ export function CreateBusinessAccountDrawer({
         warnings: payload.warnings,
       });
       setAccountNotice(
-        `Business account ${payload.businessAccountId} was created in Acumatica.`,
+        `Business account ${payload.businessAccountId} was created locally.`,
       );
     } catch (error) {
       setAccountError(error instanceof Error ? error.message : "Unable to create business account.");
@@ -792,7 +792,7 @@ export function CreateBusinessAccountDrawer({
           )
           .join(", ");
         setCompanyAttributeSuggestionNotice(
-          `OpenAI filled missing ${filledLabels}. Create saves the description locally and sends only Acumatica attributes upstream.`,
+          `OpenAI filled missing ${filledLabels}. Create saves those values locally.`,
         );
       } else {
         setCompanyAttributeSuggestionNotice(
@@ -879,7 +879,7 @@ export function CreateBusinessAccountDrawer({
         setContactPartialComplete(true);
         setContactError(payload.error);
         setContactNotice(
-          "Contact was created in Acumatica, but the primary contact switch did not complete.",
+          "Contact was saved locally, but the primary contact switch did not complete.",
         );
         return;
       }
@@ -903,7 +903,7 @@ export function CreateBusinessAccountDrawer({
         <div className={styles.drawerHeader}>
           <div>
             <p className={styles.kicker}>New Business Account</p>
-            <h2>Create in Acumatica</h2>
+            <h2>Create account</h2>
             {createdAccount ? (
               <p className={styles.headerMeta}>
                 {createdAccount.companyName} • Account ID {createdAccount.businessAccountId}
@@ -946,12 +946,12 @@ export function CreateBusinessAccountDrawer({
                         companyDescription: event.target.value,
                       }))
                     }
-                    placeholder="Stored only in this app. Not sent to Acumatica."
+                    placeholder="Stored only in this app."
                     value={accountForm.companyDescription ?? ""}
                   />
                 </label>
                 <p className={styles.lookupHint}>
-                  This description stays in the app only. Create saves it locally and does not push it to Acumatica.
+                  This description stays in the app only. Create saves it locally.
                 </p>
 
                 <label>
@@ -1286,7 +1286,7 @@ export function CreateBusinessAccountDrawer({
                 }}
                 type="button"
               >
-                {isCreatingAccount ? "Creating..." : "Create account in Acumatica"}
+                {isCreatingAccount ? "Creating..." : "Create account"}
               </button>
             </>
           ) : (

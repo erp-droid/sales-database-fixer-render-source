@@ -666,7 +666,7 @@ function buildMeetingDescription(
       : input.relatedContactId !== null
         ? `Related Contact ID: ${input.relatedContactId}`
         : "",
-    input.acumaticaEventId ? `Acumatica Event ID: ${input.acumaticaEventId}` : "",
+    input.acumaticaEventId ? `source system Event ID: ${input.acumaticaEventId}` : "",
     "Created by Sales Database Fixer.",
   ].filter(Boolean);
 

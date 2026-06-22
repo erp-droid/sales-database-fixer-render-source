@@ -1048,7 +1048,7 @@ function renderExistingOpportunitySummary() {
   if (!state.existingOpportunityLoaded && !cleanString(state.existingOpportunityLoadError)) {
     el.existingOpportunitySummary.innerHTML = `
       <div class="linked-opportunity-placeholder">
-        <p>Loading opportunity context from Acumatica...</p>
+        <p>Loading opportunity context from source system...</p>
       </div>
     `;
     return;
@@ -1083,7 +1083,7 @@ function renderExistingOpportunitySummary() {
     <div class="linked-opportunity-head">
       <div>
         <p class="section-caption">Existing Opportunity</p>
-        <p class="hint">This quote will be created on the selected Acumatica opportunity. Step 2 is locked to preserve that link.</p>
+        <p class="hint">This quote will be created on the selected source system opportunity. Step 2 is locked to preserve that link.</p>
       </div>
       <span class="linked-opportunity-pill">${escapeHtml(linkedOpportunityId || "Linked")}</span>
     </div>
@@ -1270,7 +1270,7 @@ function syncDepartmentGate() {
   if (el.accountComboInput) {
     el.accountComboInput.disabled = existingMode || !departmentSelected;
     el.accountComboInput.placeholder = existingMode
-      ? "Linked to Acumatica opportunity"
+      ? "Linked to source system opportunity"
       : departmentSelected
       ? "Start typing business account name"
       : "Select Department first";
@@ -2217,7 +2217,7 @@ async function openCurrentQuote() {
   }
 
   if (!quoteUrl) {
-    showStatus("Create a quote first to open it in Acumatica.", "error");
+    showStatus("Create a quote first to open it in source system.", "error");
     return;
   }
   window.open(quoteUrl, "_blank", "noopener,noreferrer");
@@ -3191,7 +3191,7 @@ function setAuthUI(isAuthenticated) {
 }
 
 function handleForgotPassword() {
-  showAuthStatus("Use the standard Acumatica password reset flow or contact your MeadowBrook administrator.");
+  showAuthStatus("Use the standard source system password reset flow or contact your MeadowBrook administrator.");
 }
 
 function handleLoginFieldKeydown(event) {
@@ -4775,7 +4775,7 @@ function getPricingBookEstimatorHint() {
     return `Unable to refresh the live estimator list right now. ${state.pricingBookEstimatorsLoadError}`;
   }
   if (state.pricingBookEstimators.length) {
-    return "Required for pricing-book and Acumatica line assignment.";
+    return "Required for pricing-book and source system line assignment.";
   }
   return "No estimators available yet.";
 }

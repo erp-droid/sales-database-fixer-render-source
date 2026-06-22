@@ -128,7 +128,7 @@ describe("data-quality tasks", () => {
     expect(companyTask?.reviewReason).toBeNull();
   });
 
-  it("moves zero-context company-assignment tasks into review", () => {
+  it("suppresses zero-context company-assignment placeholders before task building", () => {
     const snapshot = buildDataQualitySnapshot([
       buildRow({
         id: "orphan-review",
@@ -154,14 +154,12 @@ describe("data-quality tasks", () => {
     const tasks = buildDataQualityTasks(snapshot);
     const companyTask = tasks.tasks.find((task) => task.metric === "missingCompany");
 
-    expect(companyTask?.actionable).toBe(false);
-    expect(companyTask?.reviewReason).toBe("missing_identity");
-    expect(companyTask?.title).toBe("Review unassigned record");
-    expect(tasks.total).toBe(1);
-    expect(tasks.reviewTotal).toBe(1);
+    expect(companyTask).toBeUndefined();
+    expect(tasks.total).toBe(0);
+    expect(tasks.reviewTotal).toBe(0);
   });
 
-  it("counts only actionable tasks in totals and rep summaries", () => {
+  it("counts actionable tasks in totals and rep summaries after placeholder suppression", () => {
     const snapshot = buildDataQualitySnapshot([
       buildRow({
         id: "actionable-company",
@@ -200,8 +198,8 @@ describe("data-quality tasks", () => {
     const tasks = buildDataQualityTasks(snapshot);
     const rep = tasks.reps.find((item) => item.salesRepName === "Jorge Serrano");
 
-    expect(tasks.total).toBe(2);
-    expect(tasks.reviewTotal).toBe(1);
+    expect(tasks.total).toBe(1);
+    expect(tasks.reviewTotal).toBe(0);
     expect(rep?.openTasks).toBe(1);
   });
 
