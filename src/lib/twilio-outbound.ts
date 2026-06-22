@@ -38,6 +38,14 @@ export type StartedBridgeCall = {
   bridgeNumber: string;
 };
 
+type CachedCallerDirectoryItem = {
+  employeeId: string | null;
+  contactId: number | null;
+  displayName: string;
+  email: string | null;
+  userPhone: string | null;
+};
+
 function readCachedCallerDirectoryItem(loginName: string): {
   employeeId: string | null;
   contactId: number | null;
@@ -111,6 +119,47 @@ function cacheResolvedCallerDirectoryItem(input: {
   }
 }
 
+function assertAllowedCallerId(
+  inventory: Awaited<ReturnType<typeof readTwilioPhoneInventory>>,
+  callerPhone: string,
+  loginName: string,
+): void {
+  if (!inventory.allowedCallerIds.has(callerPhone)) {
+    throw new HttpError(
+      422,
+      `Twilio cannot present ${callerPhone} as caller ID for '${loginName}'. Verify that employee number in Twilio first.`,
+    );
+  }
+}
+
+function buildCachedCallerProfile(input: {
+  loginName: string;
+  cachedCallerIdentity: CachedCallerDirectoryItem | null;
+  userPhone: string;
+  bridgeNumber: string;
+}): ResolvedCallerProfile {
+  const displayName = input.cachedCallerIdentity?.displayName?.trim() || input.loginName;
+  cacheResolvedCallerDirectoryItem({
+    loginName: input.loginName,
+    employeeId: input.cachedCallerIdentity?.employeeId ?? null,
+    contactId: input.cachedCallerIdentity?.contactId ?? null,
+    displayName,
+    email: input.cachedCallerIdentity?.email ?? null,
+    userPhone: input.userPhone,
+  });
+
+  return {
+    loginName: input.loginName,
+    employeeId: input.cachedCallerIdentity?.employeeId ?? null,
+    contactId: input.cachedCallerIdentity?.contactId ?? null,
+    displayName,
+    email: input.cachedCallerIdentity?.email ?? null,
+    userPhone: input.userPhone,
+    callerId: input.userPhone,
+    bridgeNumber: input.bridgeNumber,
+  };
+}
+
 export async function resolveCallerProfile(
   cookieValue: string,
   loginName: string,
@@ -124,6 +173,7 @@ export async function resolveCallerProfile(
     readCallerPhoneOverride(normalizedLoginName)?.phoneNumber ?? null,
   );
   const cachedCallerIdentity = readCachedCallerDirectoryItem(normalizedLoginName);
+  const cachedIdentityPhone = normalizeTwilioPhoneNumber(cachedCallerIdentity?.userPhone ?? null);
   let callerIdentity:
     | Awaited<ReturnType<typeof resolveSignedInCallerIdentity>>
     | null = null;
@@ -147,32 +197,34 @@ export async function resolveCallerProfile(
     if (!inventory.allowedCallerIds.has(cachedOverridePhone)) {
       inventory = await readTwilioPhoneInventory({ forceRefresh: true });
     }
-    if (!inventory.allowedCallerIds.has(cachedOverridePhone)) {
-      throw new HttpError(
-        422,
-        `Twilio cannot present ${cachedOverridePhone} as caller ID for '${normalizedLoginName}'. Verify that employee number in Twilio first.`,
-      );
+    assertAllowedCallerId(inventory, cachedOverridePhone, normalizedLoginName);
+
+    return buildCachedCallerProfile({
+      loginName: normalizedLoginName,
+      userPhone: cachedOverridePhone,
+      cachedCallerIdentity,
+      bridgeNumber,
+    });
+  }
+
+  if (cachedIdentityPhone) {
+    if (!inventory.allowedCallerIds.has(cachedIdentityPhone)) {
+      inventory = await readTwilioPhoneInventory({ forceRefresh: true });
+    }
+    assertAllowedCallerId(inventory, cachedIdentityPhone, normalizedLoginName);
+
+    try {
+      saveCallerPhoneOverride(normalizedLoginName, cachedIdentityPhone);
+    } catch {
+      // Keep outbound calling resilient even if the local cache write fails.
     }
 
-    cacheResolvedCallerDirectoryItem({
+    return buildCachedCallerProfile({
       loginName: normalizedLoginName,
-      employeeId: cachedCallerIdentity?.employeeId ?? null,
-      contactId: cachedCallerIdentity?.contactId ?? null,
-      displayName: cachedCallerIdentity?.displayName ?? normalizedLoginName,
-      email: cachedCallerIdentity?.email ?? null,
-      userPhone: cachedOverridePhone,
-    });
-
-    return {
-      loginName: normalizedLoginName,
-      employeeId: cachedCallerIdentity?.employeeId ?? null,
-      contactId: cachedCallerIdentity?.contactId ?? null,
-      displayName: cachedCallerIdentity?.displayName ?? normalizedLoginName,
-      email: cachedCallerIdentity?.email ?? null,
-      userPhone: cachedOverridePhone,
-      callerId: cachedOverridePhone,
+      userPhone: cachedIdentityPhone,
+      cachedCallerIdentity,
       bridgeNumber,
-    };
+    });
   }
 
   try {

@@ -84,6 +84,7 @@ const CALL_STATUS_POLL_INTERVAL_MS_ACTIVE = 15_000;
 const CALL_STATUS_POLL_INTERVAL_MS_CONNECTED = 20_000;
 const CALL_STATUS_POLL_BACKOFF_AFTER_MS = 30_000;
 const CALL_STATUS_STALE_UNANSWERED_AFTER_MS = 2 * 60_000;
+const CALL_START_TIMEOUT_MS = 60_000;
 const CALL_STATUS_RECHECK_TIMEOUT_MS = 8_000;
 const CALL_START_RECHECK_COOLDOWN_MS = 10_000;
 
@@ -168,12 +169,12 @@ async function startServerCall(
           context,
         }),
       },
-      20000,
+      CALL_START_TIMEOUT_MS,
     );
   } catch (error) {
     if (isAbortError(error)) {
       throw new Error(
-        "Call setup timed out while resolving the signed-in employee phone. Please retry.",
+        "Call setup is taking longer than expected. If your phone rings, answer it. Otherwise, wait a few seconds and retry.",
       );
     }
     throw error;

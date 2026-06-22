@@ -38,7 +38,7 @@ type StartPayload = {
   } | null;
 };
 
-const ACTIVE_BRIDGE_CALL_LOOKBACK_MS = 45_000;
+const ACTIVE_BRIDGE_CALL_LOOKBACK_MS = 10 * 60_000;
 const ACTIVE_SESSION_RECONCILE_INTERVAL_MS = 30_000;
 const ACTIVE_SESSION_CALLBACK_FRESHNESS_MS = 20_000;
 const pendingBridgeCallStarts = new Map<string, Promise<BridgeCallStartResult>>();
@@ -59,6 +59,27 @@ type BridgeCallStartResult = {
   targetPhone: string;
   callerDisplayName: string;
 };
+
+function buildActiveBridgeCallPayload(
+  session: CallSessionRecord,
+  fallbackDisplayName: string,
+): Record<string, unknown> {
+  return {
+    ok: true,
+    deduped: true,
+    sessionId: session.sessionId,
+    callSid: session.rootCallSid,
+    status: session.outcome,
+    bridgeNumber: session.bridgeNumber,
+    callerId: session.presentedCallerId,
+    userPhone: session.employeePhone,
+    targetPhone: session.targetPhone,
+    callerDisplayName:
+      session.employeeDisplayName ??
+      session.employeeLoginName ??
+      fallbackDisplayName,
+  };
+}
 
 function isEmployeePhoneResolutionError(message: string | null | undefined): boolean {
   const normalized = message?.trim().toLowerCase() ?? "";
@@ -238,6 +259,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const body = (await request.json().catch(() => null)) as StartPayload | null;
     const targetPhone = typeof body?.to === "string" ? body.to : "";
     const sessionId = createCallSessionId();
+    const normalizedLoginName = loginName.trim().toLowerCase();
+
+    const activeLocalSession = findRecentBridgeCallSessionForEmployee({
+      employeeLoginName: normalizedLoginName,
+      targetPhone,
+      withinMs: ACTIVE_BRIDGE_CALL_LOOKBACK_MS,
+    });
+    if (activeLocalSession && !activeLocalSession.endedAt) {
+      return NextResponse.json(
+        buildActiveBridgeCallPayload(activeLocalSession, normalizedLoginName),
+      );
+    }
 
     let callerProfile;
     try {
@@ -266,16 +299,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     });
     if (existingSession && !existingSession.endedAt) {
       const response = NextResponse.json({
-        ok: true,
-        deduped: true,
-        sessionId: existingSession.sessionId,
-        callSid: existingSession.rootCallSid,
-        status: existingSession.outcome,
-        bridgeNumber: existingSession.bridgeNumber,
-        callerId: existingSession.presentedCallerId,
-        userPhone: existingSession.employeePhone,
-        targetPhone: existingSession.targetPhone,
-        callerDisplayName: existingSession.employeeDisplayName ?? callerProfile.displayName,
+        ...buildActiveBridgeCallPayload(existingSession, callerProfile.displayName),
       });
       if (authCookieRefresh.value) {
         setAuthCookie(response, authCookieRefresh.value);

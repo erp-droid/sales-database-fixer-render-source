@@ -181,6 +181,7 @@ describe("POST /api/twilio/call", () => {
       callerDisplayName: "Brock Koczka",
     });
     expect(startBridgeCall).not.toHaveBeenCalled();
+    expect(resolveCallerProfile).not.toHaveBeenCalled();
     expect(recordProvisionalBridgeCall).not.toHaveBeenCalled();
   });
 

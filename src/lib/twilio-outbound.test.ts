@@ -186,6 +186,65 @@ describe("resolveCallerProfile", () => {
     });
   });
 
+  it("uses the cached caller identity phone before reading the external employee profile", async () => {
+    readCallerIdentityProfile.mockReturnValue({
+      loginName: "kpareek",
+      employeeId: "E0000199",
+      contactId: 160199,
+      displayName: "Krishna Pareek",
+      email: "kpareek@meadowb.com",
+      phoneNumber: "+14165550100",
+      updatedAt: "2026-06-22T15:00:00.000Z",
+    });
+
+    const { resolveCallerProfile } = await import("@/lib/twilio-outbound");
+
+    await expect(resolveCallerProfile("cookie", "kpareek")).resolves.toEqual({
+      loginName: "kpareek",
+      employeeId: "E0000199",
+      contactId: 160199,
+      displayName: "Krishna Pareek",
+      email: "kpareek@meadowb.com",
+      userPhone: "+14165550100",
+      callerId: "+14165550100",
+      bridgeNumber: "+16475550123",
+    });
+    expect(resolveSignedInCallerIdentity).not.toHaveBeenCalled();
+    expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
+    expect(saveCallerPhoneOverride).toHaveBeenCalledWith("kpareek", "+14165550100");
+  });
+
+  it("uses the cached employee directory phone before reading the external employee profile", async () => {
+    readCallEmployeeDirectory.mockReturnValue([
+      {
+        loginName: "kpareek",
+        contactId: 160199,
+        displayName: "Krishna Pareek",
+        email: "kpareek@meadowb.com",
+        normalizedPhone: "+14165550100",
+        callerIdPhone: null,
+        isActive: true,
+        updatedAt: "2026-06-22T15:00:00.000Z",
+      },
+    ]);
+
+    const { resolveCallerProfile } = await import("@/lib/twilio-outbound");
+
+    await expect(resolveCallerProfile("cookie", "kpareek")).resolves.toEqual({
+      loginName: "kpareek",
+      employeeId: null,
+      contactId: 160199,
+      displayName: "Krishna Pareek",
+      email: "kpareek@meadowb.com",
+      userPhone: "+14165550100",
+      callerId: "+14165550100",
+      bridgeNumber: "+16475550123",
+    });
+    expect(resolveSignedInCallerIdentity).not.toHaveBeenCalled();
+    expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
+    expect(saveCallerPhoneOverride).toHaveBeenCalledWith("kpareek", "+14165550100");
+  });
+
   it("fails when the employee phone is not verified in Twilio for caller ID", async () => {
     resolveSignedInCallerIdentity.mockResolvedValue({
       loginName: "jserrano",
