@@ -15,6 +15,10 @@ const resolveDeferredActionActor = vi.fn(async () => ({
   loginName: "jserrano",
   name: "Jorge Serrano",
 }));
+const resolveStoredDeferredActionActor = vi.fn(() => ({
+  loginName: "jserrano",
+  name: "jserrano",
+}));
 const appendLocalContactRow = vi.fn();
 const readStoredBusinessAccountRowsFromReadModel = vi.fn(() => []);
 const replaceReadModelAccountRows = vi.fn();
@@ -74,6 +78,7 @@ vi.mock("@/lib/audit-log-store", () => ({
 
 vi.mock("@/lib/deferred-action-actor", () => ({
   resolveDeferredActionActor,
+  resolveStoredDeferredActionActor,
 }));
 
 vi.mock("@/lib/local-account-rows", () => ({
@@ -214,6 +219,8 @@ describe("POST /api/business-accounts/[id]/contacts", () => {
     );
 
     expect(response.status).toBe(201);
+    expect(resolveStoredDeferredActionActor).toHaveBeenCalledTimes(1);
+    expect(resolveDeferredActionActor).not.toHaveBeenCalled();
     expect(createContact).not.toHaveBeenCalled();
     expect(appendLocalContactRow).toHaveBeenCalledWith(
       storedRows,

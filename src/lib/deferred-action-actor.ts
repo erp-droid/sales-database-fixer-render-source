@@ -29,3 +29,14 @@ export async function resolveDeferredActionActor(
     name: normalized?.name ?? storedLoginName ?? null,
   });
 }
+
+export function resolveStoredDeferredActionActor(request: NextRequest): {
+  loginName: string | null;
+  name: string | null;
+} {
+  const storedLoginName = getStoredLoginName(request);
+  return createDeferredActionActor({
+    loginName: storedLoginName,
+    name: storedLoginName,
+  });
+}

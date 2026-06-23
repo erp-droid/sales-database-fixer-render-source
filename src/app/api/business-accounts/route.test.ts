@@ -11,6 +11,15 @@ const getEnv = vi.fn(() => ({
 const fetchAllSyncRows = vi.fn();
 const queryReadModelBusinessAccounts = vi.fn();
 const maybeTriggerReadModelSync = vi.fn();
+const resolveDeferredActionActor = vi.fn();
+const resolveStoredDeferredActionActor = vi.fn(() => ({
+  loginName: "jserrano",
+  name: "jserrano",
+}));
+const retrieveCanadaPostAddressCompleteAddress = vi.fn(
+  async (input: { fallback: unknown }) => input.fallback,
+);
+const logBusinessAccountCreateAudit = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
   requireAuthCookieValue,
@@ -19,6 +28,19 @@ vi.mock("@/lib/auth", () => ({
 
 vi.mock("@/lib/env", () => ({
   getEnv,
+}));
+
+vi.mock("@/lib/deferred-action-actor", () => ({
+  resolveDeferredActionActor,
+  resolveStoredDeferredActionActor,
+}));
+
+vi.mock("@/lib/address-complete", () => ({
+  retrieveCanadaPostAddressCompleteAddress,
+}));
+
+vi.mock("@/lib/audit-log-store", () => ({
+  logBusinessAccountCreateAudit,
 }));
 
 vi.mock("@/lib/data-quality-live", () => ({
@@ -319,5 +341,79 @@ describe("GET /api/business-accounts", () => {
       "Universal Matter",
       "Vermeer Canada",
     ]);
+  });
+});
+
+describe("POST /api/business-accounts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    requireAuthCookieValue.mockReturnValue("cookie");
+    getEnv.mockReturnValue({
+      READ_MODEL_ENABLED: false,
+    });
+    retrieveCanadaPostAddressCompleteAddress.mockImplementation(
+      async (input: { fallback: unknown }) => input.fallback,
+    );
+    resolveStoredDeferredActionActor.mockReturnValue({
+      loginName: "jserrano",
+      name: "jserrano",
+    });
+  });
+
+  it("creates a local account without validating the legacy actor session", async () => {
+    const { POST } = await import("@/app/api/business-accounts/route");
+
+    const response = await POST(
+      new NextRequest("http://localhost/api/business-accounts", {
+        method: "POST",
+        body: JSON.stringify({
+          companyName: "360 Advanced Security Corporation",
+          companyDescription: "Security services.",
+          classId: "LEAD",
+          salesRepId: null,
+          salesRepName: null,
+          companyPhone: "905-555-1212",
+          industryType: "Service",
+          subCategory: "Service",
+          companyRegion: "Region 5",
+          week: null,
+          category: "B",
+          addressLookupId: "ca-post-id",
+          addressLine1: "31 Constellation Crt",
+          addressLine2: "",
+          city: "Etobicoke",
+          state: "ON",
+          postalCode: "M9W 1K4",
+          country: "CA",
+        }),
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(resolveStoredDeferredActionActor).toHaveBeenCalledTimes(1);
+    expect(resolveDeferredActionActor).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({
+      created: true,
+      createdRow: expect.objectContaining({
+        companyName: "360 Advanced Security Corporation",
+        addressLine1: "31 Constellation Crt",
+      }),
+      warnings: ["Saved locally."],
+    });
+    expect(payload.businessAccountId).toMatch(/^LOCAL-/);
+    expect(logBusinessAccountCreateAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: {
+          loginName: "jserrano",
+          name: "jserrano",
+        },
+        resultCode: "succeeded",
+        companyName: "360 Advanced Security Corporation",
+      }),
+    );
   });
 });

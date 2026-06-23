@@ -17,7 +17,7 @@ import {
   setBusinessAccountPrimaryContact,
 } from "@/lib/contact-merge-server";
 import { logContactCreateAudit } from "@/lib/audit-log-store";
-import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
+import { resolveStoredDeferredActionActor } from "@/lib/deferred-action-actor";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { getEnv } from "@/lib/env";
 import { appendLocalContactRow } from "@/lib/local-account-rows";
@@ -98,15 +98,15 @@ export async function POST(
   const authCookieRefresh = {
     value: null as string | null,
   };
-  let actor: Awaited<ReturnType<typeof resolveDeferredActionActor>> | null = null;
+  let actor: ReturnType<typeof resolveStoredDeferredActionActor> | null = null;
   let contactRequest: ReturnType<typeof parseBusinessAccountContactCreatePayload> | null = null;
   let auditBusinessAccountRecordId: string | null = null;
   let auditBusinessAccountId: string | null = null;
   let auditCompanyName: string | null = null;
 
   try {
-    const cookieValue = requireAuthCookieValue(request);
-    actor = await resolveDeferredActionActor(request, cookieValue, authCookieRefresh);
+    requireAuthCookieValue(request);
+    actor = resolveStoredDeferredActionActor(request);
     const { id } = await context.params;
     const body = await request.json().catch(() => {
       throw new HttpError(400, "Request body must be valid JSON.");

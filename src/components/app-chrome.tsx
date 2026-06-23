@@ -8,6 +8,12 @@ import { AppPageNav } from "@/components/app-page-nav";
 
 import styles from "./app-chrome.module.css";
 
+const appVersion = (process.env.NEXT_PUBLIC_APP_VERSION || "0.0.0").trim();
+const appBuild = (process.env.NEXT_PUBLIC_APP_BUILD || "").trim();
+const appVersionLabel = appBuild
+  ? `Version ${appVersion} (${appBuild})`
+  : `Version ${appVersion}`;
+
 function buildUserInitials(userName: string | null | undefined): string {
   const value = userName?.trim() ?? "";
   if (!value) {
@@ -115,7 +121,8 @@ export function AppChrome({
           />
           <div className={styles.brandText}>
             <strong>Sales MeadowBrook</strong>
-            <span>ACCOUNT MANAGEMENT PLATFORM</span>
+            <span className={styles.brandSubtitle}>ACCOUNT MANAGEMENT PLATFORM</span>
+            <span className={styles.appVersion}>{appVersionLabel}</span>
           </div>
         </div>
 

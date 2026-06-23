@@ -25,7 +25,7 @@ import {
 } from "@/lib/business-account-create";
 import { buildLocalBusinessAccountRows } from "@/lib/local-account-rows";
 import { logBusinessAccountCreateAudit } from "@/lib/audit-log-store";
-import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
+import { resolveStoredDeferredActionActor } from "@/lib/deferred-action-actor";
 import { getEnv } from "@/lib/env";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { resolvePrimaryContactPhoneFields } from "@/lib/phone";
@@ -1056,12 +1056,12 @@ async function querySyncBatchWithCookie(
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const authCookieRefresh: AuthCookieRefresh = { value: null };
-  let actor: Awaited<ReturnType<typeof resolveDeferredActionActor>> | null = null;
+  let actor: ReturnType<typeof resolveStoredDeferredActionActor> | null = null;
   let createRequest: ReturnType<typeof parseBusinessAccountCreatePayload> | null = null;
 
   try {
-    const cookieValue = requireAuthCookieValue(request);
-    actor = await resolveDeferredActionActor(request, cookieValue, authCookieRefresh);
+    requireAuthCookieValue(request);
+    actor = resolveStoredDeferredActionActor(request);
     const body = await request.json().catch(() => {
       throw new HttpError(400, "Request body must be valid JSON.");
     });
