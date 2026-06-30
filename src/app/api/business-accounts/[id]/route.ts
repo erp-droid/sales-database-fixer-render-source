@@ -11,7 +11,7 @@ import {
   logContactUpdateAudit,
 } from "@/lib/audit-log-store";
 import type { AuditAffectedField } from "@/lib/audit-log-types";
-import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
+import { resolveStoredDeferredActionActor } from "@/lib/deferred-action-actor";
 import { enqueueDeferredBusinessAccountDeleteAction } from "@/lib/deferred-actions-store";
 import {
   type AuthCookieRefreshState,
@@ -2279,11 +2279,7 @@ export async function DELETE(
       );
     }
 
-    const actor = await resolveDeferredActionActor(
-      request,
-      cookieValue,
-      authCookieRefresh,
-    );
+    const actor = resolveStoredDeferredActionActor(request);
     const representativeRow = candidateRows[0];
     const businessAccountId = representativeRow?.businessAccountId?.trim() ?? "";
     if (!businessAccountId) {

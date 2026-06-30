@@ -18,6 +18,10 @@ const resolveDeferredActionActor = vi.fn(async () => ({
   loginName: "jserrano",
   name: "Jorge Serrano",
 }));
+const resolveStoredDeferredActionActor = vi.fn(() => ({
+  loginName: "jserrano",
+  name: "jserrano",
+}));
 const enqueueDeferredBusinessAccountDeleteAction = vi.fn(() => ({
   id: "delete-account-1",
   executeAfterAt: "2026-04-16T01:00:00.000Z",
@@ -68,6 +72,7 @@ vi.mock("@/lib/audit-log-store", () => ({
 
 vi.mock("@/lib/deferred-action-actor", () => ({
   resolveDeferredActionActor,
+  resolveStoredDeferredActionActor,
 }));
 
 vi.mock("@/lib/deferred-actions-store", () => ({
@@ -275,6 +280,11 @@ describe("GET /api/business-accounts/[id]", () => {
     resolveDeferredActionActor.mockResolvedValue({
       loginName: "jserrano",
       name: "Jorge Serrano",
+    });
+    resolveStoredDeferredActionActor.mockReset();
+    resolveStoredDeferredActionActor.mockReturnValue({
+      loginName: "jserrano",
+      name: "jserrano",
     });
     enqueueDeferredBusinessAccountDeleteAction.mockReset();
     enqueueDeferredBusinessAccountDeleteAction.mockReturnValue({
@@ -548,6 +558,11 @@ describe("DELETE /api/business-accounts/[id]", () => {
       loginName: "jserrano",
       name: "Jorge Serrano",
     });
+    resolveStoredDeferredActionActor.mockReset();
+    resolveStoredDeferredActionActor.mockReturnValue({
+      loginName: "jserrano",
+      name: "jserrano",
+    });
     enqueueDeferredBusinessAccountDeleteAction.mockReset();
     enqueueDeferredBusinessAccountDeleteAction.mockReturnValue({
       id: "delete-account-1",
@@ -617,6 +632,52 @@ describe("DELETE /api/business-accounts/[id]", () => {
         sourceSurface: "accounts",
       }),
     );
+    expect(resolveStoredDeferredActionActor).toHaveBeenCalledTimes(1);
+    expect(resolveDeferredActionActor).not.toHaveBeenCalled();
+  });
+
+  it("queues from the local read model when source-system auth is stale", async () => {
+    readStoredBusinessAccountRowsFromReadModel.mockReturnValue([
+      buildRow({
+        accountRecordId: "record-1",
+        businessAccountId: "B200000003",
+        contactId: 157252,
+        primaryContactId: 157252,
+      }),
+    ]);
+    fetchBusinessAccountById.mockRejectedValue(
+      new Error("source system request failed with status 401"),
+    );
+    resolveDeferredActionActor.mockRejectedValue(
+      new Error("source system request failed with status 401"),
+    );
+
+    const { DELETE } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await DELETE(
+      new NextRequest("http://localhost/api/business-accounts/record-1?source=accounts", {
+        method: "DELETE",
+        body: JSON.stringify({ reason: "Company closed" }),
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+      {
+        params: Promise.resolve({
+          id: "record-1",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      queued: true,
+      actionType: "deleteBusinessAccount",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "B200000003",
+      reason: "Company closed",
+    });
+    expect(resolveStoredDeferredActionActor).toHaveBeenCalledTimes(1);
+    expect(resolveDeferredActionActor).not.toHaveBeenCalled();
   });
 
   it("rechecks the live account before rejecting a business account delete", async () => {
