@@ -217,6 +217,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         existing,
       });
     }
+    if (existing?.status === "failed" || existing?.status === "running") {
+      return NextResponse.json({
+        ok: true,
+        status: "skipped",
+        reportDate: resolved.reportDate,
+        detail:
+          existing.status === "running"
+            ? "Scheduled daily coaching is already marked running for this report date. Use force=1 after confirming no run is active."
+            : "Scheduled daily coaching previously failed for this report date. Automatic retry is suppressed; use force=1 after remediation.",
+        existing,
+      });
+    }
 
     const finalizedImport = force ? null : readScheduledJobRun("call_activity_sync", resolved.reportDate);
 

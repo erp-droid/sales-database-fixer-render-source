@@ -208,6 +208,114 @@ describe("POST /api/scheduled/daily-call-coaching/run", () => {
     expect(writeScheduledJobRun).not.toHaveBeenCalled();
   });
 
+  it("skips automatic retry after a failed report date", async () => {
+    vi.setSystemTime(new Date("2026-04-13T11:30:00.000Z"));
+    readScheduledJobRun.mockImplementation((jobName: string, windowKey: string) => {
+      if (jobName === "daily_call_coaching") {
+        return {
+          jobName: "daily_call_coaching",
+          windowKey,
+          status: "failed",
+          detail: "Required CC missing.",
+          startedAt: "2026-04-13T11:00:00.000Z",
+          completedAt: null,
+          updatedAt: "2026-04-13T11:05:00.000Z",
+        };
+      }
+      return null;
+    });
+
+    const { POST } = await import("@/app/api/scheduled/daily-call-coaching/run/route");
+
+    const response = await POST(buildRequest());
+    const payload = (await response.json()) as {
+      status: string;
+      detail: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.status).toBe("skipped");
+    expect(payload.detail).toContain("previously failed");
+    expect(payload.detail).toContain("force=1");
+    expect(runDailyCallCoaching).not.toHaveBeenCalled();
+    expect(writeScheduledJobRun).not.toHaveBeenCalled();
+  });
+
+  it("skips automatic retry while a report date is marked running", async () => {
+    vi.setSystemTime(new Date("2026-04-13T11:30:00.000Z"));
+    readScheduledJobRun.mockImplementation((jobName: string, windowKey: string) => {
+      if (jobName === "daily_call_coaching") {
+        return {
+          jobName: "daily_call_coaching",
+          windowKey,
+          status: "running",
+          detail: "Scheduled daily coaching started.",
+          startedAt: "2026-04-13T11:00:00.000Z",
+          completedAt: null,
+          updatedAt: "2026-04-13T11:00:00.000Z",
+        };
+      }
+      return null;
+    });
+
+    const { POST } = await import("@/app/api/scheduled/daily-call-coaching/run/route");
+
+    const response = await POST(buildRequest());
+    const payload = (await response.json()) as {
+      status: string;
+      detail: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.status).toBe("skipped");
+    expect(payload.detail).toContain("already marked running");
+    expect(payload.detail).toContain("force=1");
+    expect(runDailyCallCoaching).not.toHaveBeenCalled();
+    expect(writeScheduledJobRun).not.toHaveBeenCalled();
+  });
+
+  it("allows a forced rerun after a failed report date", async () => {
+    vi.setSystemTime(new Date("2026-04-13T11:30:00.000Z"));
+    readScheduledJobRun.mockImplementation((jobName: string, windowKey: string) => {
+      if (jobName === "daily_call_coaching") {
+        return {
+          jobName: "daily_call_coaching",
+          windowKey,
+          status: "failed",
+          detail: "Required CC missing.",
+          startedAt: "2026-04-13T11:00:00.000Z",
+          completedAt: null,
+          updatedAt: "2026-04-13T11:05:00.000Z",
+        };
+      }
+      return null;
+    });
+
+    const { POST } = await import("@/app/api/scheduled/daily-call-coaching/run/route");
+
+    const response = await POST(buildRequest("?force=1"));
+    const payload = (await response.json()) as {
+      status: string;
+      reportDate: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.status).toBe("completed");
+    expect(payload.reportDate).toBe("2026-04-12");
+    expect(runDailyCallCoaching).toHaveBeenCalledWith({
+      reportDate: "2026-04-12",
+      retryFailedOnly: true,
+    });
+    expect(writeScheduledJobRun).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        jobName: "daily_call_coaching",
+        windowKey: "2026-04-12",
+        status: "running",
+      }),
+    );
+  });
+
   it("continues with warnings when prior-day 5:00 PM call-activity finalization is missing", async () => {
     vi.setSystemTime(new Date("2026-04-13T11:30:00.000Z"));
     readScheduledJobRun.mockImplementation((jobName: string) => {
