@@ -60,6 +60,30 @@ type BridgeCallStartResult = {
   callerDisplayName: string;
 };
 
+function logCallSetupTiming(input: {
+  step: string;
+  startedAt: number;
+  loginName?: string | null;
+  sessionId?: string | null;
+  targetPhone?: string | null;
+  extra?: Record<string, unknown>;
+}): void {
+  const durationMs = Date.now() - input.startedAt;
+  if (durationMs < 1000) {
+    return;
+  }
+
+  const normalizedTargetPhone = formatPhoneForTwilioDial(input.targetPhone ?? "") ?? "";
+  console.info("[twilio-call] setup timing", {
+    step: input.step,
+    durationMs,
+    loginName: input.loginName?.trim().toLowerCase() || undefined,
+    sessionId: input.sessionId || undefined,
+    targetLast4: normalizedTargetPhone ? normalizedTargetPhone.slice(-4) : undefined,
+    ...input.extra,
+  });
+}
+
 function buildActiveBridgeCallPayload(
   session: CallSessionRecord,
   fallbackDisplayName: string,
@@ -243,12 +267,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const routeStartedAt = Date.now();
   const cookieValue = getAuthCookieValue(request);
   if (!cookieValue) {
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
 
   const authCookieRefresh: AuthCookieRefreshState = { value: null };
+  let activeLoginName: string | null = null;
+  let activeSessionId: string | null = null;
+  let activeTargetPhone: string | null = null;
 
   try {
     const loginName = getStoredLoginName(request);
@@ -260,13 +288,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const targetPhone = typeof body?.to === "string" ? body.to : "";
     const sessionId = createCallSessionId();
     const normalizedLoginName = loginName.trim().toLowerCase();
+    activeLoginName = normalizedLoginName;
+    activeSessionId = sessionId;
+    activeTargetPhone = targetPhone;
 
+    const activeLookupStartedAt = Date.now();
     const activeLocalSession = findRecentBridgeCallSessionForEmployee({
       employeeLoginName: normalizedLoginName,
       targetPhone,
       withinMs: ACTIVE_BRIDGE_CALL_LOOKBACK_MS,
     });
+    logCallSetupTiming({
+      step: "find-active-session-before-profile",
+      startedAt: activeLookupStartedAt,
+      loginName: normalizedLoginName,
+      sessionId,
+      targetPhone,
+    });
     if (activeLocalSession && !activeLocalSession.endedAt) {
+      logCallSetupTiming({
+        step: "total-deduped-before-profile",
+        startedAt: routeStartedAt,
+        loginName: normalizedLoginName,
+        sessionId,
+        targetPhone,
+      });
       return NextResponse.json(
         buildActiveBridgeCallPayload(activeLocalSession, normalizedLoginName),
       );
@@ -274,14 +320,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     let callerProfile;
     try {
+      const resolveStartedAt = Date.now();
       callerProfile = await resolveCallerProfile(cookieValue, loginName);
+      logCallSetupTiming({
+        step: "resolve-caller-profile",
+        startedAt: resolveStartedAt,
+        loginName: normalizedLoginName,
+        sessionId,
+        targetPhone,
+      });
     } catch (error) {
       if (getEnv().LOCAL_DATABASE_ONLY || !shouldRetryCallerProfileWithSession(error)) {
         throw error;
       }
 
+      const validateStartedAt = Date.now();
       const sessionPayload = await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
+      logCallSetupTiming({
+        step: "validate-session-retry",
+        startedAt: validateStartedAt,
+        loginName: normalizedLoginName,
+        sessionId,
+        targetPhone,
+      });
       const sessionIdentity = normalizeSessionIdentity(sessionPayload);
+      const retryResolveStartedAt = Date.now();
       callerProfile = await resolveCallerProfile(
         authCookieRefresh.value ?? cookieValue,
         loginName,
@@ -290,12 +353,27 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           employeeId: sessionIdentity?.employeeId ?? null,
         },
       );
+      logCallSetupTiming({
+        step: "resolve-caller-profile-retry",
+        startedAt: retryResolveStartedAt,
+        loginName: normalizedLoginName,
+        sessionId,
+        targetPhone,
+      });
     }
 
+    const existingLookupStartedAt = Date.now();
     const existingSession = findRecentBridgeCallSessionForEmployee({
       employeeLoginName: callerProfile.loginName,
       targetPhone,
       withinMs: ACTIVE_BRIDGE_CALL_LOOKBACK_MS,
+    });
+    logCallSetupTiming({
+      step: "find-active-session-after-profile",
+      startedAt: existingLookupStartedAt,
+      loginName: callerProfile.loginName,
+      sessionId,
+      targetPhone,
     });
     if (existingSession && !existingSession.endedAt) {
       const response = NextResponse.json({
@@ -304,18 +382,35 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (authCookieRefresh.value) {
         setAuthCookie(response, authCookieRefresh.value);
       }
+      logCallSetupTiming({
+        step: "total-deduped-after-profile",
+        startedAt: routeStartedAt,
+        loginName: callerProfile.loginName,
+        sessionId,
+        targetPhone,
+      });
       return response;
     }
 
+    const pendingStartStartedAt = Date.now();
     const startResult = await startOrJoinPendingBridgeCall(
       buildBridgeCallStartKey(callerProfile.loginName, targetPhone),
       async () => {
         const callbacks = buildTwilioBridgeCallbacks(request, sessionId);
+        const twilioStartStartedAt = Date.now();
         const startedCall = await startBridgeCall(callerProfile, targetPhone, {
           parentStatusCallback: callbacks.parentStatusCallback,
           childStatusCallback: callbacks.childStatusCallback,
           recordingStatusCallback: callbacks.recordingStatusCallback,
         });
+        logCallSetupTiming({
+          step: "start-bridge-call",
+          startedAt: twilioStartStartedAt,
+          loginName: callerProfile.loginName,
+          sessionId,
+          targetPhone,
+        });
+        const recordStartedAt = Date.now();
         recordProvisionalBridgeCall({
           sessionId,
           rootCallSid: startedCall.sid,
@@ -331,6 +426,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           callerEmail: callerProfile.email ?? null,
           context: body?.context ?? undefined,
         });
+        logCallSetupTiming({
+          step: "record-provisional-call",
+          startedAt: recordStartedAt,
+          loginName: callerProfile.loginName,
+          sessionId,
+          targetPhone,
+        });
 
         return {
           sessionId,
@@ -344,6 +446,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         };
       },
     );
+    logCallSetupTiming({
+      step: "start-or-join-pending-call",
+      startedAt: pendingStartStartedAt,
+      loginName: callerProfile.loginName,
+      sessionId,
+      targetPhone,
+      extra: startResult.deduped ? { deduped: true } : undefined,
+    });
 
     const response = NextResponse.json({
       ok: true,
@@ -360,6 +470,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
     }
+    logCallSetupTiming({
+      step: "total",
+      startedAt: routeStartedAt,
+      loginName: callerProfile.loginName,
+      sessionId,
+      targetPhone,
+    });
     return response;
   } catch (error) {
     const normalizedError = normalizeCallRouteError(error);
@@ -376,6 +493,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);
     }
+    logCallSetupTiming({
+      step: "total-error",
+      startedAt: routeStartedAt,
+      loginName: activeLoginName,
+      sessionId: activeSessionId,
+      targetPhone: activeTargetPhone,
+      extra: {
+        error: getErrorMessage(error),
+      },
+    });
     return response;
   }
 }

@@ -21,6 +21,8 @@ export type TwilioVoiceConfig = {
 export type TwilioRestConfig = {
   accountSid: string;
   authToken: string;
+  callerId?: string;
+  edge?: string;
 };
 
 export type TwilioPhoneInventory = {
@@ -48,6 +50,9 @@ let cachedVerifiedCallerDirectory:
       items: TwilioVerifiedCallerIdentity[];
     }
   | null = null;
+
+let cachedRestClient: ReturnType<typeof twilio> | null = null;
+let cachedRestClientKey: string | null = null;
 
 export function clearTwilioPhoneInventoryCache(): void {
   cachedInventory = null;
@@ -87,6 +92,8 @@ export function getTwilioRestConfig(): TwilioRestConfig | null {
   return {
     accountSid: env.TWILIO_ACCOUNT_SID,
     authToken: env.TWILIO_AUTH_TOKEN,
+    callerId: env.TWILIO_CALLER_ID,
+    edge: env.TWILIO_EDGE ?? "ashburn",
   };
 }
 
@@ -96,7 +103,20 @@ export function createTwilioRestClient(): ReturnType<typeof twilio> | null {
     return null;
   }
 
-  return twilio(config.accountSid, config.authToken);
+  const clientKey = [
+    config.accountSid,
+    config.authToken,
+    config.edge ?? "",
+  ].join("|");
+  if (cachedRestClient && cachedRestClientKey === clientKey) {
+    return cachedRestClient;
+  }
+
+  cachedRestClient = twilio(config.accountSid, config.authToken, {
+    edge: config.edge,
+  });
+  cachedRestClientKey = clientKey;
+  return cachedRestClient;
 }
 
 export function normalizeTwilioPhoneNumber(value: string | null | undefined): string | null {
@@ -152,7 +172,7 @@ export async function readTwilioPhoneInventory(
   };
 
   cachedInventory = {
-    expiresAt: Date.now() + 5 * 60_000,
+    expiresAt: Date.now() + 60 * 60_000,
     inventory,
   };
 

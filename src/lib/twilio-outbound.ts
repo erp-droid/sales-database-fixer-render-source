@@ -7,6 +7,10 @@ import {
   saveCallerPhoneOverride,
 } from "@/lib/caller-phone-overrides";
 import {
+  readCallerIdVerification,
+  saveVerifiedCallerIdVerification,
+} from "@/lib/caller-id-verifications";
+import {
   readCallerIdentityProfile,
   saveCallerIdentityProfile,
 } from "@/lib/caller-identity-cache";
@@ -15,8 +19,14 @@ import {
   upsertCallEmployeeDirectoryItem,
 } from "@/lib/call-analytics/employee-directory";
 import { resolveSignedInCallerIdentity } from "@/lib/caller-identity";
-import { HttpError } from "@/lib/errors";
-import { createTwilioRestClient, normalizeTwilioPhoneNumber, readTwilioPhoneInventory } from "@/lib/twilio";
+import { HttpError, getErrorMessage } from "@/lib/errors";
+import {
+  createTwilioRestClient,
+  getTwilioRestConfig,
+  normalizeTwilioPhoneNumber,
+  readTwilioPhoneInventory,
+  type TwilioPhoneInventory,
+} from "@/lib/twilio";
 
 export type ResolvedCallerProfile = {
   loginName: string;
@@ -120,7 +130,7 @@ function cacheResolvedCallerDirectoryItem(input: {
 }
 
 function assertAllowedCallerId(
-  inventory: Awaited<ReturnType<typeof readTwilioPhoneInventory>>,
+  inventory: TwilioPhoneInventory,
   callerPhone: string,
   loginName: string,
 ): void {
@@ -130,6 +140,96 @@ function assertAllowedCallerId(
       `Twilio cannot present ${callerPhone} as caller ID for '${loginName}'. Verify that employee number in Twilio first.`,
     );
   }
+}
+
+function readConfiguredBridgeNumber(): string | null {
+  return normalizeTwilioPhoneNumber(getTwilioRestConfig()?.callerId ?? null);
+}
+
+async function resolveBridgeNumber(
+  inventory?: TwilioPhoneInventory | null,
+): Promise<{
+  bridgeNumber: string;
+  inventory: TwilioPhoneInventory | null;
+}> {
+  const configuredBridgeNumber = readConfiguredBridgeNumber();
+  if (configuredBridgeNumber) {
+    return {
+      bridgeNumber: configuredBridgeNumber,
+      inventory: inventory ?? null,
+    };
+  }
+
+  const resolvedInventory = inventory ?? await readTwilioPhoneInventory();
+  const bridgeNumber = resolvedInventory.voiceNumbers[0] ?? null;
+  if (!bridgeNumber) {
+    throw new HttpError(
+      503,
+      "Twilio does not have a voice-capable phone number configured for this account.",
+    );
+  }
+
+  return {
+    bridgeNumber,
+    inventory: resolvedInventory,
+  };
+}
+
+function hasVerifiedCallerId(loginName: string, phoneNumber: string): boolean {
+  const record = readCallerIdVerification(loginName);
+  return (
+    record?.status === "verified" &&
+    normalizeTwilioPhoneNumber(record.phoneNumber) === phoneNumber
+  );
+}
+
+function markCallerIdVerified(loginName: string, phoneNumber: string): void {
+  try {
+    saveVerifiedCallerIdVerification({
+      loginName,
+      phoneNumber,
+    });
+  } catch {
+    // Keep outbound calling resilient even if the verification cache write fails.
+  }
+}
+
+async function ensureAllowedCallerId(input: {
+  loginName: string;
+  callerPhone: string;
+  inventory: TwilioPhoneInventory | null;
+}): Promise<TwilioPhoneInventory> {
+  if (hasVerifiedCallerId(input.loginName, input.callerPhone)) {
+    return input.inventory ?? {
+      accountType: "",
+      allowedCallerIds: new Set([input.callerPhone]),
+      voiceNumbers: [],
+    };
+  }
+
+  let inventory = input.inventory ?? await readTwilioPhoneInventory();
+  if (!inventory.allowedCallerIds.has(input.callerPhone)) {
+    inventory = await readTwilioPhoneInventory({ forceRefresh: true });
+  }
+  assertAllowedCallerId(inventory, input.callerPhone, input.loginName);
+  markCallerIdVerified(input.loginName, input.callerPhone);
+  return inventory;
+}
+
+function mapTwilioStartError(error: unknown, targetPhone: string): never {
+  const message = getErrorMessage(error);
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes("trial") &&
+    (normalized.includes("verified") || normalized.includes("verify"))
+  ) {
+    throw new HttpError(
+      422,
+      `Twilio trial accounts can only call verified numbers. ${targetPhone} is not verified in this Twilio account.`,
+    );
+  }
+
+  throw error;
 }
 
 function buildCachedCallerProfile(input: {
@@ -184,20 +284,16 @@ export async function resolveCallerProfile(
     throw new HttpError(503, "Twilio outbound calling is not configured.");
   }
 
-  let inventory = await readTwilioPhoneInventory();
-  const bridgeNumber = inventory.voiceNumbers[0] ?? null;
-  if (!bridgeNumber) {
-    throw new HttpError(
-      503,
-      "Twilio does not have a voice-capable phone number configured for this account.",
-    );
-  }
+  const bridge = await resolveBridgeNumber();
+  let inventory = bridge.inventory;
+  const bridgeNumber = bridge.bridgeNumber;
 
   if (cachedOverridePhone) {
-    if (!inventory.allowedCallerIds.has(cachedOverridePhone)) {
-      inventory = await readTwilioPhoneInventory({ forceRefresh: true });
-    }
-    assertAllowedCallerId(inventory, cachedOverridePhone, normalizedLoginName);
+    inventory = await ensureAllowedCallerId({
+      loginName: normalizedLoginName,
+      callerPhone: cachedOverridePhone,
+      inventory,
+    });
 
     return buildCachedCallerProfile({
       loginName: normalizedLoginName,
@@ -208,10 +304,11 @@ export async function resolveCallerProfile(
   }
 
   if (cachedIdentityPhone) {
-    if (!inventory.allowedCallerIds.has(cachedIdentityPhone)) {
-      inventory = await readTwilioPhoneInventory({ forceRefresh: true });
-    }
-    assertAllowedCallerId(inventory, cachedIdentityPhone, normalizedLoginName);
+    inventory = await ensureAllowedCallerId({
+      loginName: normalizedLoginName,
+      callerPhone: cachedIdentityPhone,
+      inventory,
+    });
 
     try {
       saveCallerPhoneOverride(normalizedLoginName, cachedIdentityPhone);
@@ -282,15 +379,11 @@ export async function resolveCallerProfile(
       `Calling is unavailable for '${normalizedLoginName}'. Internal employee '${callerIdentity.displayName}' does not have a valid phone number in source system.`,
     );
   }
-  if (!inventory.allowedCallerIds.has(resolvedUserPhone)) {
-    inventory = await readTwilioPhoneInventory({ forceRefresh: true });
-  }
-  if (!inventory.allowedCallerIds.has(resolvedUserPhone)) {
-    throw new HttpError(
-      422,
-      `Twilio cannot present ${resolvedUserPhone} as caller ID for '${normalizedLoginName}'. Verify that employee number in Twilio first.`,
-    );
-  }
+  inventory = await ensureAllowedCallerId({
+    loginName: normalizedLoginName,
+    callerPhone: resolvedUserPhone,
+    inventory,
+  });
   const callerId = resolvedUserPhone;
 
   if (callerIdentity.userPhone) {
@@ -341,17 +434,6 @@ export async function startBridgeCall(
     throw new HttpError(503, "Twilio outbound calling is not configured.");
   }
 
-  const inventory = await readTwilioPhoneInventory();
-  if (
-    inventory.accountType.toLowerCase() === "trial" &&
-    !inventory.allowedCallerIds.has(normalizedTargetPhone)
-  ) {
-    throw new HttpError(
-      422,
-      `Twilio trial accounts can only call verified numbers. ${normalizedTargetPhone} is not verified in this Twilio account.`,
-    );
-  }
-
   const response = new twilio.twiml.VoiceResponse();
   response.say("Please wait while we connect your call.");
   const dial = response.dial({
@@ -378,18 +460,31 @@ export async function startBridgeCall(
     dial.number(normalizedTargetPhone);
   }
 
-  const call = await client.calls.create({
-    to: callerProfile.userPhone,
-    from: callerProfile.bridgeNumber,
-    twiml: response.toString(),
-    ...(options?.parentStatusCallback
-      ? {
-          statusCallback: options.parentStatusCallback,
-          statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-          statusCallbackMethod: "POST",
-        }
-      : {}),
-  });
+  let call: Awaited<ReturnType<typeof client.calls.create>>;
+  const startedAt = Date.now();
+  try {
+    call = await client.calls.create({
+      to: callerProfile.userPhone,
+      from: callerProfile.bridgeNumber,
+      twiml: response.toString(),
+      ...(options?.parentStatusCallback
+        ? {
+            statusCallback: options.parentStatusCallback,
+            statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+            statusCallbackMethod: "POST",
+          }
+        : {}),
+    });
+  } catch (error) {
+    mapTwilioStartError(error, normalizedTargetPhone);
+  } finally {
+    const durationMs = Date.now() - startedAt;
+    if (durationMs >= 1000) {
+      console.info("[twilio-call] calls.create timing", {
+        durationMs,
+      });
+    }
+  }
 
   return {
     sid: call.sid,

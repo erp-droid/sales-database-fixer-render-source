@@ -7,10 +7,13 @@ const saveCallerPhoneOverride = vi.fn();
 const readCallerIdentityProfile = vi.fn();
 const saveCallerIdentityProfile = vi.fn();
 const createTwilioRestClient = vi.fn();
+const getTwilioRestConfig = vi.fn();
 const readTwilioPhoneInventory = vi.fn();
 const normalizeTwilioPhoneNumber = vi.fn((value: string | null | undefined) => value ?? null);
 const readCallEmployeeDirectory = vi.fn();
 const upsertCallEmployeeDirectoryItem = vi.fn();
+const readCallerIdVerification = vi.fn();
+const saveVerifiedCallerIdVerification = vi.fn();
 
 vi.mock("@/lib/caller-identity", () => ({
   resolveSignedInCallerIdentity,
@@ -26,6 +29,11 @@ vi.mock("@/lib/caller-identity-cache", () => ({
   saveCallerIdentityProfile,
 }));
 
+vi.mock("@/lib/caller-id-verifications", () => ({
+  readCallerIdVerification,
+  saveVerifiedCallerIdVerification,
+}));
+
 vi.mock("@/lib/acumatica-service-auth", () => ({
   withServiceAcumaticaSession,
 }));
@@ -37,6 +45,7 @@ vi.mock("@/lib/call-analytics/employee-directory", () => ({
 
 vi.mock("@/lib/twilio", () => ({
   createTwilioRestClient,
+  getTwilioRestConfig,
   readTwilioPhoneInventory,
   normalizeTwilioPhoneNumber,
 }));
@@ -64,14 +73,24 @@ describe("resolveCallerProfile", () => {
     readCallerIdentityProfile.mockReset();
     saveCallerIdentityProfile.mockReset();
     createTwilioRestClient.mockReset();
+    getTwilioRestConfig.mockReset();
     readTwilioPhoneInventory.mockReset();
     normalizeTwilioPhoneNumber.mockClear();
     readCallEmployeeDirectory.mockReset();
     upsertCallEmployeeDirectoryItem.mockReset();
+    readCallerIdVerification.mockReset();
+    saveVerifiedCallerIdVerification.mockReset();
     setTestEnv();
     createTwilioRestClient.mockReturnValue({});
+    getTwilioRestConfig.mockReturnValue({
+      accountSid: "AC123",
+      authToken: "secret",
+      callerId: "+14165551234",
+      edge: "ashburn",
+    });
     readCallerPhoneOverride.mockReturnValue(null);
     readCallerIdentityProfile.mockReturnValue(null);
+    readCallerIdVerification.mockReturnValue(null);
     readCallEmployeeDirectory.mockReturnValue([]);
     withServiceAcumaticaSession.mockImplementation(async (_preferredLoginName, operation) =>
       operation("service-cookie", { value: null }),
@@ -118,7 +137,7 @@ describe("resolveCallerProfile", () => {
       email: "jserrano@meadowb.com",
       userPhone: "+14162304681",
       callerId: "+14162304681",
-      bridgeNumber: "+16475550123",
+      bridgeNumber: "+14165551234",
     });
     expect(resolveSignedInCallerIdentity).toHaveBeenCalledWith(
       "cookie",
@@ -142,6 +161,16 @@ describe("resolveCallerProfile", () => {
   });
 
   it("uses the cached caller phone override before going back to Acumatica", async () => {
+    readCallerIdVerification.mockReturnValue({
+      loginName: "jlee",
+      phoneNumber: "+13653411781",
+      validationCode: null,
+      callSid: null,
+      status: "verified",
+      failureMessage: null,
+      verifiedAt: "2026-03-18T00:00:00.000Z",
+      updatedAt: "2026-03-18T00:00:00.000Z",
+    });
     readCallerPhoneOverride.mockReturnValue({
       loginName: "jlee",
       phoneNumber: "+13653411781",
@@ -170,10 +199,11 @@ describe("resolveCallerProfile", () => {
       email: "jlee@meadowb.com",
       userPhone: "+13653411781",
       callerId: "+13653411781",
-      bridgeNumber: "+16475550123",
+      bridgeNumber: "+14165551234",
     });
     expect(resolveSignedInCallerIdentity).not.toHaveBeenCalled();
     expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
+    expect(readTwilioPhoneInventory).not.toHaveBeenCalled();
     expect(upsertCallEmployeeDirectoryItem).toHaveBeenCalledWith({
       loginName: "jlee",
       contactId: 159842,
@@ -207,7 +237,7 @@ describe("resolveCallerProfile", () => {
       email: "kpareek@meadowb.com",
       userPhone: "+14165550100",
       callerId: "+14165550100",
-      bridgeNumber: "+16475550123",
+      bridgeNumber: "+14165551234",
     });
     expect(resolveSignedInCallerIdentity).not.toHaveBeenCalled();
     expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
@@ -238,7 +268,7 @@ describe("resolveCallerProfile", () => {
       email: "kpareek@meadowb.com",
       userPhone: "+14165550100",
       callerId: "+14165550100",
-      bridgeNumber: "+16475550123",
+      bridgeNumber: "+14165551234",
     });
     expect(resolveSignedInCallerIdentity).not.toHaveBeenCalled();
     expect(withServiceAcumaticaSession).not.toHaveBeenCalled();
@@ -314,7 +344,7 @@ describe("resolveCallerProfile", () => {
       email: "bkoczka@meadowb.com",
       userPhone: "+14165550100",
       callerId: "+14165550100",
-      bridgeNumber: "+16475550123",
+      bridgeNumber: "+14165551234",
     });
   });
 
