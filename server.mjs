@@ -340,6 +340,7 @@ let runtimeActiveRequestCount = 0;
 let runtimeLastLagP99Ms = 0;
 let runtimeLastLagMaxMs = 0;
 let runtimeLastLagSpikeAtMs = 0;
+let runtimeLastTwilioRouteActivityAtMs = 0;
 const runtimeEventLoopLagHistogram = runtimeStallMonitorEnabled
   ? monitorEventLoopDelay({ resolution: RUNTIME_MONITOR_EVENT_LOOP_RESOLUTION_MS })
   : null;
@@ -754,6 +755,13 @@ async function runStartupWarmupSequence() {
 }
 
 server.disable("x-powered-by");
+server.use((req, _res, next) => {
+  const pathname = normalizeRequestPath(req.path || req.originalUrl || req.url);
+  if (pathname.startsWith("/api/twilio/")) {
+    runtimeLastTwilioRouteActivityAtMs = Date.now();
+  }
+  next();
+});
 server.use((req, res, next) => {
   const pathname = normalizeRequestPath(req.path || req.originalUrl || req.url);
   if (!STARTUP_PROBE_LOG_PATHS.has(pathname)) {
@@ -1132,6 +1140,18 @@ server.listen(port, hostname, () => {
       30 * 60 * 1000,
       (Number(process.env.READ_MODEL_BACKUP_INTERVAL_HOURS) || 3) * 60 * 60 * 1000,
     );
+    const BACKUP_INITIAL_DELAY_MS = readBoundedInteger(
+      process.env.READ_MODEL_BACKUP_INITIAL_DELAY_MS,
+      30 * 60 * 1000,
+      5 * 60 * 1000,
+      24 * 60 * 60 * 1000,
+    );
+    const BACKUP_TWILIO_IDLE_MS = readBoundedInteger(
+      process.env.READ_MODEL_BACKUP_TWILIO_IDLE_MS,
+      10 * 60 * 1000,
+      0,
+      12 * 60 * 60 * 1000,
+    );
     const backupScriptPath = fileURLToPath(
       new URL("./scripts/backup-read-model.cjs", import.meta.url),
     );
@@ -1139,6 +1159,21 @@ server.listen(port, hostname, () => {
     const runReadModelBackup = () => {
       if (backupInFlight) {
         console.warn("[backup] previous backup still running; skipping overlap");
+        return;
+      }
+      if (shouldDeferBackgroundWork("read-model-backup")) {
+        return;
+      }
+      const nowMs = Date.now();
+      const twilioIdleForMs =
+        runtimeLastTwilioRouteActivityAtMs > 0
+          ? nowMs - runtimeLastTwilioRouteActivityAtMs
+          : Number.POSITIVE_INFINITY;
+      if (twilioIdleForMs < BACKUP_TWILIO_IDLE_MS) {
+        console.warn("[backup] recent Twilio traffic; skipping scheduled backup", {
+          twilioIdleForMs,
+          requiredIdleMs: BACKUP_TWILIO_IDLE_MS,
+        });
         return;
       }
       backupInFlight = true;
@@ -1159,10 +1194,10 @@ server.listen(port, hostname, () => {
       );
     };
     setInterval(runReadModelBackup, BACKUP_INTERVAL_MS);
-    // Take one shortly after boot so a fresh restart is protected quickly.
-    setTimeout(runReadModelBackup, 60 * 1000);
+    // Avoid taking the first large SQLite snapshot during deploy warmup or active call setup.
+    setTimeout(runReadModelBackup, BACKUP_INITIAL_DELAY_MS);
     console.log(
-      `[backup] scheduled read-model backups every ${Math.round(BACKUP_INTERVAL_MS / 3600000)}h`,
+      `[backup] scheduled read-model backups every ${Math.round(BACKUP_INTERVAL_MS / 3600000)}h; first in ${Math.round(BACKUP_INITIAL_DELAY_MS / 60000)}m; Twilio idle guard ${Math.round(BACKUP_TWILIO_IDLE_MS / 60000)}m`,
     );
   } else if (clusterBackgroundTasksEnabled) {
     console.log("[backup] scheduled read-model backups disabled via env");
