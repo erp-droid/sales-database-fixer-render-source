@@ -12,7 +12,7 @@ import {
   readCallEmployeeDirectoryMeta,
 } from "@/lib/call-analytics/employee-directory";
 import { publishAuditLogChanged } from "@/lib/audit-log-live";
-import { invalidateDashboardSnapshotCache } from "@/lib/call-analytics/dashboard-cache";
+import { markDashboardSnapshotCacheStale } from "@/lib/call-analytics/dashboard-cache";
 import { upsertCallAuditEvent } from "@/lib/audit-log-store";
 import type {
   CallAnalyticsDirection,
@@ -1055,7 +1055,7 @@ function finalizeCallSessionWrites(reason: string, sessions: CallSessionRecord[]
   for (const session of sessions) {
     upsertCallAuditEvent(session);
   }
-  invalidateDashboardSnapshotCache();
+  markDashboardSnapshotCacheStale();
   publishAuditLogChanged(reason);
 }
 

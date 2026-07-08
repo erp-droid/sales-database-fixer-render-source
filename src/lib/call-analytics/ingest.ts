@@ -27,7 +27,7 @@ import {
   replaceCallEmployeeDirectory,
   syncCallEmployeeDirectory,
 } from "@/lib/call-analytics/employee-directory";
-import { invalidateDashboardSnapshotCache } from "@/lib/call-analytics/dashboard-cache";
+import { markDashboardSnapshotCacheStale } from "@/lib/call-analytics/dashboard-cache";
 import type { CallAnalyticsSource, CallIngestState } from "@/lib/call-analytics/types";
 
 type CallContextPayload = {
@@ -1116,7 +1116,7 @@ export async function refreshCallAnalytics(
       });
     })
     .finally(() => {
-      invalidateDashboardSnapshotCache();
+      markDashboardSnapshotCacheStale();
       refreshInFlight = null;
     });
 
@@ -1215,7 +1215,7 @@ export async function processTwilioStatusCallback(
     rootCallSid: params.ParentCallSid?.trim() || callSid,
     sessionId,
   });
-  invalidateDashboardSnapshotCache();
+  markDashboardSnapshotCacheStale();
   writeCallIngestState({
     status: readCallIngestState().fullHistoryComplete ? "complete" : "idle",
     lastWebhookAt: new Date().toISOString(),

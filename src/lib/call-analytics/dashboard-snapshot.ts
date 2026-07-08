@@ -1,4 +1,4 @@
-import { readCachedDashboardSnapshot, readDashboardSnapshotInFlight, writeCachedDashboardSnapshot, writeDashboardSnapshotInFlight } from "@/lib/call-analytics/dashboard-cache";
+import { claimDashboardSnapshotRebuild, readCachedDashboardSnapshot, readDashboardSnapshotInFlight, readStaleDashboardSnapshot, writeCachedDashboardSnapshot, writeDashboardSnapshotInFlight } from "@/lib/call-analytics/dashboard-cache";
 import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
 import { filterCallSessions, buildSummaryStats } from "@/lib/call-analytics/queries";
 import { readCallSessions } from "@/lib/call-analytics/sessionize";
@@ -1126,6 +1126,16 @@ function buildSnapshotFromSessions(
   };
 }
 
+function readSnapshotRebuildMinIntervalMs(): number {
+  const raw = process.env.DASHBOARD_SNAPSHOT_REBUILD_MIN_INTERVAL_MS;
+  const parsed = Number.parseInt(String(raw ?? "").trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 15_000;
+  }
+
+  return parsed;
+}
+
 export async function getDashboardSnapshot(filters: DashboardFilters): Promise<DashboardSnapshotResponse> {
   const cacheKey = buildSnapshotCacheKey(filters);
   const cached = readCachedDashboardSnapshot(cacheKey);
@@ -1133,9 +1143,19 @@ export async function getDashboardSnapshot(filters: DashboardFilters): Promise<D
     return cached;
   }
 
+  // Stale-while-revalidate: call webhooks mark this cache stale many times a
+  // minute, and rebuilding the snapshot blocks the event loop long enough to
+  // fail Render's 5s health check when every dashboard poll triggers one.
+  // Serve the stale copy immediately and refresh at most once per interval.
+  const stale = readStaleDashboardSnapshot(cacheKey);
+
   const existingRequest = readDashboardSnapshotInFlight(cacheKey);
   if (existingRequest) {
-    return existingRequest;
+    return stale ?? existingRequest;
+  }
+
+  if (stale && !claimDashboardSnapshotRebuild(cacheKey, readSnapshotRebuildMinIntervalMs())) {
+    return stale;
   }
 
   const request = Promise.resolve().then(() => {
@@ -1205,6 +1225,16 @@ export async function getDashboardSnapshot(filters: DashboardFilters): Promise<D
   });
 
   writeDashboardSnapshotInFlight(cacheKey, request);
+
+  if (stale) {
+    request.catch((error) => {
+      console.error("[dashboard-snapshot] background refresh failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return stale;
+  }
+
   return request;
 }
 

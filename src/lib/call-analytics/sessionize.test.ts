@@ -8,7 +8,7 @@ const readCallEmployeeDirectoryMeta = vi.fn();
 const readAllCallerPhoneOverrides = vi.fn();
 const publishAuditLogChanged = vi.fn();
 const upsertCallAuditEvent = vi.fn();
-const invalidateDashboardSnapshotCache = vi.fn();
+const markDashboardSnapshotCacheStale = vi.fn();
 
 vi.mock("@/lib/call-analytics/employee-directory", () => ({
   readCallEmployeeDirectory,
@@ -36,7 +36,7 @@ vi.mock("@/lib/audit-log-live", () => ({
 }));
 
 vi.mock("@/lib/call-analytics/dashboard-cache", () => ({
-  invalidateDashboardSnapshotCache,
+  markDashboardSnapshotCacheStale,
 }));
 
 vi.mock("@/lib/audit-log-store", () => ({
@@ -214,7 +214,7 @@ describe("rebuildCallSessions", () => {
       }),
     );
     expect(upsertCallAuditEvent).toHaveBeenCalledTimes(1);
-    expect(invalidateDashboardSnapshotCache).toHaveBeenCalledTimes(1);
+    expect(markDashboardSnapshotCacheStale).toHaveBeenCalledTimes(1);
     expect(publishAuditLogChanged).toHaveBeenCalledWith("call-sessions-rebuilt");
   });
 

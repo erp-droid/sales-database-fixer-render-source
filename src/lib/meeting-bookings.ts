@@ -6,7 +6,7 @@ import {
   readWrappedScalarString,
   readWrappedString,
 } from "@/lib/acumatica";
-import { invalidateDashboardSnapshotCache } from "@/lib/call-analytics/dashboard-cache";
+import { markDashboardSnapshotCacheStale } from "@/lib/call-analytics/dashboard-cache";
 import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
 import { getReadModelDb } from "@/lib/read-model/db";
 import { readEmployeeDirectorySnapshot } from "@/lib/read-model/employees";
@@ -434,7 +434,7 @@ export function replaceMeetingBookings(items: UpsertMeetingBookingInput[]): numb
   });
 
   replace(items);
-  invalidateDashboardSnapshotCache();
+  markDashboardSnapshotCacheStale();
   return items.length;
 }
 
@@ -523,7 +523,7 @@ export function upsertMeetingBooking(input: UpsertMeetingBookingInput): StoredMe
   ensureReadModelSchema(db);
   writeMeetingBookingUpsert(db, input);
 
-  invalidateDashboardSnapshotCache();
+  markDashboardSnapshotCacheStale();
   return getMeetingBookingById(`meeting:${input.eventId.trim()}`) as StoredMeetingBooking;
 }
 
