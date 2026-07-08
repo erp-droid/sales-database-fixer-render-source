@@ -620,16 +620,20 @@
 .callerSpotlight {
   min-width: 0;
   display: grid;
-  gap: 5px;
-  border-left: 4px solid var(--app-green);
+  gap: 6px;
+  border: 2px solid rgba(22, 128, 61, 0.55);
+  border-left: 8px solid #16803d;
   border-radius: 10px;
-  background: #f3faf5;
-  padding: 12px 14px;
+  background: linear-gradient(180deg, #ecfdf3 0%, #dcfce7 100%);
+  box-shadow: 0 16px 28px rgba(22, 128, 61, 0.16);
+  padding: 13px 15px;
 }
 
 .callerSpotlightQuiet {
-  border-left-color: #6f7e91;
-  background: #f6f8fb;
+  border-color: rgba(185, 28, 28, 0.52);
+  border-left-color: #b91c1c;
+  background: linear-gradient(180deg, #fff1f2 0%, #fee2e2 100%);
+  box-shadow: 0 16px 28px rgba(185, 28, 28, 0.16);
 }
 
 .callerSpotlightLabel {
@@ -643,15 +647,24 @@
 
 .callerSpotlight strong {
   overflow-wrap: anywhere;
-  color: var(--ink-strong);
-  font-size: 20px;
+  color: #064e3b;
+  font-size: 22px;
   line-height: 1.15;
 }
 
+.callerSpotlightQuiet strong {
+  color: #7f1d1d;
+}
+
 .callerSpotlight span:last-child {
-  color: var(--ink-muted);
+  color: #166534;
   font-size: 13px;
+  font-weight: 750;
   line-height: 1.35;
+}
+
+.callerSpotlightQuiet span:last-child {
+  color: #991b1b;
 }
 
 .chartFrame {

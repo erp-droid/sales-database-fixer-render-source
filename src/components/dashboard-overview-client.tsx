@@ -641,7 +641,12 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
   );
   const topCaller = rankedCallers[0] ?? null;
   const lowestCaller =
-    snapshot?.activityGaps.find((item) => item.loginName !== "unattributed") ?? null;
+    snapshot?.activityGaps.find(
+      (item) =>
+        item.loginName !== "unattributed" &&
+        item.totalCalls > 0 &&
+        item.loginName !== topCaller?.loginName,
+    ) ?? null;
   const maxEmployeeCalls = useMemo(
     () => Math.max(1, ...chartEmployees.map((item) => item.totalCalls)),
     [chartEmployees],

@@ -196,7 +196,7 @@ describe("dashboard snapshot builder and cache", () => {
     expect(snapshot.meetingCategoryAnalytics.dropOffs.stats.totalMeetings).toBe(0);
     expect(snapshot.teamStats.outboundCalls).toBe(3);
     expect(snapshot.employeeLeaderboard[0]?.loginName).toBe("jserrano");
-    expect(snapshot.activityGaps[0]?.loginName).toBe("jlee");
+    expect(snapshot.activityGaps[0]?.loginName).toBe("dcowell");
     expect(snapshot.bucketDrilldowns).toHaveLength(2);
     expect(snapshot.bucketDrilldowns[0]?.companies[0]?.label).toBe("Northwind");
     expect(snapshot.bucketDrilldowns[0]?.outcomes[0]?.label).toBe("answered");
@@ -225,10 +225,7 @@ describe("dashboard snapshot builder and cache", () => {
       "jserrano",
       "kallen",
     ]);
-    expect(snapshot.activityGaps.map((employee) => employee.loginName)).toEqual([
-      "kallen",
-      "jserrano",
-    ]);
+    expect(snapshot.activityGaps.map((employee) => employee.loginName)).toEqual(["jserrano"]);
   });
 
   it("treats all non-drop-off meeting categories as meetings booked", async () => {

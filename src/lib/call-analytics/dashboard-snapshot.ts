@@ -823,6 +823,7 @@ function buildEmployeeAnalytics(
         lastCallAt: null,
       },
     ))
+    .filter((item) => item.totalCalls > 0)
     .sort((left, right) => compareActivityGap(toActivityGapItem(left), toActivityGapItem(right)))
     .slice(0, MAX_ACTIVITY_GAP_ITEMS)
     .map(toActivityGapItem);
