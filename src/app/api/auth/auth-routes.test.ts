@@ -321,6 +321,102 @@ describe("auth route timeouts", () => {
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/entity/auth/login");
   });
 
+  it("returns a controlled timeout before the browser aborts a stalled upstream login", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { POST } = await import("@/app/api/auth/login/route");
+
+    const responsePromise = POST(
+      new NextRequest("http://localhost/api/auth/login", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          username: "jserrano",
+          password: "secret",
+        }),
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(18_000);
+
+    const response = await responsePromise;
+    const setCookie = response.headers.get("set-cookie") ?? "";
+
+    expect(response.status).toBe(504);
+    await expect(response.json()).resolves.toEqual({
+      error:
+        "Sign-in timed out while contacting Acumatica. Please retry in a few seconds.",
+    });
+    expect(setCookie).toContain(".ASPXAUTH=");
+    expect(setCookie).toContain("mb_login_name=");
+    expect(console.warn).toHaveBeenCalledWith(
+      "[auth-login] upstream sign-in timed out",
+      expect.objectContaining({
+        authLoginName: "jserrano",
+        loginName: "jserrano",
+        timeoutMs: 18_000,
+      }),
+    );
+  });
+
+  it("uses the email local part as the Acumatica login name", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/entity/auth/login")) {
+        return Promise.resolve(
+          jsonResponse({
+            status: 200,
+            body: { ok: true },
+            headers: {
+              "set-cookie": ".ASPXAUTH=fresh-cookie; Path=/; HttpOnly",
+            },
+          }),
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { POST } = await import("@/app/api/auth/login/route");
+
+    const response = await POST(
+      new NextRequest("http://localhost/api/auth/login", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          username: "jserrano@meadowb.com",
+          password: "secret",
+        }),
+      }),
+    );
+    const requestInit = fetchMock.mock.calls[0]?.[1];
+    const payload =
+      typeof requestInit?.body === "string"
+        ? (JSON.parse(requestInit.body) as Record<string, string>)
+        : {};
+    const setCookie = response.headers.get("set-cookie") ?? "";
+
+    expect(response.status).toBe(200);
+    expect(payload.name).toBe("jserrano");
+    expect(setCookie).toContain("mb_login_name=jserrano");
+  });
+
   it("does not fail sign-in when local credential storage is locked", async () => {
     const storageError = new Error("database is locked");
     (storageError as Error & { code?: string }).code = "SQLITE_BUSY";

@@ -9,7 +9,7 @@ const REMEMBER_PASSWORD_STORAGE_KEY = "businessAccounts.rememberPassword.v1";
 const COLUMN_PREF_RESET_STORAGE_KEY = "businessAccounts.resetColumnsOnNextLoad.v1";
 const RECENT_SIGN_IN_STORAGE_KEY = "businessAccounts.authJustSignedInAt.v1";
 const SESSION_CHECK_TIMEOUT_MS = 6000;
-const LOGIN_TIMEOUT_MS = 35000;
+const LOGIN_TIMEOUT_MS = 24000;
 
 type StoredCredentials = {
   username: string;
@@ -205,7 +205,7 @@ export function SignInForm({
       window.location.assign(nextPath);
     } catch (submitError) {
       if (isAbortError(submitError)) {
-        setError("Sign-in timed out. Please retry.");
+        setError("Sign-in timed out while contacting Acumatica. Please retry.");
         return;
       }
       setError(submitError instanceof Error ? submitError.message : "Sign-in failed.");

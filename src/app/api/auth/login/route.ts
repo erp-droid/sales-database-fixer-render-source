@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   buildStoredAuthCookieValueFromSetCookies,
   buildCookieHeader,
+  clearAuthCookie,
   clearStoredLoginName,
   getSetCookieHeaders,
   setStoredLoginName,
@@ -12,8 +13,8 @@ import type { AppEnv } from "@/lib/env";
 import { getEnv } from "@/lib/env";
 import { storeUserCredentials } from "@/lib/stored-user-credentials";
 
-const UPSTREAM_LOGIN_TIMEOUT_MS = 30000;
-const LOGOUT_TIMEOUT_MS = 4000;
+const UPSTREAM_LOGIN_TIMEOUT_MS = 18000;
+const LOGOUT_TIMEOUT_MS = 1500;
 
 function isAbortError(error: unknown): boolean {
   return (
@@ -197,6 +198,27 @@ function buildLoginErrorResponse(
   return NextResponse.json({ error: message }, { status });
 }
 
+function buildClearingLoginErrorResponse(
+  request: NextRequest,
+  env: AppEnv,
+  mode: LoginResponseMode,
+  nextPath: string,
+  status: number,
+  message: string,
+): NextResponse {
+  const response = buildLoginErrorResponse(
+    request,
+    env,
+    mode,
+    nextPath,
+    status,
+    message,
+  );
+  clearAuthCookie(response);
+  clearStoredLoginName(response);
+  return response;
+}
+
 function isLocalDevLoginAllowed(): boolean {
   return (
     process.env.NODE_ENV !== "production" &&
@@ -206,6 +228,21 @@ function isLocalDevLoginAllowed(): boolean {
 
 function buildLocalDevCookieValue(username: string): string {
   return `local-dev-${Buffer.from(username, "utf8").toString("base64url")}`;
+}
+
+function extractEmailLocalPart(value: string): string | null {
+  const trimmed = value.trim();
+  const atIndex = trimmed.indexOf("@");
+  if (atIndex <= 0) {
+    return null;
+  }
+
+  const localPart = trimmed.slice(0, atIndex).trim();
+  return localPart || null;
+}
+
+function buildAcumaticaLoginName(username: string): string {
+  return extractEmailLocalPart(username) ?? username.trim();
 }
 
 function normalizeUpstreamError(status: number, message: string): NormalizedUpstreamError {
@@ -261,6 +298,7 @@ async function logoutCookieValue(cookieValue: string, env: AppEnv): Promise<void
     return;
   }
 
+  const startedAt = Date.now();
   await fetchWithTimeout(
     logoutUrl,
     {
@@ -273,7 +311,10 @@ async function logoutCookieValue(cookieValue: string, env: AppEnv): Promise<void
     },
     LOGOUT_TIMEOUT_MS,
   ).catch(() => {
-    // Best effort only. Login below still proceeds.
+    console.warn("[auth-login] prior session logout failed; continuing login", {
+      durationMs: Math.max(0, Date.now() - startedAt),
+      timeoutMs: LOGOUT_TIMEOUT_MS,
+    });
   });
 }
 
@@ -332,12 +373,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   // Try to release any prior upstream browser session before opening a new one.
+  const hadExistingCookie = Boolean(request.cookies.get(env.AUTH_COOKIE_NAME)?.value);
   await logoutExistingSession(request, env);
 
+  const upstreamLoginName = isCustomAuth ? username : buildAcumaticaLoginName(username);
+  const appLoginName = isCustomAuth ? username : upstreamLoginName;
   const loginPayload = isCustomAuth
-    ? { username, password }
+    ? { username: upstreamLoginName, password }
     : {
-        name: username,
+        name: upstreamLoginName,
         password,
         company: env.ACUMATICA_COMPANY ?? "MeadowBrook Live",
         ...(env.ACUMATICA_BRANCH ? { branch: env.ACUMATICA_BRANCH } : {}),
@@ -345,6 +389,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       };
 
   let upstreamResponse: Response;
+  const loginStartedAt = Date.now();
   try {
     upstreamResponse = await fetchWithTimeout(
       loginUrl,
@@ -362,13 +407,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   } catch (error) {
     if (isAbortError(error)) {
-      return buildLoginErrorResponse(
+      console.warn("[auth-login] upstream sign-in timed out", {
+        authLoginName: upstreamLoginName,
+        durationMs: Math.max(0, Date.now() - loginStartedAt),
+        hadExistingCookie,
+        loginName: appLoginName,
+        timeoutMs: UPSTREAM_LOGIN_TIMEOUT_MS,
+      });
+      return buildClearingLoginErrorResponse(
         request,
         env,
         mode,
         nextPath,
         504,
-        "Sign-in timed out. Please retry in a few seconds.",
+        "Sign-in timed out while contacting Acumatica. Please retry in a few seconds.",
       );
     }
     throw error;
@@ -381,7 +433,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       parseUpstreamErrorMessage(rawText),
     );
     console.warn("[auth-login] upstream sign-in failed", {
-      loginName: username,
+      authLoginName: upstreamLoginName,
+      loginName: appLoginName,
       status: upstreamResponse.status,
       responseStatus: normalizedError.status,
       message: normalizedError.message,
@@ -401,7 +454,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   if (!cookieValue) {
     console.warn("[auth-login] upstream sign-in did not return an auth cookie", {
-      loginName: username,
+      authLoginName: upstreamLoginName,
+      loginName: appLoginName,
       cookieName: env.AUTH_COOKIE_NAME,
     });
     return buildLoginErrorResponse(
@@ -419,28 +473,29 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       ? NextResponse.redirect(buildPublicRedirectUrl(request, env, nextPath), { status: 303 })
       : NextResponse.json({ ok: true });
   setAuthCookie(response, cookieValue);
-  if (username) {
-    setStoredLoginName(response, username);
+  if (appLoginName) {
+    setStoredLoginName(response, appLoginName);
   } else {
     clearStoredLoginName(response);
   }
   if (env.AUTH_PROVIDER === "acumatica") {
     try {
       storeUserCredentials({
-        loginName: username,
-        username,
+        loginName: appLoginName,
+        username: upstreamLoginName,
         password,
       });
     } catch (error) {
       console.warn("[auth-login] failed to store user credentials", {
         error: error instanceof Error ? error.message : String(error),
-        loginName: username,
+        loginName: appLoginName,
       });
     }
   }
 
   console.info("[auth-login] sign-in accepted", {
-    loginName: username,
+    authLoginName: upstreamLoginName,
+    loginName: appLoginName,
     mode,
   });
 
