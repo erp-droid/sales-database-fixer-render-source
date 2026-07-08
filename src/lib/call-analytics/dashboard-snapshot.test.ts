@@ -16,6 +16,7 @@ const readCallEmployeeDirectoryMock = vi.fn<
     updatedAt: string;
   }>
 >();
+const readAllCallerIdentityProfilesMock = vi.fn();
 const listMeetingBookingsMock = vi.fn();
 
 vi.mock("@/lib/call-analytics/sessionize", () => ({
@@ -28,6 +29,10 @@ vi.mock("@/lib/call-analytics/postcall-store", () => ({
 
 vi.mock("@/lib/call-analytics/employee-directory", () => ({
   readCallEmployeeDirectory: readCallEmployeeDirectoryMock,
+}));
+
+vi.mock("@/lib/caller-identity-cache", () => ({
+  readAllCallerIdentityProfiles: readAllCallerIdentityProfilesMock,
 }));
 
 vi.mock("@/lib/meeting-bookings", () => ({
@@ -108,6 +113,8 @@ describe("dashboard snapshot builder and cache", () => {
       summaryText: "Summary ready.",
     });
     readCallEmployeeDirectoryMock.mockReset();
+    readAllCallerIdentityProfilesMock.mockReset();
+    readAllCallerIdentityProfilesMock.mockReturnValue([]);
     listMeetingBookingsMock.mockReset();
     listMeetingBookingsMock.mockReturnValue([]);
     setSnapshotEnv();
@@ -157,9 +164,9 @@ describe("dashboard snapshot builder and cache", () => {
         }),
       ],
       [
-        { loginName: "jserrano", displayName: "Jorge Serrano", email: null },
-        { loginName: "dcowell", displayName: "Derek Cowell", email: null },
-        { loginName: "jlee", displayName: "Jacky Lee", email: null },
+        { loginName: "jserrano", displayName: "Jorge Serrano", email: null, callerIdPhone: "+14162304681" },
+        { loginName: "dcowell", displayName: "Derek Cowell", email: null, callerIdPhone: "+14165550123" },
+        { loginName: "jlee", displayName: "Jacky Lee", email: null, callerIdPhone: "+13653411781" },
       ],
       undefined,
       undefined,
@@ -217,7 +224,7 @@ describe("dashboard snapshot builder and cache", () => {
       ],
       [
         { loginName: "4162304681", displayName: "(416) 230-4681", email: null },
-        { loginName: "jserrano", displayName: "Jorge Serrano", email: null },
+        { loginName: "jserrano", displayName: "Jorge Serrano", email: null, callerIdPhone: "+14162304681" },
         { loginName: "kallen", displayName: "Kallen", email: null },
       ],
     );

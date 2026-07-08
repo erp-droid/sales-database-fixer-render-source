@@ -2,6 +2,7 @@ import { readCachedDashboardSnapshot, readDashboardSnapshotInFlight, writeCached
 import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
 import { filterCallSessions, buildSummaryStats } from "@/lib/call-analytics/queries";
 import { readCallSessions } from "@/lib/call-analytics/sessionize";
+import { readAllCallerIdentityProfiles } from "@/lib/caller-identity-cache";
 import type {
   CallSessionRecord,
   DashboardActivityGapItem,
@@ -45,6 +46,9 @@ type EmployeeDirectoryOption = {
   loginName: string;
   displayName: string;
   email: string | null;
+  normalizedPhone?: string | null;
+  callerIdPhone?: string | null;
+  isCallerIdentityProfile?: boolean;
 };
 
 type BreakdownAggregate = {
@@ -118,7 +122,7 @@ function isReportableEmployee(employee: Pick<EmployeeDirectoryOption, "loginName
 }
 
 const CALL_REP_DISPLAY_NAME_OVERRIDES: Record<string, string> = {
-  brock: "Brock",
+  bkoczka: "Brock",
   jsettle: "Justin",
   kallen: "Katlynn",
   kpareek: "Krishna",
@@ -126,6 +130,8 @@ const CALL_REP_DISPLAY_NAME_OVERRIDES: Record<string, string> = {
   smessih: "Sarah",
   stita: "Samuel",
 };
+
+const FORCE_INCLUDED_CALL_REP_LOGIN_NAMES = new Set(Object.keys(CALL_REP_DISPLAY_NAME_OVERRIDES));
 
 function readRepDisplayName(loginName: string, fallback: string | null | undefined): string {
   const normalizedLoginName = loginName.trim().toLowerCase();
@@ -143,6 +149,19 @@ function normalizeEmployeeOption(employee: EmployeeDirectoryOption): EmployeeDir
     loginName,
     displayName: readRepDisplayName(loginName, employee.displayName),
   };
+}
+
+function isDashboardCallRosterEmployee(employee: EmployeeDirectoryOption): boolean {
+  const loginName = employee.loginName.trim().toLowerCase();
+  if (!isReportableEmployee(employee)) {
+    return false;
+  }
+
+  return (
+    FORCE_INCLUDED_CALL_REP_LOGIN_NAMES.has(loginName) ||
+    employee.isCallerIdentityProfile === true ||
+    Boolean(cleanString(employee.callerIdPhone))
+  );
 }
 
 function buildSnapshotCacheKey(filters: DashboardFilters): string {
@@ -757,7 +776,7 @@ function buildCandidateEmployees(
   employees: EmployeeDirectoryOption[],
 ): EmployeeDirectoryOption[] {
   const reportableEmployees = employees
-    .filter(isReportableEmployee)
+    .filter(isDashboardCallRosterEmployee)
     .map(normalizeEmployeeOption);
 
   if (filters.employees.length === 0) {
@@ -961,7 +980,7 @@ function buildSnapshotFromSessions(
 ): DashboardSnapshotResponse {
   const teamStats = buildSummaryStats(sessions);
   const reportableEmployees = employees
-    .filter(isReportableEmployee)
+    .filter(isDashboardCallRosterEmployee)
     .map(normalizeEmployeeOption);
   const visibleMeetingRows = meetingRows ?? [];
   const trendGroups = new Map<string, DashboardTrendPoint>();
@@ -1079,11 +1098,40 @@ export async function getDashboardSnapshot(filters: DashboardFilters): Promise<D
     const now = Date.now();
     const generatedAt = new Date(now).toISOString();
     const cacheExpiresAt = new Date(now + getEnv().CALL_ANALYTICS_STALE_AFTER_MS).toISOString();
-    const employees = readCallEmployeeDirectory().map((item) => ({
-      loginName: item.loginName,
-      displayName: item.displayName,
-      email: item.email,
-    }));
+    const employeesByLogin = new Map<string, EmployeeDirectoryOption>();
+    for (const item of readCallEmployeeDirectory()) {
+      const loginName = item.loginName.trim().toLowerCase();
+      if (!loginName) {
+        continue;
+      }
+
+      employeesByLogin.set(loginName, {
+        loginName,
+        displayName: item.displayName,
+        email: item.email,
+        normalizedPhone: item.normalizedPhone,
+        callerIdPhone: item.callerIdPhone,
+      });
+    }
+
+    for (const profile of readAllCallerIdentityProfiles()) {
+      const loginName = profile.loginName.trim().toLowerCase();
+      if (!loginName) {
+        continue;
+      }
+
+      const existing = employeesByLogin.get(loginName);
+      employeesByLogin.set(loginName, {
+        loginName,
+        displayName: profile.displayName || existing?.displayName || loginName,
+        email: profile.email ?? existing?.email ?? null,
+        normalizedPhone: profile.phoneNumber ?? existing?.normalizedPhone ?? null,
+        callerIdPhone: profile.phoneNumber ?? existing?.callerIdPhone ?? null,
+        isCallerIdentityProfile: true,
+      });
+    }
+
+    const employees = [...employeesByLogin.values()];
     const sessions = filterCallSessions(readCallSessions(), filters);
     const snapshot = buildSnapshotFromSessions(
       filters,
