@@ -549,6 +549,15 @@ async function diagnoseAndRepairJob(job: {
 
 // ── Main Entry Point ───────────────────────────────────────────────────
 
+// A full cycle over ~100 jobs runs several seconds of synchronous SQLite work;
+// without yielding between jobs the event loop blocks longer than Render's 5s
+// health-check timeout and the instance gets killed mid-cycle.
+function yieldEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 async function runWatchdogCycle(): Promise<WatchdogReport> {
   const startMs = Date.now();
   const actions: WatchdogAction[] = [];
@@ -560,6 +569,7 @@ async function runWatchdogCycle(): Promise<WatchdogReport> {
     : null;
 
   for (const job of jobs) {
+    await yieldEventLoop();
     try {
       const action = await diagnoseAndRepairJob(job);
       if (action) {
