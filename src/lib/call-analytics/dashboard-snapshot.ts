@@ -164,6 +164,51 @@ function isDashboardCallRosterEmployee(employee: EmployeeDirectoryOption): boole
   );
 }
 
+function readRosterDedupeKey(employee: EmployeeDirectoryOption): string {
+  const phone = cleanString(employee.callerIdPhone) ?? cleanString(employee.normalizedPhone);
+  if (phone) {
+    return `phone:${phone}`;
+  }
+
+  return `login:${employee.loginName}`;
+}
+
+function shouldPreferRosterEmployee(
+  next: EmployeeDirectoryOption,
+  current: EmployeeDirectoryOption,
+): boolean {
+  if (next.isCallerIdentityProfile !== current.isCallerIdentityProfile) {
+    return next.isCallerIdentityProfile === true;
+  }
+
+  const currentDisplayIsLogin = current.displayName.trim().toLowerCase() === current.loginName;
+  const nextDisplayIsLogin = next.displayName.trim().toLowerCase() === next.loginName;
+  if (currentDisplayIsLogin !== nextDisplayIsLogin) {
+    return !nextDisplayIsLogin;
+  }
+
+  return next.loginName.localeCompare(current.loginName, undefined, { sensitivity: "base" }) < 0;
+}
+
+function buildDashboardCallRosterEmployees(employees: EmployeeDirectoryOption[]): EmployeeDirectoryOption[] {
+  const byKey = new Map<string, EmployeeDirectoryOption>();
+
+  for (const employee of employees) {
+    if (!isDashboardCallRosterEmployee(employee)) {
+      continue;
+    }
+
+    const normalizedEmployee = normalizeEmployeeOption(employee);
+    const key = readRosterDedupeKey(normalizedEmployee);
+    const existing = byKey.get(key);
+    if (!existing || shouldPreferRosterEmployee(normalizedEmployee, existing)) {
+      byKey.set(key, normalizedEmployee);
+    }
+  }
+
+  return [...byKey.values()];
+}
+
 function buildSnapshotCacheKey(filters: DashboardFilters): string {
   return JSON.stringify(filters);
 }
@@ -775,9 +820,7 @@ function buildCandidateEmployees(
   filters: DashboardFilters,
   employees: EmployeeDirectoryOption[],
 ): EmployeeDirectoryOption[] {
-  const reportableEmployees = employees
-    .filter(isDashboardCallRosterEmployee)
-    .map(normalizeEmployeeOption);
+  const reportableEmployees = buildDashboardCallRosterEmployees(employees);
 
   if (filters.employees.length === 0) {
     return reportableEmployees;
@@ -979,9 +1022,7 @@ function buildSnapshotFromSessions(
   meetingRows?: StoredMeetingBooking[],
 ): DashboardSnapshotResponse {
   const teamStats = buildSummaryStats(sessions);
-  const reportableEmployees = employees
-    .filter(isDashboardCallRosterEmployee)
-    .map(normalizeEmployeeOption);
+  const reportableEmployees = buildDashboardCallRosterEmployees(employees);
   const visibleMeetingRows = meetingRows ?? [];
   const trendGroups = new Map<string, DashboardTrendPoint>();
   const bucketSessions = new Map<string, CallSessionRecord[]>();

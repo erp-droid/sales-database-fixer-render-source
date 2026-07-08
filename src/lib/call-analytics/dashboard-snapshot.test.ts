@@ -276,6 +276,31 @@ describe("dashboard snapshot builder and cache", () => {
     );
   });
 
+  it("dedupes duplicate caller roster rows by caller ID", async () => {
+    const snapshotModule = await import("@/lib/call-analytics/dashboard-snapshot");
+    const snapshot = snapshotModule.buildDashboardSnapshotForTests(
+      baseFilters,
+      [],
+      [
+        {
+          loginName: "steven",
+          displayName: "Steven Buhagiar",
+          email: null,
+          callerIdPhone: "+14168843800",
+        },
+        {
+          loginName: "sbuhagiar",
+          displayName: "Steven Buhagiar",
+          email: null,
+          callerIdPhone: "+14168843800",
+          isCallerIdentityProfile: true,
+        },
+      ],
+    );
+
+    expect(snapshot.employeeLeaderboard.map((employee) => employee.loginName)).toEqual(["sbuhagiar"]);
+  });
+
   it("treats all non-drop-off meeting categories as meetings booked", async () => {
     const snapshotModule = await import("@/lib/call-analytics/dashboard-snapshot");
     const snapshot = snapshotModule.buildDashboardSnapshotForTests(
