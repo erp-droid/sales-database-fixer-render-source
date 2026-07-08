@@ -7,7 +7,9 @@ function readPositiveInteger(value, fallback) {
 }
 
 const requestedWorkerCount = readPositiveInteger(process.env.WEB_CONCURRENCY, 1);
-const workerCount = Math.max(1, requestedWorkerCount);
+const defaultMaxWorkerCount = process.env.NODE_ENV === "production" ? 2 : requestedWorkerCount;
+const maxWorkerCount = readPositiveInteger(process.env.WEB_CLUSTER_MAX_WORKERS, defaultMaxWorkerCount);
+const workerCount = Math.max(1, Math.min(requestedWorkerCount, maxWorkerCount));
 const shutdownTimeoutMs = readPositiveInteger(process.env.WEB_CLUSTER_SHUTDOWN_TIMEOUT_MS, 10_000);
 
 if (workerCount <= 1) {
@@ -18,7 +20,9 @@ if (workerCount <= 1) {
 
   console.log("[cluster] primary starting", {
     pid: process.pid,
+    requestedWebConcurrency: requestedWorkerCount,
     webConcurrency: workerCount,
+    maxWorkerCount,
     availableParallelism: availableParallelism(),
   });
 

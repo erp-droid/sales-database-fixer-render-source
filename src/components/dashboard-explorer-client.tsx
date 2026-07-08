@@ -24,7 +24,8 @@ import {
 } from "./dashboard-ui";
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-const ACTIVE_REFRESH_INTERVAL_MS = 2_000;
+const ACTIVE_REFRESH_INTERVAL_MS = 30_000;
+const REFRESH_RANGE_BUCKET_MS = 5 * 60 * 1000;
 
 type ErrorPayload = {
   error?: string;
@@ -72,7 +73,14 @@ function mergeFilters(filters: DashboardFilters, next: Partial<DashboardFilters>
 }
 
 function parseRefreshFilters(currentQuery: string): DashboardFilters {
-  return parseDashboardFilters(new URLSearchParams(currentQuery));
+  const bucketedNow = Math.floor(Date.now() / REFRESH_RANGE_BUCKET_MS) * REFRESH_RANGE_BUCKET_MS;
+  return parseDashboardFilters(new URLSearchParams(currentQuery), {
+    now: bucketedNow,
+  });
+}
+
+function canRefreshInBackground(): boolean {
+  return document.visibilityState === "visible";
 }
 
 type DashboardExplorerClientProps = {
@@ -197,6 +205,10 @@ export function DashboardExplorerClient({ defaultNowIso }: DashboardExplorerClie
     const intervalMs = useActiveRefresh ? ACTIVE_REFRESH_INTERVAL_MS : REFRESH_INTERVAL_MS;
 
     async function refreshCallListInPlace() {
+      if (!canRefreshInBackground()) {
+        return;
+      }
+
       try {
         const query = buildDashboardQueryString(parseRefreshFilters(currentQuery), {
           page,
@@ -219,15 +231,19 @@ export function DashboardExplorerClient({ defaultNowIso }: DashboardExplorerClie
       void refreshCallListInPlace();
     }, intervalMs);
 
-    function handleFocus() {
-      void refreshCallListInPlace();
+    function handleVisibleRefresh() {
+      if (canRefreshInBackground()) {
+        void refreshCallListInPlace();
+      }
     }
 
-    window.addEventListener("focus", handleFocus);
+    window.addEventListener("focus", handleVisibleRefresh);
+    document.addEventListener("visibilitychange", handleVisibleRefresh);
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
-      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("focus", handleVisibleRefresh);
+      document.removeEventListener("visibilitychange", handleVisibleRefresh);
     };
   }, [currentQuery, page, pageSize, useActiveRefresh]);
 

@@ -22,7 +22,8 @@ import {
 } from "./dashboard-ui";
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-const ACTIVE_REFRESH_INTERVAL_MS = 2_000;
+const ACTIVE_REFRESH_INTERVAL_MS = 30_000;
+const REFRESH_RANGE_BUCKET_MS = 5 * 60 * 1000;
 
 type ErrorPayload = {
   error?: string;
@@ -360,7 +361,14 @@ function buildExplorerHref(filters: DashboardFilters): string {
 }
 
 function parseRefreshFilters(currentQuery: string): DashboardFilters {
-  return parseDashboardFilters(new URLSearchParams(currentQuery));
+  const bucketedNow = Math.floor(Date.now() / REFRESH_RANGE_BUCKET_MS) * REFRESH_RANGE_BUCKET_MS;
+  return parseDashboardFilters(new URLSearchParams(currentQuery), {
+    now: bucketedNow,
+  });
+}
+
+function canRefreshInBackground(): boolean {
+  return document.visibilityState === "visible";
 }
 
 function mergeFilters(filters: DashboardFilters, next: Partial<DashboardFilters>): DashboardFilters {
@@ -581,6 +589,10 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     const intervalMs = useActiveRefresh ? ACTIVE_REFRESH_INTERVAL_MS : REFRESH_INTERVAL_MS;
 
     async function refreshSnapshotInPlace() {
+      if (!canRefreshInBackground()) {
+        return;
+      }
+
       try {
         const query = buildDashboardQueryString(parseRefreshFilters(currentQuery));
         const response = await fetch(`/api/dashboard/calls/snapshot?${query}`, {
@@ -600,15 +612,19 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
       void refreshSnapshotInPlace();
     }, intervalMs);
 
-    function handleFocus() {
-      void refreshSnapshotInPlace();
+    function handleVisibleRefresh() {
+      if (canRefreshInBackground()) {
+        void refreshSnapshotInPlace();
+      }
     }
 
-    window.addEventListener("focus", handleFocus);
+    window.addEventListener("focus", handleVisibleRefresh);
+    document.addEventListener("visibilitychange", handleVisibleRefresh);
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
-      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("focus", handleVisibleRefresh);
+      document.removeEventListener("visibilitychange", handleVisibleRefresh);
     };
   }, [currentQuery, useActiveRefresh]);
 
