@@ -15,6 +15,7 @@ import {
   DashboardShell,
   DashboardStatusBar,
   extractErrorMessage,
+  formatDateTime,
   formatDuration,
   formatPercent,
   readJsonResponse,
@@ -287,6 +288,24 @@ function formatBookingPillValue(employee: DashboardSnapshotResponse["meetingLead
     return employee.totalAttendees.toLocaleString();
   }
   return employee.totalMeetings.toLocaleString();
+}
+
+function formatCallCountLabel(count: number): string {
+  return `${count.toLocaleString()} call${count === 1 ? "" : "s"}`;
+}
+
+function formatCallerShare(count: number, total: number): string {
+  if (total <= 0) {
+    return "0% of team";
+  }
+  return `${formatPercent(count / total)} of team`;
+}
+
+function formatLastCallLabel(value: string | null): string {
+  if (!value) {
+    return "No calls in range";
+  }
+  return `Last call ${formatDateTime(value)}`;
 }
 
 function readStatusLabel(snapshot: DashboardSnapshotResponse | null): string {
@@ -616,6 +635,13 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
   }, [employeeSearch, snapshot?.employees]);
 
   const chartEmployees = useMemo(() => snapshot?.employeeLeaderboard ?? [], [snapshot?.employeeLeaderboard]);
+  const rankedCallers = useMemo(
+    () => chartEmployees.filter((item) => item.loginName !== "unattributed"),
+    [chartEmployees],
+  );
+  const topCaller = rankedCallers[0] ?? null;
+  const lowestCaller =
+    snapshot?.activityGaps.find((item) => item.loginName !== "unattributed") ?? null;
   const maxEmployeeCalls = useMemo(
     () => Math.max(1, ...chartEmployees.map((item) => item.totalCalls)),
     [chartEmployees],
@@ -1071,6 +1097,34 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
                   Connected calls
                 </span>
               </div>
+
+              {topCaller || lowestCaller ? (
+                <div className={styles.callerSpotlightGrid}>
+                  {topCaller ? (
+                    <div className={styles.callerSpotlight}>
+                      <span className={styles.callerSpotlightLabel}>Most calls</span>
+                      <strong>{topCaller.displayName}</strong>
+                      <span>
+                        {formatCallCountLabel(topCaller.totalCalls)} ·{" "}
+                        {topCaller.answeredCalls.toLocaleString()} connected ·{" "}
+                        {formatCallerShare(topCaller.totalCalls, snapshot.teamStats.totalCalls)}
+                      </span>
+                    </div>
+                  ) : null}
+
+                  {lowestCaller ? (
+                    <div className={`${styles.callerSpotlight} ${styles.callerSpotlightQuiet}`}>
+                      <span className={styles.callerSpotlightLabel}>Fewest calls</span>
+                      <strong>{lowestCaller.displayName}</strong>
+                      <span>
+                        {formatCallCountLabel(lowestCaller.totalCalls)} ·{" "}
+                        {lowestCaller.outboundCalls.toLocaleString()} outbound ·{" "}
+                        {formatLastCallLabel(lowestCaller.lastCallAt)}
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               {chartEmployees.length ? (
                 <div className={styles.chartFrame}>
