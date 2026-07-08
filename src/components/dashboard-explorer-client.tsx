@@ -71,6 +71,10 @@ function mergeFilters(filters: DashboardFilters, next: Partial<DashboardFilters>
   };
 }
 
+function parseRefreshFilters(currentQuery: string): DashboardFilters {
+  return parseDashboardFilters(new URLSearchParams(currentQuery));
+}
+
 type DashboardExplorerClientProps = {
   defaultNowIso: string;
 };
@@ -194,7 +198,7 @@ export function DashboardExplorerClient({ defaultNowIso }: DashboardExplorerClie
 
     async function refreshCallListInPlace() {
       try {
-        const query = buildDashboardQueryString(filters, {
+        const query = buildDashboardQueryString(parseRefreshFilters(currentQuery), {
           page,
           pageSize,
         });
@@ -225,7 +229,7 @@ export function DashboardExplorerClient({ defaultNowIso }: DashboardExplorerClie
       window.clearInterval(intervalId);
       window.removeEventListener("focus", handleFocus);
     };
-  }, [filters, page, pageSize, useActiveRefresh]);
+  }, [currentQuery, page, pageSize, useActiveRefresh]);
 
   useEffect(() => {
     if (!selectedSessionId) {
@@ -289,7 +293,7 @@ export function DashboardExplorerClient({ defaultNowIso }: DashboardExplorerClie
         throw new Error(extractErrorMessage(payload) ?? "Unable to refresh call history.");
       }
 
-      const query = buildDashboardQueryString(filters, {
+      const query = buildDashboardQueryString(parseRefreshFilters(currentQuery), {
         page,
         pageSize,
       });

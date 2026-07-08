@@ -359,6 +359,10 @@ function buildExplorerHref(filters: DashboardFilters): string {
   return query ? `/dashboard/explorer?${query}` : "/dashboard/explorer";
 }
 
+function parseRefreshFilters(currentQuery: string): DashboardFilters {
+  return parseDashboardFilters(new URLSearchParams(currentQuery));
+}
+
 function mergeFilters(filters: DashboardFilters, next: Partial<DashboardFilters>): DashboardFilters {
   return {
     ...filters,
@@ -578,7 +582,7 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
 
     async function refreshSnapshotInPlace() {
       try {
-        const query = buildDashboardQueryString(filters);
+        const query = buildDashboardQueryString(parseRefreshFilters(currentQuery));
         const response = await fetch(`/api/dashboard/calls/snapshot?${query}`, {
           cache: "no-store",
         });
@@ -606,7 +610,7 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
       window.clearInterval(intervalId);
       window.removeEventListener("focus", handleFocus);
     };
-  }, [currentQuery, filters, useActiveRefresh]);
+  }, [currentQuery, useActiveRefresh]);
 
   async function handleManualRefresh(): Promise<void> {
     setRefreshing(true);
@@ -620,7 +624,7 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
         throw new Error(extractErrorMessage(payload) ?? "Unable to refresh call history.");
       }
 
-      const query = buildDashboardQueryString(filters);
+      const query = buildDashboardQueryString(parseRefreshFilters(currentQuery));
       const snapshotResponse = await fetch(`/api/dashboard/calls/snapshot?${query}`, {
         cache: "no-store",
       });
