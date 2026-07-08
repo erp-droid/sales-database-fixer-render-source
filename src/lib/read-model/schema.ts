@@ -690,7 +690,262 @@ function backfillAccountRowSupplementalColumns(db: Database.Database): void {
   backfill();
 }
 
+type LegacyColumnMigration = {
+  name: string;
+  definition: string;
+};
+
+type LegacyTableMigration = {
+  tableName: string;
+  columns: LegacyColumnMigration[];
+};
+
+const SAFE_SQL_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+const LEGACY_TABLE_MIGRATIONS: LegacyTableMigration[] = [
+  {
+    tableName: "account_notes",
+    columns: [
+      { name: "account_record_id", definition: "account_record_id TEXT NOT NULL DEFAULT ''" },
+      { name: "business_account_id", definition: "business_account_id TEXT" },
+      { name: "company_name", definition: "company_name TEXT" },
+      { name: "contact_id", definition: "contact_id INTEGER" },
+      { name: "contact_name", definition: "contact_name TEXT" },
+      { name: "note", definition: "note TEXT NOT NULL DEFAULT ''" },
+      { name: "author", definition: "author TEXT" },
+      { name: "created_at", definition: "created_at TEXT NOT NULL DEFAULT ''" },
+      { name: "updated_at", definition: "updated_at TEXT NOT NULL DEFAULT ''" },
+    ],
+  },
+  {
+    tableName: "call_sessions",
+    columns: [
+      { name: "root_call_sid", definition: "root_call_sid TEXT NOT NULL DEFAULT ''" },
+      { name: "primary_leg_sid", definition: "primary_leg_sid TEXT" },
+      { name: "source", definition: "source TEXT NOT NULL DEFAULT 'unknown'" },
+      { name: "direction", definition: "direction TEXT NOT NULL DEFAULT 'unknown'" },
+      { name: "outcome", definition: "outcome TEXT NOT NULL DEFAULT 'unknown'" },
+      { name: "answered", definition: "answered INTEGER NOT NULL DEFAULT 0" },
+      { name: "started_at", definition: "started_at TEXT" },
+      { name: "answered_at", definition: "answered_at TEXT" },
+      { name: "ended_at", definition: "ended_at TEXT" },
+      { name: "talk_duration_seconds", definition: "talk_duration_seconds INTEGER" },
+      { name: "ring_duration_seconds", definition: "ring_duration_seconds INTEGER" },
+      { name: "employee_login_name", definition: "employee_login_name TEXT" },
+      { name: "employee_display_name", definition: "employee_display_name TEXT" },
+      { name: "employee_contact_id", definition: "employee_contact_id INTEGER" },
+      { name: "employee_phone", definition: "employee_phone TEXT" },
+      { name: "recipient_employee_login_name", definition: "recipient_employee_login_name TEXT" },
+      { name: "recipient_employee_display_name", definition: "recipient_employee_display_name TEXT" },
+      { name: "presented_caller_id", definition: "presented_caller_id TEXT" },
+      { name: "bridge_number", definition: "bridge_number TEXT" },
+      { name: "target_phone", definition: "target_phone TEXT" },
+      { name: "counterparty_phone", definition: "counterparty_phone TEXT" },
+      { name: "matched_contact_id", definition: "matched_contact_id INTEGER" },
+      { name: "matched_contact_name", definition: "matched_contact_name TEXT" },
+      { name: "matched_business_account_id", definition: "matched_business_account_id TEXT" },
+      { name: "matched_company_name", definition: "matched_company_name TEXT" },
+      { name: "phone_match_type", definition: "phone_match_type TEXT" },
+      {
+        name: "phone_match_ambiguity_count",
+        definition: "phone_match_ambiguity_count INTEGER NOT NULL DEFAULT 0",
+      },
+      { name: "initiated_from_surface", definition: "initiated_from_surface TEXT" },
+      { name: "linked_account_row_key", definition: "linked_account_row_key TEXT" },
+      { name: "linked_business_account_id", definition: "linked_business_account_id TEXT" },
+      { name: "linked_contact_id", definition: "linked_contact_id INTEGER" },
+      { name: "metadata_json", definition: "metadata_json TEXT NOT NULL DEFAULT '{}'" },
+      { name: "updated_at", definition: "updated_at TEXT NOT NULL DEFAULT ''" },
+    ],
+  },
+  {
+    tableName: "call_activity_sync",
+    columns: [
+      { name: "recording_sid", definition: "recording_sid TEXT" },
+      { name: "recording_status", definition: "recording_status TEXT" },
+      { name: "recording_duration_seconds", definition: "recording_duration_seconds INTEGER" },
+      { name: "status", definition: "status TEXT NOT NULL DEFAULT 'queued'" },
+      { name: "attempts", definition: "attempts INTEGER NOT NULL DEFAULT 0" },
+      { name: "transcript_text", definition: "transcript_text TEXT" },
+      { name: "summary_text", definition: "summary_text TEXT" },
+      { name: "activity_id", definition: "activity_id TEXT" },
+      { name: "error_message", definition: "error_message TEXT" },
+      { name: "recording_deleted_at", definition: "recording_deleted_at TEXT" },
+      { name: "created_at", definition: "created_at TEXT NOT NULL DEFAULT ''" },
+      { name: "updated_at", definition: "updated_at TEXT NOT NULL DEFAULT ''" },
+    ],
+  },
+  {
+    tableName: "audit_events",
+    columns: [
+      { name: "occurred_at", definition: "occurred_at TEXT NOT NULL DEFAULT ''" },
+      { name: "item_type", definition: "item_type TEXT NOT NULL DEFAULT 'business_account'" },
+      {
+        name: "action_group",
+        definition: "action_group TEXT NOT NULL DEFAULT 'business_account_update'",
+      },
+      { name: "result_code", definition: "result_code TEXT NOT NULL DEFAULT 'succeeded'" },
+      { name: "actor_login_name", definition: "actor_login_name TEXT" },
+      { name: "actor_name", definition: "actor_name TEXT" },
+      { name: "source_surface", definition: "source_surface TEXT" },
+      { name: "summary", definition: "summary TEXT NOT NULL DEFAULT ''" },
+      { name: "business_account_record_id", definition: "business_account_record_id TEXT" },
+      { name: "business_account_id", definition: "business_account_id TEXT" },
+      { name: "company_name", definition: "company_name TEXT" },
+      { name: "contact_id", definition: "contact_id INTEGER" },
+      { name: "contact_name", definition: "contact_name TEXT" },
+      { name: "phone_number", definition: "phone_number TEXT" },
+      { name: "email_subject", definition: "email_subject TEXT" },
+      { name: "email_thread_id", definition: "email_thread_id TEXT" },
+      { name: "email_message_id", definition: "email_message_id TEXT" },
+      { name: "call_session_id", definition: "call_session_id TEXT" },
+      { name: "call_direction", definition: "call_direction TEXT" },
+      { name: "activity_sync_status", definition: "activity_sync_status TEXT" },
+      { name: "search_text", definition: "search_text TEXT NOT NULL DEFAULT ''" },
+      { name: "created_at", definition: "created_at TEXT NOT NULL DEFAULT ''" },
+      { name: "updated_at", definition: "updated_at TEXT NOT NULL DEFAULT ''" },
+    ],
+  },
+  {
+    tableName: "audit_event_fields",
+    columns: [
+      { name: "audit_event_id", definition: "audit_event_id TEXT NOT NULL DEFAULT ''" },
+      { name: "field_key", definition: "field_key TEXT NOT NULL DEFAULT ''" },
+      { name: "field_label", definition: "field_label TEXT NOT NULL DEFAULT ''" },
+    ],
+  },
+  {
+    tableName: "audit_event_links",
+    columns: [
+      { name: "audit_event_id", definition: "audit_event_id TEXT NOT NULL DEFAULT ''" },
+      { name: "link_type", definition: "link_type TEXT NOT NULL DEFAULT 'business_account'" },
+      { name: "role", definition: "role TEXT NOT NULL DEFAULT 'primary'" },
+      { name: "business_account_record_id", definition: "business_account_record_id TEXT" },
+      { name: "business_account_id", definition: "business_account_id TEXT" },
+      { name: "company_name", definition: "company_name TEXT" },
+      { name: "contact_id", definition: "contact_id INTEGER" },
+      { name: "contact_name", definition: "contact_name TEXT" },
+    ],
+  },
+  {
+    tableName: "meeting_bookings",
+    columns: [
+      { name: "event_id", definition: "event_id TEXT NOT NULL DEFAULT ''" },
+      { name: "actor_login_name", definition: "actor_login_name TEXT" },
+      { name: "actor_name", definition: "actor_name TEXT" },
+      { name: "business_account_record_id", definition: "business_account_record_id TEXT" },
+      { name: "business_account_id", definition: "business_account_id TEXT" },
+      { name: "company_name", definition: "company_name TEXT" },
+      { name: "related_contact_id", definition: "related_contact_id INTEGER" },
+      { name: "related_contact_name", definition: "related_contact_name TEXT" },
+      { name: "category", definition: "category TEXT" },
+      { name: "meeting_summary", definition: "meeting_summary TEXT NOT NULL DEFAULT ''" },
+      { name: "private_notes", definition: "private_notes TEXT" },
+      { name: "attendee_count", definition: "attendee_count INTEGER NOT NULL DEFAULT 0" },
+      {
+        name: "attendee_details_json",
+        definition: "attendee_details_json TEXT NOT NULL DEFAULT '[]'",
+      },
+      { name: "invite_authority", definition: "invite_authority TEXT" },
+      { name: "calendar_invite_status", definition: "calendar_invite_status TEXT" },
+      { name: "occurred_at", definition: "occurred_at TEXT NOT NULL DEFAULT ''" },
+      { name: "created_at", definition: "created_at TEXT NOT NULL DEFAULT ''" },
+      { name: "updated_at", definition: "updated_at TEXT NOT NULL DEFAULT ''" },
+    ],
+  },
+  {
+    tableName: "deferred_actions",
+    columns: [
+      { name: "reason", definition: "reason TEXT" },
+      { name: "attempt_count", definition: "attempt_count INTEGER NOT NULL DEFAULT 0" },
+      { name: "max_attempts", definition: "max_attempts INTEGER NOT NULL DEFAULT 5" },
+      { name: "last_attempt_at", definition: "last_attempt_at TEXT" },
+    ],
+  },
+  {
+    tableName: "call_ingest_state",
+    columns: [
+      { name: "status", definition: "status TEXT NOT NULL DEFAULT 'idle'" },
+      { name: "last_recent_sync_at", definition: "last_recent_sync_at TEXT" },
+      { name: "last_full_backfill_at", definition: "last_full_backfill_at TEXT" },
+      { name: "latest_seen_start_time", definition: "latest_seen_start_time TEXT" },
+      { name: "oldest_seen_start_time", definition: "oldest_seen_start_time TEXT" },
+      { name: "full_history_complete", definition: "full_history_complete INTEGER NOT NULL DEFAULT 0" },
+      { name: "last_webhook_at", definition: "last_webhook_at TEXT" },
+      { name: "last_error", definition: "last_error TEXT" },
+      { name: "progress_json", definition: "progress_json TEXT" },
+      { name: "updated_at", definition: "updated_at TEXT NOT NULL DEFAULT ''" },
+    ],
+  },
+  {
+    tableName: "sync_state",
+    columns: [
+      { name: "status", definition: "status TEXT NOT NULL DEFAULT 'idle'" },
+      { name: "started_at", definition: "started_at TEXT" },
+      { name: "completed_at", definition: "completed_at TEXT" },
+      { name: "last_successful_sync_at", definition: "last_successful_sync_at TEXT" },
+      { name: "last_error", definition: "last_error TEXT" },
+      { name: "rows_count", definition: "rows_count INTEGER NOT NULL DEFAULT 0" },
+      { name: "accounts_count", definition: "accounts_count INTEGER NOT NULL DEFAULT 0" },
+      { name: "contacts_count", definition: "contacts_count INTEGER NOT NULL DEFAULT 0" },
+      { name: "phase", definition: "phase TEXT" },
+      { name: "progress_json", definition: "progress_json TEXT" },
+    ],
+  },
+];
+
+function assertSafeSqlIdentifier(identifier: string): void {
+  if (!SAFE_SQL_IDENTIFIER_PATTERN.test(identifier)) {
+    throw new Error(`Unsafe SQLite identifier '${identifier}'.`);
+  }
+}
+
+function readExistingTableColumns(
+  db: Database.Database,
+  tableName: string,
+): Set<string> | null {
+  assertSafeSqlIdentifier(tableName);
+
+  const table = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { name: string } | undefined;
+  if (!table) {
+    return null;
+  }
+
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return new Set(rows.map((row) => row.name));
+}
+
+function addMissingLegacyColumns(
+  db: Database.Database,
+  tableName: string,
+  columns: LegacyColumnMigration[],
+): void {
+  const existingColumns = readExistingTableColumns(db, tableName);
+  if (!existingColumns) {
+    return;
+  }
+
+  for (const column of columns) {
+    assertSafeSqlIdentifier(column.name);
+    if (existingColumns.has(column.name)) {
+      continue;
+    }
+
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${column.definition}`);
+    existingColumns.add(column.name);
+  }
+}
+
+function migrateLegacyReadModelTables(db: Database.Database): void {
+  for (const migration of LEGACY_TABLE_MIGRATIONS) {
+    addMissingLegacyColumns(db, migration.tableName, migration.columns);
+  }
+}
+
 export function ensureReadModelSchema(db: Database.Database): void {
+  migrateLegacyReadModelTables(db);
   db.exec(SCHEMA_SQL);
 
   const accountRowColumns = db

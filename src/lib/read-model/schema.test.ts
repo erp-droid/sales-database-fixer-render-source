@@ -651,6 +651,308 @@ describe("ensureReadModelSchema", () => {
     expect(indexes.map((index) => index.name)).toContain("idx_account_notes_contact");
   });
 
+  it("adds current note metadata columns to minimal legacy account_notes tables", () => {
+    db.exec(`
+      CREATE TABLE account_notes (
+        id TEXT PRIMARY KEY,
+        account_record_id TEXT NOT NULL,
+        note TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
+    ensureReadModelSchema(db);
+
+    db.prepare(
+      `
+      INSERT INTO account_notes (
+        id,
+        account_record_id,
+        business_account_id,
+        company_name,
+        contact_id,
+        contact_name,
+        note,
+        author,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "note-1",
+      "account-1",
+      "BUS-1",
+      "Test Company",
+      123,
+      "Test Contact",
+      "Follow up",
+      "travis",
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:00:00.000Z",
+    );
+
+    const row = db
+      .prepare(
+        `
+        SELECT business_account_id, company_name, contact_id, contact_name, author
+        FROM account_notes
+        WHERE id = ?
+        `,
+      )
+      .get("note-1") as {
+      business_account_id: string;
+      company_name: string;
+      contact_id: number;
+      contact_name: string;
+      author: string;
+    };
+
+    expect(row).toMatchObject({
+      business_account_id: "BUS-1",
+      company_name: "Test Company",
+      contact_id: 123,
+      contact_name: "Test Contact",
+      author: "travis",
+    });
+  });
+
+  it("adds current call session columns before creating indexes on legacy tables", () => {
+    db.exec(`
+      CREATE TABLE call_sessions (
+        session_id TEXT PRIMARY KEY,
+        root_call_sid TEXT NOT NULL,
+        source TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        answered INTEGER NOT NULL,
+        started_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      INSERT INTO call_sessions (
+        session_id,
+        root_call_sid,
+        source,
+        direction,
+        outcome,
+        answered,
+        started_at,
+        updated_at
+      ) VALUES (
+        'session-1',
+        'CA123',
+        'app_bridge',
+        'outbound',
+        'answered',
+        1,
+        '2026-01-01T00:00:00.000Z',
+        '2026-01-01T00:00:00.000Z'
+      );
+    `);
+
+    ensureReadModelSchema(db);
+
+    const columns = db.prepare("PRAGMA table_info(call_sessions)").all() as Array<{
+      name: string;
+    }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "recipient_employee_login_name",
+        "recipient_employee_display_name",
+        "phone_match_ambiguity_count",
+        "linked_account_row_key",
+        "linked_business_account_id",
+        "linked_contact_id",
+        "metadata_json",
+      ]),
+    );
+
+    const indexes = db.prepare("PRAGMA index_list(call_sessions)").all() as Array<{
+      name: string;
+    }>;
+    expect(indexes.map((index) => index.name)).toEqual(
+      expect.arrayContaining([
+        "idx_call_sessions_linked_account_row_key",
+        "idx_call_sessions_linked_business_account_id",
+        "idx_call_sessions_linked_contact_id",
+      ]),
+    );
+
+    const row = db
+      .prepare(
+        `
+        SELECT
+          recipient_employee_login_name,
+          phone_match_ambiguity_count,
+          metadata_json
+        FROM call_sessions
+        WHERE session_id = ?
+        `,
+      )
+      .get("session-1") as {
+      recipient_employee_login_name: string | null;
+      phone_match_ambiguity_count: number;
+      metadata_json: string;
+    };
+
+    expect(row).toEqual({
+      recipient_employee_login_name: null,
+      phone_match_ambiguity_count: 0,
+      metadata_json: "{}",
+    });
+  });
+
+  it("adds current audit columns before querying legacy audit tables", () => {
+    db.exec(`
+      CREATE TABLE audit_events (
+        id TEXT PRIMARY KEY,
+        occurred_at TEXT NOT NULL,
+        item_type TEXT NOT NULL,
+        action_group TEXT NOT NULL,
+        result_code TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE audit_event_fields (
+        audit_event_id TEXT NOT NULL,
+        field_key TEXT NOT NULL,
+        PRIMARY KEY (audit_event_id, field_key)
+      );
+
+      CREATE TABLE audit_event_links (
+        audit_event_id TEXT NOT NULL,
+        link_type TEXT NOT NULL,
+        role TEXT NOT NULL,
+        business_account_record_id TEXT
+      );
+    `);
+
+    ensureReadModelSchema(db);
+
+    db.prepare(
+      `
+      INSERT INTO audit_events (
+        id,
+        occurred_at,
+        item_type,
+        action_group,
+        result_code,
+        actor_login_name,
+        actor_name,
+        source_surface,
+        summary,
+        business_account_record_id,
+        business_account_id,
+        company_name,
+        contact_id,
+        contact_name,
+        phone_number,
+        email_subject,
+        email_thread_id,
+        email_message_id,
+        call_session_id,
+        call_direction,
+        activity_sync_status,
+        search_text,
+        created_at,
+        updated_at
+      ) VALUES (
+        'audit-1',
+        '2026-01-01T00:00:00.000Z',
+        'call',
+        'call',
+        'answered',
+        'travis',
+        'Travis',
+        'accounts',
+        'Called account',
+        'account-1',
+        'BUS-1',
+        'Test Company',
+        123,
+        'Test Contact',
+        '+14165550100',
+        NULL,
+        NULL,
+        NULL,
+        'session-1',
+        'outbound',
+        'synced',
+        'called account',
+        '2026-01-01T00:00:00.000Z',
+        '2026-01-01T00:00:00.000Z'
+      )
+      `,
+    ).run();
+
+    db.prepare(
+      `
+      INSERT INTO audit_event_links (
+        audit_event_id,
+        link_type,
+        role,
+        business_account_record_id,
+        business_account_id,
+        company_name,
+        contact_id,
+        contact_name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "audit-1",
+      "contact",
+      "matched_contact",
+      "account-1",
+      "BUS-1",
+      "Test Company",
+      123,
+      "Test Contact",
+    );
+
+    const auditEvent = db
+      .prepare(
+        `
+        SELECT actor_login_name, contact_id, activity_sync_status, search_text
+        FROM audit_events
+        WHERE id = ?
+        `,
+      )
+      .get("audit-1") as {
+      actor_login_name: string;
+      contact_id: number;
+      activity_sync_status: string;
+      search_text: string;
+    };
+    const auditLink = db
+      .prepare(
+        `
+        SELECT business_account_id, contact_id, contact_name
+        FROM audit_event_links
+        WHERE audit_event_id = ?
+        `,
+      )
+      .get("audit-1") as {
+      business_account_id: string;
+      contact_id: number;
+      contact_name: string;
+    };
+
+    expect(auditEvent).toMatchObject({
+      actor_login_name: "travis",
+      contact_id: 123,
+      activity_sync_status: "synced",
+      search_text: "called account",
+    });
+    expect(auditLink).toMatchObject({
+      business_account_id: "BUS-1",
+      contact_id: 123,
+      contact_name: "Test Contact",
+    });
+  });
+
   it("creates the call_sessions active lookup index", () => {
     ensureReadModelSchema(db);
 
