@@ -23,6 +23,27 @@ type StoredScheduledJobRunRecord = {
   updated_at: string;
 };
 
+// Cached per time zone: constructing Intl.DateTimeFormat on every call turns
+// per-row loops into multi-second event-loop blocks.
+const localDatePartsFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function getLocalDatePartsFormatter(timeZone: string): Intl.DateTimeFormat {
+  let formatter = localDatePartsFormatterCache.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    localDatePartsFormatterCache.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
 function readLocalDateParts(
   date: Date,
   timeZone: string,
@@ -37,15 +58,7 @@ function readLocalDateParts(
     return null;
   }
 
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(date);
+  const parts = getLocalDatePartsFormatter(timeZone).formatToParts(date);
   const readPart = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((part) => part.type === type)?.value ?? "";
 

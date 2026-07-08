@@ -500,6 +500,25 @@ function isMailSendResponse(payload: unknown): payload is MailSendResponse {
   return record.sent === true && typeof record.threadId === "string" && typeof record.messageId === "string";
 }
 
+// Intl.DateTimeFormat construction costs ~0.5ms; per-session callers (e.g.
+// pickSubjectLogins over the full session table) turned that into multi-second
+// event-loop blocks, so formatters are cached per time zone.
+const dateKeyFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function getDateKeyFormatter(timeZone: string): Intl.DateTimeFormat {
+  let formatter = dateKeyFormatterCache.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    dateKeyFormatterCache.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
 function readDateParts(value: string, timeZone: string): {
   year: string;
   month: string;
@@ -510,12 +529,7 @@ function readDateParts(value: string, timeZone: string): {
     return null;
   }
 
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
+  const parts = getDateKeyFormatter(timeZone).formatToParts(date);
   const year = parts.find((part) => part.type === "year")?.value ?? "";
   const month = parts.find((part) => part.type === "month")?.value ?? "";
   const day = parts.find((part) => part.type === "day")?.value ?? "";

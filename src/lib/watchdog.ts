@@ -64,6 +64,27 @@ function ageMs(isoTimestamp: string | null | undefined): number {
   return Date.now() - parsed;
 }
 
+// Cached per time zone: constructing Intl.DateTimeFormat on every call is
+// ~0.5ms, which multiplies into event-loop stalls in per-row loops.
+const localDatePartsFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function getLocalDatePartsFormatter(timeZone: string): Intl.DateTimeFormat {
+  let formatter = localDatePartsFormatterCache.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    localDatePartsFormatterCache.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
 function readLocalDateParts(date: Date, timeZone: string): {
   year: string;
   month: string;
@@ -75,15 +96,7 @@ function readLocalDateParts(date: Date, timeZone: string): {
     return null;
   }
 
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(date);
+  const parts = getLocalDatePartsFormatter(timeZone).formatToParts(date);
   const readPart = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((part) => part.type === type)?.value ?? "";
 
