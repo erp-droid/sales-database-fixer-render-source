@@ -644,7 +644,6 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     snapshot?.activityGaps.find(
       (item) =>
         item.loginName !== "unattributed" &&
-        item.totalCalls > 0 &&
         item.loginName !== topCaller?.loginName,
     ) ?? null;
   const maxEmployeeCalls = useMemo(

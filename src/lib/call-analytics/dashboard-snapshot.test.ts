@@ -196,13 +196,14 @@ describe("dashboard snapshot builder and cache", () => {
     expect(snapshot.meetingCategoryAnalytics.dropOffs.stats.totalMeetings).toBe(0);
     expect(snapshot.teamStats.outboundCalls).toBe(3);
     expect(snapshot.employeeLeaderboard[0]?.loginName).toBe("jserrano");
-    expect(snapshot.activityGaps[0]?.loginName).toBe("dcowell");
+    expect(snapshot.employeeLeaderboard.some((employee) => employee.loginName === "jlee")).toBe(true);
+    expect(snapshot.activityGaps[0]?.loginName).toBe("jlee");
     expect(snapshot.bucketDrilldowns).toHaveLength(2);
     expect(snapshot.bucketDrilldowns[0]?.companies[0]?.label).toBe("Northwind");
     expect(snapshot.bucketDrilldowns[0]?.outcomes[0]?.label).toBe("answered");
   });
 
-  it("excludes phone-number pseudo employees from dashboard candidates", async () => {
+  it("excludes phone-number pseudo employees while retaining zero-call reps", async () => {
     const snapshotModule = await import("@/lib/call-analytics/dashboard-snapshot");
     const snapshot = snapshotModule.buildDashboardSnapshotForTests(
       baseFilters,
@@ -225,7 +226,47 @@ describe("dashboard snapshot builder and cache", () => {
       "jserrano",
       "kallen",
     ]);
-    expect(snapshot.activityGaps.map((employee) => employee.loginName)).toEqual(["jserrano"]);
+    expect(snapshot.employeeLeaderboard.map((employee) => employee.loginName)).toEqual([
+      "jserrano",
+      "kallen",
+    ]);
+    expect(snapshot.activityGaps.map((employee) => employee.loginName)).toEqual([
+      "kallen",
+      "jserrano",
+    ]);
+  });
+
+  it("uses familiar rep names instead of raw login names", async () => {
+    const snapshotModule = await import("@/lib/call-analytics/dashboard-snapshot");
+    const snapshot = snapshotModule.buildDashboardSnapshotForTests(
+      baseFilters,
+      [
+        buildSession({
+          sessionId: "krishna-call",
+          employeeLoginName: "kpareek",
+          employeeDisplayName: "kpareek",
+          startedAt: "2026-03-08T14:00:00.000Z",
+        }),
+      ],
+      [
+        { loginName: "smessih", displayName: "smessih", email: null },
+        { loginName: "kpareek", displayName: "kpareek", email: null },
+        { loginName: "stita", displayName: "stita", email: null },
+        { loginName: "kallen", displayName: "kallen", email: null },
+        { loginName: "jsettle", displayName: "jsettle", email: null },
+      ],
+    );
+
+    expect(snapshot.employees.map((employee) => employee.displayName)).toEqual([
+      "Sarah",
+      "Krishna",
+      "Samuel",
+      "Katlynn",
+      "Justin",
+    ]);
+    expect(snapshot.employeeLeaderboard.find((employee) => employee.loginName === "kpareek")?.displayName).toBe(
+      "Krishna",
+    );
   });
 
   it("treats all non-drop-off meeting categories as meetings booked", async () => {

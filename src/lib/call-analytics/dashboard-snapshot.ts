@@ -117,6 +117,34 @@ function isReportableEmployee(employee: Pick<EmployeeDirectoryOption, "loginName
   return !looksLikePhoneLoginName(employee.loginName);
 }
 
+const CALL_REP_DISPLAY_NAME_OVERRIDES: Record<string, string> = {
+  brock: "Brock",
+  jsettle: "Justin",
+  kallen: "Katlynn",
+  kpareek: "Krishna",
+  smesshah: "Sarah",
+  smessih: "Sarah",
+  stita: "Samuel",
+};
+
+function readRepDisplayName(loginName: string, fallback: string | null | undefined): string {
+  const normalizedLoginName = loginName.trim().toLowerCase();
+  return (
+    CALL_REP_DISPLAY_NAME_OVERRIDES[normalizedLoginName] ??
+    cleanString(fallback) ??
+    loginName
+  );
+}
+
+function normalizeEmployeeOption(employee: EmployeeDirectoryOption): EmployeeDirectoryOption {
+  const loginName = employee.loginName.trim().toLowerCase();
+  return {
+    ...employee,
+    loginName,
+    displayName: readRepDisplayName(loginName, employee.displayName),
+  };
+}
+
 function buildSnapshotCacheKey(filters: DashboardFilters): string {
   return JSON.stringify(filters);
 }
@@ -728,17 +756,21 @@ function buildCandidateEmployees(
   filters: DashboardFilters,
   employees: EmployeeDirectoryOption[],
 ): EmployeeDirectoryOption[] {
+  const reportableEmployees = employees
+    .filter(isReportableEmployee)
+    .map(normalizeEmployeeOption);
+
   if (filters.employees.length === 0) {
-    return employees.filter(isReportableEmployee);
+    return reportableEmployees;
   }
 
-  const byLogin = new Map(employees.map((employee) => [employee.loginName, employee]));
+  const byLogin = new Map(reportableEmployees.map((employee) => [employee.loginName, employee]));
   return filters.employees
     .map((loginName) => {
       return (
         byLogin.get(loginName) ?? {
           loginName,
-          displayName: loginName,
+          displayName: readRepDisplayName(loginName, loginName),
           email: null,
         }
       );
@@ -756,15 +788,22 @@ function buildEmployeeAnalytics(
   activityGaps: DashboardActivityGapItem[];
 } {
   const aggregates = new Map<string, EmployeeAggregate>();
+  const employeesByLogin = new Map(employees.map((employee) => [employee.loginName, employee]));
 
   for (const session of sessions) {
     const loginName = session.employeeLoginName ?? session.recipientEmployeeLoginName ?? "unattributed";
+    const directoryEmployee = employeesByLogin.get(loginName);
     const displayName =
-      session.employeeDisplayName ??
-      session.recipientEmployeeDisplayName ??
-      session.employeeLoginName ??
-      session.recipientEmployeeLoginName ??
-      "Unattributed";
+      loginName === "unattributed"
+        ? "Unattributed"
+        : readRepDisplayName(
+            loginName,
+            directoryEmployee?.displayName ??
+              session.employeeDisplayName ??
+              session.recipientEmployeeDisplayName ??
+              session.employeeLoginName ??
+              session.recipientEmployeeLoginName,
+          );
     const aggregate = aggregates.get(loginName) ?? {
       loginName,
       displayName,
@@ -803,13 +842,38 @@ function buildEmployeeAnalytics(
     aggregates.set(loginName, aggregate);
   }
 
-  const leaderboard = [...aggregates.values()]
-    .map(normalizeEmployeeAggregate)
-    .filter((item) => item.loginName === "unattributed" || isReportableEmployee(item))
-    .sort(compareLeaderboard)
-    .slice(0, MAX_LEADERBOARD_ITEMS);
+  const candidateEmployees = buildCandidateEmployees(filters, employees);
+  const candidateLoginNames = new Set(candidateEmployees.map((employee) => employee.loginName));
+  const leaderboard = candidateEmployees
+    .map((employee) => normalizeEmployeeAggregate(
+      aggregates.get(employee.loginName) ?? {
+        loginName: employee.loginName,
+        displayName: employee.displayName,
+        totalCalls: 0,
+        outboundCalls: 0,
+        inboundCalls: 0,
+        answeredCalls: 0,
+        unansweredCalls: 0,
+        talkSeconds: 0,
+        lastCallAt: null,
+      },
+    ));
 
-  const activityCandidates = buildCandidateEmployees(filters, employees)
+  for (const aggregate of aggregates.values()) {
+    if (
+      aggregate.loginName === "unattributed" ||
+      candidateLoginNames.has(aggregate.loginName) ||
+      !isReportableEmployee(aggregate)
+    ) {
+      continue;
+    }
+
+    leaderboard.push(normalizeEmployeeAggregate(aggregate));
+  }
+
+  leaderboard.sort(compareLeaderboard);
+
+  const activityCandidates = leaderboard
     .map((employee) => normalizeEmployeeAggregate(
       aggregates.get(employee.loginName) ?? {
         loginName: employee.loginName,
@@ -823,7 +887,6 @@ function buildEmployeeAnalytics(
         lastCallAt: null,
       },
     ))
-    .filter((item) => item.totalCalls > 0)
     .sort((left, right) => compareActivityGap(toActivityGapItem(left), toActivityGapItem(right)))
     .slice(0, MAX_ACTIVITY_GAP_ITEMS)
     .map(toActivityGapItem);
@@ -897,7 +960,9 @@ function buildSnapshotFromSessions(
   meetingRows?: StoredMeetingBooking[],
 ): DashboardSnapshotResponse {
   const teamStats = buildSummaryStats(sessions);
-  const reportableEmployees = employees.filter(isReportableEmployee);
+  const reportableEmployees = employees
+    .filter(isReportableEmployee)
+    .map(normalizeEmployeeOption);
   const visibleMeetingRows = meetingRows ?? [];
   const trendGroups = new Map<string, DashboardTrendPoint>();
   const bucketSessions = new Map<string, CallSessionRecord[]>();
