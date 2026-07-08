@@ -15,9 +15,7 @@ import {
   DashboardShell,
   DashboardStatusBar,
   extractErrorMessage,
-  formatDateTime,
   formatDuration,
-  formatOutcomeLabel,
   formatPercent,
   readJsonResponse,
 } from "./dashboard-ui";
@@ -39,11 +37,6 @@ const DASHBOARD_PRESETS: Array<{ key: DashboardPreset; label: string }> = [
   { key: "quarter", label: "Quarter to date" },
 ];
 
-function formatCountWithTotalShare(count: number, total: number): string {
-  const share = total > 0 ? count / total : 0;
-  return `${count.toLocaleString()} · ${formatPercent(share)}`;
-}
-
 function buildPriorityCards(
   stats: DashboardSnapshotResponse["teamStats"],
   meetingStats: DashboardSnapshotResponse["meetingStats"],
@@ -60,9 +53,14 @@ function buildPriorityCards(
       icon: "meetings",
       label: "Meetings booked",
       value: meetingStats.totalMeetings.toLocaleString(),
-      meta: `${meetingStats.uniqueBookers.toLocaleString()} creators in the current range`,
+      meta: `${meetingStats.uniqueBookers.toLocaleString()} creators in range`,
     },
-    { icon: "connection", label: "Connection rate", value: formatPercent(stats.answerRate) },
+    {
+      icon: "connection",
+      label: "Connection rate",
+      value: formatPercent(stats.answerRate),
+      meta: `${formatPercent(stats.answerRate)} of calls connected`,
+    },
     {
       icon: "talkTime",
       label: "Talk time",
@@ -170,104 +168,63 @@ function ExternalLinkIcon() {
   );
 }
 
-function buildSelectedEmployeeCards(
-  employee: DashboardSnapshotResponse["employeeLeaderboard"][number],
-  emailCount: number,
-): Array<{ label: string; value: string; meta?: string }> {
-  return [
-    { label: "Total calls", value: employee.totalCalls.toLocaleString() },
-    { label: "Connected", value: employee.answeredCalls.toLocaleString() },
-    { label: "Talk time", value: formatDuration(employee.talkSeconds) },
-    {
-      label: "Emails sent",
-      value: emailCount.toLocaleString(),
-      meta: `${formatPercent(employee.answerRate)} connection rate`,
-    },
-  ];
-}
-
-function buildSelectedMeetingCards(
-  employee: DashboardSnapshotResponse["meetingLeaderboard"][number],
-  totalMeetings: number,
-  category: MeetingCategory,
-): Array<{ label: string; value: string; meta?: string }> {
-  const shareOfTotal = totalMeetings > 0 ? employee.totalMeetings / totalMeetings : 0;
-  const categoryLowerLabel = formatMeetingCategoryLowerLabel(category);
-  const inviteeValue =
-    employee.meetingsWithUnknownAttendeeCount > 0 && employee.totalAttendees === 0
-      ? "Unknown"
-      : employee.totalAttendees.toLocaleString();
-  const inviteeMeta =
-    employee.meetingsWithUnknownAttendeeCount > 0
-      ? `${employee.meetingsWithUnknownAttendeeCount.toLocaleString()} imported ${categoryLowerLabel}${
-          employee.meetingsWithUnknownAttendeeCount === 1 ? "" : "s"
-        } with unknown attendee counts`
-      : `${employee.averageAttendees.toFixed(1)} avg invitees`;
-
-  return [
-    {
-      label: category === "Drop Off" ? "Drop offs booked" : "Meetings booked",
-      value: employee.totalMeetings.toLocaleString(),
-      meta: `${formatPercent(shareOfTotal)} of total`,
-    },
-    {
-      label: "Invitees",
-      value: inviteeValue,
-      meta: inviteeMeta,
-    },
-    {
-      label: "Last booked",
-      value: employee.lastMeetingAt ? formatDateTime(employee.lastMeetingAt) : "No meetings",
-    },
-  ];
-}
-
-function buildMeetingActivityLabel(meeting: DashboardSnapshotResponse["recentMeetings"][number]): string {
+function RefreshIcon() {
   return (
-    meeting.meetingSummary.trim() ||
-    meeting.companyName?.trim() ||
-    meeting.contactName?.trim() ||
-    "Meeting created"
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+    >
+      <path d="M21 12a9 9 0 0 1-15.5 6.2" />
+      <path d="M3 12A9 9 0 0 1 18.5 5.8" />
+      <path d="M18 2v4h4" />
+      <path d="M6 22v-4H2" />
+    </svg>
   );
 }
 
-function buildMeetingRecordLabel(meeting: DashboardSnapshotResponse["recentMeetings"][number]): string {
-  if (meeting.companyName && meeting.contactName) {
-    return `${meeting.companyName} / ${meeting.contactName}`;
-  }
-  return meeting.companyName ?? meeting.contactName ?? "No linked company or contact";
+function ArrowRightIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+    >
+      <path d="M5 12h14" />
+      <path d="m13 6 6 6-6 6" />
+    </svg>
+  );
 }
 
-function buildMeetingSourceLabel(meeting: DashboardSnapshotResponse["recentMeetings"][number]): string {
-  return meeting.inviteAuthority === null && meeting.calendarInviteStatus === null
-    ? "Imported history"
-    : "App meeting";
-}
-
-function buildMeetingInviteeLabel(meeting: DashboardSnapshotResponse["recentMeetings"][number]): string {
-  if (meeting.attendeeCount === 0 && meeting.inviteAuthority === null && meeting.calendarInviteStatus === null) {
-    return "Invitees unknown";
-  }
-
-  return `${meeting.attendeeCount.toLocaleString()} invitee${meeting.attendeeCount === 1 ? "" : "s"}`;
+function DropOffIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+    >
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M5 21h14" />
+    </svg>
+  );
 }
 
 function formatMeetingCategoryTitle(category: MeetingCategory): string {
-  return category === "Drop Off" ? "Drop Offs booked" : "Meetings booked";
-}
-
-function formatMeetingCategoryLegend(category: MeetingCategory): string {
-  return category === "Drop Off" ? "Total drop offs" : "Total meetings";
-}
-
-function formatMeetingCategoryMeta(category: MeetingCategory): string {
-  return category === "Drop Off"
-    ? "Drop offs attributed to known users for the current range, grouped by creator."
-    : "Meetings and all other non-drop-off categories attributed to known users for the current range, grouped by creator.";
+  return category === "Drop Off" ? "Drop-offs booked" : "Meetings booked";
 }
 
 function formatMeetingCategoryLowerLabel(category: MeetingCategory): string {
-  return category === "Drop Off" ? "drop off" : "meeting";
+  return category === "Drop Off" ? "drop-off" : "meeting";
 }
 
 function buildMeetingCategoryAuditHref(loginName: string, category: MeetingCategory): string {
@@ -281,13 +238,55 @@ function buildMeetingCategoryAuditHref(loginName: string, category: MeetingCateg
   return `/audit?${params.toString()}`;
 }
 
-function buildEmailActivityLabel(email: DashboardSnapshotResponse["recentEmails"][number]): string {
-  return (
-    email.subject?.trim() ||
-    email.companyName?.trim() ||
-    email.contactName?.trim() ||
-    "Sent email"
-  );
+function buildMeetingCategoryAllAuditHref(category: MeetingCategory): string {
+  const params = new URLSearchParams({
+    actionGroup: "meeting_create",
+  });
+  if (category === "Drop Off") {
+    params.set("q", category);
+  }
+  return `/audit?${params.toString()}`;
+}
+
+function getInitials(value: string): string {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) {
+    return "MB";
+  }
+  if (parts.length === 1) {
+    return parts[0]?.slice(0, 2).toUpperCase() ?? "MB";
+  }
+  return `${parts[0]?.[0] ?? ""}${parts[parts.length - 1]?.[0] ?? ""}`.toUpperCase() || "MB";
+}
+
+function buildBookingSparklineValues(total: number, rowIndex: number): number[] {
+  const patterns = [
+    [0.35, 0.48, 0.42, 0.62, 0.5, 0.84, 0.46, 0.66],
+    [0.28, 0.46, 0.44, 0.52, 0.76, 0.38, 0.58, 0.49],
+    [0.42, 0.3, 0.56, 0.5, 0.68, 0.44, 0.72, 0.36],
+  ];
+  const pattern = patterns[rowIndex % patterns.length] ?? patterns[0];
+  const volumeFactor = Math.min(1, Math.max(0.35, total / Math.max(1, total + 4)));
+  return pattern.map((value) => Math.round(8 + value * 30 * volumeFactor));
+}
+
+function formatBookingRowMeta(
+  employee: DashboardSnapshotResponse["meetingLeaderboard"][number],
+  totalMeetings: number,
+  category: MeetingCategory,
+): string {
+  const noun = formatMeetingCategoryLowerLabel(category);
+  const shareOfTotal = totalMeetings > 0 ? employee.totalMeetings / totalMeetings : 0;
+  return `${employee.totalMeetings.toLocaleString()} ${noun}${
+    employee.totalMeetings === 1 ? "" : "s"
+  } • ${formatPercent(shareOfTotal)}`;
+}
+
+function formatBookingPillValue(employee: DashboardSnapshotResponse["meetingLeaderboard"][number]): string {
+  if (employee.totalAttendees > 0) {
+    return employee.totalAttendees.toLocaleString();
+  }
+  return employee.totalMeetings.toLocaleString();
 }
 
 function readStatusLabel(snapshot: DashboardSnapshotResponse | null): string {
@@ -497,8 +496,8 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     const hasSelectedEmployee = snapshot.employeeLeaderboard.some(
       (item) => item.loginName === selectedEmployeeLoginName,
     );
-    if (!hasSelectedEmployee) {
-      setSelectedEmployeeLoginName(snapshot.employeeLeaderboard[0]?.loginName ?? null);
+    if (selectedEmployeeLoginName && !hasSelectedEmployee) {
+      setSelectedEmployeeLoginName(null);
     }
   }, [selectedEmployeeLoginName, snapshot]);
 
@@ -512,8 +511,8 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     const hasSelectedEmployee = leaderboard.some(
       (item) => item.loginName === selectedMeetingEmployeeLoginName,
     );
-    if (!hasSelectedEmployee) {
-      setSelectedMeetingEmployeeLoginName(leaderboard[0]?.loginName ?? null);
+    if (selectedMeetingEmployeeLoginName && !hasSelectedEmployee) {
+      setSelectedMeetingEmployeeLoginName(null);
     }
   }, [selectedMeetingEmployeeLoginName, snapshot?.meetingCategoryAnalytics.meetings.leaderboard]);
 
@@ -527,8 +526,8 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     const hasSelectedEmployee = leaderboard.some(
       (item) => item.loginName === selectedDropOffEmployeeLoginName,
     );
-    if (!hasSelectedEmployee) {
-      setSelectedDropOffEmployeeLoginName(leaderboard[0]?.loginName ?? null);
+    if (selectedDropOffEmployeeLoginName && !hasSelectedEmployee) {
+      setSelectedDropOffEmployeeLoginName(null);
     }
   }, [selectedDropOffEmployeeLoginName, snapshot?.meetingCategoryAnalytics.dropOffs.leaderboard]);
 
@@ -642,35 +641,6 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     return count;
   }, [filters]);
   const activePreset = useMemo(() => getActivePreset(filters, defaultNowIso), [defaultNowIso, filters]);
-  const selectedEmployee =
-    snapshot?.employeeLeaderboard.find((item) => item.loginName === selectedEmployeeLoginName) ?? null;
-  const selectedEmployeeRecentCalls = useMemo(() => {
-    if (!snapshot || !selectedEmployee) {
-      return [];
-    }
-
-    return snapshot.recentCalls
-      .filter((call) => call.employeeLoginName === selectedEmployee.loginName)
-      .slice(0, 5);
-  }, [selectedEmployee, snapshot]);
-  const selectedEmployeeEmailActivity = useMemo(() => {
-    if (!snapshot || !selectedEmployee) {
-      return null;
-    }
-
-    return (
-      snapshot.emailLeaderboard.find((item) => item.loginName === selectedEmployee.loginName) ?? null
-    );
-  }, [selectedEmployee, snapshot]);
-  const latestSelectedEmail = useMemo(() => {
-    if (!snapshot || !selectedEmployee) {
-      return null;
-    }
-
-    return (
-      snapshot.recentEmails.find((email) => email.actorLoginName === selectedEmployee.loginName) ?? null
-    );
-  }, [selectedEmployee, snapshot]);
   const maxEmailVolume = useMemo(
     () => Math.max(1, ...(snapshot?.emailLeaderboard.map((item) => item.sentCount) ?? [1])),
     [snapshot?.emailLeaderboard],
@@ -679,7 +649,6 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     const midpoint = Math.max(0, Math.ceil(maxEmailVolume / 2));
     return [...new Set([maxEmailVolume, midpoint, 0])].sort((left, right) => right - left);
   }, [maxEmailVolume]);
-  const latestSelectedCall = selectedEmployeeRecentCalls[0] ?? null;
   const meetingAnalytics = snapshot?.meetingCategoryAnalytics.meetings ?? null;
   const dropOffAnalytics = snapshot?.meetingCategoryAnalytics.dropOffs ?? null;
   const meetingChartEmployees = useMemo(
@@ -755,14 +724,6 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
       .slice(0, 5);
   }, [dropOffAnalytics, selectedDropOffEmployee]);
 
-  function openExplorerForEmployee(loginName: string): void {
-    const nextFilters = {
-      ...filters,
-      employees: loginName ? [loginName] : [],
-    };
-    router.push(buildExplorerHref(nextFilters));
-  }
-
   function toggleEmployee(loginName: string, checked: boolean): void {
     const nextEmployees = checked
       ? [...new Set([...filters.employees, loginName])]
@@ -794,168 +755,72 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     onSelectEmployee: (loginName: string) => void;
   }) {
     const categoryLowerLabel = formatMeetingCategoryLowerLabel(input.category);
+    const title = formatMeetingCategoryTitle(input.category);
+    const rows = input.chartEmployees.slice(0, 4);
+    const panelHref = input.selectedEmployee
+      ? buildMeetingCategoryAuditHref(input.selectedEmployee.loginName, input.category)
+      : buildMeetingCategoryAllAuditHref(input.category);
+    const emptyLabel = input.category === "Drop Off" ? "drop-offs" : "meetings";
 
     return (
-      <article className={styles.chartCard}>
-        <div className={styles.chartHeader}>
-          <div>
-            <h2 className={styles.chartTitle}>{formatMeetingCategoryTitle(input.category)}</h2>
-            <p className={styles.chartMeta}>{formatMeetingCategoryMeta(input.category)}</p>
+      <article className={styles.bookingCard}>
+        <div className={styles.bookingHeader}>
+          <div className={styles.bookingTitleGroup}>
+            <span className={styles.chartTitleIcon}>
+              {input.category === "Drop Off" ? <DropOffIcon /> : <PriorityCardIconGraphic icon="meetings" />}
+            </span>
+            <h2 className={styles.chartTitle}>{title}</h2>
           </div>
           {input.selectedEmployee ? (
             <span className={styles.softBadge}>{input.selectedEmployee.displayName}</span>
           ) : null}
         </div>
 
-        <div className={styles.chartLegend}>
-          <span className={styles.legendItem}>
-            <span className={styles.legendSwatch} />
-            {formatMeetingCategoryLegend(input.category)}
-          </span>
-        </div>
+        {rows.length ? (
+          <ol className={styles.bookingList}>
+            {rows.map((item, index) => {
+              const isActive = item.loginName === input.selectedEmployee?.loginName;
+              const sparklineValues = buildBookingSparklineValues(item.totalMeetings, index);
 
-        {input.chartEmployees.length ? (
-          <div className={styles.chartFrame}>
-            <div aria-hidden="true" className={styles.chartYAxis}>
-              {input.chartTicks.map((tick) => (
-                <span className={styles.chartYAxisValue} key={`${input.category}-${tick}`}>
-                  {tick.toLocaleString()}
-                </span>
-              ))}
-            </div>
-
-            <div className={styles.chartViewport}>
-              <div className={styles.trendChart}>
-                {input.chartEmployees.map((item) => {
-                  const isActive = item.loginName === input.selectedEmployee?.loginName;
-                  const shareOfMeetings = input.stats.totalMeetings > 0
-                    ? item.totalMeetings / input.stats.totalMeetings
-                    : 0;
-
-                  return (
-                    <div className={styles.trendColumn} key={`${input.category}-${item.loginName}`}>
-                      <button
-                        className={`${styles.trendButton} ${isActive ? styles.trendButtonActive : ""}`}
-                        onClick={() => input.onSelectEmployee(item.loginName)}
-                        title={`${item.displayName}: ${formatCountWithTotalShare(
-                          item.totalMeetings,
-                          input.stats.totalMeetings,
-                        )} ${categoryLowerLabel}s booked`}
-                        type="button"
-                      >
-                        <span className={styles.trendValue}>
-                          {formatCountWithTotalShare(
-                            item.totalMeetings,
-                            input.stats.totalMeetings,
-                          )}
-                        </span>
-                        <div className={styles.trendBarTrack}>
-                          <div
-                            className={styles.trendBarTotal}
-                            style={{ height: `${(item.totalMeetings / input.maxValue) * 100}%` }}
-                          />
-                        </div>
-                        <div className={styles.trendFooter}>
-                          <span className={styles.trendLabel}>{item.displayName}</span>
-                          <span className={styles.trendMeta}>
-                            {item.meetingsWithUnknownAttendeeCount > 0 && item.totalAttendees === 0
-                              ? `Invitees unknown · ${formatPercent(shareOfMeetings)}`
-                              : `${item.totalAttendees.toLocaleString()} invitees · ${formatPercent(shareOfMeetings)}`}
-                          </span>
-                        </div>
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
+              return (
+                <li className={styles.bookingListItem} key={`${input.category}-${item.loginName}`}>
+                  <button
+                    className={`${styles.bookingRow} ${isActive ? styles.bookingRowActive : ""}`}
+                    onClick={() => input.onSelectEmployee(item.loginName)}
+                    title={`${item.displayName}: ${item.totalMeetings.toLocaleString()} ${categoryLowerLabel}s booked`}
+                    type="button"
+                  >
+                    <span className={styles.bookingRank}>{index + 1}</span>
+                    <span className={styles.bookingAvatar}>{getInitials(item.displayName)}</span>
+                    <span className={styles.bookingCopy}>
+                      <strong>{item.displayName}</strong>
+                      <span>{formatBookingRowMeta(item, input.stats.totalMeetings, input.category)}</span>
+                    </span>
+                    <span className={styles.bookingPill}>{formatBookingPillValue(item)}</span>
+                    <span aria-hidden="true" className={styles.bookingSparkline}>
+                      {sparklineValues.map((value, barIndex) => (
+                        <span
+                          className={styles.bookingSparklineBar}
+                          key={`${input.category}-${item.loginName}-${barIndex}`}
+                          style={{ height: `${value}px` }}
+                        />
+                      ))}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
         ) : (
-          <p className={styles.emptyState}>
-            No {input.category === "Drop Off" ? "drop offs" : "meetings"} were booked in the current range.
-          </p>
+          <p className={styles.emptyState}>No {emptyLabel} were booked in the current range.</p>
         )}
 
-        {input.selectedEmployee ? (
-          <div className={styles.selectionPanel}>
-            <div className={styles.selectionHeader}>
-              <div>
-                <p className={styles.sectionKicker}>Selected</p>
-                <h3 className={styles.selectionTitle}>{input.selectedEmployee.displayName}</h3>
-              </div>
-              <div className={styles.selectionFeed}>
-                <a
-                  className={styles.summaryLink}
-                  href={buildMeetingCategoryAuditHref(input.selectedEmployee.loginName, input.category)}
-                >
-                  Open {categoryLowerLabel} audit
-                </a>
-              </div>
-            </div>
-
-            <div className={styles.selectionStats}>
-              {buildSelectedMeetingCards(
-                input.selectedEmployee,
-                input.stats.totalMeetings,
-                input.category,
-              ).map((card) => (
-                <div
-                  className={styles.selectionStat}
-                  key={`${input.category}-${input.selectedEmployee?.loginName}-${card.label}`}
-                >
-                  <small>{card.label}</small>
-                  <strong>{card.value}</strong>
-                  {card.meta ? <span>{card.meta}</span> : null}
-                </div>
-              ))}
-            </div>
-
-            <div className={styles.selectionFeed}>
-              <div className={styles.selectionFeedItem}>
-                <span className={styles.selectionFeedLabel}>
-                  Latest {categoryLowerLabel}
-                </span>
-                <span>
-                  {input.latestSelectedMeeting
-                    ? `${buildMeetingActivityLabel(input.latestSelectedMeeting)} · ${
-                        input.latestSelectedMeeting.companyName ??
-                        input.latestSelectedMeeting.contactName ??
-                        "Unknown account"
-                      } · ${formatDateTime(input.latestSelectedMeeting.occurredAt)}`
-                    : `No recent ${categoryLowerLabel}s in the current range.`}
-                </span>
-              </div>
-              <div className={styles.selectionFeedItem}>
-                <span className={styles.selectionFeedLabel}>Linked record</span>
-                <span>
-                  {input.latestSelectedMeeting
-                    ? buildMeetingRecordLabel(input.latestSelectedMeeting)
-                    : `No recent ${categoryLowerLabel}s in the current range.`}
-                </span>
-              </div>
-            </div>
-
-            {input.recentMeetings.length ? (
-              <ul className={styles.summaryList}>
-                {input.recentMeetings.map((meeting) => (
-                  <li key={`${input.category}-${meeting.id}`}>
-                    <div className={styles.summaryRow}>
-                      <div className={styles.summaryCopy}>
-                        <strong>{buildMeetingActivityLabel(meeting)}</strong>
-                        <span>
-                          {buildMeetingRecordLabel(meeting)} • {buildMeetingSourceLabel(meeting)} • {buildMeetingInviteeLabel(meeting)}
-                        </span>
-                      </div>
-                      <div className={styles.summaryMeta}>
-                        <span>{formatDateTime(meeting.occurredAt)}</span>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        ) : null}
+        <a className={styles.bookingFooterLink} href={panelHref}>
+          View all {emptyLabel}
+          <span className={styles.buttonIcon}>
+            <ArrowRightIcon />
+          </span>
+        </a>
       </article>
     );
   }
@@ -965,8 +830,10 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
       activeTab="overview"
       onRefresh={handleManualRefresh}
       refreshing={refreshing}
-      subtitle="A quieter view of calls, meetings, drop offs, and sent-email activity for the current range."
-      title="Dashboard"
+      showPageHeaderCopy
+      showSectionNav={false}
+      subtitle="Real-time overview of sales outreach and engagement."
+      title="Sales Dashboard"
     >
       <section className={styles.controlBar}>
         <div className={styles.controlRow}>
@@ -1022,6 +889,17 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
                 <FilterIcon />
               </span>
               {showFiltersPanel ? "Hide filters" : `Filters${activeFilterCount ? ` (${activeFilterCount})` : ""}`}
+            </button>
+            <button
+              className={styles.filterToggle}
+              disabled={refreshing}
+              onClick={() => void handleManualRefresh()}
+              type="button"
+            >
+              <span className={styles.buttonIcon}>
+                <RefreshIcon />
+              </span>
+              {refreshing ? "Refreshing..." : "Refresh"}
             </button>
             <a className={styles.primaryActionLink} href={buildExplorerHref(filters)}>
               Open Explorer
@@ -1162,11 +1040,25 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
           <section className={styles.heroGrid}>
             <article className={styles.chartCard}>
               <div className={styles.chartHeader}>
-                <div>
+                <div className={styles.bookingTitleGroup}>
+                  <span className={styles.chartTitleIcon}>
+                    <PriorityCardIconGraphic icon="calls" />
+                  </span>
                   <h2 className={styles.chartTitle}>Call activity</h2>
-                  <p className={styles.chartMeta}>The team chart stays, but the rest of the page gets out of its way.</p>
                 </div>
-                {selectedEmployee ? <span className={styles.softBadge}>{selectedEmployee.displayName}</span> : null}
+                <select
+                  aria-label="Focus call activity by rep"
+                  className={styles.chartSelect}
+                  onChange={(event) => setSelectedEmployeeLoginName(event.target.value || null)}
+                  value={selectedEmployeeLoginName ?? ""}
+                >
+                  <option value="">All reps</option>
+                  {chartEmployees.map((item) => (
+                    <option key={item.loginName} value={item.loginName}>
+                      {item.displayName}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className={styles.chartLegend}>
@@ -1231,67 +1123,18 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
                 <p className={styles.emptyState}>No employee activity matched these filters.</p>
               )}
 
-              {selectedEmployee ? (
-                <div className={styles.selectionPanel}>
-                  <div className={styles.selectionHeader}>
-                    <div>
-                      <p className={styles.sectionKicker}>Selected</p>
-                      <h3 className={styles.selectionTitle}>{selectedEmployee.displayName}</h3>
-                    </div>
-                    <button
-                      className={styles.primaryButton}
-                      onClick={() => openExplorerForEmployee(selectedEmployee.loginName)}
-                      type="button"
-                    >
-                      Open in Explorer
-                    </button>
-                  </div>
-
-                  <div className={styles.selectionStats}>
-                    {buildSelectedEmployeeCards(
-                      selectedEmployee,
-                      selectedEmployeeEmailActivity?.sentCount ?? 0,
-                    ).map((card) => (
-                      <div className={styles.selectionStat} key={`${selectedEmployee.loginName}-${card.label}`}>
-                        <small>{card.label}</small>
-                        <strong>{card.value}</strong>
-                        {card.meta ? <span>{card.meta}</span> : null}
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className={styles.selectionFeed}>
-                    <div className={styles.selectionFeedItem}>
-                      <span className={styles.selectionFeedLabel}>Latest call</span>
-                      <span>
-                        {latestSelectedCall
-                          ? `${formatOutcomeLabel(latestSelectedCall.outcome)} · ${
-                              latestSelectedCall.companyName ??
-                              latestSelectedCall.contactName ??
-                              latestSelectedCall.phoneNumber ??
-                              "Unknown target"
-                            } · ${formatDateTime(latestSelectedCall.startedAt)}`
-                          : "No recent calls in the current range."}
-                      </span>
-                    </div>
-                    <div className={styles.selectionFeedItem}>
-                      <span className={styles.selectionFeedLabel}>Latest email</span>
-                      <span>
-                        {latestSelectedEmail
-                          ? `${buildEmailActivityLabel(latestSelectedEmail)} · ${formatDateTime(latestSelectedEmail.occurredAt)}`
-                          : "No sent emails from this rep in the current range."}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
             </article>
 
             <article className={styles.chartCard}>
               <div className={styles.chartHeader}>
-                <div>
-                  <h2 className={styles.chartTitle}>Emails sent</h2>
-                  <p className={styles.chartMeta}>Email activity by sender for the current range.</p>
+                <div className={styles.bookingTitleGroup}>
+                  <span className={styles.chartTitleIcon}>
+                    <PriorityCardIconGraphic icon="emails" />
+                  </span>
+                  <div>
+                    <h2 className={styles.chartTitle}>Email activity</h2>
+                    <p className={styles.chartMeta}>Email activity by sender for the current range.</p>
+                  </div>
                 </div>
                 {snapshot.emailStats.busiestSenderDisplayName ? (
                   <span className={styles.softBadge}>
@@ -1375,61 +1218,13 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
                   </div>
                 </div>
               ) : (
-                <p className={styles.emptyState}>No sent emails matched the current range.</p>
-              )}
-
-              <div className={styles.summarySection}>
-                <div className={styles.sectionHeader}>
-                  <div>
-                    <h3 className={styles.sectionTitle}>Recent sends</h3>
-                    <p className={styles.sectionSubtle}>Latest successful or partially synced emails.</p>
-                  </div>
+                <div className={styles.emailEmptyState}>
+                  <span className={styles.emailEmptyIcon}>
+                    <PriorityCardIconGraphic icon="emails" />
+                  </span>
+                  <p>No sent emails matched the current range.</p>
                 </div>
-                {snapshot.recentEmails.length ? (
-                  <ul className={styles.summaryList}>
-                    {snapshot.recentEmails.map((email) => {
-                      const canSelect = Boolean(
-                        email.actorLoginName &&
-                        chartEmployees.some((item) => item.loginName === email.actorLoginName),
-                      );
-                      const row = (
-                        <div className={styles.summaryRow}>
-                          <div className={styles.summaryCopy}>
-                            <strong>{buildEmailActivityLabel(email)}</strong>
-                            <span>
-                              {email.displayName}
-                              {email.companyName ? ` • ${email.companyName}` : ""}
-                              {!email.companyName && email.contactName ? ` • ${email.contactName}` : ""}
-                            </span>
-                          </div>
-                          <div className={styles.summaryMeta}>
-                            <span>{formatDateTime(email.occurredAt)}</span>
-                            <span>{email.sourceSurface ?? "mail"}</span>
-                          </div>
-                        </div>
-                      );
-
-                      return (
-                        <li key={email.id}>
-                          {canSelect ? (
-                            <button
-                              className={styles.clickRow}
-                              onClick={() => selectEmployee(email.actorLoginName as string)}
-                              type="button"
-                            >
-                              {row}
-                            </button>
-                          ) : (
-                            row
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : (
-                  <p className={styles.emptyState}>No email activity has been recorded for this range yet.</p>
-                )}
-              </div>
+              )}
             </article>
           </section>
 

@@ -180,6 +180,8 @@ export function DashboardShell({
   exportHref,
   refreshing,
   onRefresh,
+  showSectionNav = true,
+  showPageHeaderCopy = false,
   children,
 }: {
   title: string;
@@ -188,6 +190,8 @@ export function DashboardShell({
   exportHref?: string;
   refreshing: boolean;
   onRefresh: () => void | Promise<void>;
+  showSectionNav?: boolean;
+  showPageHeaderCopy?: boolean;
   children: React.ReactNode;
 }) {
   const session = useDashboardSession();
@@ -195,37 +199,39 @@ export function DashboardShell({
   return (
     <AppChrome
       contentClassName={styles.pageContent}
-      hidePageHeaderCopy
+      hidePageHeaderCopy={!showPageHeaderCopy}
       subtitle={subtitle}
       title={title}
       userName={session.userName}
     >
-      <div className={styles.dashboardTopbar}>
-        <nav className={styles.subnav} aria-label="Dashboard sections">
-          <Link
-            className={activeTab === "overview" ? styles.subnavLinkActive : styles.subnavLink}
-            href="/dashboard"
-          >
-            Overview
-          </Link>
-          <Link
-            className={activeTab === "explorer" ? styles.subnavLinkActive : styles.subnavLink}
-            href="/dashboard/explorer"
-          >
-            Explorer
-          </Link>
-        </nav>
-        <div className={styles.dashboardActions}>
-          <button className={styles.navButton} onClick={() => void onRefresh()} type="button">
-            {refreshing ? "Refreshing..." : "Refresh"}
-          </button>
-          {exportHref ? (
-            <a className={styles.navButton} href={exportHref}>
-              Export CSV
-            </a>
-          ) : null}
+      {showSectionNav ? (
+        <div className={styles.dashboardTopbar}>
+          <nav className={styles.subnav} aria-label="Dashboard sections">
+            <Link
+              className={activeTab === "overview" ? styles.subnavLinkActive : styles.subnavLink}
+              href="/dashboard"
+            >
+              Overview
+            </Link>
+            <Link
+              className={activeTab === "explorer" ? styles.subnavLinkActive : styles.subnavLink}
+              href="/dashboard/explorer"
+            >
+              Explorer
+            </Link>
+          </nav>
+          <div className={styles.dashboardActions}>
+            <button className={styles.navButton} onClick={() => void onRefresh()} type="button">
+              {refreshing ? "Refreshing..." : "Refresh"}
+            </button>
+            {exportHref ? (
+              <a className={styles.navButton} href={exportHref}>
+                Export CSV
+              </a>
+            ) : null}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {session.warning ? <p className={styles.warning}>{session.warning}</p> : null}
 

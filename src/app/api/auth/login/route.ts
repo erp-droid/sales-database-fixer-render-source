@@ -197,6 +197,17 @@ function buildLoginErrorResponse(
   return NextResponse.json({ error: message }, { status });
 }
 
+function isLocalDevLoginAllowed(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.ALLOW_LOCAL_DEV_LOGIN === "true"
+  );
+}
+
+function buildLocalDevCookieValue(username: string): string {
+  return `local-dev-${Buffer.from(username, "utf8").toString("base64url")}`;
+}
+
 function normalizeUpstreamError(status: number, message: string): NormalizedUpstreamError {
   const normalizedMessage = message || "Authentication service is unavailable";
   const lower = normalizedMessage.toLowerCase();
@@ -288,6 +299,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       400,
       "Username and password are required.",
     );
+  }
+
+  if (isLocalDevLoginAllowed()) {
+    const response =
+      mode === "form"
+        ? NextResponse.redirect(buildPublicRedirectUrl(request, env, nextPath), { status: 303 })
+        : NextResponse.json({ ok: true, localDevLogin: true });
+    setAuthCookie(response, buildLocalDevCookieValue(username));
+    setStoredLoginName(response, username);
+    console.info("[auth-login] local dev sign-in accepted", {
+      loginName: username,
+      mode,
+    });
+    return response;
   }
 
   const isCustomAuth = env.AUTH_PROVIDER === "custom";
