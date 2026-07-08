@@ -12,7 +12,7 @@ const RECENT_SIGN_IN_STORAGE_KEY = "businessAccounts.authJustSignedInAt.v1";
 const RECENT_SIGN_IN_GRACE_MS = 60_000;
 
 function isPublicPath(pathname: string | null): boolean {
-  return pathname === "/signin";
+  return pathname === "/signin" || pathname === "/tv" || pathname?.startsWith("/tv/") === true;
 }
 
 function buildSignInHref(): string {

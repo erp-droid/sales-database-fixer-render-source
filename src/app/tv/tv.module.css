@@ -1,0 +1,443 @@
+.page {
+  min-height: 100vh;
+  background: #07110d;
+  color: #f6fbf8;
+  padding: 32px;
+}
+
+.shell {
+  margin: 0 auto;
+  max-width: 1760px;
+}
+
+.topbar {
+  align-items: flex-start;
+  border-bottom: 1px solid rgba(246, 251, 248, 0.16);
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding-bottom: 20px;
+}
+
+.titleBlock {
+  display: grid;
+  gap: 6px;
+}
+
+.eyebrow {
+  color: #80d8a4;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.title {
+  font-size: clamp(40px, 5vw, 86px);
+  line-height: 0.96;
+  margin: 0;
+}
+
+.subtitle {
+  color: #b9c8c1;
+  font-size: 18px;
+  margin: 0;
+}
+
+.nav {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.nav a,
+.button {
+  background: rgba(246, 251, 248, 0.08);
+  border: 1px solid rgba(246, 251, 248, 0.16);
+  border-radius: 8px;
+  color: #f6fbf8;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 11px 15px;
+  text-decoration: none;
+}
+
+.nav a[aria-current="page"],
+.buttonPrimary {
+  background: #2db36f;
+  border-color: #2db36f;
+  color: #04110a;
+}
+
+.statusBar {
+  align-items: center;
+  color: #b9c8c1;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 15px;
+  gap: 12px;
+  padding: 18px 0 24px;
+}
+
+.statusPill {
+  background: rgba(128, 216, 164, 0.12);
+  border: 1px solid rgba(128, 216, 164, 0.24);
+  border-radius: 999px;
+  color: #bff3d2;
+  font-weight: 700;
+  padding: 6px 11px;
+}
+
+.grid {
+  display: grid;
+  gap: 18px;
+}
+
+.statsGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.statCard,
+.panel,
+.accountCard,
+.contactRow {
+  background: #0d1d16;
+  border: 1px solid rgba(246, 251, 248, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.28);
+}
+
+.statCard {
+  display: grid;
+  gap: 7px;
+  min-height: 128px;
+  padding: 22px;
+}
+
+.statLabel,
+.sectionMeta,
+.accountMeta,
+.contactMeta {
+  color: #b9c8c1;
+}
+
+.statLabel {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.statValue {
+  font-size: clamp(36px, 5vw, 62px);
+  font-weight: 800;
+  line-height: 0.94;
+}
+
+.statNote {
+  color: #d8e6df;
+  font-size: 16px;
+}
+
+.splitGrid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
+}
+
+.panel {
+  padding: 22px;
+}
+
+.sectionHeader {
+  align-items: baseline;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.sectionTitle {
+  font-size: 28px;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.sectionMeta {
+  font-size: 15px;
+}
+
+.leaderList,
+.recentList,
+.accountList,
+.contactList {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.leaderRow,
+.recentRow {
+  align-items: center;
+  background: rgba(246, 251, 248, 0.05);
+  border: 1px solid rgba(246, 251, 248, 0.08);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(160px, 0.5fr) minmax(0, 1fr) auto;
+  padding: 14px;
+}
+
+.rank {
+  color: #80d8a4;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.personName,
+.companyName,
+.contactName {
+  color: #f6fbf8;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.barTrack {
+  background: rgba(246, 251, 248, 0.12);
+  border-radius: 999px;
+  height: 16px;
+  overflow: hidden;
+}
+
+.barFill {
+  background: linear-gradient(90deg, #2db36f, #8cf2b7);
+  border-radius: inherit;
+  height: 100%;
+  min-width: 3px;
+}
+
+.callCount {
+  font-size: 30px;
+  font-weight: 900;
+  text-align: right;
+}
+
+.highlightGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.highlightWin,
+.highlightLow {
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  min-height: 138px;
+  padding: 20px;
+}
+
+.highlightWin {
+  background: #0f7b45;
+  color: #f6fff9;
+}
+
+.highlightLow {
+  background: #b4232c;
+  color: #fff8f8;
+}
+
+.highlightLabel {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.highlightName {
+  font-size: clamp(30px, 4vw, 48px);
+  font-weight: 900;
+  line-height: 1;
+}
+
+.highlightMeta {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.recentRow {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.recentPrimary {
+  display: grid;
+  gap: 4px;
+}
+
+.muted,
+.empty {
+  color: #b9c8c1;
+}
+
+.badge {
+  background: rgba(128, 216, 164, 0.12);
+  border: 1px solid rgba(128, 216, 164, 0.22);
+  border-radius: 999px;
+  color: #c9f7da;
+  font-size: 14px;
+  font-weight: 800;
+  padding: 6px 10px;
+  text-transform: capitalize;
+}
+
+.toolbar {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(260px, 1fr) 160px auto auto;
+  margin-bottom: 18px;
+}
+
+.field {
+  color: #b9c8c1;
+  display: grid;
+  font-size: 14px;
+  font-weight: 700;
+  gap: 6px;
+}
+
+.input,
+.select {
+  background: #08150f;
+  border: 1px solid rgba(246, 251, 248, 0.18);
+  border-radius: 8px;
+  color: #f6fbf8;
+  font: inherit;
+  min-height: 46px;
+  padding: 10px 12px;
+}
+
+.accountCard {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.accountCardHeader {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.companyName {
+  text-decoration: none;
+}
+
+.accountFacts {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.fact {
+  background: rgba(246, 251, 248, 0.05);
+  border-radius: 8px;
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+}
+
+.fact span {
+  color: #b9c8c1;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fact strong {
+  color: #f6fbf8;
+  font-size: 16px;
+}
+
+.pagination {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 18px;
+}
+
+.paginationLinks {
+  display: flex;
+  gap: 10px;
+}
+
+.detailGrid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+}
+
+.contactRow {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+}
+
+.contactChannels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.channel {
+  background: rgba(246, 251, 248, 0.06);
+  border-radius: 8px;
+  color: #f6fbf8;
+  font-weight: 700;
+  padding: 8px 10px;
+  text-decoration: none;
+}
+
+@media (max-width: 900px) {
+  .page {
+    padding: 18px;
+  }
+
+  .topbar,
+  .sectionHeader,
+  .accountCardHeader,
+  .pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .nav {
+    justify-content: flex-start;
+  }
+
+  .statsGrid,
+  .splitGrid,
+  .highlightGrid,
+  .accountFacts,
+  .detailGrid,
+  .toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .leaderRow,
+  .recentRow {
+    grid-template-columns: 1fr;
+  }
+
+  .callCount {
+    text-align: left;
+  }
+}
