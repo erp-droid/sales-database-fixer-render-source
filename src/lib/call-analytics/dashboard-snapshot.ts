@@ -24,7 +24,6 @@ import type {
 import { getEnv } from "@/lib/env";
 import {
   listMeetingBookings,
-  resolveMeetingBookingCategory,
   type StoredMeetingBooking,
 } from "@/lib/meeting-bookings";
 import { getReadModelDb } from "@/lib/read-model/db";
@@ -108,6 +107,14 @@ function cleanString(value: string | null | undefined): string | null {
 
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+function looksLikePhoneLoginName(value: string): boolean {
+  return /^\d{10,15}$/.test(value.trim());
+}
+
+function isReportableEmployee(employee: Pick<EmployeeDirectoryOption, "loginName">): boolean {
+  return !looksLikePhoneLoginName(employee.loginName);
 }
 
 function buildSnapshotCacheKey(filters: DashboardFilters): string {
@@ -722,7 +729,7 @@ function buildCandidateEmployees(
   employees: EmployeeDirectoryOption[],
 ): EmployeeDirectoryOption[] {
   if (filters.employees.length === 0) {
-    return employees;
+    return employees.filter(isReportableEmployee);
   }
 
   const byLogin = new Map(employees.map((employee) => [employee.loginName, employee]));
@@ -736,6 +743,7 @@ function buildCandidateEmployees(
         }
       );
     })
+    .filter(isReportableEmployee)
     .sort(compareByDisplayName);
 }
 
@@ -797,7 +805,7 @@ function buildEmployeeAnalytics(
 
   const leaderboard = [...aggregates.values()]
     .map(normalizeEmployeeAggregate)
-    .filter((item) => item.loginName !== "unattributed" || item.totalCalls > 0)
+    .filter((item) => item.loginName === "unattributed" || isReportableEmployee(item))
     .sort(compareLeaderboard)
     .slice(0, MAX_LEADERBOARD_ITEMS);
 
@@ -888,6 +896,7 @@ function buildSnapshotFromSessions(
   meetingRows?: StoredMeetingBooking[],
 ): DashboardSnapshotResponse {
   const teamStats = buildSummaryStats(sessions);
+  const reportableEmployees = employees.filter(isReportableEmployee);
   const visibleMeetingRows = meetingRows ?? [];
   const trendGroups = new Map<string, DashboardTrendPoint>();
   const bucketSessions = new Map<string, CallSessionRecord[]>();
@@ -930,12 +939,12 @@ function buildSnapshotFromSessions(
     trendItems.map((item) => [item.bucketStart, bucketSessions.get(item.bucketStart) ?? []]),
   );
   const breakdowns = buildBreakdownsForSessions(sessions);
-  const employeeAnalytics = buildEmployeeAnalytics(filters, sessions, employees);
-  const emailAnalytics = buildEmailAnalytics(filters, employees, emailRows);
-  const meetingAnalytics = buildMeetingAnalytics(filters, employees, visibleMeetingRows, "Meeting");
+  const employeeAnalytics = buildEmployeeAnalytics(filters, sessions, reportableEmployees);
+  const emailAnalytics = buildEmailAnalytics(filters, reportableEmployees, emailRows);
+  const meetingAnalytics = buildMeetingAnalytics(filters, reportableEmployees, visibleMeetingRows, "Meeting");
   const meetingCategoryAnalytics = {
-    meetings: buildMeetingCategoryAnalytics(filters, employees, "Meeting", visibleMeetingRows),
-    dropOffs: buildMeetingCategoryAnalytics(filters, employees, "Drop Off", visibleMeetingRows),
+    meetings: buildMeetingCategoryAnalytics(filters, reportableEmployees, "Meeting", visibleMeetingRows),
+    dropOffs: buildMeetingCategoryAnalytics(filters, reportableEmployees, "Drop Off", visibleMeetingRows),
   };
 
   return {
@@ -959,7 +968,7 @@ function buildSnapshotFromSessions(
     viewer: {
       loginName: null,
     },
-    employees,
+    employees: reportableEmployees,
     teamStats,
     meetingStats: meetingAnalytics.stats,
     meetingCategoryAnalytics,

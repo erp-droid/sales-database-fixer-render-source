@@ -202,6 +202,35 @@ describe("dashboard snapshot builder and cache", () => {
     expect(snapshot.bucketDrilldowns[0]?.outcomes[0]?.label).toBe("answered");
   });
 
+  it("excludes phone-number pseudo employees from dashboard candidates", async () => {
+    const snapshotModule = await import("@/lib/call-analytics/dashboard-snapshot");
+    const snapshot = snapshotModule.buildDashboardSnapshotForTests(
+      baseFilters,
+      [
+        buildSession({
+          sessionId: "real-rep-call",
+          employeeLoginName: "jserrano",
+          employeeDisplayName: "Jorge Serrano",
+          startedAt: "2026-03-08T14:00:00.000Z",
+        }),
+      ],
+      [
+        { loginName: "4162304681", displayName: "(416) 230-4681", email: null },
+        { loginName: "jserrano", displayName: "Jorge Serrano", email: null },
+        { loginName: "kallen", displayName: "Kallen", email: null },
+      ],
+    );
+
+    expect(snapshot.employees.map((employee) => employee.loginName)).toEqual([
+      "jserrano",
+      "kallen",
+    ]);
+    expect(snapshot.activityGaps.map((employee) => employee.loginName)).toEqual([
+      "kallen",
+      "jserrano",
+    ]);
+  });
+
   it("treats all non-drop-off meeting categories as meetings booked", async () => {
     const snapshotModule = await import("@/lib/call-analytics/dashboard-snapshot");
     const snapshot = snapshotModule.buildDashboardSnapshotForTests(
