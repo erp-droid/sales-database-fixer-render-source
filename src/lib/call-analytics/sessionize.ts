@@ -1206,7 +1206,11 @@ const FULL_REBUILD_YIELD_CHUNK_SIZE = 100;
 export async function rebuildCallSessionsYielding(
   options: SessionizeOptions = {},
 ): Promise<CallSessionRecord[]> {
+  const startMs = Date.now();
   const { groups, employeeIndex, phoneIndex } = prepareFullSessionRebuild();
+  const prepareMs = Date.now() - startMs;
+
+  const buildStartMs = Date.now();
   const sessions: CallSessionRecord[] = [];
   let builtSinceYield = 0;
 
@@ -1220,8 +1224,23 @@ export async function rebuildCallSessionsYielding(
       });
     }
   }
+  const buildMs = Date.now() - buildStartMs;
 
-  return commitFullSessionRebuild(groups, sessions);
+  const commitStartMs = Date.now();
+  const result = commitFullSessionRebuild(groups, sessions);
+  const commitMs = Date.now() - commitStartMs;
+
+  if (Date.now() - startMs > 2_000) {
+    console.warn("[call-sessions] slow full rebuild phase breakdown", {
+      totalMs: Date.now() - startMs,
+      prepareMs,
+      buildMs,
+      commitMs,
+      sessionCount: sessions.length,
+    });
+  }
+
+  return result;
 }
 
 type StoredCallSessionRow = {
@@ -1531,8 +1550,25 @@ export function readCallLegsBySessionId(sessionId: string): CallLegRecord[] {
   return rows.map(normalizeStoredCallLeg);
 }
 
+// Repairing inline ran the full synchronous session rebuild inside ordinary
+// session reads (dashboard snapshots, webhook lookups), blocking the event
+// loop for tens of seconds whenever an unlinked session existed. The repair
+// now runs in the background with the yielding rebuild, at most once per
+// interval; reads return current data immediately and see repaired rows on a
+// later read.
+const EMPLOYEE_DIRECTORY_REPAIR_MIN_INTERVAL_MS = 5 * 60 * 1000;
+let employeeDirectoryRepairScheduled = false;
+let employeeDirectoryRepairLastStartedAtMs = 0;
+
 function maybeRepairCallSessionsFromEmployeeDirectory(): void {
-  if (repairingCallSessionsFromEmployeeDirectory) {
+  if (repairingCallSessionsFromEmployeeDirectory || employeeDirectoryRepairScheduled) {
+    return;
+  }
+
+  if (
+    Date.now() - employeeDirectoryRepairLastStartedAtMs <
+    EMPLOYEE_DIRECTORY_REPAIR_MIN_INTERVAL_MS
+  ) {
     return;
   }
 
@@ -1559,10 +1595,19 @@ function maybeRepairCallSessionsFromEmployeeDirectory(): void {
     return;
   }
 
-  repairingCallSessionsFromEmployeeDirectory = true;
-  try {
-    rebuildCallSessions();
-  } finally {
-    repairingCallSessionsFromEmployeeDirectory = false;
-  }
+  employeeDirectoryRepairScheduled = true;
+  setImmediate(() => {
+    employeeDirectoryRepairScheduled = false;
+    employeeDirectoryRepairLastStartedAtMs = Date.now();
+    repairingCallSessionsFromEmployeeDirectory = true;
+    rebuildCallSessionsYielding()
+      .catch((error) => {
+        console.error("[call-sessions] background employee-directory repair failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        repairingCallSessionsFromEmployeeDirectory = false;
+      });
+  });
 }
