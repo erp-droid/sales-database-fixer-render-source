@@ -17,7 +17,8 @@ export function readCachedDashboardSnapshot(key: string, nowMs = Date.now()): Da
   }
 
   if (entry.expiresAtMs <= nowMs) {
-    snapshotCache.delete(key);
+    // Keep the entry: readStaleDashboardSnapshot serves it during the grace
+    // window while a background rebuild replaces it.
     return null;
   }
 
@@ -28,13 +29,19 @@ export function readCachedDashboardSnapshot(key: string, nowMs = Date.now()): Da
   return entry.snapshot;
 }
 
+// Grace window during which an expired entry may still be served while a
+// background rebuild replaces it. Rebuilding inline on expiry would block the
+// event loop for seconds during quiet periods when nothing marks the cache
+// stale — the exact stall that fails Render's 5s health check.
+const STALE_SERVE_GRACE_MS = 25 * 60 * 1000;
+
 export function readStaleDashboardSnapshot(key: string, nowMs = Date.now()): DashboardSnapshotResponse | null {
   const entry = snapshotCache.get(key);
   if (!entry) {
     return null;
   }
 
-  if (entry.expiresAtMs <= nowMs) {
+  if (entry.expiresAtMs + STALE_SERVE_GRACE_MS <= nowMs) {
     snapshotCache.delete(key);
     return null;
   }
