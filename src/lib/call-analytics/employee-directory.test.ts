@@ -247,7 +247,7 @@ describe("syncCallEmployeeDirectory", () => {
         email: "simon@meadowb.com",
       }),
     ]);
-    const rebuildCallSessions = vi.fn();
+    const rebuildCallSessionsYielding = vi.fn(async () => []);
 
     vi.doMock("@/lib/acumatica", () => ({
       fetchEmployeeProfiles,
@@ -263,7 +263,7 @@ describe("syncCallEmployeeDirectory", () => {
     }));
 
     vi.doMock("@/lib/call-analytics/sessionize", () => ({
-      rebuildCallSessions,
+      rebuildCallSessionsYielding,
     }));
 
     vi.doMock("@/lib/read-model/db", () => ({
@@ -280,6 +280,6 @@ describe("syncCallEmployeeDirectory", () => {
 
     await module.syncCallEmployeeDirectory("cookie");
 
-    expect(rebuildCallSessions).toHaveBeenCalledTimes(1);
+    expect(rebuildCallSessionsYielding).toHaveBeenCalledTimes(1);
   });
 });

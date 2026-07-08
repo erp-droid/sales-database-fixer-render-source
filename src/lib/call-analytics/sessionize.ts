@@ -1131,8 +1131,13 @@ export function rebuildCallSession(options: {
   return session;
 }
 
-export function rebuildCallSessions(options: SessionizeOptions = {}): CallSessionRecord[] {
-  const db = getReadModelDb();
+type FullRebuildPreparation = {
+  groups: Map<string, CallLegRecord[]>;
+  employeeIndex: ReturnType<typeof buildEmployeeIndex>;
+  phoneIndex: ReturnType<typeof buildPhoneMatchIndex>;
+};
+
+function prepareFullSessionRebuild(): FullRebuildPreparation {
   const legs = readAllCallLegs();
   const employeeIndex = buildEmployeeIndex(readCallEmployeeDirectory());
   const phoneIndex = buildPhoneMatchIndex();
@@ -1146,10 +1151,14 @@ export function rebuildCallSessions(options: SessionizeOptions = {}): CallSessio
     groups.set(rootSid, group);
   }
 
-  const sessions = [...groups.entries()].map(([rootSid, group]) =>
-    buildSessionRecord(rootSid, group, employeeIndex, phoneIndex, options),
-  );
+  return { groups, employeeIndex, phoneIndex };
+}
 
+function commitFullSessionRebuild(
+  groups: Map<string, CallLegRecord[]>,
+  sessions: CallSessionRecord[],
+): CallSessionRecord[] {
+  const db = getReadModelDb();
   const replace = db.transaction((nextSessions: CallSessionRecord[]) => {
     const updateLegSession = db.prepare(
       `
@@ -1177,6 +1186,42 @@ export function rebuildCallSessions(options: SessionizeOptions = {}): CallSessio
   replace(sessions);
   finalizeCallSessionWrites("call-sessions-rebuilt", sessions);
   return sessions;
+}
+
+export function rebuildCallSessions(options: SessionizeOptions = {}): CallSessionRecord[] {
+  const { groups, employeeIndex, phoneIndex } = prepareFullSessionRebuild();
+  const sessions = [...groups.entries()].map(([rootSid, group]) =>
+    buildSessionRecord(rootSid, group, employeeIndex, phoneIndex, options),
+  );
+
+  return commitFullSessionRebuild(groups, sessions);
+}
+
+// Rebuilding every session in one synchronous pass blocks the event loop for
+// tens of seconds on a full call history, which fails Render's 5s health
+// check and gets the instance killed. Analytics refreshes use this variant,
+// which yields between chunks so health probes and user requests keep flowing.
+const FULL_REBUILD_YIELD_CHUNK_SIZE = 100;
+
+export async function rebuildCallSessionsYielding(
+  options: SessionizeOptions = {},
+): Promise<CallSessionRecord[]> {
+  const { groups, employeeIndex, phoneIndex } = prepareFullSessionRebuild();
+  const sessions: CallSessionRecord[] = [];
+  let builtSinceYield = 0;
+
+  for (const [rootSid, group] of groups) {
+    sessions.push(buildSessionRecord(rootSid, group, employeeIndex, phoneIndex, options));
+    builtSinceYield += 1;
+    if (builtSinceYield >= FULL_REBUILD_YIELD_CHUNK_SIZE) {
+      builtSinceYield = 0;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    }
+  }
+
+  return commitFullSessionRebuild(groups, sessions);
 }
 
 type StoredCallSessionRow = {

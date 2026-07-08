@@ -292,11 +292,11 @@ export async function syncCallEmployeeDirectory(
       replaceEmployeeDirectory(employeeDirectoryItems, FULL_EMPLOYEE_DIRECTORY_SOURCE);
       replaceCallEmployeeDirectory(items);
       try {
-        const { rebuildCallSessions } = await import("@/lib/call-analytics/sessionize");
+        const { rebuildCallSessionsYielding } = await import("@/lib/call-analytics/sessionize");
         const { refreshStoredReadModelAccountSupplementalFields } = await import(
           "@/lib/read-model/accounts"
         );
-        rebuildCallSessions();
+        await rebuildCallSessionsYielding();
         refreshStoredReadModelAccountSupplementalFields();
       } catch {
         // Keep employee syncing resilient even if the historical call repair step fails.

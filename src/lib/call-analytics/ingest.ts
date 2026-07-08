@@ -18,7 +18,7 @@ import {
   readCallLegsBySessionId,
   readCallSessionById,
   rebuildCallSession,
-  rebuildCallSessions,
+  rebuildCallSessionsYielding,
 } from "@/lib/call-analytics/sessionize";
 import type { CallEmployeeDirectoryItem, CallSessionRecord } from "@/lib/call-analytics/types";
 import {
@@ -894,7 +894,7 @@ async function ingestTwilioCalls(
     normalizeTwilioCallRecord(call, source);
   }
 
-  rebuildCallSessions({ bridgeNumbers });
+  await rebuildCallSessionsYielding({ bridgeNumbers });
   return calls.length;
 }
 
