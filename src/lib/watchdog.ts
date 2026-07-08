@@ -571,6 +571,28 @@ function yieldEventLoop(): Promise<void> {
   });
 }
 
+// The coaching health check scans every call session (~4s of CPU) to guard a
+// once-a-day email, so recomputing it on each 5-minute watchdog cycle is
+// wasted stall risk. Its result is cached and refreshed at most every 15
+// minutes; a missing daily send is still alerted well within the hour.
+const COACHING_HEALTH_CACHE_MS = 15 * 60 * 1000;
+let cachedCoachingHealth: { computedAtMs: number; action: WatchdogAction | null } | null = null;
+
+function readCachedCoachingHealthAction(): WatchdogAction | null {
+  if (
+    cachedCoachingHealth &&
+    Date.now() - cachedCoachingHealth.computedAtMs < COACHING_HEALTH_CACHE_MS
+  ) {
+    return cachedCoachingHealth.action;
+  }
+
+  cachedCoachingHealth = {
+    computedAtMs: Date.now(),
+    action: buildDailyCallCoachingHealthAction(new Date()),
+  };
+  return cachedCoachingHealth.action;
+}
+
 async function runWatchdogCycle(): Promise<WatchdogReport> {
   const startMs = Date.now();
   const actions: WatchdogAction[] = [];
@@ -581,7 +603,7 @@ async function runWatchdogCycle(): Promise<WatchdogReport> {
   const coachingStartMs = Date.now();
   const coachingHealthEnabled = getEnv().DAILY_CALL_COACHING_ENABLED;
   const coachingHealthAction = coachingHealthEnabled
-    ? buildDailyCallCoachingHealthAction(new Date())
+    ? readCachedCoachingHealthAction()
     : null;
   const coachingMs = Date.now() - coachingStartMs;
 
