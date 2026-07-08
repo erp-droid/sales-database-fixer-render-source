@@ -294,6 +294,14 @@ function formatCallCountLabel(count: number): string {
   return `${count.toLocaleString()} call${count === 1 ? "" : "s"}`;
 }
 
+function formatNameList(names: string[]): string {
+  if (names.length <= 2) {
+    return names.join(" and ");
+  }
+
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 function formatCallerShare(count: number, total: number): string {
   if (total <= 0) {
     return "0% of team";
@@ -301,11 +309,23 @@ function formatCallerShare(count: number, total: number): string {
   return `${formatPercent(count / total)} of team`;
 }
 
-function formatLastCallLabel(value: string | null): string {
-  if (!value) {
-    return "No calls in range";
+function formatLowestCallerMeta(
+  callers: DashboardSnapshotResponse["activityGaps"],
+): string {
+  const firstCaller = callers[0] ?? null;
+  if (!firstCaller) {
+    return "";
   }
-  return `Last call ${formatDateTime(value)}`;
+
+  if (callers.length === 1) {
+    const lastCallLabel = firstCaller.lastCallAt
+      ? `Last call ${formatDateTime(firstCaller.lastCallAt)}`
+      : "No calls in range";
+    return `${formatCallCountLabel(firstCaller.totalCalls)} · ${firstCaller.outboundCalls.toLocaleString()} outbound · ${lastCallLabel}`;
+  }
+
+  const totalOutbound = callers.reduce((sum, caller) => sum + caller.outboundCalls, 0);
+  return `${formatCallCountLabel(firstCaller.totalCalls)} each · ${callers.length.toLocaleString()} reps tied · ${totalOutbound.toLocaleString()} outbound combined`;
 }
 
 function readStatusLabel(snapshot: DashboardSnapshotResponse | null): string {
@@ -640,12 +660,18 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     [chartEmployees],
   );
   const topCaller = rankedCallers[0] ?? null;
-  const lowestCaller =
-    snapshot?.activityGaps.find(
-      (item) =>
-        item.loginName !== "unattributed" &&
-        item.loginName !== topCaller?.loginName,
-    ) ?? null;
+  const lowestCallers = useMemo(() => {
+    const candidates =
+      snapshot?.activityGaps.filter(
+        (item) => item.loginName !== "unattributed" && item.loginName !== topCaller?.loginName,
+      ) ?? [];
+    const lowestCallCount = candidates[0]?.totalCalls;
+    if (lowestCallCount === undefined) {
+      return [];
+    }
+
+    return candidates.filter((item) => item.totalCalls === lowestCallCount);
+  }, [snapshot?.activityGaps, topCaller?.loginName]);
   const maxEmployeeCalls = useMemo(
     () => Math.max(1, ...chartEmployees.map((item) => item.totalCalls)),
     [chartEmployees],
@@ -1102,7 +1128,7 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
                 </span>
               </div>
 
-              {topCaller || lowestCaller ? (
+              {topCaller || lowestCallers.length ? (
                 <div className={styles.callerSpotlightGrid}>
                   {topCaller ? (
                     <div className={styles.callerSpotlight}>
@@ -1116,15 +1142,11 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
                     </div>
                   ) : null}
 
-                  {lowestCaller ? (
+                  {lowestCallers.length ? (
                     <div className={`${styles.callerSpotlight} ${styles.callerSpotlightQuiet}`}>
                       <span className={styles.callerSpotlightLabel}>Fewest calls</span>
-                      <strong>{lowestCaller.displayName}</strong>
-                      <span>
-                        {formatCallCountLabel(lowestCaller.totalCalls)} ·{" "}
-                        {lowestCaller.outboundCalls.toLocaleString()} outbound ·{" "}
-                        {formatLastCallLabel(lowestCaller.lastCallAt)}
-                      </span>
+                      <strong>{formatNameList(lowestCallers.map((caller) => caller.displayName))}</strong>
+                      <span>{formatLowestCallerMeta(lowestCallers)}</span>
                     </div>
                   ) : null}
                 </div>

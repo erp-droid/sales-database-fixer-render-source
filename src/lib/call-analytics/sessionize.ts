@@ -1497,7 +1497,7 @@ function maybeRepairCallSessionsFromEmployeeDirectory(): void {
   }
 
   const db = getReadModelDb();
-  const staleUnattributedRow = db
+  const staleUnlinkedRow = db
     .prepare(
       `
       SELECT session_id
@@ -1510,7 +1510,7 @@ function maybeRepairCallSessionsFromEmployeeDirectory(): void {
     )
     .get(directoryMeta.latestUpdatedAt) as { session_id: string } | undefined;
 
-  if (!staleUnattributedRow) {
+  if (!staleUnlinkedRow) {
     return;
   }
 

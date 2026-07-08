@@ -277,7 +277,7 @@ function breakdownKey(session: CallSessionRecord, dimension: CallBreakdownDimens
     case "employee":
       return {
         key: session.employeeLoginName ?? "unattributed",
-        label: session.employeeDisplayName ?? session.employeeLoginName ?? "Unattributed",
+        label: session.employeeDisplayName ?? session.employeeLoginName ?? "No rep linked",
       };
     case "outcome":
       return {

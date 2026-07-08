@@ -521,7 +521,7 @@ export function DashboardExplorerClient({ defaultNowIso }: DashboardExplorerClie
                     onClick={() => setSelectedSessionId(call.sessionId)}
                   >
                     <td>{formatDateTime(call.startedAt)}</td>
-                    <td>{call.employeeDisplayName ?? call.employeeLoginName ?? "Unattributed"}</td>
+                    <td>{call.employeeDisplayName ?? call.employeeLoginName ?? "No rep linked"}</td>
                     <td>{call.direction}</td>
                     <td>{call.contactName ?? "Unknown contact"}</td>
                     <td>{call.companyName ?? "Unknown company"}</td>

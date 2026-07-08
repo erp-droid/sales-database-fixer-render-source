@@ -124,17 +124,31 @@ function isReportableEmployee(employee: Pick<EmployeeDirectoryOption, "loginName
 const CALL_REP_DISPLAY_NAME_OVERRIDES: Record<string, string> = {
   bkoczka: "Brock",
   jsettle: "Justin",
-  kallen: "Katlynn",
   kpareek: "Krishna",
   smesshah: "Sarah",
   smessih: "Sarah",
   stita: "Samuel",
 };
 
-const FORCE_INCLUDED_CALL_REP_LOGIN_NAMES = new Set(Object.keys(CALL_REP_DISPLAY_NAME_OVERRIDES));
+const SALES_CALL_REP_LOGIN_NAMES = new Set([
+  "smessih",
+  "kpareek",
+  "bkoczka",
+  "stita",
+  "jsettle",
+]);
+
+const SALES_CALL_REP_LOGIN_ALIASES: Record<string, string> = {
+  smesshah: "smessih",
+};
+
+function normalizeSalesCallRepLoginName(loginName: string): string {
+  const normalizedLoginName = loginName.trim().toLowerCase();
+  return SALES_CALL_REP_LOGIN_ALIASES[normalizedLoginName] ?? normalizedLoginName;
+}
 
 function readRepDisplayName(loginName: string, fallback: string | null | undefined): string {
-  const normalizedLoginName = loginName.trim().toLowerCase();
+  const normalizedLoginName = normalizeSalesCallRepLoginName(loginName);
   return (
     CALL_REP_DISPLAY_NAME_OVERRIDES[normalizedLoginName] ??
     cleanString(fallback) ??
@@ -143,7 +157,7 @@ function readRepDisplayName(loginName: string, fallback: string | null | undefin
 }
 
 function normalizeEmployeeOption(employee: EmployeeDirectoryOption): EmployeeDirectoryOption {
-  const loginName = employee.loginName.trim().toLowerCase();
+  const loginName = normalizeSalesCallRepLoginName(employee.loginName);
   return {
     ...employee,
     loginName,
@@ -152,16 +166,12 @@ function normalizeEmployeeOption(employee: EmployeeDirectoryOption): EmployeeDir
 }
 
 function isDashboardCallRosterEmployee(employee: EmployeeDirectoryOption): boolean {
-  const loginName = employee.loginName.trim().toLowerCase();
+  const loginName = normalizeSalesCallRepLoginName(employee.loginName);
   if (!isReportableEmployee(employee)) {
     return false;
   }
 
-  return (
-    FORCE_INCLUDED_CALL_REP_LOGIN_NAMES.has(loginName) ||
-    employee.isCallerIdentityProfile === true ||
-    Boolean(cleanString(employee.callerIdPhone))
-  );
+  return SALES_CALL_REP_LOGIN_NAMES.has(loginName);
 }
 
 function readRosterDedupeKey(employee: EmployeeDirectoryOption): string {
@@ -829,15 +839,16 @@ function buildCandidateEmployees(
   const byLogin = new Map(reportableEmployees.map((employee) => [employee.loginName, employee]));
   return filters.employees
     .map((loginName) => {
+      const normalizedLoginName = normalizeSalesCallRepLoginName(loginName);
       return (
-        byLogin.get(loginName) ?? {
-          loginName,
-          displayName: readRepDisplayName(loginName, loginName),
+        byLogin.get(normalizedLoginName) ?? {
+          loginName: normalizedLoginName,
+          displayName: readRepDisplayName(normalizedLoginName, normalizedLoginName),
           email: null,
         }
       );
     })
-    .filter(isReportableEmployee)
+    .filter(isDashboardCallRosterEmployee)
     .sort(compareByDisplayName);
 }
 
@@ -853,11 +864,14 @@ function buildEmployeeAnalytics(
   const employeesByLogin = new Map(employees.map((employee) => [employee.loginName, employee]));
 
   for (const session of sessions) {
-    const loginName = session.employeeLoginName ?? session.recipientEmployeeLoginName ?? "unattributed";
+    const rawLoginName = session.employeeLoginName ?? session.recipientEmployeeLoginName ?? "unattributed";
+    const loginName = rawLoginName === "unattributed"
+      ? "unattributed"
+      : normalizeSalesCallRepLoginName(rawLoginName);
     const directoryEmployee = employeesByLogin.get(loginName);
     const displayName =
       loginName === "unattributed"
-        ? "Unattributed"
+        ? "No rep linked"
         : readRepDisplayName(
             loginName,
             directoryEmployee?.displayName ??
@@ -905,7 +919,6 @@ function buildEmployeeAnalytics(
   }
 
   const candidateEmployees = buildCandidateEmployees(filters, employees);
-  const candidateLoginNames = new Set(candidateEmployees.map((employee) => employee.loginName));
   const leaderboard = candidateEmployees
     .map((employee) => normalizeEmployeeAggregate(
       aggregates.get(employee.loginName) ?? {
@@ -920,18 +933,6 @@ function buildEmployeeAnalytics(
         lastCallAt: null,
       },
     ));
-
-  for (const aggregate of aggregates.values()) {
-    if (
-      aggregate.loginName === "unattributed" ||
-      candidateLoginNames.has(aggregate.loginName) ||
-      !isReportableEmployee(aggregate)
-    ) {
-      continue;
-    }
-
-    leaderboard.push(normalizeEmployeeAggregate(aggregate));
-  }
 
   leaderboard.sort(compareLeaderboard);
 
@@ -1141,7 +1142,7 @@ export async function getDashboardSnapshot(filters: DashboardFilters): Promise<D
     const cacheExpiresAt = new Date(now + getEnv().CALL_ANALYTICS_STALE_AFTER_MS).toISOString();
     const employeesByLogin = new Map<string, EmployeeDirectoryOption>();
     for (const item of readCallEmployeeDirectory()) {
-      const loginName = item.loginName.trim().toLowerCase();
+      const loginName = normalizeSalesCallRepLoginName(item.loginName);
       if (!loginName) {
         continue;
       }
@@ -1156,7 +1157,7 @@ export async function getDashboardSnapshot(filters: DashboardFilters): Promise<D
     }
 
     for (const profile of readAllCallerIdentityProfiles()) {
-      const loginName = profile.loginName.trim().toLowerCase();
+      const loginName = normalizeSalesCallRepLoginName(profile.loginName);
       if (!loginName) {
         continue;
       }
@@ -1169,6 +1170,18 @@ export async function getDashboardSnapshot(filters: DashboardFilters): Promise<D
         normalizedPhone: profile.phoneNumber ?? existing?.normalizedPhone ?? null,
         callerIdPhone: profile.phoneNumber ?? existing?.callerIdPhone ?? null,
         isCallerIdentityProfile: true,
+      });
+    }
+
+    for (const loginName of SALES_CALL_REP_LOGIN_NAMES) {
+      if (employeesByLogin.has(loginName)) {
+        continue;
+      }
+
+      employeesByLogin.set(loginName, {
+        loginName,
+        displayName: readRepDisplayName(loginName, loginName),
+        email: null,
       });
     }
 

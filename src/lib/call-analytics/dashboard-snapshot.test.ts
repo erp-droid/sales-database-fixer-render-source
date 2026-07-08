@@ -202,15 +202,14 @@ describe("dashboard snapshot builder and cache", () => {
     expect(snapshot.meetingCategoryAnalytics.meetings.stats.totalMeetings).toBe(1);
     expect(snapshot.meetingCategoryAnalytics.dropOffs.stats.totalMeetings).toBe(0);
     expect(snapshot.teamStats.outboundCalls).toBe(3);
-    expect(snapshot.employeeLeaderboard[0]?.loginName).toBe("jserrano");
-    expect(snapshot.employeeLeaderboard.some((employee) => employee.loginName === "jlee")).toBe(true);
-    expect(snapshot.activityGaps[0]?.loginName).toBe("jlee");
+    expect(snapshot.employeeLeaderboard).toHaveLength(0);
+    expect(snapshot.activityGaps).toHaveLength(0);
     expect(snapshot.bucketDrilldowns).toHaveLength(2);
     expect(snapshot.bucketDrilldowns[0]?.companies[0]?.label).toBe("Northwind");
     expect(snapshot.bucketDrilldowns[0]?.outcomes[0]?.label).toBe("answered");
   });
 
-  it("excludes phone-number pseudo employees while retaining zero-call reps", async () => {
+  it("shows only sales call reps while retaining zero-call reps", async () => {
     const snapshotModule = await import("@/lib/call-analytics/dashboard-snapshot");
     const snapshot = snapshotModule.buildDashboardSnapshotForTests(
       baseFilters,
@@ -225,21 +224,34 @@ describe("dashboard snapshot builder and cache", () => {
       [
         { loginName: "4162304681", displayName: "(416) 230-4681", email: null },
         { loginName: "jserrano", displayName: "Jorge Serrano", email: null, callerIdPhone: "+14162304681" },
-        { loginName: "kallen", displayName: "Kallen", email: null },
+        { loginName: "kpareek", displayName: "kpareek", email: null },
+        { loginName: "smessih", displayName: "smessih", email: null },
+        { loginName: "stita", displayName: "Samuel Tita", email: null },
+        { loginName: "bkoczka", displayName: "Brock Koczka", email: null },
+        { loginName: "jsettle", displayName: "Justin Settle", email: null },
       ],
     );
 
     expect(snapshot.employees.map((employee) => employee.loginName)).toEqual([
-      "jserrano",
-      "kallen",
+      "kpareek",
+      "smessih",
+      "stita",
+      "bkoczka",
+      "jsettle",
     ]);
     expect(snapshot.employeeLeaderboard.map((employee) => employee.loginName)).toEqual([
-      "jserrano",
-      "kallen",
+      "bkoczka",
+      "jsettle",
+      "kpareek",
+      "stita",
+      "smessih",
     ]);
     expect(snapshot.activityGaps.map((employee) => employee.loginName)).toEqual([
-      "kallen",
-      "jserrano",
+      "bkoczka",
+      "jsettle",
+      "kpareek",
+      "stita",
+      "smessih",
     ]);
   });
 
@@ -259,7 +271,7 @@ describe("dashboard snapshot builder and cache", () => {
         { loginName: "smessih", displayName: "smessih", email: null },
         { loginName: "kpareek", displayName: "kpareek", email: null },
         { loginName: "stita", displayName: "stita", email: null },
-        { loginName: "kallen", displayName: "kallen", email: null },
+        { loginName: "bkoczka", displayName: "bkoczka", email: null },
         { loginName: "jsettle", displayName: "jsettle", email: null },
       ],
     );
@@ -268,7 +280,7 @@ describe("dashboard snapshot builder and cache", () => {
       "Sarah",
       "Krishna",
       "Samuel",
-      "Katlynn",
+      "Brock",
       "Justin",
     ]);
     expect(snapshot.employeeLeaderboard.find((employee) => employee.loginName === "kpareek")?.displayName).toBe(
@@ -276,29 +288,29 @@ describe("dashboard snapshot builder and cache", () => {
     );
   });
 
-  it("dedupes duplicate caller roster rows by caller ID", async () => {
+  it("dedupes duplicate sales roster rows by caller ID", async () => {
     const snapshotModule = await import("@/lib/call-analytics/dashboard-snapshot");
     const snapshot = snapshotModule.buildDashboardSnapshotForTests(
       baseFilters,
       [],
       [
         {
-          loginName: "steven",
-          displayName: "Steven Buhagiar",
+          loginName: "smesshah",
+          displayName: "Smesshah",
           email: null,
-          callerIdPhone: "+14168843800",
+          callerIdPhone: "+12895415935",
         },
         {
-          loginName: "sbuhagiar",
-          displayName: "Steven Buhagiar",
+          loginName: "smessih",
+          displayName: "Smessih",
           email: null,
-          callerIdPhone: "+14168843800",
+          callerIdPhone: "+12895415935",
           isCallerIdentityProfile: true,
         },
       ],
     );
 
-    expect(snapshot.employeeLeaderboard.map((employee) => employee.loginName)).toEqual(["sbuhagiar"]);
+    expect(snapshot.employeeLeaderboard.map((employee) => employee.loginName)).toEqual(["smessih"]);
   });
 
   it("treats all non-drop-off meeting categories as meetings booked", async () => {

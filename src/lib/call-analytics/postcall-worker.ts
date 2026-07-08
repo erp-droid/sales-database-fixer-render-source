@@ -433,7 +433,7 @@ function readRecordingDurationSeconds(value: string | number | null | undefined)
 
 function buildDetailsHtml(session: CallSessionRecord): string {
   const rows = [
-    ["Employee", cleanText(session.employeeDisplayName) || cleanText(session.recipientEmployeeDisplayName) || "Unattributed"],
+    ["Employee", cleanText(session.employeeDisplayName) || cleanText(session.recipientEmployeeDisplayName) || "No rep linked"],
     ["Phone", cleanText(session.counterpartyPhone) || cleanText(session.targetPhone) || "-"],
     ["Started", formatDateTime(session.startedAt)],
     ["Ended", formatDateTime(session.endedAt)],

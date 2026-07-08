@@ -310,7 +310,7 @@ export function CallDetailDrawer({
                 <dd>
                   {detail.session.employeeDisplayName ??
                     detail.session.recipientEmployeeDisplayName ??
-                    "Unattributed"}
+                    "No rep linked"}
                 </dd>
               </div>
               <div>
