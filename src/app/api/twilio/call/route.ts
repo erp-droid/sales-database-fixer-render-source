@@ -239,14 +239,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "sessionId is required." }, { status: 400 });
   }
 
-  let session = readCallSessionById(sessionId);
+  let session = readCallSessionById(sessionId, { repairFromEmployeeDirectory: false });
   if (!session) {
     return NextResponse.json({ error: "Call session was not found." }, { status: 404 });
   }
 
   if (!session.endedAt || session.outcome === "in_progress") {
     maybeStartSessionReconcile(session);
-    session = readCallSessionById(sessionId) ?? session;
+    session = readCallSessionById(sessionId, { repairFromEmployeeDirectory: false }) ?? session;
   } else {
     pendingSessionReconciles.delete(sessionId);
     lastSessionReconcileAt.delete(sessionId);

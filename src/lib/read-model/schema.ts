@@ -342,6 +342,8 @@ CREATE INDEX IF NOT EXISTS idx_call_sessions_target_phone
   ON call_sessions(target_phone);
 CREATE INDEX IF NOT EXISTS idx_call_sessions_counterparty_phone
   ON call_sessions(counterparty_phone);
+CREATE INDEX IF NOT EXISTS idx_call_sessions_active_bridge_lookup
+  ON call_sessions(source, employee_login_name, target_phone, COALESCE(started_at, updated_at) DESC, session_id DESC);
 
 CREATE TABLE IF NOT EXISTS call_ingest_state (
   scope TEXT PRIMARY KEY,

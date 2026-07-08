@@ -961,5 +961,8 @@ describe("ensureReadModelSchema", () => {
     }>;
 
     expect(indexes.map((index) => index.name)).toContain("idx_call_sessions_ended_at_outcome");
+    expect(indexes.map((index) => index.name)).toContain(
+      "idx_call_sessions_active_bridge_lookup",
+    );
   });
 });

@@ -348,10 +348,60 @@ export function replaceCallEmployeeDirectory(items: CallEmployeeDirectoryItem[])
 }
 
 export function upsertCallEmployeeDirectoryItem(item: CallEmployeeDirectoryItem): void {
-  const current = readCallEmployeeDirectory().filter(
-    (existing) => normalizeComparable(existing.loginName) !== normalizeComparable(item.loginName),
+  const normalizedLoginName = normalizeComparable(item.loginName);
+  if (!normalizedLoginName) {
+    return;
+  }
+
+  const existing = readCallEmployeeDirectory().find(
+    (candidate) => normalizeComparable(candidate.loginName) === normalizedLoginName,
   );
-  replaceCallEmployeeDirectory([...current, item]);
+  if (
+    existing &&
+    existing.contactId === item.contactId &&
+    normalizeComparable(existing.displayName) === normalizeComparable(item.displayName) &&
+    (existing.email ?? null) === (item.email ?? null) &&
+    (formatPhoneForTwilioDial(existing.normalizedPhone) ?? null) ===
+      (formatPhoneForTwilioDial(item.normalizedPhone) ?? null) &&
+    (formatPhoneForTwilioDial(existing.callerIdPhone) ?? null) ===
+      (formatPhoneForTwilioDial(item.callerIdPhone) ?? null) &&
+    existing.isActive === item.isActive
+  ) {
+    return;
+  }
+
+  const db = getReadModelDb();
+  db.prepare(
+    `
+    INSERT INTO call_employee_directory (
+      login_name,
+      contact_id,
+      display_name,
+      email,
+      normalized_phone,
+      caller_id_phone,
+      is_active,
+      updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(login_name) DO UPDATE SET
+      contact_id = excluded.contact_id,
+      display_name = excluded.display_name,
+      email = excluded.email,
+      normalized_phone = excluded.normalized_phone,
+      caller_id_phone = excluded.caller_id_phone,
+      is_active = excluded.is_active,
+      updated_at = excluded.updated_at
+    `,
+  ).run(
+    normalizedLoginName,
+    item.contactId ?? null,
+    item.displayName.trim() || normalizedLoginName,
+    item.email ?? null,
+    formatPhoneForTwilioDial(item.normalizedPhone),
+    formatPhoneForTwilioDial(item.callerIdPhone),
+    item.isActive ? 1 : 0,
+    item.updatedAt || new Date().toISOString(),
+  );
 }
 
 export function readCallEmployeeDirectory(): CallEmployeeDirectoryItem[] {

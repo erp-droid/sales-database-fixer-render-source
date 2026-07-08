@@ -82,6 +82,10 @@ type SessionizeOptions = {
   bridgeNumbers?: string[];
 };
 
+type ReadCallSessionOptions = {
+  repairFromEmployeeDirectory?: boolean;
+};
+
 let repairingCallSessionsFromEmployeeDirectory = false;
 
 function normalizeStoredCallLeg(row: StoredCallLegRow): CallLegRecord {
@@ -1320,8 +1324,13 @@ export function readCallSessions(): CallSessionRecord[] {
   return rows.map(normalizeCallSessionRow);
 }
 
-export function readCallSessionById(sessionId: string): CallSessionRecord | null {
-  maybeRepairCallSessionsFromEmployeeDirectory();
+export function readCallSessionById(
+  sessionId: string,
+  options: ReadCallSessionOptions = {},
+): CallSessionRecord | null {
+  if (options.repairFromEmployeeDirectory !== false) {
+    maybeRepairCallSessionsFromEmployeeDirectory();
+  }
   const db = getReadModelDb();
   const row = db
     .prepare(
@@ -1375,8 +1384,6 @@ export function findRecentBridgeCallSessionForEmployee(options: {
   targetPhone: string;
   withinMs?: number;
 }): CallSessionRecord | null {
-  maybeRepairCallSessionsFromEmployeeDirectory();
-
   const normalizedLoginName = options.employeeLoginName.trim().toLowerCase();
   const normalizedTargetPhone = formatPhoneForTwilioDial(options.targetPhone);
   if (!normalizedLoginName || !normalizedTargetPhone) {
