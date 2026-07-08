@@ -1154,10 +1154,10 @@ function prepareFullSessionRebuild(): FullRebuildPreparation {
   return { groups, employeeIndex, phoneIndex };
 }
 
-function commitFullSessionRebuild(
+function replaceFullSessionTables(
   groups: Map<string, CallLegRecord[]>,
   sessions: CallSessionRecord[],
-): CallSessionRecord[] {
+): void {
   const db = getReadModelDb();
   const replace = db.transaction((nextSessions: CallSessionRecord[]) => {
     const updateLegSession = db.prepare(
@@ -1184,8 +1184,42 @@ function commitFullSessionRebuild(
   });
 
   replace(sessions);
+}
+
+function commitFullSessionRebuild(
+  groups: Map<string, CallLegRecord[]>,
+  sessions: CallSessionRecord[],
+): CallSessionRecord[] {
+  replaceFullSessionTables(groups, sessions);
   finalizeCallSessionWrites("call-sessions-rebuilt", sessions);
   return sessions;
+}
+
+function yieldRebuildEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+// The audit upserts run outside the replace transaction and dominated the
+// commit phase (~41s for ~8k sessions), so the yielding rebuild slices them.
+const AUDIT_WRITE_YIELD_CHUNK_SIZE = 50;
+
+async function finalizeCallSessionWritesYielding(
+  reason: string,
+  sessions: CallSessionRecord[],
+): Promise<void> {
+  let writtenSinceYield = 0;
+  for (const session of sessions) {
+    upsertCallAuditEvent(session);
+    writtenSinceYield += 1;
+    if (writtenSinceYield >= AUDIT_WRITE_YIELD_CHUNK_SIZE) {
+      writtenSinceYield = 0;
+      await yieldRebuildEventLoop();
+    }
+  }
+  markDashboardSnapshotCacheStale();
+  publishAuditLogChanged(reason);
 }
 
 export function rebuildCallSessions(options: SessionizeOptions = {}): CallSessionRecord[] {
@@ -1207,8 +1241,31 @@ export async function rebuildCallSessionsYielding(
   options: SessionizeOptions = {},
 ): Promise<CallSessionRecord[]> {
   const startMs = Date.now();
-  const { groups, employeeIndex, phoneIndex } = prepareFullSessionRebuild();
-  const prepareMs = Date.now() - startMs;
+  const legs = readAllCallLegs();
+  const legsMs = Date.now() - startMs;
+  await yieldRebuildEventLoop();
+
+  const employeeIndexStartMs = Date.now();
+  const employeeIndex = buildEmployeeIndex(readCallEmployeeDirectory());
+  const employeeIndexMs = Date.now() - employeeIndexStartMs;
+  await yieldRebuildEventLoop();
+
+  const phoneIndexStartMs = Date.now();
+  const phoneIndex = buildPhoneMatchIndex();
+  const phoneIndexMs = Date.now() - phoneIndexStartMs;
+  await yieldRebuildEventLoop();
+
+  const groupStartMs = Date.now();
+  const rootSidMap = readRootSidMap(legs);
+  const groups = new Map<string, CallLegRecord[]>();
+  for (const leg of legs) {
+    const rootSid = rootSidMap.get(leg.sid) ?? leg.sid;
+    const group = groups.get(rootSid) ?? [];
+    group.push(leg);
+    groups.set(rootSid, group);
+  }
+  const groupMs = Date.now() - groupStartMs;
+  await yieldRebuildEventLoop();
 
   const buildStartMs = Date.now();
   const sessions: CallSessionRecord[] = [];
@@ -1219,28 +1276,36 @@ export async function rebuildCallSessionsYielding(
     builtSinceYield += 1;
     if (builtSinceYield >= FULL_REBUILD_YIELD_CHUNK_SIZE) {
       builtSinceYield = 0;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldRebuildEventLoop();
     }
   }
   const buildMs = Date.now() - buildStartMs;
+  await yieldRebuildEventLoop();
 
-  const commitStartMs = Date.now();
-  const result = commitFullSessionRebuild(groups, sessions);
-  const commitMs = Date.now() - commitStartMs;
+  const replaceStartMs = Date.now();
+  replaceFullSessionTables(groups, sessions);
+  const replaceMs = Date.now() - replaceStartMs;
+  await yieldRebuildEventLoop();
+
+  const auditStartMs = Date.now();
+  await finalizeCallSessionWritesYielding("call-sessions-rebuilt", sessions);
+  const auditMs = Date.now() - auditStartMs;
 
   if (Date.now() - startMs > 2_000) {
     console.warn("[call-sessions] slow full rebuild phase breakdown", {
       totalMs: Date.now() - startMs,
-      prepareMs,
+      legsMs,
+      employeeIndexMs,
+      phoneIndexMs,
+      groupMs,
       buildMs,
-      commitMs,
+      replaceMs,
+      auditMs,
       sessionCount: sessions.length,
     });
   }
 
-  return result;
+  return sessions;
 }
 
 type StoredCallSessionRow = {
