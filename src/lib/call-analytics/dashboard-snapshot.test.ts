@@ -229,6 +229,7 @@ describe("dashboard snapshot builder and cache", () => {
         { loginName: "stita", displayName: "Samuel Tita", email: null },
         { loginName: "bkoczka", displayName: "Brock Koczka", email: null },
         { loginName: "jsettle", displayName: "Justin Settle", email: null },
+        { loginName: "kallen", displayName: "kallen", email: null },
       ],
     );
 
@@ -238,10 +239,12 @@ describe("dashboard snapshot builder and cache", () => {
       "stita",
       "bkoczka",
       "jsettle",
+      "kallen",
     ]);
     expect(snapshot.employeeLeaderboard.map((employee) => employee.loginName)).toEqual([
       "bkoczka",
       "jsettle",
+      "kallen",
       "kpareek",
       "stita",
       "smessih",
@@ -249,6 +252,7 @@ describe("dashboard snapshot builder and cache", () => {
     expect(snapshot.activityGaps.map((employee) => employee.loginName)).toEqual([
       "bkoczka",
       "jsettle",
+      "kallen",
       "kpareek",
       "stita",
       "smessih",
@@ -273,6 +277,7 @@ describe("dashboard snapshot builder and cache", () => {
         { loginName: "stita", displayName: "stita", email: null },
         { loginName: "bkoczka", displayName: "bkoczka", email: null },
         { loginName: "jsettle", displayName: "jsettle", email: null },
+        { loginName: "kallen", displayName: "kallen", email: null },
       ],
     );
 
@@ -282,6 +287,7 @@ describe("dashboard snapshot builder and cache", () => {
       "Samuel",
       "Brock",
       "Justin",
+      "Katlynn",
     ]);
     expect(snapshot.employeeLeaderboard.find((employee) => employee.loginName === "kpareek")?.displayName).toBe(
       "Krishna",

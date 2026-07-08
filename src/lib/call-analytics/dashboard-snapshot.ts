@@ -124,6 +124,7 @@ function isReportableEmployee(employee: Pick<EmployeeDirectoryOption, "loginName
 const CALL_REP_DISPLAY_NAME_OVERRIDES: Record<string, string> = {
   bkoczka: "Brock",
   jsettle: "Justin",
+  kallen: "Katlynn",
   kpareek: "Krishna",
   smesshah: "Sarah",
   smessih: "Sarah",
@@ -136,6 +137,7 @@ const SALES_CALL_REP_LOGIN_NAMES = new Set([
   "bkoczka",
   "stita",
   "jsettle",
+  "kallen",
 ]);
 
 const SALES_CALL_REP_LOGIN_ALIASES: Record<string, string> = {
