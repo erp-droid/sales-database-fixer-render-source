@@ -218,6 +218,103 @@ describe("rebuildCallSessions", () => {
     expect(publishAuditLogChanged).toHaveBeenCalledWith("call-sessions-rebuilt");
   });
 
+  it("attributes inbound calls from a known employee phone to the initiating employee", async () => {
+    const db = new Database(":memory:");
+    ensureReadModelSchema(db);
+
+    db.prepare(
+      `
+      INSERT INTO call_legs (
+        sid,
+        parent_sid,
+        session_id,
+        direction,
+        from_number,
+        to_number,
+        status,
+        answered,
+        answered_at,
+        started_at,
+        ended_at,
+        duration_seconds,
+        ring_duration_seconds,
+        price,
+        price_unit,
+        source,
+        leg_type,
+        raw_json,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "CA-inbound",
+      null,
+      "CA-inbound",
+      "inbound",
+      "+14379965446",
+      "+16474929859",
+      "completed",
+      1,
+      null,
+      "2026-07-08T13:59:34.000Z",
+      "2026-07-08T13:59:45.000Z",
+      11,
+      null,
+      null,
+      "USD",
+      "unknown",
+      "inbound",
+      JSON.stringify({
+        sid: "CA-inbound",
+        direction: "inbound",
+        from: "+14379965446",
+        to: "+16474929859",
+        status: "completed",
+        events: [],
+      }),
+      "2026-07-08T13:59:45.000Z",
+    );
+
+    readCallEmployeeDirectory.mockReturnValue([
+      {
+        loginName: "kpareek",
+        contactId: 45,
+        displayName: "Krishna Pareek",
+        email: "kpareek@meadowb.com",
+        normalizedPhone: "+14379965446",
+        callerIdPhone: "+14379965446",
+        isActive: true,
+        updatedAt: "2026-07-08T13:55:00.000Z",
+      },
+    ]);
+    readCallEmployeeDirectoryMeta.mockReturnValue({
+      total: 1,
+      latestUpdatedAt: "2026-07-08T13:55:00.000Z",
+    });
+    readAllCallerPhoneOverrides.mockReturnValue([]);
+
+    vi.doMock("@/lib/read-model/db", () => ({
+      getReadModelDb: () => db,
+    }));
+
+    const sessionizeModule = await import("@/lib/call-analytics/sessionize");
+    const sessions = sessionizeModule.rebuildCallSessions();
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toEqual(
+      expect.objectContaining({
+        employeeLoginName: "kpareek",
+        employeeDisplayName: "Krishna Pareek",
+        employeePhone: "+14379965446",
+        recipientEmployeeLoginName: null,
+        direction: "inbound",
+        source: "inbound",
+        answered: true,
+        outcome: "answered",
+      }),
+    );
+  });
+
   it("prefers canonical Acumatica caller identity over Twilio-friendly rows for the same phone", async () => {
     const db = new Database(":memory:");
     ensureReadModelSchema(db);

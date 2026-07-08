@@ -567,7 +567,9 @@ function determineEmployeeAttribution(
 
   if (direction === "inbound") {
     return {
-      employee: null,
+      employee:
+        findUniqueEmployeeMatch(employeeIndex.byCallerIdPhone, primaryLeg?.fromNumber) ??
+        findUniqueEmployeeMatch(employeeIndex.byNormalizedPhone, primaryLeg?.fromNumber),
       recipientEmployee:
         findUniqueEmployeeMatch(employeeIndex.byCallerIdPhone, primaryLeg?.toNumber) ??
         findUniqueEmployeeMatch(employeeIndex.byNormalizedPhone, primaryLeg?.toNumber),
