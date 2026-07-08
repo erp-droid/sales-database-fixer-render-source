@@ -563,13 +563,21 @@ async function runWatchdogCycle(): Promise<WatchdogReport> {
   const actions: WatchdogAction[] = [];
 
   const jobs = listAllTroubleSyncJobs();
+  const listJobsMs = Date.now() - startMs;
+
+  const coachingStartMs = Date.now();
   const coachingHealthEnabled = getEnv().DAILY_CALL_COACHING_ENABLED;
   const coachingHealthAction = coachingHealthEnabled
     ? buildDailyCallCoachingHealthAction(new Date())
     : null;
+  const coachingMs = Date.now() - coachingStartMs;
+
+  let slowestJobMs = 0;
+  let slowestJobSessionId: string | null = null;
 
   for (const job of jobs) {
     await yieldEventLoop();
+    const jobStartMs = Date.now();
     try {
       const action = await diagnoseAndRepairJob(job);
       if (action) {
@@ -584,6 +592,22 @@ async function runWatchdogCycle(): Promise<WatchdogReport> {
         detail: `Watchdog itself errored: ${getErrorMessage(error)}`,
       });
     }
+    const jobMs = Date.now() - jobStartMs;
+    if (jobMs > slowestJobMs) {
+      slowestJobMs = jobMs;
+      slowestJobSessionId = job.sessionId;
+    }
+  }
+
+  if (Date.now() - startMs > 2_000) {
+    console.warn("[watchdog] slow cycle phase breakdown", {
+      totalMs: Date.now() - startMs,
+      listJobsMs,
+      coachingMs,
+      jobCount: jobs.length,
+      slowestJobMs,
+      slowestJobSessionId,
+    });
   }
 
   if (coachingHealthAction) {

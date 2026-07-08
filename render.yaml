@@ -19,9 +19,9 @@ services:
       - key: NODE_ENV
         value: production
       - key: WEB_CONCURRENCY
-        value: "2"
+        value: "4"
       - key: WEB_CLUSTER_MAX_WORKERS
-        value: "2"
+        value: "4"
       - key: WEB_CLUSTER_SHUTDOWN_TIMEOUT_MS
         value: "10000"
       - key: AUTH_PROVIDER
