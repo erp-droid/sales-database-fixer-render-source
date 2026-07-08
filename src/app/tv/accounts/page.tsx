@@ -5,6 +5,7 @@ import { resolveCompanyPhone } from "@/lib/business-accounts";
 import { requireTvAccess } from "@/lib/tv-access";
 import type { Category } from "@/types/business-account";
 
+import { TvChrome } from "../tv-chrome";
 import styles from "../tv.module.css";
 
 export const dynamic = "force-dynamic";
@@ -66,7 +67,7 @@ export default async function TvAccountsPage({ searchParams }: TvAccountsPagePro
   const category = readCategory(readParam(resolvedParams.category));
   const page = readPage(readParam(resolvedParams.page));
   const currentPath = buildPageHref({ q, category, page });
-  await requireTvAccess(currentPath);
+  const { loginName } = await requireTvAccess(currentPath);
 
   const result = queryReadModelBusinessAccounts({
     q,
@@ -81,33 +82,26 @@ export default async function TvAccountsPage({ searchParams }: TvAccountsPagePro
   const nextHref = buildPageHref({ q, category, page: Math.min(pageCount, page + 1) });
 
   return (
-    <main className={styles.page}>
+    <TvChrome
+      active="accounts"
+      headerActions={<Link className={styles.primaryActionLink} href="/accounts">Open full app</Link>}
+      subtitle={`${result.total.toLocaleString()} matching contacts and accounts`}
+      title="Accounts"
+      userName={loginName}
+    >
       <script
         dangerouslySetInnerHTML={{
           __html: "setTimeout(function(){ window.location.reload(); }, 120000);",
         }}
       />
-      <div className={styles.shell}>
-        <header className={styles.topbar}>
-          <div className={styles.titleBlock}>
-            <span className={styles.eyebrow}>Private TV View</span>
-            <h1 className={styles.title}>Accounts</h1>
-            <p className={styles.subtitle}>{result.total.toLocaleString()} matching contacts and accounts</p>
-          </div>
-          <nav className={styles.nav} aria-label="TV navigation">
-            <Link href="/tv/dashboard">Dashboard</Link>
-            <Link href="/tv/accounts" aria-current="page">Accounts</Link>
-            <Link href="/accounts">Full app</Link>
-          </nav>
-        </header>
 
-        <div className={styles.statusBar}>
-          <span className={styles.statusPill}>Read-only</span>
-          <span>Page {result.page.toLocaleString()} of {pageCount.toLocaleString()}</span>
-        </div>
+      <div className={styles.statusBar}>
+        <span className={styles.statusPill}>Read-only</span>
+        <span>Page {result.page.toLocaleString()} of {pageCount.toLocaleString()}</span>
+      </div>
 
-        <section className={styles.panel}>
-          <form action="/tv/accounts" className={styles.toolbar} method="get">
+      <section className={styles.panel}>
+        <form action="/tv/accounts" className={styles.toolbar} method="get">
             <label className={styles.field}>
               Search
               <input
@@ -129,7 +123,7 @@ export default async function TvAccountsPage({ searchParams }: TvAccountsPagePro
             </label>
             <button className={`${styles.button} ${styles.buttonPrimary}`} type="submit">Search</button>
             <Link className={styles.button} href="/tv/accounts">Reset</Link>
-          </form>
+        </form>
 
           {result.items.length === 0 ? (
             <p className={styles.empty}>No accounts matched.</p>
@@ -174,17 +168,16 @@ export default async function TvAccountsPage({ searchParams }: TvAccountsPagePro
             </ul>
           )}
 
-          <div className={styles.pagination}>
-            <span className={styles.sectionMeta}>
-              Showing {result.items.length.toLocaleString()} of {result.total.toLocaleString()}
-            </span>
-            <div className={styles.paginationLinks}>
-              <Link className={styles.button} href={previousHref}>Previous</Link>
-              <Link className={styles.button} href={nextHref}>Next</Link>
-            </div>
+        <div className={styles.pagination}>
+          <span className={styles.sectionMeta}>
+            Showing {result.items.length.toLocaleString()} of {result.total.toLocaleString()}
+          </span>
+          <div className={styles.paginationLinks}>
+            <Link className={styles.button} href={previousHref}>Previous</Link>
+            <Link className={styles.button} href={nextHref}>Next</Link>
           </div>
-        </section>
-      </div>
-    </main>
+        </div>
+      </section>
+    </TvChrome>
   );
 }

@@ -1,7 +1,9 @@
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
+import { validateSessionWithAcumatica } from "@/lib/acumatica";
 import { getAuthCookieNameForMiddleware } from "@/lib/env";
+import { HttpError } from "@/lib/errors";
 
 export const TV_ALLOWED_LOGIN_NAME = "jserrano";
 
@@ -15,17 +17,29 @@ export async function requireTvAccess(nextPath: string): Promise<{
   loginName: string;
 }> {
   const cookieStore = await cookies();
-  const hasSessionCookie = Boolean(
-    cookieStore.get(getAuthCookieNameForMiddleware())?.value,
-  );
+  const sessionCookie = cookieStore.get(getAuthCookieNameForMiddleware())?.value ?? "";
   const loginName = cookieStore.get("mb_login_name")?.value?.trim().toLowerCase() ?? "";
 
-  if (!hasSessionCookie || !loginName) {
+  if (!sessionCookie || !loginName) {
     redirect(buildSignInUrl(nextPath));
   }
 
   if (loginName !== TV_ALLOWED_LOGIN_NAME) {
     notFound();
+  }
+
+  try {
+    await validateSessionWithAcumatica(
+      sessionCookie,
+      undefined,
+      { signal: AbortSignal.timeout(10_000) },
+    );
+  } catch (error) {
+    if (error instanceof HttpError && [401, 403].includes(error.status)) {
+      redirect(buildSignInUrl(nextPath));
+    }
+
+    throw error;
   }
 
   return { loginName };
