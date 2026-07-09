@@ -1169,10 +1169,14 @@ function replaceFullSessionTables(
       `,
     );
     const insert = createCallSessionInsertStatement(db);
+    const legUpdateTimestamp = new Date().toISOString();
     for (const session of nextSessions) {
       const group = groups.get(session.rootCallSid) ?? [];
       for (const leg of group) {
-        updateLegSession.run(session.sessionId, new Date().toISOString(), leg.sid);
+        if (leg.sessionId === session.sessionId) {
+          continue;
+        }
+        updateLegSession.run(session.sessionId, legUpdateTimestamp, leg.sid);
       }
     }
 
@@ -1345,13 +1349,36 @@ async function runFullSessionRebuildYielding(
   const buildMs = Date.now() - buildStartMs;
   await yieldRebuildEventLoop();
 
+  // Rebuilds run constantly but usually change only a handful of sessions.
+  // Rewriting and re-auditing all ~8k rows every time held the SQLite write
+  // lock for 20s+ and starved rep-facing writes (meetings, mail) across all
+  // workers. Fingerprints (excluding the always-fresh updated_at) identify
+  // the sessions that truly changed so only those get audited.
+  const changedStartMs = Date.now();
+  const existingFingerprints = readExistingSessionFingerprints();
+  const changedSessions: CallSessionRecord[] = [];
+  let comparedSinceYield = 0;
+  for (const session of sessions) {
+    const fingerprint = sessionFingerprint(toCallSessionInsertParams(session));
+    if (existingFingerprints.get(session.sessionId) !== fingerprint) {
+      changedSessions.push(session);
+    }
+    comparedSinceYield += 1;
+    if (comparedSinceYield >= FULL_REBUILD_YIELD_CHUNK_SIZE) {
+      comparedSinceYield = 0;
+      await yieldRebuildEventLoop();
+    }
+  }
+  const changedMs = Date.now() - changedStartMs;
+  await yieldRebuildEventLoop();
+
   const replaceStartMs = Date.now();
   replaceFullSessionTables(groups, sessions);
   const replaceMs = Date.now() - replaceStartMs;
   await yieldRebuildEventLoop();
 
   const auditStartMs = Date.now();
-  await finalizeCallSessionWritesYielding("call-sessions-rebuilt", sessions);
+  await finalizeCallSessionWritesYielding("call-sessions-rebuilt", changedSessions);
   const auditMs = Date.now() - auditStartMs;
 
   if (Date.now() - startMs > 2_000) {
@@ -1362,13 +1389,33 @@ async function runFullSessionRebuildYielding(
       phoneIndexMs,
       groupMs,
       buildMs,
+      changedMs,
       replaceMs,
       auditMs,
       sessionCount: sessions.length,
+      changedCount: changedSessions.length,
     });
   }
 
   return sessions;
+}
+
+function sessionFingerprint(params: ReturnType<typeof toCallSessionInsertParams>): string {
+  const entries = Object.entries(params)
+    .filter(([key]) => key !== "updated_at")
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return JSON.stringify(entries);
+}
+
+function readExistingSessionFingerprints(): Map<string, string> {
+  const db = getReadModelDb();
+  const rows = db.prepare("SELECT * FROM call_sessions").all() as StoredCallSessionRow[];
+  const fingerprints = new Map<string, string>();
+  for (const row of rows) {
+    const record = normalizeCallSessionRow(row);
+    fingerprints.set(record.sessionId, sessionFingerprint(toCallSessionInsertParams(record)));
+  }
+  return fingerprints;
 }
 
 type StoredCallSessionRow = {
