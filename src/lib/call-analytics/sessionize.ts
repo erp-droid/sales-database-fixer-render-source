@@ -1237,8 +1237,71 @@ export function rebuildCallSessions(options: SessionizeOptions = {}): CallSessio
 // which yields between chunks so health probes and user requests keep flowing.
 const FULL_REBUILD_YIELD_CHUNK_SIZE = 100;
 
+// Only one full rebuild may run at a time across all cluster workers. Two
+// overlapping rebuilds fight over the SQLite write lock, and better-sqlite3
+// blocks each waiting worker's whole event loop — with enough workers writing,
+// every worker freezes and the instance fails its health check. Rebuilds are
+// idempotent and re-triggered constantly, so a concurrent trigger safely skips.
+const FULL_REBUILD_LOCK_STALE_MS = 5 * 60 * 1000;
+const FULL_REBUILD_LOCK_RELEASED = "1970-01-01T00:00:00.000Z";
+
+function ensureFullRebuildLockTable(db: ReturnType<typeof getReadModelDb>): void {
+  db.exec(
+    `
+    CREATE TABLE IF NOT EXISTS full_rebuild_lock (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      claimed_at TEXT NOT NULL
+    )
+    `,
+  );
+}
+
+function tryClaimFullRebuildLock(): boolean {
+  const db = getReadModelDb();
+  ensureFullRebuildLockTable(db);
+  const nowMs = Date.now();
+  const staleBefore = new Date(nowMs - FULL_REBUILD_LOCK_STALE_MS).toISOString();
+  const result = db
+    .prepare(
+      `
+      INSERT INTO full_rebuild_lock (id, claimed_at) VALUES (1, @claimed_at)
+      ON CONFLICT(id) DO UPDATE SET claimed_at = excluded.claimed_at
+      WHERE full_rebuild_lock.claimed_at < @stale_before
+      `,
+    )
+    .run({ claimed_at: new Date(nowMs).toISOString(), stale_before: staleBefore });
+  return result.changes > 0;
+}
+
+function releaseFullRebuildLock(): void {
+  try {
+    getReadModelDb()
+      .prepare("UPDATE full_rebuild_lock SET claimed_at = ? WHERE id = 1")
+      .run(FULL_REBUILD_LOCK_RELEASED);
+  } catch (error) {
+    console.error("[call-sessions] failed to release full rebuild lock", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function rebuildCallSessionsYielding(
   options: SessionizeOptions = {},
+): Promise<CallSessionRecord[]> {
+  if (!tryClaimFullRebuildLock()) {
+    console.log("[call-sessions] full rebuild already in progress; skipping duplicate");
+    return readCallSessions();
+  }
+
+  try {
+    return await runFullSessionRebuildYielding(options);
+  } finally {
+    releaseFullRebuildLock();
+  }
+}
+
+async function runFullSessionRebuildYielding(
+  options: SessionizeOptions,
 ): Promise<CallSessionRecord[]> {
   const startMs = Date.now();
   const legs = readAllCallLegs();
