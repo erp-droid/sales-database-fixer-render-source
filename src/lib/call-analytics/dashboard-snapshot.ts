@@ -1,4 +1,4 @@
-import { claimDashboardSnapshotRebuild, readCachedDashboardSnapshot, readDashboardSnapshotInFlight, readStaleDashboardSnapshot, writeCachedDashboardSnapshot, writeDashboardSnapshotInFlight } from "@/lib/call-analytics/dashboard-cache";
+import { claimDashboardSnapshotRebuild, readCachedDashboardSnapshot, readDashboardSnapshotInFlight, readStaleDashboardSnapshot, waitForSharedDashboardSnapshot, writeCachedDashboardSnapshot, writeDashboardSnapshotInFlight } from "@/lib/call-analytics/dashboard-cache";
 import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
 import { filterCallSessions, buildSummaryStats } from "@/lib/call-analytics/queries";
 import { readCallSessions } from "@/lib/call-analytics/sessionize";
@@ -1154,8 +1154,16 @@ export async function getDashboardSnapshot(filters: DashboardFilters): Promise<D
     return stale ?? existingRequest;
   }
 
-  if (stale && !claimDashboardSnapshotRebuild(cacheKey, readSnapshotRebuildMinIntervalMs())) {
-    return stale;
+  if (!claimDashboardSnapshotRebuild(cacheKey, readSnapshotRebuildMinIntervalMs())) {
+    if (stale) {
+      return stale;
+    }
+    // Another cluster worker is building this key; wait for its result in the
+    // shared cache instead of duplicating a ~6s synchronous build per worker.
+    const shared = await waitForSharedDashboardSnapshot(cacheKey, 15_000);
+    if (shared) {
+      return shared;
+    }
   }
 
   const request = Promise.resolve().then(() => {
