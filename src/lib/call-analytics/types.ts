@@ -316,6 +316,19 @@ export type DashboardEmployeeActivityItem = {
   lastCallAt: string | null;
 };
 
+export type DashboardRepActivityItem = {
+  loginName: string;
+  displayName: string;
+  totalActivities: number;
+  calls: number;
+  connectedCalls: number;
+  meetings: number;
+  dropOffs: number;
+  emails: number;
+  notes: number;
+  lastActivityAt: string | null;
+};
+
 export type DashboardActivityGapItem = {
   loginName: string;
   displayName: string;
@@ -378,6 +391,7 @@ export type DashboardSnapshotResponse = {
   trend: DashboardTrendResponse;
   emailTrend: DashboardEmailTrendResponse;
   bucketDrilldowns: DashboardBucketDrilldown[];
+  activityLeaderboard: DashboardRepActivityItem[];
   employeeLeaderboard: DashboardEmployeeActivityItem[];
   meetingLeaderboard: DashboardMeetingActivityItem[];
   emailLeaderboard: DashboardEmailActivityItem[];

@@ -257,6 +257,14 @@ describe("dashboard snapshot builder and cache", () => {
       "stita",
       "smessih",
     ]);
+    expect(snapshot.activityLeaderboard.map((employee) => employee.loginName)).toEqual([
+      "bkoczka",
+      "jsettle",
+      "kallen",
+      "kpareek",
+      "stita",
+      "smessih",
+    ]);
   });
 
   it("uses familiar rep names instead of raw login names", async () => {
@@ -292,6 +300,173 @@ describe("dashboard snapshot builder and cache", () => {
     expect(snapshot.employeeLeaderboard.find((employee) => employee.loginName === "kpareek")?.displayName).toBe(
       "Krishna",
     );
+  });
+
+  it("combines calls, meetings, drop-offs, emails, and explicit note entries per rep", async () => {
+    const snapshotModule = await import("@/lib/call-analytics/dashboard-snapshot");
+    const snapshot = snapshotModule.buildDashboardSnapshotForTests(
+      baseFilters,
+      [
+        buildSession({
+          sessionId: "krishna-call-1",
+          employeeLoginName: "kpareek",
+          employeeDisplayName: "Krishna",
+          startedAt: "2026-03-08T09:00:00.000Z",
+        }),
+        buildSession({
+          sessionId: "krishna-call-2",
+          employeeLoginName: "kpareek",
+          employeeDisplayName: "Krishna",
+          startedAt: "2026-03-08T10:00:00.000Z",
+          answered: false,
+          outcome: "no_answer",
+        }),
+        buildSession({
+          sessionId: "sarah-call-1",
+          employeeLoginName: "smessih",
+          employeeDisplayName: "Sarah",
+          startedAt: "2026-03-08T11:00:00.000Z",
+        }),
+      ],
+      [
+        { loginName: "kpareek", displayName: "Krishna", email: null },
+        { loginName: "smessih", displayName: "Sarah", email: null },
+      ],
+      undefined,
+      undefined,
+      [
+        {
+          id: "email-1",
+          occurred_at: "2026-03-08T12:00:00.000Z",
+          actor_login_name: "kpareek",
+          actor_name: "Krishna",
+          company_name: "Northwind",
+          contact_name: "Alex Prospect",
+          email_subject: "Follow up",
+          result_code: "succeeded",
+          source_surface: "accounts",
+        },
+        {
+          id: "email-2",
+          occurred_at: "2026-03-08T13:00:00.000Z",
+          actor_login_name: "kpareek",
+          actor_name: "Krishna",
+          company_name: "Northwind",
+          contact_name: "Alex Prospect",
+          email_subject: "Details",
+          result_code: "partial",
+          source_surface: "accounts",
+        },
+        {
+          id: "email-failed",
+          occurred_at: "2026-03-08T13:30:00.000Z",
+          actor_login_name: "kpareek",
+          actor_name: "Krishna",
+          company_name: "Northwind",
+          contact_name: "Alex Prospect",
+          email_subject: "Failed message",
+          result_code: "failed",
+          source_surface: "accounts",
+        },
+      ],
+      [
+        {
+          id: "meeting:event-activity",
+          eventId: "event-activity",
+          actorLoginName: "kpareek",
+          actorName: "Krishna",
+          businessAccountRecordId: "record-1",
+          businessAccountId: "B2001",
+          companyName: "Northwind",
+          relatedContactId: 91,
+          relatedContactName: "Alex Prospect",
+          category: "Meeting",
+          meetingSummary: "Intro meeting",
+          attendeeCount: 2,
+          attendees: [],
+          inviteAuthority: "google",
+          calendarInviteStatus: "created",
+          occurredAt: "2026-03-08T14:00:00.000Z",
+          createdAt: "2026-03-08T14:00:00.000Z",
+          updatedAt: "2026-03-08T14:00:00.000Z",
+        },
+        {
+          id: "meeting:event-drop-off",
+          eventId: "event-drop-off",
+          actorLoginName: "kpareek",
+          actorName: "Krishna",
+          businessAccountRecordId: "record-1",
+          businessAccountId: "B2001",
+          companyName: "Northwind",
+          relatedContactId: 91,
+          relatedContactName: "Alex Prospect",
+          category: "Drop Off",
+          meetingSummary: "Sample delivery",
+          attendeeCount: 1,
+          attendees: [],
+          inviteAuthority: "acumatica",
+          calendarInviteStatus: "created",
+          occurredAt: "2026-03-08T15:00:00.000Z",
+          createdAt: "2026-03-08T15:00:00.000Z",
+          updatedAt: "2026-03-08T15:00:00.000Z",
+        },
+      ],
+      [
+        {
+          id: "account-note-1",
+          occurred_at: "2026-03-08T16:00:00.000Z",
+          actor_login_name: "kpareek",
+          actor_name: "Krishna",
+          company_name: "Northwind",
+          contact_name: null,
+          note_text: "Follow up next week",
+          source: "account_note",
+        },
+        {
+          id: "sarah-alias-note",
+          occurred_at: "2026-03-08T18:00:00.000Z",
+          actor_login_name: "smesshah",
+          actor_name: "Sarah",
+          company_name: "Contoso",
+          contact_name: "Jordan Buyer",
+          note_text: "Requested a quote",
+          source: "account_note",
+        },
+        {
+          id: "outside-range-note",
+          occurred_at: "2026-03-11T00:00:00.000Z",
+          actor_login_name: "kpareek",
+          actor_name: "Krishna",
+          company_name: "Northwind",
+          contact_name: null,
+          note_text: "Outside range",
+          source: "account_note",
+        },
+      ],
+    );
+
+    expect(snapshot.activityLeaderboard).toEqual([
+      expect.objectContaining({
+        loginName: "kpareek",
+        calls: 2,
+        connectedCalls: 1,
+        meetings: 1,
+        dropOffs: 1,
+        emails: 2,
+        notes: 1,
+        totalActivities: 7,
+      }),
+      expect.objectContaining({
+        loginName: "smessih",
+        calls: 1,
+        connectedCalls: 1,
+        meetings: 0,
+        dropOffs: 0,
+        emails: 0,
+        notes: 1,
+        totalActivities: 2,
+      }),
+    ]);
   });
 
   it("dedupes duplicate sales roster rows by caller ID", async () => {
@@ -452,6 +627,57 @@ describe("dashboard snapshot builder and cache", () => {
     await snapshotModule.getDashboardSnapshot(baseFilters);
 
     expect(readCallSessionsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps historical login aliases when filtering by the canonical rep", async () => {
+    readCallSessionsMock.mockReturnValue([
+      buildSession({
+        sessionId: "sarah-alias-filter",
+        employeeLoginName: "smesshah",
+        employeeDisplayName: "Sarah",
+      }),
+      buildSession({
+        sessionId: "krishna-unfiltered-activity",
+        employeeLoginName: "kpareek",
+        employeeDisplayName: "Krishna",
+      }),
+    ]);
+    listMeetingBookingsMock.mockReturnValue([]);
+    readCallEmployeeDirectoryMock.mockReturnValue([
+      {
+        loginName: "smessih",
+        contactId: 1,
+        displayName: "Sarah",
+        email: null,
+        normalizedPhone: null,
+        callerIdPhone: null,
+        isActive: true,
+        updatedAt: "2026-03-09T00:00:00.000Z",
+      },
+    ]);
+
+    const snapshotModule = await import("@/lib/call-analytics/dashboard-snapshot");
+    const snapshot = await snapshotModule.getDashboardSnapshot({
+      ...baseFilters,
+      employees: ["smessih"],
+    });
+
+    expect(snapshot.teamStats.totalCalls).toBe(1);
+    expect(snapshot.activityLeaderboard).toHaveLength(6);
+    expect(snapshot.activityLeaderboard).toContainEqual(
+      expect.objectContaining({
+        loginName: "smessih",
+        calls: 1,
+        totalActivities: 1,
+      }),
+    );
+    expect(snapshot.activityLeaderboard).toContainEqual(
+      expect.objectContaining({
+        loginName: "kpareek",
+        calls: 1,
+        totalActivities: 1,
+      }),
+    );
   });
 
   it("expires cached snapshots after the ttl", async () => {

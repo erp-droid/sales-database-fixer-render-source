@@ -6,6 +6,7 @@ import type { CallSessionRecord } from "@/lib/call-analytics/types";
 import type { StoredMeetingBooking } from "@/lib/meeting-bookings";
 
 import { publishAuditLogChanged } from "@/lib/audit-log-live";
+import { markDashboardSnapshotCacheStale } from "@/lib/call-analytics/dashboard-cache";
 import type {
   AuditActionGroup,
   AuditAffectedField,
@@ -355,6 +356,12 @@ function writeAuditEvent(input: AuditEventWriteInput, options: WriteOptions = {}
 
   transaction();
   invalidateReadModelCaches();
+  if (
+    input.actionGroup === "email_send" &&
+    (input.resultCode === "succeeded" || input.resultCode === "partial")
+  ) {
+    markDashboardSnapshotCacheStale();
+  }
   if (options.notifyReason) {
     publishAuditLogChanged(options.notifyReason);
   }

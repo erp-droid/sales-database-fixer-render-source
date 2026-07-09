@@ -17,6 +17,7 @@ import type {
   DashboardRecentCall,
   DashboardRecentEmail,
   DashboardRecentMeeting,
+  DashboardRepActivityItem,
   DashboardSnapshotResponse,
   DashboardTrendPoint,
   DashboardEmployeeActivityItem,
@@ -70,6 +71,18 @@ type StoredEmailAuditRow = {
   email_subject: string | null;
   result_code: string;
   source_surface: string | null;
+  search_text?: string | null;
+};
+
+type StoredNoteActivityRow = {
+  id: string;
+  occurred_at: string;
+  actor_login_name: string | null;
+  actor_name: string | null;
+  company_name: string | null;
+  contact_name: string | null;
+  note_text: string | null;
+  source: "account_note";
 };
 
 type EmailSenderAggregate = {
@@ -149,6 +162,21 @@ function normalizeSalesCallRepLoginName(loginName: string): string {
   return SALES_CALL_REP_LOGIN_ALIASES[normalizedLoginName] ?? normalizedLoginName;
 }
 
+function expandSalesCallRepFilterLoginNames(loginNames: string[]): string[] {
+  const canonicalLoginNames = new Set(
+    loginNames.map((loginName) => normalizeSalesCallRepLoginName(loginName)),
+  );
+  const expandedLoginNames = new Set(canonicalLoginNames);
+
+  for (const [alias, canonicalLoginName] of Object.entries(SALES_CALL_REP_LOGIN_ALIASES)) {
+    if (canonicalLoginNames.has(canonicalLoginName)) {
+      expandedLoginNames.add(alias);
+    }
+  }
+
+  return [...expandedLoginNames];
+}
+
 function readRepDisplayName(loginName: string, fallback: string | null | undefined): string {
   const normalizedLoginName = normalizeSalesCallRepLoginName(loginName);
   return (
@@ -222,7 +250,7 @@ function buildDashboardCallRosterEmployees(employees: EmployeeDirectoryOption[])
 }
 
 function buildSnapshotCacheKey(filters: DashboardFilters): string {
-  return JSON.stringify(filters);
+  return JSON.stringify({ version: 4, filters });
 }
 
 function startOfDay(value: number): number {
@@ -275,16 +303,6 @@ function buildEmailWhereClause(filters: DashboardFilters): {
   ];
   const params: Array<string> = [filters.start, filters.end];
 
-  if (filters.employees.length > 0) {
-    where.push(`actor_login_name IN (${filters.employees.map(() => "?").join(", ")})`);
-    params.push(...filters.employees);
-  }
-
-  if (filters.search.trim()) {
-    where.push(`search_text LIKE ?`);
-    params.push(`%${filters.search.trim().toLowerCase()}%`);
-  }
-
   return {
     clause: where.join(" AND "),
     params,
@@ -306,12 +324,140 @@ function listEmailAuditRows(filters: DashboardFilters): StoredEmailAuditRow[] {
       contact_name,
       email_subject,
       result_code,
-      source_surface
+      source_surface,
+      search_text
     FROM audit_events
     WHERE ${clause}
     ORDER BY occurred_at DESC, id DESC
     `,
   ).all(...params) as StoredEmailAuditRow[];
+}
+
+function filterEmailAuditRows(
+  rows: StoredEmailAuditRow[],
+  filters: DashboardFilters,
+): StoredEmailAuditRow[] {
+  const selectedEmployees = new Set(
+    filters.employees.map((loginName) => normalizeSalesCallRepLoginName(loginName)),
+  );
+  const lowerSearch = filters.search.trim().toLowerCase();
+  const startMs = Date.parse(filters.start);
+  const endMs = Date.parse(filters.end);
+
+  return rows.filter((row) => {
+    if (!["succeeded", "partial"].includes(row.result_code)) {
+      return false;
+    }
+
+    const occurredAtMs = Date.parse(row.occurred_at);
+    if (
+      !Number.isFinite(occurredAtMs) ||
+      occurredAtMs < startMs ||
+      occurredAtMs > endMs
+    ) {
+      return false;
+    }
+
+    const actorLoginName = row.actor_login_name
+      ? normalizeSalesCallRepLoginName(row.actor_login_name)
+      : null;
+    if (selectedEmployees.size > 0 && (!actorLoginName || !selectedEmployees.has(actorLoginName))) {
+      return false;
+    }
+
+    if (!lowerSearch) {
+      return true;
+    }
+
+    return [
+      row.actor_login_name,
+      row.actor_name,
+      row.company_name,
+      row.contact_name,
+      row.email_subject,
+      row.source_surface,
+      row.search_text,
+    ]
+      .filter((value): value is string => Boolean(value && value.trim()))
+      .join(" ")
+      .toLowerCase()
+      .includes(lowerSearch);
+  });
+}
+
+function filterNoteActivityRows(
+  rows: StoredNoteActivityRow[],
+  filters: DashboardFilters,
+): StoredNoteActivityRow[] {
+  const selectedEmployees = new Set(
+    filters.employees.map((loginName) => normalizeSalesCallRepLoginName(loginName)),
+  );
+  const lowerSearch = filters.search.trim().toLowerCase();
+  const startMs = Date.parse(filters.start);
+  const endMs = Date.parse(filters.end);
+
+  return rows.filter((row) => {
+    const occurredAtMs = Date.parse(row.occurred_at);
+    if (
+      !Number.isFinite(occurredAtMs) ||
+      occurredAtMs < startMs ||
+      occurredAtMs > endMs
+    ) {
+      return false;
+    }
+
+    const actorLoginName = row.actor_login_name
+      ? normalizeSalesCallRepLoginName(row.actor_login_name)
+      : null;
+    if (!actorLoginName) {
+      return false;
+    }
+    if (selectedEmployees.size > 0 && !selectedEmployees.has(actorLoginName)) {
+      return false;
+    }
+
+    if (!lowerSearch) {
+      return true;
+    }
+
+    return [
+      row.actor_login_name,
+      row.actor_name,
+      row.company_name,
+      row.contact_name,
+      row.note_text,
+    ]
+      .filter((value): value is string => Boolean(value && value.trim()))
+      .join(" ")
+      .toLowerCase()
+      .includes(lowerSearch);
+  });
+}
+
+function listNoteActivityRows(filters: DashboardFilters): StoredNoteActivityRow[] {
+  const db = getReadModelDb();
+  const accountNoteRows = db
+    .prepare(
+      `
+      SELECT
+        'account-note:' || id AS id,
+        created_at AS occurred_at,
+        author AS actor_login_name,
+        author AS actor_name,
+        company_name,
+        contact_name,
+        note AS note_text,
+        'account_note' AS source
+      FROM account_notes
+      WHERE created_at >= ?
+        AND created_at <= ?
+        AND TRIM(COALESCE(note, '')) <> ''
+      `,
+    )
+    .all(filters.start, filters.end) as StoredNoteActivityRow[];
+  // Only explicit note-log entries are counted. A generic contact save can
+  // include the notes field even when its value was unchanged or cleared.
+  return filterNoteActivityRows(accountNoteRows, filters);
 }
 
 function resolveEmailSenderDisplayName(
@@ -323,7 +469,8 @@ function resolveEmailSenderDisplayName(
   email: string | null;
   key: string;
 } {
-  const loginName = row.actor_login_name?.trim().toLowerCase() || null;
+  const rawLoginName = row.actor_login_name?.trim().toLowerCase() || null;
+  const loginName = rawLoginName ? normalizeSalesCallRepLoginName(rawLoginName) : null;
   if (loginName) {
     const employee = employeesByLogin.get(loginName);
     return {
@@ -372,7 +519,7 @@ function buildEmailAnalytics(
   leaderboard: DashboardEmailActivityItem[];
   recentEmails: DashboardRecentEmail[];
 } {
-  const rows = rowsOverride ?? listEmailAuditRows(filters);
+  const rows = filterEmailAuditRows(rowsOverride ?? listEmailAuditRows(filters), filters);
   const employeesByLogin = new Map(employees.map((employee) => [employee.loginName, employee]));
   const trendGroups = new Map<string, DashboardEmailTrendPoint>();
   const senderAggregates = new Map<string, EmailSenderAggregate>();
@@ -463,6 +610,9 @@ function filterMeetingBookings(
   category?: MeetingCategory,
 ): StoredMeetingBooking[] {
   const lowerSearch = filters.search.trim().toLowerCase();
+  const selectedEmployees = new Set(
+    filters.employees.map((loginName) => normalizeSalesCallRepLoginName(loginName)),
+  );
 
   return rows.filter((row) => {
     const normalizedCategory = cleanString(row.category);
@@ -482,9 +632,11 @@ function filterMeetingBookings(
       return false;
     }
 
-    if (filters.employees.length > 0) {
-      const actorLogin = row.actorLoginName?.trim().toLowerCase() ?? "";
-      if (!filters.employees.includes(actorLogin)) {
+    if (selectedEmployees.size > 0) {
+      const actorLogin = row.actorLoginName
+        ? normalizeSalesCallRepLoginName(row.actorLoginName)
+        : "";
+      if (!selectedEmployees.has(actorLogin)) {
         return false;
       }
     }
@@ -516,7 +668,10 @@ function resolveMeetingBookerDisplayName(
   loginName: string;
   displayName: string;
 } {
-  const loginName = row.actorLoginName?.trim().toLowerCase() || "unknown";
+  const rawLoginName = row.actorLoginName?.trim().toLowerCase() || "unknown";
+  const loginName = rawLoginName === "unknown"
+    ? rawLoginName
+    : normalizeSalesCallRepLoginName(rawLoginName);
   if (loginName !== "unknown") {
     const employee = employeesByLogin.get(loginName);
     return {
@@ -614,7 +769,7 @@ function buildMeetingAnalytics(
     return {
       id: row.id,
       occurredAt: row.occurredAt,
-      actorLoginName: row.actorLoginName,
+      actorLoginName: actor.loginName === "unknown" ? null : actor.loginName,
       actorName: row.actorName,
       displayName: actor.displayName,
       category: cleanString(row.category),
@@ -653,6 +808,146 @@ function buildMeetingCategoryAnalytics(
     leaderboard: analytics.leaderboard,
     recentMeetings: analytics.recentMeetings,
   };
+}
+
+function readLaterActivityTimestamp(
+  current: string | null,
+  candidate: string | null | undefined,
+): string | null {
+  if (!candidate) {
+    return current;
+  }
+
+  const candidateMs = Date.parse(candidate);
+  if (!Number.isFinite(candidateMs)) {
+    return current;
+  }
+
+  const currentMs = current ? Date.parse(current) : Number.NEGATIVE_INFINITY;
+  return candidateMs > currentMs ? candidate : current;
+}
+
+function buildRepActivityLeaderboard(input: {
+  filters: DashboardFilters;
+  employees: EmployeeDirectoryOption[];
+  calls: DashboardEmployeeActivityItem[];
+  meetingRows: StoredMeetingBooking[];
+  emailRows: StoredEmailAuditRow[];
+  noteRows: StoredNoteActivityRow[];
+}): DashboardRepActivityItem[] {
+  const candidates = buildCandidateEmployees(input.filters, input.employees);
+  const activityByLogin = new Map<string, DashboardRepActivityItem>(
+    candidates.map((employee) => [
+      employee.loginName,
+      {
+        loginName: employee.loginName,
+        displayName: employee.displayName,
+        totalActivities: 0,
+        calls: 0,
+        connectedCalls: 0,
+        meetings: 0,
+        dropOffs: 0,
+        emails: 0,
+        notes: 0,
+        lastActivityAt: null,
+      },
+    ]),
+  );
+
+  for (const callActivity of input.calls) {
+    const loginName = normalizeSalesCallRepLoginName(callActivity.loginName);
+    const aggregate = activityByLogin.get(loginName);
+    if (!aggregate) {
+      continue;
+    }
+    aggregate.calls += callActivity.totalCalls;
+    aggregate.connectedCalls += callActivity.answeredCalls;
+    aggregate.lastActivityAt = readLaterActivityTimestamp(
+      aggregate.lastActivityAt,
+      callActivity.lastCallAt,
+    );
+  }
+
+  const meetingRows = filterMeetingBookings(input.meetingRows, input.filters, "Meeting");
+  for (const row of meetingRows) {
+    const loginName = row.actorLoginName
+      ? normalizeSalesCallRepLoginName(row.actorLoginName)
+      : "";
+    const aggregate = activityByLogin.get(loginName);
+    if (!aggregate) {
+      continue;
+    }
+    aggregate.meetings += 1;
+    aggregate.lastActivityAt = readLaterActivityTimestamp(
+      aggregate.lastActivityAt,
+      row.occurredAt,
+    );
+  }
+
+  const dropOffRows = filterMeetingBookings(input.meetingRows, input.filters, "Drop Off");
+  for (const row of dropOffRows) {
+    const loginName = row.actorLoginName
+      ? normalizeSalesCallRepLoginName(row.actorLoginName)
+      : "";
+    const aggregate = activityByLogin.get(loginName);
+    if (!aggregate) {
+      continue;
+    }
+    aggregate.dropOffs += 1;
+    aggregate.lastActivityAt = readLaterActivityTimestamp(
+      aggregate.lastActivityAt,
+      row.occurredAt,
+    );
+  }
+
+  for (const row of filterEmailAuditRows(input.emailRows, input.filters)) {
+    const loginName = row.actor_login_name
+      ? normalizeSalesCallRepLoginName(row.actor_login_name)
+      : "";
+    const aggregate = activityByLogin.get(loginName);
+    if (!aggregate) {
+      continue;
+    }
+    aggregate.emails += 1;
+    aggregate.lastActivityAt = readLaterActivityTimestamp(
+      aggregate.lastActivityAt,
+      row.occurred_at,
+    );
+  }
+
+  for (const row of filterNoteActivityRows(input.noteRows, input.filters)) {
+    const loginName = row.actor_login_name
+      ? normalizeSalesCallRepLoginName(row.actor_login_name)
+      : "";
+    const aggregate = activityByLogin.get(loginName);
+    if (!aggregate) {
+      continue;
+    }
+    aggregate.notes += 1;
+    aggregate.lastActivityAt = readLaterActivityTimestamp(
+      aggregate.lastActivityAt,
+      row.occurred_at,
+    );
+  }
+
+  for (const aggregate of activityByLogin.values()) {
+    aggregate.totalActivities =
+      aggregate.calls +
+      aggregate.meetings +
+      aggregate.dropOffs +
+      aggregate.emails +
+      aggregate.notes;
+  }
+
+  return [...activityByLogin.values()].sort((left, right) => {
+    if (right.totalActivities !== left.totalActivities) {
+      return right.totalActivities - left.totalActivities;
+    }
+    if (right.calls !== left.calls) {
+      return right.calls - left.calls;
+    }
+    return compareByDisplayName(left, right);
+  });
 }
 
 function sortBreakdownItems(items: DashboardBreakdownItem[]): DashboardBreakdownItem[] {
@@ -1023,10 +1318,26 @@ function buildSnapshotFromSessions(
   cacheExpiresAt: string,
   emailRows?: StoredEmailAuditRow[],
   meetingRows?: StoredMeetingBooking[],
+  noteRows?: StoredNoteActivityRow[],
+  activitySessions: CallSessionRecord[] = sessions,
 ): DashboardSnapshotResponse {
   const teamStats = buildSummaryStats(sessions);
   const reportableEmployees = buildDashboardCallRosterEmployees(employees);
+  const activityFilters: DashboardFilters = {
+    ...filters,
+    employees: [],
+  };
   const visibleMeetingRows = meetingRows ?? [];
+  const sourceEmailRows = emailRows ?? listEmailAuditRows(activityFilters);
+  const visibleEmailRows = filterEmailAuditRows(
+    sourceEmailRows,
+    filters,
+  );
+  const activityEmailRows = filterEmailAuditRows(sourceEmailRows, activityFilters);
+  const activityNoteRows = filterNoteActivityRows(
+    noteRows ?? listNoteActivityRows(activityFilters),
+    activityFilters,
+  );
   const trendGroups = new Map<string, DashboardTrendPoint>();
   const bucketSessions = new Map<string, CallSessionRecord[]>();
 
@@ -1069,12 +1380,25 @@ function buildSnapshotFromSessions(
   );
   const breakdowns = buildBreakdownsForSessions(sessions);
   const employeeAnalytics = buildEmployeeAnalytics(filters, sessions, reportableEmployees);
-  const emailAnalytics = buildEmailAnalytics(filters, reportableEmployees, emailRows);
+  const activityEmployeeAnalytics = buildEmployeeAnalytics(
+    activityFilters,
+    activitySessions,
+    reportableEmployees,
+  );
+  const emailAnalytics = buildEmailAnalytics(filters, reportableEmployees, visibleEmailRows);
   const meetingAnalytics = buildMeetingAnalytics(filters, reportableEmployees, visibleMeetingRows, "Meeting");
   const meetingCategoryAnalytics = {
     meetings: buildMeetingCategoryAnalytics(filters, reportableEmployees, "Meeting", visibleMeetingRows),
     dropOffs: buildMeetingCategoryAnalytics(filters, reportableEmployees, "Drop Off", visibleMeetingRows),
   };
+  const activityLeaderboard = buildRepActivityLeaderboard({
+    filters: activityFilters,
+    employees: reportableEmployees,
+    calls: activityEmployeeAnalytics.leaderboard,
+    meetingRows: visibleMeetingRows,
+    emailRows: activityEmailRows,
+    noteRows: activityNoteRows,
+  });
 
   return {
     filters,
@@ -1113,6 +1437,7 @@ function buildSnapshotFromSessions(
       items: emailAnalytics.trendItems,
     },
     bucketDrilldowns: buildBucketDrilldowns(trendItems, visibleBucketSessions),
+    activityLeaderboard,
     employeeLeaderboard: employeeAnalytics.leaderboard,
     meetingLeaderboard: meetingAnalytics.leaderboard,
     emailLeaderboard: emailAnalytics.leaderboard,
@@ -1216,7 +1541,17 @@ export async function getDashboardSnapshot(filters: DashboardFilters): Promise<D
     }
 
     const employees = [...employeesByLogin.values()];
-    const sessions = filterCallSessions(readCallSessions(), filters);
+    const allCallSessions = readCallSessions();
+    const sessions = filterCallSessions(allCallSessions, {
+      ...filters,
+      employees: expandSalesCallRepFilterLoginNames(filters.employees),
+    });
+    const activitySessions = filters.employees.length > 0
+      ? filterCallSessions(allCallSessions, {
+          ...filters,
+          employees: [],
+        })
+      : sessions;
     const snapshot = buildSnapshotFromSessions(
       filters,
       sessions,
@@ -1225,6 +1560,8 @@ export async function getDashboardSnapshot(filters: DashboardFilters): Promise<D
       cacheExpiresAt,
       undefined,
       listMeetingBookings(),
+      undefined,
+      activitySessions,
     );
     writeCachedDashboardSnapshot(cacheKey, snapshot, now + getEnv().CALL_ANALYTICS_STALE_AFTER_MS);
     return snapshot;
@@ -1254,6 +1591,7 @@ export function buildDashboardSnapshotForTests(
   cacheExpiresAt = "2026-03-09T00:05:00.000Z",
   emailRows: StoredEmailAuditRow[] = [],
   meetingRows: StoredMeetingBooking[] = [],
+  noteRows: StoredNoteActivityRow[] = [],
 ): DashboardSnapshotResponse {
   return buildSnapshotFromSessions(
     filters,
@@ -1263,6 +1601,7 @@ export function buildDashboardSnapshotForTests(
     cacheExpiresAt,
     emailRows,
     meetingRows,
+    noteRows,
   );
 }
 

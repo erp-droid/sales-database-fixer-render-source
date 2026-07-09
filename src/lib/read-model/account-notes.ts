@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { markDashboardSnapshotCacheStale } from "@/lib/call-analytics/dashboard-cache";
 import { getReadModelDb } from "@/lib/read-model/db";
 
 export type AccountNote = {
@@ -112,6 +113,7 @@ export function createAccountNote(input: {
       now,
       now,
     );
+  markDashboardSnapshotCacheStale();
 
   return {
     id,
@@ -151,6 +153,7 @@ export function updateAccountNote(input: {
   if (result.changes === 0) {
     return null;
   }
+  markDashboardSnapshotCacheStale();
 
   const row = getReadModelDb()
     .prepare(
@@ -171,5 +174,10 @@ export function deleteAccountNote(input: { id: string; accountRecordId: string }
     .prepare(`DELETE FROM account_notes WHERE id = ? AND account_record_id = ?`)
     .run(input.id.trim(), input.accountRecordId.trim());
 
-  return result.changes > 0;
+  if (result.changes > 0) {
+    markDashboardSnapshotCacheStale();
+    return true;
+  }
+
+  return false;
 }
