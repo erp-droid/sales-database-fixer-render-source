@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { buildDashboardQueryString, formatDashboardDateInputValue, parseDashboardFilters } from "@/lib/call-analytics/filter-params";
 import type {
@@ -15,7 +15,6 @@ import {
   DashboardShell,
   DashboardStatusBar,
   extractErrorMessage,
-  formatDateTime,
   formatDuration,
   formatPercent,
   readJsonResponse,
@@ -24,6 +23,7 @@ import {
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const ACTIVE_REFRESH_INTERVAL_MS = 30_000;
 const REFRESH_RANGE_BUCKET_MS = 5 * 60 * 1000;
+const MULTIPLE_EMPLOYEE_FILTER_VALUE = "__multiple_employees__";
 
 type ErrorPayload = {
   error?: string;
@@ -31,6 +31,26 @@ type ErrorPayload = {
 
 type PriorityCardIcon = "calls" | "meetings" | "connection" | "talkTime" | "emails";
 type DashboardPreset = "today" | "last7" | "last30" | "quarter";
+type ActivitySegmentKey = "calls" | "meetings" | "dropOffs" | "emails" | "notes";
+type ActivityMetricKey = "all" | ActivitySegmentKey | "connectedCalls";
+
+const ACTIVITY_SEGMENTS: Array<{ key: ActivitySegmentKey; label: string }> = [
+  { key: "calls", label: "Total calls" },
+  { key: "meetings", label: "Meetings" },
+  { key: "dropOffs", label: "Drop-offs" },
+  { key: "emails", label: "Emails" },
+  { key: "notes", label: "Notes" },
+];
+
+const ACTIVITY_FILTER_OPTIONS: Array<{ key: ActivityMetricKey; label: string }> = [
+  { key: "all", label: "All activities" },
+  { key: "calls", label: "Total calls" },
+  { key: "connectedCalls", label: "Connected calls" },
+  { key: "meetings", label: "Meetings" },
+  { key: "dropOffs", label: "Drop-offs" },
+  { key: "emails", label: "Emails" },
+  { key: "notes", label: "Notes" },
+];
 
 const DASHBOARD_PRESETS: Array<{ key: DashboardPreset; label: string }> = [
   { key: "today", label: "Today" },
@@ -291,10 +311,6 @@ function formatBookingPillValue(employee: DashboardSnapshotResponse["meetingLead
   return employee.totalMeetings.toLocaleString();
 }
 
-function formatCallCountLabel(count: number): string {
-  return `${count.toLocaleString()} call${count === 1 ? "" : "s"}`;
-}
-
 function formatNameList(names: string[]): string {
   if (names.length <= 2) {
     return names.join(" and ");
@@ -303,30 +319,131 @@ function formatNameList(names: string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-function formatCallerShare(count: number, total: number): string {
+function formatActivityShare(count: number, total: number): string {
   if (total <= 0) {
     return "0% of team";
   }
   return `${formatPercent(count / total)} of team`;
 }
 
-function formatLowestCallerMeta(
-  callers: DashboardSnapshotResponse["activityGaps"],
+function readActivityMetricValue(
+  activity: DashboardSnapshotResponse["activityLeaderboard"][number],
+  metric: ActivityMetricKey,
+): number {
+  return metric === "all" ? activity.totalActivities : activity[metric];
+}
+
+function formatActivityMetricCount(count: number, metric: ActivityMetricKey): string {
+  const value = count.toLocaleString();
+  if (metric === "all") {
+    return `${value} ${count === 1 ? "activity" : "activities"}`;
+  }
+  if (metric === "calls") {
+    return `${value} total ${count === 1 ? "call" : "calls"}`;
+  }
+  if (metric === "connectedCalls") {
+    return `${value} connected ${count === 1 ? "call" : "calls"}`;
+  }
+  if (metric === "meetings") {
+    return `${value} ${count === 1 ? "meeting" : "meetings"}`;
+  }
+  if (metric === "dropOffs") {
+    return `${value} ${count === 1 ? "drop-off" : "drop-offs"}`;
+  }
+  if (metric === "emails") {
+    return `${value} ${count === 1 ? "email" : "emails"}`;
+  }
+  return `${value} ${count === 1 ? "note" : "notes"}`;
+}
+
+function readActivityMetricLabel(metric: ActivityMetricKey): string {
+  return ACTIVITY_FILTER_OPTIONS.find((option) => option.key === metric)?.label ?? "Activities";
+}
+
+function formatActivityChartFooter(
+  activity: DashboardSnapshotResponse["activityLeaderboard"][number],
+  metric: ActivityMetricKey,
 ): string {
-  const firstCaller = callers[0] ?? null;
-  if (!firstCaller) {
+  if (metric === "all") {
+    return `${activity.calls.toLocaleString()} total · ${activity.connectedCalls.toLocaleString()} connected · ${(activity.totalActivities - activity.calls).toLocaleString()} other`;
+  }
+  if (metric === "calls") {
+    return `${activity.calls.toLocaleString()} total · ${activity.connectedCalls.toLocaleString()} connected`;
+  }
+  if (metric === "connectedCalls") {
+    return `${activity.connectedCalls.toLocaleString()} connected of ${activity.calls.toLocaleString()} calls`;
+  }
+  return formatActivityMetricCount(readActivityMetricValue(activity, metric), metric);
+}
+
+function formatActivityBreakdown(
+  activity: DashboardSnapshotResponse["activityLeaderboard"][number],
+): string {
+  return [
+    `${activity.totalActivities.toLocaleString()} total`,
+    `${activity.calls.toLocaleString()} total calls`,
+    `${activity.connectedCalls.toLocaleString()} connected calls (included in total calls)`,
+    `${activity.meetings.toLocaleString()} meetings`,
+    `${activity.dropOffs.toLocaleString()} drop-offs`,
+    `${activity.emails.toLocaleString()} emails`,
+    `${activity.notes.toLocaleString()} notes`,
+  ].join(" · ");
+}
+
+function formatLowestActivityMeta(
+  activities: DashboardSnapshotResponse["activityLeaderboard"],
+  metric: ActivityMetricKey,
+): string {
+  const firstActivity = activities[0] ?? null;
+  if (!firstActivity) {
     return "";
   }
 
-  if (callers.length === 1) {
-    const lastCallLabel = firstCaller.lastCallAt
-      ? `Last call ${formatDateTime(firstCaller.lastCallAt)}`
-      : "No calls in range";
-    return `${formatCallCountLabel(firstCaller.totalCalls)} · ${firstCaller.outboundCalls.toLocaleString()} outbound · ${lastCallLabel}`;
+  if (activities.length === 1) {
+    return metric === "all"
+      ? formatActivityBreakdown(firstActivity)
+      : formatActivityMetricCount(readActivityMetricValue(firstActivity, metric), metric);
   }
 
-  const totalOutbound = callers.reduce((sum, caller) => sum + caller.outboundCalls, 0);
-  return `${formatCallCountLabel(firstCaller.totalCalls)} each · ${callers.length.toLocaleString()} reps tied · ${totalOutbound.toLocaleString()} outbound combined`;
+  return `${formatActivityMetricCount(readActivityMetricValue(firstActivity, metric), metric)} each · ${activities.length.toLocaleString()} reps tied`;
+}
+
+function buildActivityAriaLabel(
+  activity: DashboardSnapshotResponse["activityLeaderboard"][number],
+): string {
+  return `${activity.displayName}: ${formatActivityBreakdown(activity)}`;
+}
+
+function getActivitySegmentClassName(key: ActivitySegmentKey): string {
+  if (key === "calls") {
+    return styles.activitySegmentCalls;
+  }
+  if (key === "meetings") {
+    return styles.activitySegmentMeetings;
+  }
+  if (key === "dropOffs") {
+    return styles.activitySegmentDropOffs;
+  }
+  if (key === "emails") {
+    return styles.activitySegmentEmails;
+  }
+  return styles.activitySegmentNotes;
+}
+
+function getActivityLegendClassName(key: ActivitySegmentKey): string {
+  if (key === "calls") {
+    return styles.legendSwatchCalls;
+  }
+  if (key === "meetings") {
+    return styles.legendSwatchMeetings;
+  }
+  if (key === "dropOffs") {
+    return styles.legendSwatchDropOffs;
+  }
+  if (key === "emails") {
+    return styles.legendSwatchEmails;
+  }
+  return styles.legendSwatchNotes;
 }
 
 function readStatusLabel(snapshot: DashboardSnapshotResponse | null): string {
@@ -449,12 +566,18 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedEmployeeLoginName, setSelectedEmployeeLoginName] = useState<string | null>(null);
   const [selectedMeetingEmployeeLoginName, setSelectedMeetingEmployeeLoginName] = useState<string | null>(null);
   const [selectedDropOffEmployeeLoginName, setSelectedDropOffEmployeeLoginName] = useState<string | null>(null);
   const [showFiltersPanel, setShowFiltersPanel] = useState(false);
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [searchDraft, setSearchDraft] = useState(filters.search);
+  const [activityMetric, setActivityMetric] = useState<ActivityMetricKey>("all");
+  const appliedEmployeeFilters = snapshot?.filters.employees ?? filters.employees;
+  const selectedEmployeeLoginName =
+    appliedEmployeeFilters.length === 1 ? appliedEmployeeFilters[0] : null;
+  const activityRepFilterValue = appliedEmployeeFilters.length > 1
+    ? MULTIPLE_EMPLOYEE_FILTER_VALUE
+    : selectedEmployeeLoginName ?? "";
 
   useEffect(() => {
     setSearchDraft(filters.search);
@@ -537,20 +660,6 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
       controller.abort();
     };
   }, [filters, pathname, router]);
-
-  useEffect(() => {
-    if (!snapshot?.employeeLeaderboard.length) {
-      setSelectedEmployeeLoginName(null);
-      return;
-    }
-
-    const hasSelectedEmployee = snapshot.employeeLeaderboard.some(
-      (item) => item.loginName === selectedEmployeeLoginName,
-    );
-    if (selectedEmployeeLoginName && !hasSelectedEmployee) {
-      setSelectedEmployeeLoginName(null);
-    }
-  }, [selectedEmployeeLoginName, snapshot]);
 
   useEffect(() => {
     const leaderboard = snapshot?.meetingCategoryAnalytics.meetings.leaderboard ?? [];
@@ -674,32 +783,64 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
     );
   }, [employeeSearch, snapshot?.employees]);
 
-  const chartEmployees = useMemo(() => snapshot?.employeeLeaderboard ?? [], [snapshot?.employeeLeaderboard]);
-  const rankedCallers = useMemo(
-    () => chartEmployees.filter((item) => item.loginName !== "unattributed"),
-    [chartEmployees],
+  const activityEmployees = useMemo(
+    () => snapshot?.activityLeaderboard ?? [],
+    [snapshot?.activityLeaderboard],
   );
-  const topCaller = rankedCallers[0] ?? null;
-  const lowestCallers = useMemo(() => {
-    const candidates =
-      snapshot?.activityGaps.filter(
-        (item) => item.loginName !== "unattributed" && item.loginName !== topCaller?.loginName,
-      ) ?? [];
-    const lowestCallCount = candidates[0]?.totalCalls;
-    if (lowestCallCount === undefined) {
+  const activityRepOptions = useMemo(
+    () => snapshot?.employees ?? [],
+    [snapshot?.employees],
+  );
+  const visibleActivitySegments = useMemo(
+    () => activityMetric === "all"
+      ? ACTIVITY_SEGMENTS
+      : ACTIVITY_SEGMENTS.filter((segment) => segment.key === activityMetric),
+    [activityMetric],
+  );
+  const totalTeamActivities = useMemo(
+    () => activityEmployees.reduce(
+      (sum, item) => sum + readActivityMetricValue(item, activityMetric),
+      0,
+    ),
+    [activityEmployees, activityMetric],
+  );
+  const highestActivityTotal = useMemo(
+    () => totalTeamActivities > 0
+      ? Math.max(...activityEmployees.map((item) => readActivityMetricValue(item, activityMetric)))
+      : 0,
+    [activityEmployees, activityMetric, totalTeamActivities],
+  );
+  const topActivities = useMemo(
+    () => activityEmployees.filter(
+      (item) => readActivityMetricValue(item, activityMetric) === highestActivityTotal,
+    ),
+    [activityEmployees, activityMetric, highestActivityTotal],
+  );
+  const topActivity = topActivities[0] ?? null;
+  const lowestActivities = useMemo(() => {
+    const candidates = activityEmployees.filter(
+      (item) => readActivityMetricValue(item, activityMetric) < highestActivityTotal,
+    );
+    const lowestTotal = candidates.length > 0
+      ? Math.min(...candidates.map((item) => readActivityMetricValue(item, activityMetric)))
+      : undefined;
+    if (lowestTotal === undefined) {
       return [];
     }
 
-    return candidates.filter((item) => item.totalCalls === lowestCallCount);
-  }, [snapshot?.activityGaps, topCaller?.loginName]);
-  const maxEmployeeCalls = useMemo(
-    () => Math.max(1, ...chartEmployees.map((item) => item.totalCalls)),
-    [chartEmployees],
-  );
-  const chartTicks = useMemo(() => {
-    const midpoint = Math.max(0, Math.ceil(maxEmployeeCalls / 2));
-    return [...new Set([maxEmployeeCalls, midpoint, 0])].sort((left, right) => right - left);
-  }, [maxEmployeeCalls]);
+    return candidates.filter(
+      (item) => readActivityMetricValue(item, activityMetric) === lowestTotal,
+    );
+  }, [activityEmployees, activityMetric, highestActivityTotal]);
+  const maxEmployeeActivities = Math.max(1, highestActivityTotal);
+  const activityChartTicks = useMemo(() => {
+    const midpoint = Math.max(0, Math.ceil(maxEmployeeActivities / 2));
+    return [...new Set([maxEmployeeActivities, midpoint, 0])].sort((left, right) => right - left);
+  }, [maxEmployeeActivities]);
+  const selectedActivity =
+    activityEmployees.find((item) => item.loginName === selectedEmployeeLoginName) ?? null;
+  const hasCallSpecificFilters =
+    filters.direction !== "all" || filters.outcome !== "all" || filters.source !== "all";
   const activeFilterCount = useMemo(() => {
     let count = filters.employees.length;
     if (filters.direction !== "all") {
@@ -808,7 +949,9 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
   }
 
   function selectEmployee(loginName: string): void {
-    setSelectedEmployeeLoginName(loginName);
+    const isOnlySelectedEmployee =
+      appliedEmployeeFilters.length === 1 && selectedEmployeeLoginName === loginName;
+    updateFilters({ employees: isOnlySelectedEmployee ? [] : [loginName] });
   }
 
   function selectMeetingEmployee(loginName: string): void {
@@ -1114,68 +1257,112 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
           />
 
           <section className={styles.heroGrid}>
-            <article className={styles.chartCard}>
+            <article aria-busy={loading} className={styles.chartCard}>
               <div className={styles.chartHeader}>
                 <div className={styles.bookingTitleGroup}>
                   <span className={styles.chartTitleIcon}>
                     <PriorityCardIconGraphic icon="calls" />
                   </span>
-                  <h2 className={styles.chartTitle}>Call activity</h2>
+                  <div>
+                    <h2 className={styles.chartTitle}>Activity mix</h2>
+                    <p className={styles.chartMeta}>
+                      Calls, meetings, drop-offs, emails, and notes. Select a rep to filter every KPI.
+                    </p>
+                  </div>
                 </div>
-                <select
-                  aria-label="Focus call activity by rep"
-                  className={styles.chartSelect}
-                  onChange={(event) => setSelectedEmployeeLoginName(event.target.value || null)}
-                  value={selectedEmployeeLoginName ?? ""}
-                >
-                  <option value="">All reps</option>
-                  {chartEmployees.map((item) => (
-                    <option key={item.loginName} value={item.loginName}>
-                      {item.displayName}
-                    </option>
-                  ))}
-                </select>
+                <div className={styles.chartControls}>
+                  <select
+                    aria-label="Filter Activity mix by activity type"
+                    className={styles.chartSelect}
+                    onChange={(event) => setActivityMetric(event.target.value as ActivityMetricKey)}
+                    value={activityMetric}
+                  >
+                    {ACTIVITY_FILTER_OPTIONS.map((option) => (
+                      <option key={option.key} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="Filter all dashboard KPIs by sales rep"
+                    className={styles.chartSelect}
+                    disabled={loading}
+                    onChange={(event) =>
+                      updateFilters({ employees: event.target.value ? [event.target.value] : [] })
+                    }
+                    value={activityRepFilterValue}
+                  >
+                    <option value="">All reps</option>
+                    {appliedEmployeeFilters.length > 1 ? (
+                      <option disabled value={MULTIPLE_EMPLOYEE_FILTER_VALUE}>
+                        {appliedEmployeeFilters.length.toLocaleString()} reps selected
+                      </option>
+                    ) : null}
+                    {activityRepOptions.map((item) => (
+                      <option key={item.loginName} value={item.loginName}>
+                        {item.displayName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className={styles.chartLegend}>
-                <span className={styles.legendItem}>
-                  <span className={styles.legendSwatch} />
-                  Total calls
-                </span>
-                <span className={styles.legendItem}>
-                  <span className={styles.legendSwatchConnected} />
-                  Connected calls
-                </span>
+                {ACTIVITY_SEGMENTS.map((segment) => (
+                  <Fragment key={segment.key}>
+                    <span className={styles.legendItem}>
+                      <span className={getActivityLegendClassName(segment.key)} />
+                      {segment.label}
+                    </span>
+                    {segment.key === "calls" ? (
+                      <span className={styles.legendItem}>
+                        <span className={styles.legendSwatchConnected} />
+                        Connected calls
+                      </span>
+                    ) : null}
+                  </Fragment>
+                ))}
               </div>
+              {hasCallSpecificFilters ? (
+                <p className={styles.activityFilterNote}>
+                  Direction, outcome, and source filters apply to the Calls segment only.
+                </p>
+              ) : null}
 
-              {topCaller || lowestCallers.length ? (
+              {totalTeamActivities > 0 && (topActivity || lowestActivities.length) ? (
                 <div className={styles.callerSpotlightGrid}>
-                  {topCaller ? (
+                  {topActivity ? (
                     <div className={styles.callerSpotlight}>
-                      <span className={styles.callerSpotlightLabel}>Most calls</span>
-                      <strong>{topCaller.displayName}</strong>
+                      <span className={styles.callerSpotlightLabel}>
+                        Most {activityMetric === "all" ? "activity" : readActivityMetricLabel(activityMetric).toLowerCase()}
+                      </span>
+                      <strong>{formatNameList(topActivities.map((activity) => activity.displayName))}</strong>
                       <span>
-                        {formatCallCountLabel(topCaller.totalCalls)} ·{" "}
-                        {topCaller.answeredCalls.toLocaleString()} connected ·{" "}
-                        {formatCallerShare(topCaller.totalCalls, snapshot.teamStats.totalCalls)}
+                        {topActivities.length === 1
+                          ? `${activityMetric === "all"
+                              ? formatActivityBreakdown(topActivity)
+                              : formatActivityMetricCount(readActivityMetricValue(topActivity, activityMetric), activityMetric)} · ${formatActivityShare(readActivityMetricValue(topActivity, activityMetric), totalTeamActivities)}`
+                          : `${formatActivityMetricCount(readActivityMetricValue(topActivity, activityMetric), activityMetric)} each · ${topActivities.length.toLocaleString()} reps tied for the lead`}
                       </span>
                     </div>
                   ) : null}
 
-                  {lowestCallers.length ? (
+                  {lowestActivities.length ? (
                     <div className={`${styles.callerSpotlight} ${styles.callerSpotlightQuiet}`}>
-                      <span className={styles.callerSpotlightLabel}>Fewest calls</span>
-                      <strong>{formatNameList(lowestCallers.map((caller) => caller.displayName))}</strong>
-                      <span>{formatLowestCallerMeta(lowestCallers)}</span>
+                      <span className={styles.callerSpotlightLabel}>
+                        Fewest {activityMetric === "all" ? "activity" : readActivityMetricLabel(activityMetric).toLowerCase()}
+                      </span>
+                      <strong>{formatNameList(lowestActivities.map((activity) => activity.displayName))}</strong>
+                      <span>{formatLowestActivityMeta(lowestActivities, activityMetric)}</span>
                     </div>
                   ) : null}
                 </div>
               ) : null}
 
-              {chartEmployees.length ? (
+              {activityEmployees.length ? (
                 <div className={styles.chartFrame}>
                   <div aria-hidden="true" className={styles.chartYAxis}>
-                    {chartTicks.map((tick) => (
+                    {activityChartTicks.map((tick) => (
                       <span className={styles.chartYAxisValue} key={tick}>
                         {tick.toLocaleString()}
                       </span>
@@ -1184,33 +1371,87 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
 
                   <div className={styles.chartViewport}>
                     <div className={styles.trendChart}>
-                      {chartEmployees.map((item) => {
+                      {activityEmployees.map((item) => {
                         const isActive = item.loginName === selectedEmployeeLoginName;
+                        const displayedActivityValue = readActivityMetricValue(item, activityMetric);
 
                         return (
                           <div className={styles.trendColumn} key={item.loginName}>
                             <button
+                              aria-label={buildActivityAriaLabel(item)}
+                              aria-pressed={isActive}
                               className={`${styles.trendButton} ${isActive ? styles.trendButtonActive : ""}`}
+                              disabled={loading}
                               onClick={() => selectEmployee(item.loginName)}
-                              title={`${item.displayName}: ${item.answeredCalls.toLocaleString()} connected of ${item.totalCalls.toLocaleString()} calls`}
                               type="button"
                             >
-                              <span className={styles.trendValue}>{item.totalCalls.toLocaleString()}</span>
+                              <span aria-hidden="true" className={styles.activityTooltip}>
+                                <strong>
+                                  {item.displayName} · {formatActivityMetricCount(displayedActivityValue, activityMetric)}
+                                </strong>
+                                {activityMetric !== "all" ? (
+                                  <small className={styles.activityTooltipMetricNote}>
+                                    {item.totalActivities.toLocaleString()} total activities across all types
+                                  </small>
+                                ) : null}
+                                <span className={styles.activityTooltipList}>
+                                  {ACTIVITY_SEGMENTS.map((segment) => (
+                                    <Fragment key={segment.key}>
+                                      <span className={styles.activityTooltipRow}>
+                                        <span className={getActivityLegendClassName(segment.key)} />
+                                        <span>{segment.label}</span>
+                                        <b>{item[segment.key].toLocaleString()}</b>
+                                      </span>
+                                      {segment.key === "calls" ? (
+                                        <span className={`${styles.activityTooltipRow} ${styles.activityTooltipRowSubset}`}>
+                                          <span className={styles.legendSwatchConnected} />
+                                          <span>Connected calls (included)</span>
+                                          <b>{item.connectedCalls.toLocaleString()}</b>
+                                        </span>
+                                      ) : null}
+                                    </Fragment>
+                                  ))}
+                                </span>
+                              </span>
+                              <span className={styles.trendValue}>{displayedActivityValue.toLocaleString()}</span>
                               <div className={styles.trendBarTrack}>
                                 <div
-                                  className={styles.trendBarTotal}
-                                  style={{ height: `${(item.totalCalls / maxEmployeeCalls) * 100}%` }}
-                                />
-                                <div
-                                  className={styles.trendBarAnswered}
-                                  style={{ height: `${(item.answeredCalls / maxEmployeeCalls) * 100}%` }}
-                                />
+                                  className={styles.activityStack}
+                                  style={{ height: `${(displayedActivityValue / maxEmployeeActivities) * 100}%` }}
+                                >
+                                  {activityMetric === "connectedCalls" ? (
+                                    item.connectedCalls > 0 ? (
+                                      <span
+                                        aria-hidden="true"
+                                        className={`${styles.activitySegment} ${styles.activitySegmentConnected}`}
+                                        style={{ flexGrow: item.connectedCalls }}
+                                      />
+                                    ) : null
+                                  ) : (
+                                    visibleActivitySegments.map((segment) => {
+                                      const count = item[segment.key];
+                                      return count > 0 ? (
+                                        <span
+                                          aria-hidden="true"
+                                          className={`${styles.activitySegment} ${getActivitySegmentClassName(segment.key)}`}
+                                          key={segment.key}
+                                          style={{ flexGrow: count }}
+                                        >
+                                          {segment.key === "calls" ? (
+                                            <span
+                                              className={styles.activityConnectedFill}
+                                              style={{ height: `${(item.connectedCalls / item.calls) * 100}%` }}
+                                            />
+                                          ) : null}
+                                        </span>
+                                      ) : null;
+                                    })
+                                  )}
+                                </div>
                               </div>
                               <div className={styles.trendFooter}>
                                 <span className={styles.trendLabel}>{item.displayName}</span>
-                                <span className={styles.trendMeta}>
-                                  {item.answeredCalls.toLocaleString()} connected
-                                </span>
+                                <span className={styles.trendMeta}>{formatActivityChartFooter(item, activityMetric)}</span>
                               </div>
                             </button>
                           </div>
@@ -1222,6 +1463,33 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
               ) : (
                 <p className={styles.emptyState}>No employee activity matched these filters.</p>
               )}
+
+              {selectedActivity ? (
+                <section aria-label={`${selectedActivity.displayName} activity breakdown`} className={styles.activitySelectionPanel}>
+                  <div className={styles.activitySelectionHeader}>
+                    <div>
+                      <span>Selected rep</span>
+                      <strong>{selectedActivity.displayName}</strong>
+                    </div>
+                    <strong>{selectedActivity.totalActivities.toLocaleString()} total activities</strong>
+                  </div>
+                  <div className={styles.activitySelectionGrid}>
+                    {ACTIVITY_SEGMENTS.map((segment) => (
+                      <div className={styles.activitySelectionStat} key={segment.key}>
+                        <span className={`${styles.activitySelectionSwatch} ${getActivityLegendClassName(segment.key)}`} />
+                        <span>{segment.label}</span>
+                        <strong>{selectedActivity[segment.key].toLocaleString()}</strong>
+                        {segment.key === "calls" ? (
+                          <small className={styles.activityConnectedMeta}>
+                            <span className={styles.legendSwatchConnected} />
+                            {selectedActivity.connectedCalls.toLocaleString()} connected calls
+                          </small>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
 
             </article>
 
@@ -1273,7 +1541,7 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
                       {snapshot.emailLeaderboard.map((item) => {
                         const canSelectSender = Boolean(
                           item.loginName &&
-                          chartEmployees.some((employee) => employee.loginName === item.loginName),
+                          activityEmployees.some((employee) => employee.loginName === item.loginName),
                         );
                         const isActive = Boolean(
                           item.loginName && item.loginName === selectedEmployeeLoginName,
@@ -1302,6 +1570,7 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
                             {canSelectSender ? (
                               <button
                                 className={`${styles.emailTrendButton} ${isActive ? styles.emailTrendButtonActive : ""}`}
+                                disabled={loading}
                                 onClick={() => selectEmployee(item.loginName as string)}
                                 title={`${senderLabel}: ${item.sentCount.toLocaleString()} sent`}
                                 type="button"

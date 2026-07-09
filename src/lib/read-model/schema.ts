@@ -618,6 +618,8 @@ CREATE TABLE IF NOT EXISTS account_notes (
 
 CREATE INDEX IF NOT EXISTS idx_account_notes_account
   ON account_notes(account_record_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_account_notes_created_at
+  ON account_notes(created_at);
 `;
 
 function readPayloadText(record: unknown, key: string): string | null {
@@ -1005,6 +1007,9 @@ export function ensureReadModelSchema(db: Database.Database): void {
   }
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_account_notes_contact ON account_notes(account_record_id, contact_id)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_account_notes_created_at ON account_notes(created_at)",
   );
 
   const accountLocalMetadataColumns = db

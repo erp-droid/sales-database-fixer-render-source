@@ -582,6 +582,13 @@
   font-weight: 650;
 }
 
+.chartControls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .chartLegend {
   display: flex;
   flex-wrap: wrap;
@@ -597,10 +604,16 @@
 }
 
 .legendSwatch,
-.legendSwatchConnected {
+.legendSwatchConnected,
+.legendSwatchCalls,
+.legendSwatchMeetings,
+.legendSwatchDropOffs,
+.legendSwatchEmails,
+.legendSwatchNotes {
   width: 12px;
   height: 12px;
   border-radius: 999px;
+  flex: 0 0 auto;
 }
 
 .legendSwatch {
@@ -609,6 +622,33 @@
 
 .legendSwatchConnected {
   background: linear-gradient(180deg, #67b57b 0%, #2d7e4a 100%);
+}
+
+.legendSwatchCalls {
+  background: linear-gradient(180deg, #c7ebd0 0%, #7fc694 100%);
+}
+
+.legendSwatchMeetings {
+  background: linear-gradient(180deg, #60a5fa 0%, #2563eb 100%);
+}
+
+.legendSwatchDropOffs {
+  background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
+}
+
+.legendSwatchEmails {
+  background: linear-gradient(180deg, #a78bfa 0%, #7c3aed 100%);
+}
+
+.legendSwatchNotes {
+  background: linear-gradient(180deg, #7dd3fc 0%, #0284c7 100%);
+}
+
+.activityFilterNote {
+  margin: -4px 0 0;
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .callerSpotlightGrid {
@@ -709,6 +749,7 @@
 }
 
 .trendButton {
+  position: relative;
   display: grid;
   gap: 10px;
   width: 100%;
@@ -717,6 +758,89 @@
   border: 1px solid transparent;
   border-radius: 10px;
   text-align: center;
+}
+
+.activityTooltip {
+  position: absolute;
+  z-index: 8;
+  top: 42px;
+  left: 50%;
+  width: 210px;
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(24, 36, 51, 0.96);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.28);
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+  text-align: left;
+  transform: translateX(-50%) translateY(4px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+  visibility: hidden;
+}
+
+.trendColumn:first-child .activityTooltip {
+  left: 4px;
+  transform: translateX(0) translateY(4px);
+}
+
+.trendColumn:last-child .activityTooltip {
+  right: 4px;
+  left: auto;
+  transform: translateX(0) translateY(4px);
+}
+
+.trendButton:hover .activityTooltip,
+.trendButton:focus-visible .activityTooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  visibility: visible;
+}
+
+.trendColumn:first-child .trendButton:hover .activityTooltip,
+.trendColumn:first-child .trendButton:focus-visible .activityTooltip,
+.trendColumn:last-child .trendButton:hover .activityTooltip,
+.trendColumn:last-child .trendButton:focus-visible .activityTooltip {
+  transform: translateX(0) translateY(0);
+}
+
+.activityTooltip > strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.activityTooltipMetricNote {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.activityTooltipList {
+  display: grid;
+  gap: 5px;
+}
+
+.activityTooltipRow {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+}
+
+.activityTooltipRow b {
+  color: #fff;
+  font-size: 12px;
+}
+
+.activityTooltipRowSubset {
+  padding-left: 8px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
 }
 
 .trendButtonActive .trendBarTrack {
@@ -763,6 +887,56 @@
   border-radius: 8px 8px 0 0;
 }
 
+.activityStack {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column-reverse;
+  border-radius: 8px 8px 0 0;
+  overflow: hidden;
+}
+
+.activitySegment {
+  position: relative;
+  flex-basis: 0;
+  overflow: hidden;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.38);
+}
+
+.activitySegmentCalls {
+  background: linear-gradient(180deg, #c7ebd0 0%, #7fc694 100%);
+}
+
+.activityConnectedFill {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: linear-gradient(180deg, #67b57b 0%, #2d7e4a 100%);
+}
+
+.activitySegmentConnected {
+  background: linear-gradient(180deg, #67b57b 0%, #2d7e4a 100%);
+}
+
+.activitySegmentMeetings {
+  background: linear-gradient(180deg, #60a5fa 0%, #2563eb 100%);
+}
+
+.activitySegmentDropOffs {
+  background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
+}
+
+.activitySegmentEmails {
+  background: linear-gradient(180deg, #a78bfa 0%, #7c3aed 100%);
+}
+
+.activitySegmentNotes {
+  background: linear-gradient(180deg, #7dd3fc 0%, #0284c7 100%);
+}
+
 .trendFooter {
   display: grid;
   gap: 4px;
@@ -784,6 +958,96 @@
 .trendMeta {
   color: var(--ink-muted);
   font-size: 11px;
+}
+
+.activitySelectionPanel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f9fbff;
+}
+
+.activitySelectionHeader {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink-strong);
+}
+
+.activitySelectionHeader > div {
+  display: grid;
+  gap: 3px;
+}
+
+.activitySelectionHeader span {
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.activitySelectionHeader strong {
+  font-size: 14px;
+}
+
+.activitySelectionHeader > div strong {
+  font-size: 18px;
+}
+
+.activitySelectionGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.activitySelectionStat {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 7px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.activitySelectionSwatch {
+  grid-row: 1 / 3;
+}
+
+.activitySelectionStat > span:not(.activitySelectionSwatch),
+.activitySelectionStat small {
+  min-width: 0;
+  color: var(--ink-muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activitySelectionStat strong {
+  color: var(--ink-strong);
+  font-size: 16px;
+}
+
+.activitySelectionStat small {
+  grid-column: 2;
+}
+
+.activitySelectionStat .activityConnectedMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.activityConnectedMeta .legendSwatchConnected {
+  width: 8px;
+  height: 8px;
 }
 
 .selectionPanel {
@@ -1450,6 +1714,15 @@
     grid-template-columns: 1fr 1fr;
   }
 
+  .activitySelectionGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .chartControls {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .searchSpan {
     grid-column: span 2;
   }
@@ -1508,6 +1781,19 @@
 
   .chartSelect {
     width: 100%;
+  }
+
+  .chartControls {
+    flex-direction: column;
+  }
+
+  .activitySelectionHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .activitySelectionGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .bookingHeader {

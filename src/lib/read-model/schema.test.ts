@@ -649,6 +649,7 @@ describe("ensureReadModelSchema", () => {
       name: string;
     }>;
     expect(indexes.map((index) => index.name)).toContain("idx_account_notes_contact");
+    expect(indexes.map((index) => index.name)).toContain("idx_account_notes_created_at");
   });
 
   it("adds current note metadata columns to minimal legacy account_notes tables", () => {
