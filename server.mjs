@@ -163,7 +163,7 @@ function normalizeRequestPathForMetrics(pathname) {
 }
 
 const dev = process.env.NODE_ENV !== "production";
-const hostname = process.env.APP_HOSTNAME?.trim() || "0.0.0.0";
+const hostname = "0.0.0.0";
 const port = Number(process.env.PORT || 3000);
 const quotesMountPath = normalizeMountPath(process.env.MBQ_BASE_PATH, "/quotes");
 const isClusterWorker = process.env.SALES_MEADOWB_CLUSTER_WORKER === "1";
