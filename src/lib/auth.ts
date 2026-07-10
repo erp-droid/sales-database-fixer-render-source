@@ -1,11 +1,17 @@
 import type { NextRequest, NextResponse } from "next/server";
 
 import { HttpError } from "@/lib/errors";
-import { getAuthCookieNameForMiddleware, getEnv } from "@/lib/env";
+import {
+  getAuthCookieNameForMiddleware,
+  getEnv,
+  getLocalDevLoginName,
+  isLocalDevAuthBypassEnabled,
+} from "@/lib/env";
 
 const COMMA_SPLIT_REGEX = /,\s*(?=[^;]+=[^;]+)/g;
 const COOKIE_JAR_PREFIX = "v1.";
 const LOGIN_NAME_COOKIE = "mb_login_name";
+const LOCAL_DEV_AUTH_COOKIE_VALUE = "local-dev-auth-bypass";
 
 type CookieJar = Record<string, string>;
 type ParsedSetCookieEntry = {
@@ -180,7 +186,12 @@ function resolveCookieJar(storedValue: string): CookieJar {
 }
 
 export function getAuthCookieValue(request: NextRequest): string | null {
-  return request.cookies.get(getAuthCookieNameForMiddleware())?.value ?? null;
+  if (isLocalDevAuthBypassEnabled()) {
+    return LOCAL_DEV_AUTH_COOKIE_VALUE;
+  }
+
+  const cookieValue = request.cookies.get(getAuthCookieNameForMiddleware())?.value;
+  return cookieValue || null;
 }
 
 export function requireAuthCookieValue(request: NextRequest): string {
@@ -305,6 +316,10 @@ export function clearAuthCookie(response: NextResponse): void {
 }
 
 export function getStoredLoginName(request: NextRequest): string | null {
+  if (isLocalDevAuthBypassEnabled()) {
+    return getLocalDevLoginName();
+  }
+
   const value = request.cookies.get(LOGIN_NAME_COOKIE)?.value?.trim() ?? "";
   return value || null;
 }

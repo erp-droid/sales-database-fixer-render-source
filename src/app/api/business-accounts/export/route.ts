@@ -20,10 +20,12 @@ import { HttpError, getErrorMessage } from "@/lib/errors";
 import { readAllAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import { maybeTriggerReadModelSync, readSyncStatus } from "@/lib/read-model/sync";
 import { parseListQuery } from "@/lib/validation";
+import { ACCOUNT_COLUMN_IDS } from "@/types/account-column-preferences";
 import {
   CATEGORY_VALUES,
   type BusinessAccountRow,
   type Category,
+  type SortBy,
 } from "@/types/business-account";
 
 const BLANK_CATEGORY_FILTER = "__blank_category__";
@@ -118,6 +120,17 @@ function parseExportViewFilters(searchParams: URLSearchParams): ExportViewFilter
   };
 }
 
+function parseExportColumns(searchParams: URLSearchParams): SortBy[] {
+  const allowedColumns = new Set<string>(ACCOUNT_COLUMN_IDS);
+  return [
+    ...new Set(
+      readMultiValueParams(searchParams, "column").filter((column): column is SortBy =>
+        allowedColumns.has(column),
+      ),
+    ),
+  ];
+}
+
 function applyExportViewFilters(
   rows: BusinessAccountRow[],
   filters: ExportViewFilters,
@@ -178,6 +191,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     const params = parseListQuery(request.nextUrl.searchParams);
     const viewFilters = parseExportViewFilters(request.nextUrl.searchParams);
+    const exportColumns = parseExportColumns(request.nextUrl.searchParams);
     const { READ_MODEL_ENABLED } = getEnv();
 
     let sourceRows = [] as Awaited<ReturnType<typeof fetchAllSyncRows>>;
@@ -206,14 +220,18 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       pageSize: Math.max(1, viewRows.length || 1),
     }).items;
 
-    const response = new NextResponse(buildBusinessAccountsCsv(exportRows), {
-      status: 200,
-      headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${buildBusinessAccountsCsvFilename()}"`,
-        "Cache-Control": "no-store",
+    const response = new NextResponse(
+      buildBusinessAccountsCsv(exportRows, exportColumns),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${buildBusinessAccountsCsvFilename()}"`,
+          "Cache-Control": "no-store",
+          "X-Export-Row-Count": String(exportRows.length),
+        },
       },
-    });
+    );
 
     if (authCookieRefresh.value) {
       setAuthCookie(response, authCookieRefresh.value);

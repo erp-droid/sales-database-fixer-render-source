@@ -81,6 +81,7 @@ describe("GET /api/mail/session", () => {
           status: "connected",
           senderEmail: "jserrano@meadowb.com",
           senderDisplayName: "Jorge Serrano",
+          senderSignatureHtml: "<div>Jorge Serrano<br>MeadowBrook</div>",
           expectedGoogleEmail: "jserrano@meadowb.com",
           connectedGoogleEmail: "jserrano@meadowb.com",
           connectionError: null,
@@ -104,6 +105,9 @@ describe("GET /api/mail/session", () => {
     expect(response.status).toBe(200);
     expect(payload.status).toBe("connected");
     expect(payload.connectedGoogleEmail).toBe("jserrano@meadowb.com");
+    expect(payload.senderSignatureHtml).toBe(
+      "<div>Jorge Serrano<br>MeadowBrook</div>",
+    );
   });
 
   it("returns a disconnected mailbox state with sender info when the mail service hangs", async () => {

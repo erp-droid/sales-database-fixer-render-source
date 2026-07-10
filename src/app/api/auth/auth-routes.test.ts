@@ -87,6 +87,7 @@ describe("auth route timeouts", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
     for (const key of Object.keys(process.env)) {
       if (!(key in originalEnv)) {
@@ -118,6 +119,32 @@ describe("auth route timeouts", () => {
       user: {
         id: "jorge",
         name: "jorge",
+      },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("creates a cookie-free session in isolated local development mode", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("LOCAL_DEV_AUTH_BYPASS", "true");
+    vi.stubEnv("LOCAL_DATABASE_ONLY", "true");
+    vi.stubEnv("LOCAL_DEV_LOGIN_NAME", "jserrano");
+    const fetchMock = vi.fn(() => {
+      throw new Error("Local database mode should not call Acumatica.");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { GET } = await import("@/app/api/auth/session/route");
+    const response = await GET(
+      new NextRequest("http://localhost:3010/api/auth/session"),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      authenticated: true,
+      user: {
+        id: "jserrano",
+        name: "jserrano",
       },
     });
     expect(fetchMock).not.toHaveBeenCalled();

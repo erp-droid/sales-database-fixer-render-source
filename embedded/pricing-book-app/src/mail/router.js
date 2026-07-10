@@ -19,6 +19,7 @@ import {
   ensureMailboxWatch,
   exchangeGoogleCode,
   hasOauthConfig,
+  readMailboxSignature,
   saveDraft,
   sendDraft,
   sendMessage,
@@ -380,6 +381,7 @@ function buildSessionResponse(auth, connection, options = {}) {
           : "disconnected"),
     senderEmail: senderEmail || null,
     senderDisplayName: cleanString(auth?.displayName) || auth?.loginName || null,
+    senderSignatureHtml: cleanString(connection?.senderSignatureHtml) || null,
     expectedGoogleEmail: senderEmail || null,
     connectedGoogleEmail: connectedGoogleEmail || null,
     connectionError:
@@ -456,10 +458,32 @@ async function ensureConnectedMailbox(auth) {
 
 const mailboxRefreshJobs = new Map();
 
+async function syncMailboxSignature(connection) {
+  if (cleanString(connection?.signatureSyncedAt)) {
+    return connection;
+  }
+
+  try {
+    const senderSignatureHtml = await readMailboxSignature(connection);
+    return await upsertMailConnection({
+      ...connection,
+      senderSignatureHtml,
+      signatureSyncedAt: nowIso()
+    });
+  } catch (error) {
+    console.warn(
+      `[mail.signature] Unable to sync Gmail signature for ${cleanString(connection?.loginName)}: ${
+        error instanceof Error ? error.message : String(error || "Unknown error")
+      }`
+    );
+    return connection;
+  }
+}
+
 async function refreshMailbox(connection, options = {}) {
   const now = Date.now();
-  let nextConnection = connection;
-  const watchExpiresAt = Number(connection?.watchExpiration || 0);
+  let nextConnection = await syncMailboxSignature(connection);
+  const watchExpiresAt = Number(nextConnection?.watchExpiration || 0);
   if (
     cleanString(connection?.refreshToken) &&
     (!watchExpiresAt ||
@@ -659,6 +683,14 @@ router.get("/oauth/callback", async (req, res) => {
       googleEmail: exchange.googleEmail,
       connectedGoogleEmail: exchange.googleEmail,
       googleDisplayName: exchange.googleDisplayName || displayName,
+      senderSignatureHtml:
+        cleanString(exchange.senderSignatureHtml) ||
+        cleanString(existing?.senderSignatureHtml) ||
+        null,
+      signatureSyncedAt:
+        exchange.senderSignatureRead === true
+          ? nowIso()
+          : cleanString(existing?.signatureSyncedAt) || null,
       refreshToken: cleanString(exchange.tokens?.refresh_token) || cleanString(existing?.refreshToken),
       accessToken: cleanString(exchange.tokens?.access_token),
       expiryDate: Number(exchange.tokens?.expiry_date || 0) || null,
@@ -723,11 +755,13 @@ router.get("/session", async (req, res, next) => {
       return;
     }
 
-    const connection = await getMailConnection(auth.loginName);
-    if (!connection) {
+    const storedConnection = await getMailConnection(auth.loginName);
+    if (!storedConnection) {
       res.json(buildSessionResponse(auth, null));
       return;
     }
+
+    const connection = await syncMailboxSignature(storedConnection);
 
     try {
       if (forceRefresh) {
