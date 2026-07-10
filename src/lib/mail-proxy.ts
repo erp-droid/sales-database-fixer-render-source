@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { buildCookieHeader, requireAuthCookieValue } from "@/lib/auth";
 import { HttpError } from "@/lib/errors";
 import {
-  buildMailServiceAssertion,
+  buildMailProxyAssertion,
   ensureMailServiceConfigured,
   type ResolvedMailSender,
   resolveMailSenderForRequest,
@@ -33,9 +33,28 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-function buildAbsoluteServiceUrl(path: string, query?: URLSearchParams): string {
+function normalizeMailServiceMountPath(
+  value: string | null | undefined,
+  fallback = "/quotes",
+): string {
+  const rawPath = value?.trim() || fallback;
+  const prefixedPath = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+  const normalizedPath = prefixedPath.replace(/\/+$/, "");
+  return normalizedPath || fallback;
+}
+
+function buildMailServiceBaseUrl(): string {
   const { serviceUrl } = ensureMailServiceConfigured();
-  const normalizedBase = serviceUrl.replace(/\/$/, "");
+  const normalizedBase = serviceUrl.replace(/\/+$/, "");
+  const mountPath = normalizeMailServiceMountPath(process.env.MBQ_BASE_PATH);
+
+  return normalizedBase.endsWith(mountPath)
+    ? normalizedBase
+    : `${normalizedBase}${mountPath}`;
+}
+
+function buildAbsoluteServiceUrl(path: string, query?: URLSearchParams): string {
+  const normalizedBase = buildMailServiceBaseUrl();
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   const url = new URL(`${normalizedBase}${normalizedPath}`);
   if (query) {
@@ -54,7 +73,7 @@ export async function requestMailService(
   const resolvedSender =
     options.resolvedSender ??
     (await resolveMailSenderForRequest(request, options.authCookieRefresh));
-  const assertion = buildMailServiceAssertion(resolvedSender);
+  const assertion = buildMailProxyAssertion(resolvedSender);
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
   headers.set("Authorization", `Bearer ${assertion}`);
@@ -117,13 +136,12 @@ export async function buildMailServiceOauthStartUrl(
   authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<string> {
   const resolvedSender = await resolveMailSenderForRequest(request, authCookieRefresh);
-  const assertion = buildMailServiceAssertion(resolvedSender);
-  const env = ensureMailServiceConfigured();
+  const assertion = buildMailProxyAssertion(resolvedSender);
   const returnTo = new URL(
     request.nextUrl.origin + (request.nextUrl.searchParams.get("returnTo") || "/mail"),
   );
 
-  const url = new URL(`${env.serviceUrl.replace(/\/$/, "")}/api/mail/oauth/start`);
+  const url = new URL(`${buildMailServiceBaseUrl()}/api/mail/oauth/start`);
   url.searchParams.set("token", assertion);
   url.searchParams.set("returnTo", returnTo.toString());
   return url.toString();

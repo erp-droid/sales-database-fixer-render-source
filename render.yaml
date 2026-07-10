@@ -113,7 +113,7 @@ services:
       - key: ACUMATICA_OPPORTUNITY_LINK_TO_DRIVE_DEFAULT
         value: Made using MB Quoting Page
       - key: MAIL_SERVICE_URL
-        value: https://pricing-book-app-720902901526.us-central1.run.app
+        value: https://pricing-book-app-720902901526.us-central1.run.app/quotes
       - key: MAIL_SERVICE_SHARED_SECRET
         sync: false
       - key: MAIL_PROXY_SHARED_SECRET
