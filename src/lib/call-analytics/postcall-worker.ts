@@ -1208,6 +1208,9 @@ export async function processCallActivitySyncJob(
           }
         } else {
           const updated = markCallActivitySyncRecordingResolved(sessionId, resolvedRecording);
+          if (updated.status === "skipped") {
+            return finish(updated, "recording_owned_by_other_session");
+          }
           recordingSid = cleanText(updated.recordingSid);
         }
       }

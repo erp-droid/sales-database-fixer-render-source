@@ -125,6 +125,40 @@ export function listPendingCallActivitySyncJobs(limit = 25): CallActivitySyncRec
 export function upsertQueuedCallActivitySync(input: UpsertCallActivitySyncInput): CallActivitySyncRecord {
   const db = getReadModelDb();
   const now = new Date().toISOString();
+  let recordingSid = input.recordingSid;
+  if (recordingSid) {
+    const owner = db
+      .prepare(
+        `
+        SELECT session_id
+        FROM call_activity_sync
+        WHERE recording_sid = ? AND session_id <> ?
+        `,
+      )
+      .get(recordingSid, input.sessionId.trim()) as { session_id: string } | undefined;
+
+    if (owner) {
+      const ownerSessionExists = db
+        .prepare(`SELECT 1 FROM call_sessions WHERE session_id = ?`)
+        .get(owner.session_id);
+
+      if (ownerSessionExists) {
+        // recording_sid is UNIQUE; another live session already owns this recording,
+        // so queue this session without it instead of failing the insert.
+        recordingSid = null;
+      } else {
+        // The owning row's session was re-grouped away; release the recording.
+        db.prepare(
+          `
+          UPDATE call_activity_sync
+          SET recording_sid = NULL,
+              updated_at = ?
+          WHERE session_id = ?
+          `,
+        ).run(now, owner.session_id);
+      }
+    }
+  }
   db.prepare(
     `
     INSERT INTO call_activity_sync (
@@ -163,7 +197,7 @@ export function upsertQueuedCallActivitySync(input: UpsertCallActivitySyncInput)
     `,
   ).run(
     input.sessionId.trim(),
-    input.recordingSid,
+    recordingSid,
     input.recordingStatus,
     input.recordingDurationSeconds,
     now,
@@ -302,6 +336,45 @@ export function markCallActivitySyncRecordingResolved(
 
   const db = getReadModelDb();
   const updatedAt = new Date().toISOString();
+  const resolvedRecordingSid = input.recordingSid ?? existing.recording_sid;
+  if (resolvedRecordingSid) {
+    const owner = db
+      .prepare(
+        `
+        SELECT session_id
+        FROM call_activity_sync
+        WHERE recording_sid = ? AND session_id <> ?
+        `,
+      )
+      .get(resolvedRecordingSid, sessionId.trim()) as { session_id: string } | undefined;
+
+    if (owner) {
+      const ownerSessionExists = db
+        .prepare(`SELECT 1 FROM call_sessions WHERE session_id = ?`)
+        .get(owner.session_id);
+
+      if (ownerSessionExists) {
+        // recording_sid is UNIQUE; claiming it here would throw and the job would
+        // retry forever, so mark it skipped and let the owning session's job run.
+        return markCallActivitySyncSkipped(
+          sessionId,
+          `Recording ${resolvedRecordingSid} is already linked to call session '${owner.session_id}'.`,
+        );
+      }
+
+      // The owning row belongs to a session that no longer exists (re-grouped by a
+      // rebuild); release the recording so the live session can claim it.
+      db.prepare(
+        `
+        UPDATE call_activity_sync
+        SET recording_sid = NULL,
+            updated_at = ?
+        WHERE session_id = ?
+        `,
+      ).run(updatedAt, owner.session_id);
+    }
+  }
+
   db.prepare(
     `
     UPDATE call_activity_sync
