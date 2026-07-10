@@ -914,7 +914,7 @@ function buildMapMetricCards(summary: MapMetricSummary): MapViewMetric[] {
       id: "company-phones",
       label: "Company phones",
       value: summary.companyPhoneCount.toLocaleString(),
-      meta: "Company phone numbers",
+      meta: "Companies with a phone number",
       icon: "phone",
       tone: "purple",
     },
@@ -971,7 +971,7 @@ function buildMapMetricCards(summary: MapMetricSummary): MapViewMetric[] {
 function buildMapViewMetrics(rows: BusinessAccountRow[], fallbackCompanyCount: number): MapViewMetric[] {
   const companyKeys = new Set<string>();
   const contactCount = rows.filter(rowHasMetricContact).length;
-  const companyPhoneValues = new Set<string>();
+  const companyKeysWithPhone = new Set<string>();
   const contactPhoneValues = new Set<string>();
   const emailValues = new Set<string>();
   let filledDatabaseHealthFields = 0;
@@ -984,8 +984,8 @@ function buildMapViewMetrics(rows: BusinessAccountRow[], fallbackCompanyCount: n
     }
 
     const companyPhone = normalizeMetricPhone(resolveCompanyPhone(row));
-    if (companyPhone) {
-      companyPhoneValues.add(companyPhone);
+    if (companyKey && companyPhone) {
+      companyKeysWithPhone.add(companyKey);
     }
 
     if (rowHasMetricContact(row)) {
@@ -1017,7 +1017,7 @@ function buildMapViewMetrics(rows: BusinessAccountRow[], fallbackCompanyCount: n
   return buildMapMetricCards({
     companyCount: companyKeys.size || fallbackCompanyCount,
     contactCount,
-    companyPhoneCount: companyPhoneValues.size,
+    companyPhoneCount: companyKeysWithPhone.size,
     contactPhoneCount: contactPhoneValues.size,
     emailCount: emailValues.size,
     latestCalledAt: readLatestIso(rows.map((row) => row.lastCalledAt)),
@@ -1029,7 +1029,7 @@ function buildMapViewMetrics(rows: BusinessAccountRow[], fallbackCompanyCount: n
 function buildMapPointViewMetrics(points: BusinessAccountMapPoint[]): MapViewMetric[] {
   const companyKeys = new Set<string>();
   let contactCount = 0;
-  const companyPhoneValues = new Set<string>();
+  const companyKeysWithPhone = new Set<string>();
   const contactPhoneValues = new Set<string>();
   const emailValues = new Set<string>();
   const latestCalledValues: Array<string | null | undefined> = [];
@@ -1043,8 +1043,8 @@ function buildMapPointViewMetrics(points: BusinessAccountMapPoint[]): MapViewMet
     }
 
     const companyPhone = normalizeMetricPhone(point.companyPhone);
-    if (companyPhone) {
-      companyPhoneValues.add(companyPhone);
+    if (companyKey && companyPhone) {
+      companyKeysWithPhone.add(companyKey);
     }
 
     const contacts = getPointMetricContacts(point);
@@ -1080,7 +1080,7 @@ function buildMapPointViewMetrics(points: BusinessAccountMapPoint[]): MapViewMet
   return buildMapMetricCards({
     companyCount: companyKeys.size || points.length,
     contactCount,
-    companyPhoneCount: companyPhoneValues.size,
+    companyPhoneCount: companyKeysWithPhone.size,
     contactPhoneCount: contactPhoneValues.size,
     emailCount: emailValues.size,
     latestCalledAt: readLatestIso(latestCalledValues),

@@ -2655,7 +2655,7 @@ function readLatestIso(values: Array<string | null | undefined>): string | null 
 function buildAccountViewMetrics(rows: BusinessAccountRow[]): AccountViewMetric[] {
   const companyKeys = new Set<string>();
   const contactCount = rows.filter(rowHasMetricContact).length;
-  const companyPhoneValues = new Set<string>();
+  const companyKeysWithPhone = new Set<string>();
   const contactPhoneValues = new Set<string>();
   const emailValues = new Set<string>();
   let filledDatabaseHealthFields = 0;
@@ -2668,8 +2668,8 @@ function buildAccountViewMetrics(rows: BusinessAccountRow[]): AccountViewMetric[
     }
 
     const companyPhone = normalizeMetricPhone(resolveCompanyPhone(row));
-    if (companyPhone) {
-      companyPhoneValues.add(companyPhone);
+    if (companyKey && companyPhone) {
+      companyKeysWithPhone.add(companyKey);
     }
 
     if (rowHasMetricContact(row)) {
@@ -2732,8 +2732,8 @@ function buildAccountViewMetrics(rows: BusinessAccountRow[]): AccountViewMetric[
     {
       id: "company-phones",
       label: "Company phones",
-      value: companyPhoneValues.size.toLocaleString(),
-      meta: "Company phone numbers",
+      value: companyKeysWithPhone.size.toLocaleString(),
+      meta: "Companies with a phone number",
       icon: "phone",
       tone: "purple",
     },
