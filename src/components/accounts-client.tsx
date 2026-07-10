@@ -2672,12 +2672,12 @@ function buildAccountViewMetrics(rows: BusinessAccountRow[]): AccountViewMetric[
       companyPhoneValues.add(companyPhone);
     }
 
-    [row.primaryContactPhone, row.phoneNumber].forEach((value) => {
-      const normalized = normalizeMetricPhone(value);
-      if (normalized) {
-        contactPhoneValues.add(normalized);
+    if (rowHasMetricContact(row)) {
+      const contactPhone = normalizeMetricPhone(row.primaryContactPhone);
+      if (contactPhone) {
+        contactPhoneValues.add(contactPhone);
       }
-    });
+    }
 
     const email = row.primaryContactEmail?.trim().toLowerCase();
     if (email) {
