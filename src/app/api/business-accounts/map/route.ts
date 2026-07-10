@@ -271,7 +271,7 @@ function buildMapMetricSummary(
   rows: BusinessAccountRow[],
   companyCount = countDistinctAccounts(rows),
 ): BusinessAccountMapMetricSummary {
-  const companyPhoneValues = new Set<string>();
+  const companyKeysWithPhone = new Set<string>();
   const contactPhoneValues = new Set<string>();
   const emailValues = new Set<string>();
   let contactCount = 0;
@@ -284,8 +284,9 @@ function buildMapMetricSummary(
     }
 
     const companyPhone = normalizeMetricPhone(resolveCompanyPhone(row));
-    if (companyPhone) {
-      companyPhoneValues.add(companyPhone);
+    const companyKey = readRowAccountKey(row);
+    if (companyKey && companyPhone) {
+      companyKeysWithPhone.add(companyKey);
     }
 
     if (rowHasMetricContact(row)) {
@@ -317,7 +318,7 @@ function buildMapMetricSummary(
   return {
     companyCount,
     contactCount,
-    companyPhoneCount: companyPhoneValues.size,
+    companyPhoneCount: companyKeysWithPhone.size,
     contactPhoneCount: contactPhoneValues.size,
     emailCount: emailValues.size,
     latestCalledAt: readLatestIso(rows.map((row) => row.lastCalledAt)),
