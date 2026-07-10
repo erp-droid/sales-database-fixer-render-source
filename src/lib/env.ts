@@ -576,3 +576,15 @@ export function getEnv(): AppEnv {
 export function getAuthCookieNameForMiddleware(): string {
   return process.env.AUTH_COOKIE_NAME?.trim() || ".ASPXAUTH";
 }
+
+export function isLocalDevAuthBypassEnabled(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.LOCAL_DEV_AUTH_BYPASS === "true" &&
+    process.env.LOCAL_DATABASE_ONLY === "true"
+  );
+}
+
+export function getLocalDevLoginName(): string {
+  return process.env.LOCAL_DEV_LOGIN_NAME?.trim() || "jserrano";
+}

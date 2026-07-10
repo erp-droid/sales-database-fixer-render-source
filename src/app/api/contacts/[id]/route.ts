@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
 import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
-import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
+import { resolveStoredDeferredActionActor } from "@/lib/deferred-action-actor";
 import { enqueueDeferredContactDeleteAction } from "@/lib/deferred-actions-store";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { getReadModelDb } from "@/lib/read-model/db";
@@ -88,16 +88,12 @@ export async function DELETE(
   try {
     const { id } = await context.params;
     const contactId = parseContactId(id);
-    const cookieValue = requireAuthCookieValue(request);
+    requireAuthCookieValue(request);
     const body = await request.json().catch(() => {
       throw new HttpError(400, "Request body must be valid JSON.");
     });
     const { reason } = parseDeleteReasonPayload(body);
-    const actor = await resolveDeferredActionActor(
-      request,
-      cookieValue,
-      authCookieRefresh,
-    );
+    const actor = resolveStoredDeferredActionActor(request);
     const summary = readQueuedDeleteSummary(contactId);
     const queued = enqueueDeferredContactDeleteAction({
       sourceSurface: request.nextUrl.searchParams.get("source")?.trim() || "accounts",

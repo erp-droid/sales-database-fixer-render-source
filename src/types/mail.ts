@@ -16,6 +16,7 @@ export type MailSessionResponse = {
   status: MailConnectionStatus;
   senderEmail: string | null;
   senderDisplayName: string | null;
+  senderSignatureHtml?: string | null;
   expectedGoogleEmail: string | null;
   connectedGoogleEmail: string | null;
   connectionError: string | null;

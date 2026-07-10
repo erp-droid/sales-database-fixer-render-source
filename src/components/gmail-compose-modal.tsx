@@ -113,6 +113,36 @@ function htmlToText(html: string): string {
   return container.innerText.trim();
 }
 
+function sanitizeSignatureHtml(html: string): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  template.content
+    .querySelectorAll("script, style, iframe, object, embed, form, input, button, textarea, select")
+    .forEach((element) => element.remove());
+
+  template.content.querySelectorAll("*").forEach((element) => {
+    for (const attribute of Array.from(element.attributes)) {
+      const name = attribute.name.toLowerCase();
+      const value = attribute.value.trim();
+      if (
+        name.startsWith("on") ||
+        name === "srcdoc" ||
+        ((name === "href" || name === "src" || name === "xlink:href") &&
+          /^(?:javascript|vbscript):/i.test(value)) ||
+        (name === "style" && /(?:expression\s*\(|javascript:)/i.test(value))
+      ) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  });
+
+  return template.innerHTML.trim();
+}
+
 function isEmailLike(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
@@ -260,6 +290,45 @@ function formatComposeModeLabel(sendMode: ComposeSendMode): string {
   return "Draft";
 }
 
+function ComposeToolbarIcon({ kind }: { kind: "bullets" | "numbers" | "attach" | "image" }) {
+  if (kind === "attach") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        <path d="m8 12.5 6.8-6.8a3 3 0 1 1 4.2 4.25l-8.1 8.1a4.5 4.5 0 0 1-6.35-6.35l8-8" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
+      </svg>
+    );
+  }
+
+  if (kind === "image") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+        <rect height="17" rx="2" stroke="currentColor" strokeWidth="1.7" width="19" x="2.5" y="3.5" />
+        <circle cx="8" cy="9" r="1.7" fill="currentColor" />
+        <path d="m4.5 18 5-5 3.5 3 2.3-2.2 4.2 4.2" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
+      </svg>
+    );
+  }
+
+  const numbered = kind === "numbers";
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+      {numbered ? (
+        <>
+          <path d="M4 5h2v4M4 14h2l-2 4h2" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+          <path d="M10 6h10M10 12h10M10 18h10" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+        </>
+      ) : (
+        <>
+          <circle cx="5" cy="6" fill="currentColor" r="1.2" />
+          <circle cx="5" cy="12" fill="currentColor" r="1.2" />
+          <circle cx="5" cy="18" fill="currentColor" r="1.2" />
+          <path d="M10 6h10M10 12h10M10 18h10" stroke="currentColor" strokeLinecap="round" strokeWidth="1.7" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 export function GmailComposeModal({
   contactSuggestions,
   initialState = null,
@@ -279,6 +348,7 @@ export function GmailComposeModal({
   const inlineImageInputRef = useRef<HTMLInputElement | null>(null);
   const autosaveTimeoutRef = useRef<number | null>(null);
   const lastAutosaveSignatureRef = useRef("");
+  const appliedGmailSignatureRef = useRef("");
 
   const [draft, setDraft] = useState<ComposeDraftState>(() => buildEmptyDraft(initialState));
   const [recipientInputs, setRecipientInputs] = useState<Record<RecipientField, string>>({
@@ -295,6 +365,15 @@ export function GmailComposeModal({
   const [isMaximized, setIsMaximized] = useState(false);
   const [composeError, setComposeError] = useState<string | null>(null);
   const [composeNotice, setComposeNotice] = useState<string | null>(null);
+  const [isMobileComposer, setIsMobileComposer] = useState(false);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 680px)");
+    const updateViewportMode = () => setIsMobileComposer(mediaQuery.matches);
+    updateViewportMode();
+    mediaQuery.addEventListener("change", updateViewportMode);
+    return () => mediaQuery.removeEventListener("change", updateViewportMode);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -313,6 +392,7 @@ export function GmailComposeModal({
     setComposeError(null);
     setComposeNotice(null);
     lastAutosaveSignatureRef.current = "";
+    appliedGmailSignatureRef.current = "";
     if (autosaveTimeoutRef.current) {
       window.clearTimeout(autosaveTimeoutRef.current);
       autosaveTimeoutRef.current = null;
@@ -325,6 +405,7 @@ export function GmailComposeModal({
     }
 
     const nextDraft = buildEmptyDraft(initialState);
+    appliedGmailSignatureRef.current = "";
     setDraft(nextDraft);
     setShowCc(Boolean(nextDraft.cc.length));
     setShowBcc(Boolean(nextDraft.bcc.length));
@@ -332,6 +413,38 @@ export function GmailComposeModal({
       editorRef.current.innerHTML = nextDraft.htmlBody || "";
     }
   }, [initialState, isOpen]);
+
+  useEffect(() => {
+    const rawSignature = cleanText(session?.senderSignatureHtml);
+    if (!isOpen || sendMode !== "compose" || !rawSignature) {
+      return;
+    }
+
+    const signatureKey = `${session?.connectedGoogleEmail ?? "gmail"}:${rawSignature}`;
+    if (appliedGmailSignatureRef.current === signatureKey) {
+      return;
+    }
+
+    appliedGmailSignatureRef.current = signatureKey;
+    if (cleanText(htmlToText(draft.htmlBody))) {
+      return;
+    }
+
+    const safeSignature = sanitizeSignatureHtml(rawSignature);
+    if (!safeSignature) {
+      return;
+    }
+
+    const nextHtml = `<div><br></div><div data-mb-gmail-signature="true">${safeSignature}</div>`;
+    setDraft((current) => ({
+      ...current,
+      htmlBody: nextHtml,
+      textBody: htmlToText(nextHtml),
+    }));
+    if (editorRef.current) {
+      editorRef.current.innerHTML = nextHtml;
+    }
+  }, [draft.htmlBody, isOpen, sendMode, session?.connectedGoogleEmail, session?.senderSignatureHtml]);
 
   useEffect(() => {
     if (!isOpen || !editorRef.current) {
@@ -749,7 +862,12 @@ export function GmailComposeModal({
   return (
     <>
       <div className={styles.overlay} onClick={onClose} />
-      <section className={modalClassName}>
+      <section
+        aria-label={title}
+        aria-modal="true"
+        className={modalClassName}
+        role="dialog"
+      >
         <header className={styles.topBar}>
           <div className={styles.topBarTitle}>
             <strong>{title}</strong>
@@ -801,13 +919,23 @@ export function GmailComposeModal({
                   <div className={styles.recipientComposer}>
                     <div className={styles.recipientChipRow}>
                       {draft[field].map((recipient) => (
-                        <span className={styles.recipientChip} key={buildRecipientLabel(recipient)}>
-                          {buildRecipientLabel(recipient)}
+                        <span
+                          className={styles.recipientChip}
+                          key={buildRecipientLabel(recipient)}
+                          title={buildRecipientLabel(recipient)}
+                        >
+                          <span className={styles.recipientChipCopy}>
+                            <strong>{cleanText(recipient.name) || recipient.email}</strong>
+                            {cleanText(recipient.name) ? (
+                              <small>{recipient.email}</small>
+                            ) : null}
+                          </span>
                           <button
+                            aria-label={`Remove ${buildRecipientLabel(recipient)}`}
                             onClick={() => removeRecipient(field, recipient)}
                             type="button"
                           >
-                            x
+                            ×
                           </button>
                         </span>
                       ))}
@@ -939,46 +1067,53 @@ export function GmailComposeModal({
 
             <footer className={styles.footer}>
               <div className={styles.toolbar}>
-                <button onClick={() => applyEditorCommand("undo")} type="button">
-                  Undo
-                </button>
-                <button onClick={() => applyEditorCommand("redo")} type="button">
-                  Redo
-                </button>
-                <select
-                  className={styles.toolbarSelect}
-                  defaultValue="Arial"
-                  onChange={(event) => applyEditorCommand("fontName", event.target.value)}
-                >
-                  <option value="Arial">Sans Serif</option>
-                  <option value="Georgia">Serif</option>
-                  <option value="Courier New">Monospace</option>
-                </select>
-                <button onClick={() => applyEditorCommand("bold")} type="button">
+                {!isMobileComposer ? (
+                  <>
+                    <button onClick={() => applyEditorCommand("undo")} type="button">
+                      Undo
+                    </button>
+                    <button onClick={() => applyEditorCommand("redo")} type="button">
+                      Redo
+                    </button>
+                    <select
+                      className={styles.toolbarSelect}
+                      defaultValue="Arial"
+                      onChange={(event) => applyEditorCommand("fontName", event.target.value)}
+                    >
+                      <option value="Arial">Sans Serif</option>
+                      <option value="Georgia">Serif</option>
+                      <option value="Courier New">Monospace</option>
+                    </select>
+                  </>
+                ) : null}
+                <button aria-label="Bold" onClick={() => applyEditorCommand("bold")} title="Bold" type="button">
                   B
                 </button>
-                <button onClick={() => applyEditorCommand("italic")} type="button">
+                <button aria-label="Italic" onClick={() => applyEditorCommand("italic")} title="Italic" type="button">
                   I
                 </button>
-                <button onClick={() => applyEditorCommand("underline")} type="button">
+                <button aria-label="Underline" onClick={() => applyEditorCommand("underline")} title="Underline" type="button">
                   U
                 </button>
-                <button onClick={() => applyEditorCommand("insertUnorderedList")} type="button">
-                  • List
+                <button aria-label="Bulleted list" onClick={() => applyEditorCommand("insertUnorderedList")} title="Bulleted list" type="button">
+                  <ComposeToolbarIcon kind="bullets" />
                 </button>
-                <button onClick={() => applyEditorCommand("insertOrderedList")} type="button">
-                  1. List
+                <button aria-label="Numbered list" onClick={() => applyEditorCommand("insertOrderedList")} title="Numbered list" type="button">
+                  <ComposeToolbarIcon kind="numbers" />
                 </button>
-                <button onClick={() => attachmentInputRef.current?.click()} type="button">
-                  Attach
+                <button aria-label="Attach file" onClick={() => attachmentInputRef.current?.click()} title="Attach file" type="button">
+                  <ComposeToolbarIcon kind="attach" />
                 </button>
-                <button onClick={() => inlineImageInputRef.current?.click()} type="button">
-                  Inline image
+                <button aria-label="Insert image" onClick={() => inlineImageInputRef.current?.click()} title="Insert image" type="button">
+                  <ComposeToolbarIcon kind="image" />
                 </button>
               </div>
 
               <div className={styles.footerActions}>
-                <div className={styles.footerPrimaryActions}>
+                <div
+                  className={styles.footerPrimaryActions}
+                  data-connected={session?.status === "connected"}
+                >
                   <button
                     className={styles.sendButton}
                     disabled={isSending || session?.status !== "connected"}

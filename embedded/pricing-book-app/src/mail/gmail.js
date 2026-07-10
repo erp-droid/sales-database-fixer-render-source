@@ -396,11 +396,42 @@ export async function exchangeGoogleCode(code) {
   oauth.setCredentials(tokens);
   const oauth2 = google.oauth2({ version: "v2", auth: oauth });
   const profileResponse = await oauth2.userinfo.get();
+  const googleEmail = cleanEmailAddress(profileResponse.data?.email);
+  let senderSignatureHtml = null;
+  let senderSignatureRead = false;
+
+  try {
+    const gmail = google.gmail({ version: "v1", auth: oauth });
+    const sendAsResponse = await gmail.users.settings.sendAs.list({ userId: "me" });
+    senderSignatureHtml = readSignatureFromSendAsAliases(
+      sendAsResponse.data?.sendAs,
+      googleEmail
+    );
+    senderSignatureRead = true;
+  } catch {
+    senderSignatureHtml = null;
+  }
+
   return {
     tokens,
-    googleEmail: cleanEmailAddress(profileResponse.data?.email),
-    googleDisplayName: cleanString(profileResponse.data?.name)
+    googleEmail,
+    googleDisplayName: cleanString(profileResponse.data?.name),
+    senderSignatureHtml,
+    senderSignatureRead
   };
+}
+
+function readSignatureFromSendAsAliases(sendAsAliases, expectedEmail) {
+  const aliases = Array.isArray(sendAsAliases) ? sendAsAliases : [];
+  const preferredAlias =
+    aliases.find(
+      (alias) => cleanEmailAddress(alias?.sendAsEmail) === cleanEmailAddress(expectedEmail)
+    ) ||
+    aliases.find((alias) => alias?.isPrimary) ||
+    aliases.find((alias) => alias?.isDefault) ||
+    aliases[0] ||
+    null;
+  return cleanString(preferredAlias?.signature) || null;
 }
 
 function buildAuthorizedClients(connection) {
@@ -414,6 +445,15 @@ function buildAuthorizedClients(connection) {
     oauth,
     gmail: google.gmail({ version: "v1", auth: oauth })
   };
+}
+
+export async function readMailboxSignature(connection) {
+  const { gmail } = buildAuthorizedClients(connection);
+  const response = await gmail.users.settings.sendAs.list({ userId: "me" });
+  return readSignatureFromSendAsAliases(
+    response.data?.sendAs,
+    connection.googleEmail || connection.connectedGoogleEmail || connection.senderEmail
+  );
 }
 
 export async function ensureMailboxWatch(connection) {

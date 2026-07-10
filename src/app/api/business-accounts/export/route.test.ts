@@ -185,6 +185,24 @@ describe("GET /api/business-accounts/export", () => {
     expect(payload).not.toContain("Wrong Rep");
   });
 
+  it("exports only the requested visible columns in the requested order", async () => {
+    const { GET } = await import("@/app/api/business-accounts/export/route");
+
+    const response = await GET(
+      new NextRequest(
+        "http://localhost/api/business-accounts/export?selectedCategory=A&selectedSalesRep=Jorge%20Serrano&column=companyName&column=primaryContactEmail&column=category&sortBy=companyName&sortDir=asc",
+      ),
+    );
+    const payload = await response.text();
+    const [header] = payload.replace(/^\uFEFF/, "").split("\r\n");
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("X-Export-Row-Count")).toBe("2");
+    expect(header).toBe("Company Name,Email,Category");
+    expect(payload).not.toContain("Account Record ID");
+    expect(payload).not.toContain("Sales Rep ID");
+  });
+
   it("rejects non-jserrano users", async () => {
     getStoredLoginName.mockReturnValue("sdoal");
     const { GET } = await import("@/app/api/business-accounts/export/route");

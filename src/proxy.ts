@@ -1,12 +1,21 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
-import { getAuthCookieNameForMiddleware } from "@/lib/env";
+import {
+  getAuthCookieNameForMiddleware,
+  isLocalDevAuthBypassEnabled,
+} from "@/lib/env";
 
 export function proxy(request: NextRequest) {
+  const localDevAuthBypassEnabled = isLocalDevAuthBypassEnabled();
   const authCookieName = getAuthCookieNameForMiddleware();
-  const hasSessionCookie = Boolean(request.cookies.get(authCookieName)?.value);
+  const hasSessionCookie =
+    localDevAuthBypassEnabled || Boolean(request.cookies.get(authCookieName)?.value);
   const { pathname, search } = request.nextUrl;
+
+  if (pathname === "/signin" && localDevAuthBypassEnabled) {
+    return NextResponse.redirect(new URL("/accounts", request.url));
+  }
 
   if (
     (pathname.startsWith("/accounts") ||

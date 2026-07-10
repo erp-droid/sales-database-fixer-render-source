@@ -223,6 +223,14 @@ type EmailComposerState = {
   isOpen: boolean;
 };
 
+type MobileAccountsSheet = "filters" | "sort" | null;
+type MobileAccountDetailTab = "overview" | "company" | "contact" | "activity";
+type MobileAccountGroup = {
+  key: string;
+  accountRow: BusinessAccountRow;
+  contactRows: BusinessAccountRow[];
+};
+
 type MailLastEmailedLookupAccount = {
   businessAccountRecordId: string | null;
   businessAccountId: string | null;
@@ -338,6 +346,80 @@ function SearchIcon() {
       />
     </svg>
   );
+}
+
+function EmailIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+      <rect height="14" rx="2.5" stroke="currentColor" strokeWidth="1.7" width="18" x="3" y="5" />
+      <path
+        d="m5 8 7 5 7-5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.7"
+      />
+    </svg>
+  );
+}
+
+function PhoneIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+      <path
+        d="M6.6 3.5 9 8.1 7.4 9.7c1.2 2.7 3.1 4.6 5.8 5.8l1.6-1.6 4.6 2.4-.7 3.2c-.2.8-.9 1.4-1.8 1.4C9.3 20.9 3.1 14.7 3.1 7.1c0-.9.6-1.6 1.4-1.8l2.1-.5Z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+function ContactPersonIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+      <circle cx="12" cy="8" r="3" stroke="currentColor" strokeWidth="1.7" />
+      <path
+        d="M5.5 20c.8-4 2.95-6 6.5-6s5.7 2 6.5 6"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.7"
+      />
+    </svg>
+  );
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
+      <path
+        d="m7.5 4.5 5 5.5-5 5.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+function MobileFilterSummaryIcon({ type }: { type: string }) {
+  if (type === "categories") {
+    return (
+      <svg aria-hidden="true" fill="none" viewBox="0 0 20 20">
+        <path d="m3.5 9.5 6-6h5.25l1.75 1.75v5.25l-6 6-7-7Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
+        <circle cx="13.25" cy="6.75" fill="currentColor" r="1" />
+      </svg>
+    );
+  }
+
+  if (type === "sales-reps") {
+    return <ContactPersonIcon />;
+  }
+
+  return <FilterIcon />;
 }
 
 function ChevronDownIcon() {
@@ -716,6 +798,7 @@ function buildAccountsCsvExportHref(input: {
   headerFilters: HeaderFilters;
   sortBy: SortBy;
   sortDir: SortDir;
+  visibleColumns: SortBy[];
 }): string {
   const params = new URLSearchParams();
 
@@ -731,11 +814,18 @@ function buildAccountsCsvExportHref(input: {
     params.append("selectedCategory", category);
   });
   input.selectedWeekFilters.forEach((week) => {
-    append("selectedWeek", week);
+    const trimmed = week.trim();
+    if (trimmed) {
+      params.append("selectedWeek", trimmed);
+    }
   });
   input.selectedSalesRepFilters.forEach((salesRepName) => {
-    append("selectedSalesRep", salesRepName);
+    const trimmed = salesRepName.trim();
+    if (trimmed) {
+      params.append("selectedSalesRep", trimmed);
+    }
   });
+  input.visibleColumns.forEach((column) => params.append("column", column));
   append("q", input.q);
   append("filterCompanyName", input.headerFilters.companyName);
   append("filterAccountType", input.headerFilters.accountType);
@@ -2493,6 +2583,54 @@ function buildMetricCompanyKey(row: BusinessAccountRow): string {
   return fallbackParts.length > 0 ? `fallback:${fallbackParts.join("|")}` : "";
 }
 
+function isAccountPrimaryContact(row: BusinessAccountRow): boolean {
+  const contactId = resolveRowContactId(row);
+  return (
+    row.isPrimaryContact === true ||
+    (contactId !== null && row.primaryContactId !== null && contactId === row.primaryContactId)
+  );
+}
+
+function groupMobileAccountRows(rows: BusinessAccountRow[]): MobileAccountGroup[] {
+  const groups = new Map<string, MobileAccountGroup>();
+
+  rows.forEach((row, index) => {
+    const key = buildMetricCompanyKey(row) || `row:${getRowKey(row, index)}`;
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, {
+        key,
+        accountRow: row,
+        contactRows: [row],
+      });
+      return;
+    }
+
+    existing.contactRows.push(row);
+    if (!isAccountPrimaryContact(existing.accountRow) && isAccountPrimaryContact(row)) {
+      existing.accountRow = row;
+    }
+  });
+
+  return [...groups.values()].map((group) => ({
+    ...group,
+    contactRows: [...group.contactRows].sort(
+      (left, right) => Number(isAccountPrimaryContact(right)) - Number(isAccountPrimaryContact(left)),
+    ),
+  }));
+}
+
+function buildCompanyInitials(value: string | null | undefined): string {
+  const parts = value?.trim().split(/\s+/).filter(Boolean) ?? [];
+  if (parts.length === 0) {
+    return "MB";
+  }
+  if (parts.length === 1) {
+    return parts[0]?.slice(0, 2).toUpperCase() ?? "MB";
+  }
+  return `${parts[0]?.[0] ?? ""}${parts[1]?.[0] ?? ""}`.toUpperCase() || "MB";
+}
+
 function readLatestIso(values: Array<string | null | undefined>): string | null {
   let latestValue: string | null = null;
   let latestTime = Number.NEGATIVE_INFINITY;
@@ -3041,6 +3179,31 @@ function formatCreateContactAccountAddress(row: BusinessAccountRow): string {
     .join(", ");
 }
 
+function formatMobileAccountAddress(row: BusinessAccountRow): string {
+  const street = [row.addressLine1, row.addressLine2]
+    .map((value) => value?.trim() ?? "")
+    .filter(Boolean)
+    .join(" ");
+  const city = row.city?.trim() ?? "";
+  const composed = [street, city].filter(Boolean).join(", ");
+  if (composed) {
+    return composed;
+  }
+
+  const addressParts = (row.address?.trim() ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (addressParts.length >= 2) {
+    const locality = addressParts[1]
+      .replace(/\s+[A-Z]{2}(?:\s+[A-Z0-9][A-Z0-9 -]{2,9})?$/i, "")
+      .trim();
+    return [addressParts[0], locality || addressParts[1]].join(", ");
+  }
+
+  return addressParts[0] || "No address on file";
+}
+
 function buildCreateContactAccountOptions(
   rows: BusinessAccountRow[],
 ): CreateContactAccountOption[] {
@@ -3313,7 +3476,7 @@ function buildEmailInitialStateFromRow(
 
   return {
     subject: "",
-    htmlBody: "<div><br /></div>",
+    htmlBody: "",
     textBody: "",
     to: [
       {
@@ -3569,6 +3732,9 @@ export function AccountsClient({
   const [selectedWeekFilters, setSelectedWeekFilters] = useState<string[]>([]);
   const [selectedSalesRepFilters, setSelectedSalesRepFilters] = useState<string[]>([]);
   const [q, setQ] = useState("");
+  const [mobileAccountsSheet, setMobileAccountsSheet] = useState<MobileAccountsSheet>(null);
+  const [expandedMobileAccountKeys, setExpandedMobileAccountKeys] = useState<string[]>([]);
+  const [mobileDetailTab, setMobileDetailTab] = useState<MobileAccountDetailTab>("overview");
   const [headerFilters, setHeaderFilters] = useState<HeaderFilters>(
     DEFAULT_HEADER_FILTERS,
   );
@@ -3860,11 +4026,11 @@ export function AccountsClient({
     return rowsPayload.items;
   }
 
-  async function loadMailSession(): Promise<MailSessionResponse | null> {
+  async function loadMailSession(forceRefresh = false): Promise<MailSessionResponse | null> {
     setIsMailSessionLoading(true);
 
     try {
-      const response = await fetch("/api/mail/session", {
+      const response = await fetch(forceRefresh ? "/api/mail/session?refresh=1" : "/api/mail/session", {
         cache: "no-store",
       });
       const payload = await readJsonResponse<MailSessionResponse | { error?: string }>(
@@ -4421,12 +4587,18 @@ export function AccountsClient({
     [accountLists, currentAccountListSignature, displayRows],
   );
   const isAllAccountsListActive = currentAccountListSignature === defaultAccountListSignature;
+  const activeMobileAccountList = accountListItemsWithCounts.find((list) => list.isActive) ?? null;
+  const mobileAccountScopeLabel = activeMobileAccountList?.name ?? "All Accounts";
 
   const canExportAccountsCsv =
     session?.authenticated === true &&
     [session.user?.id, session.user?.name].some(
       (value) => value?.trim().toLowerCase() === "jserrano",
     );
+  const visibleColumnOrder = useMemo(
+    () => columnOrder.filter((columnId) => visibleColumns.includes(columnId)),
+    [columnOrder, visibleColumns],
+  );
   const accountsCsvExportHref = useMemo(
     () =>
       buildAccountsCsvExportHref({
@@ -4438,6 +4610,7 @@ export function AccountsClient({
         headerFilters: debouncedHeaderFilters,
         sortBy,
         sortDir,
+        visibleColumns: visibleColumnOrder,
       }),
     [
       activeFilterView,
@@ -4448,10 +4621,22 @@ export function AccountsClient({
       selectedWeekFilters,
       sortBy,
       sortDir,
+      visibleColumnOrder,
     ],
   );
   const rows = queryResult.items;
   const total = queryResult.total;
+  const mobileAccountGroups = useMemo(
+    () => groupMobileAccountRows(accountViewMetricRows),
+    [accountViewMetricRows],
+  );
+  const mobileAllAccountCount = mobileAccountGroups.length;
+  const mobileTotalPages = Math.max(1, Math.ceil(mobileAccountGroups.length / PAGE_SIZE));
+  const mobilePage = Math.min(page, mobileTotalPages);
+  const mobileGroups = useMemo(() => {
+    const start = (mobilePage - 1) * PAGE_SIZE;
+    return mobileAccountGroups.slice(start, start + PAGE_SIZE);
+  }, [mobileAccountGroups, mobilePage]);
   const selectedContactRows = useMemo(() => {
     const selectedRowKeySet = new Set(selectedContactRowKeys);
     return workbenchFilteredRows.filter(
@@ -4465,6 +4650,7 @@ export function AccountsClient({
     );
   }, [selectedContactRowKeys, workbenchFilteredRows]);
   const selectedNotesContactId = selected ? resolveRowContactId(selected) : null;
+  const selectedIsPrimaryContact = selected ? isAccountPrimaryContact(selected) : false;
   const companyNotes = useMemo(
     () => accountNotes.filter((note) => note.contactId === null),
     [accountNotes],
@@ -4477,10 +4663,6 @@ export function AccountsClient({
     [accountNotes, selectedNotesContactId],
   );
 
-  const visibleColumnOrder = useMemo(
-    () => columnOrder.filter((columnId) => visibleColumns.includes(columnId)),
-    [columnOrder, visibleColumns],
-  );
   const visibleColumnConfigs = useMemo(
     () =>
       columnOrder.map((columnId) => ({
@@ -5776,7 +5958,7 @@ export function AccountsClient({
       }
 
       if (record.success === true) {
-        void loadMailSession();
+        void loadMailSession(true);
         setSaveNotice("Gmail connected. You can send email from the app now.");
         setSaveError(null);
         return;
@@ -7513,6 +7695,7 @@ export function AccountsClient({
     setIsDrawerHydrating(false);
     setSelected(null);
     setDraft(null);
+    setMobileDetailTab("overview");
     setDrawerFocusTarget(null);
     setSaveError(null);
     setSaveFieldErrors({});
@@ -7562,6 +7745,8 @@ export function AccountsClient({
     row: BusinessAccountRow,
     options?: { focusTarget?: "notes" | null },
   ) {
+    setMobileAccountsSheet(null);
+    setMobileDetailTab(options?.focusTarget === "notes" ? "activity" : "overview");
     drawerLoadRequestIdRef.current += 1;
     const requestId = drawerLoadRequestIdRef.current;
     drawerLoadAbortControllerRef.current?.abort();
@@ -9308,19 +9493,34 @@ export function AccountsClient({
       contentClassName={styles.pageContent}
       hidePageHeaderCopy
       topBarSearch={
-        <label className={styles.searchField}>
-          <SearchIcon />
-          <input
-            aria-label="Global search"
-            className={styles.searchInput}
-            onChange={(event) => {
-              setPage(1);
-              setQ(event.target.value);
-            }}
-            placeholder="Search companies, contacts, sales reps, addresses, emails, or notes"
-            value={q}
-          />
-        </label>
+        <>
+          <label className={`${styles.searchField} ${styles.desktopTopBarSearch}`}>
+            <SearchIcon />
+            <input
+              aria-label="Global search"
+              className={styles.searchInput}
+              onChange={(event) => {
+                setPage(1);
+                setQ(event.target.value);
+              }}
+              placeholder="Search companies, contacts, sales reps, addresses, emails, or notes"
+              value={q}
+            />
+          </label>
+          <label className={`${styles.searchField} ${styles.mobileTopBarSearch}`}>
+            <SearchIcon />
+            <input
+              aria-label="Search accounts"
+              className={styles.searchInput}
+              onChange={(event) => {
+                setPage(1);
+                setQ(event.target.value);
+              }}
+              placeholder="Search accounts"
+              value={q}
+            />
+          </label>
+        </>
       }
       statusLine={
         isSyncing ? (
@@ -9943,6 +10143,439 @@ export function AccountsClient({
         </div>
       </section>
 
+      <section aria-label="Accounts mobile view" className={styles.mobileAccountsExperience}>
+        <section className={styles.mobileAccountsCommandBar}>
+          <header className={styles.mobileAccountsHeader}>
+            <div>
+              <span className={styles.mobileEyebrow}>Account management</span>
+              <h1>Accounts</h1>
+            </div>
+            <button
+              aria-label="Create account"
+              className={styles.mobileCreateButton}
+              onClick={openCreateDrawer}
+              type="button"
+            >
+              +
+            </button>
+          </header>
+
+          <div className={styles.mobileAccountCommandRow}>
+            <button
+              aria-label={`Choose account list. Current list: ${mobileAccountScopeLabel}`}
+              className={styles.mobileAccountScopeButton}
+              onClick={() => setMobileAccountsSheet("filters")}
+              type="button"
+            >
+              <span className={styles.mobileAccountScopeIcon}>
+                <AccountViewMetricIcon icon="contacts" />
+              </span>
+              <span className={styles.mobileAccountScopeLabel}>{mobileAccountScopeLabel}</span>
+              <ChevronDownIcon />
+              <i />
+              <b>{mobileAllAccountCount.toLocaleString()}</b>
+            </button>
+          <button
+            className={styles.mobileControlButton}
+            onClick={() => setMobileAccountsSheet("filters")}
+            type="button"
+          >
+            <FilterIcon />
+            <span>Filters</span>
+            <ChevronDownIcon />
+          </button>
+          <button
+            className={styles.mobileControlButton}
+            onClick={() => setMobileAccountsSheet("sort")}
+            type="button"
+          >
+            <HeaderSortIcon active direction={sortDir} />
+            <span>Sort</span>
+            <ChevronDownIcon />
+          </button>
+          </div>
+        </section>
+
+        {activeFilterSummaryItems.length > 0 ? (
+          <div className={styles.mobileActiveFilters}>
+            {activeFilterSummaryItems.map((item) => (
+              <span key={item.key}>
+                <MobileFilterSummaryIcon type={item.key} />
+                {item.label}
+              </span>
+            ))}
+            <button onClick={clearAllFilters} type="button">Clear</button>
+          </div>
+        ) : null}
+
+        <div className={styles.mobileResultsMeta}>
+          <strong>{mobileAccountGroups.length.toLocaleString()} accounts</strong>
+          <span>Tap an account for details and activity</span>
+        </div>
+
+        <div className={styles.mobileAccountList}>
+          {loading ? (
+            <div className={styles.mobileEmptyState}>Loading accounts…</div>
+          ) : mobileGroups.length === 0 ? (
+            <div className={styles.mobileEmptyState}>No accounts match these filters.</div>
+          ) : (
+            mobileGroups.map((group) => {
+              const isExpanded = expandedMobileAccountKeys.includes(group.key);
+              const visibleContactRows = isExpanded
+                ? group.contactRows
+                : group.contactRows.slice(0, 2);
+              const hiddenContactCount = Math.max(
+                group.contactRows.length - visibleContactRows.length,
+                0,
+              );
+              const accountRow = group.accountRow;
+
+              return (
+                <article className={styles.mobileAccountCard} key={`mobile-${group.key}`}>
+                  <header className={styles.mobileCompanyCardHeader}>
+                    <span className={styles.mobileCompanyCardIcon}>
+                      <AccountViewMetricIcon icon="building" />
+                    </span>
+                    <button
+                      aria-label={`Open ${accountRow.companyName}`}
+                      className={styles.mobileCompanyCardMain}
+                      onClick={() => {
+                        void openDrawer(accountRow);
+                      }}
+                      type="button"
+                    >
+                      <span className={styles.mobileCompanyCardCopy}>
+                        <strong>{accountRow.companyName || "Unnamed account"}</strong>
+                        <span>{formatMobileAccountAddress(accountRow)}</span>
+                      </span>
+                    </button>
+                    <button
+                      aria-label={`Open ${accountRow.companyName}`}
+                      className={styles.mobileCardOpenButton}
+                      onClick={() => {
+                        void openDrawer(accountRow);
+                      }}
+                      type="button"
+                    >
+                      <ChevronRightIcon />
+                    </button>
+                  </header>
+
+                  <div className={styles.mobileContactList}>
+                    {visibleContactRows.map((row) => {
+                      const isConfirmedPrimary = isAccountPrimaryContact(row);
+                      const hasContact = rowHasMetricContact(row);
+                      const contactName = row.primaryContactName?.trim() || "No contact assigned";
+                      const phone = row.primaryContactPhone?.trim() || resolveCompanyPhone(row);
+                      const email = resolveRowContactEmail(row);
+
+                      return (
+                        <section className={styles.mobileContactRow} key={getRowKey(row)}>
+                          <button
+                            aria-label={`Open ${contactName} at ${row.companyName}`}
+                            className={styles.mobileContactCardMain}
+                            onClick={() => {
+                              void openDrawer(row);
+                            }}
+                            type="button"
+                          >
+                            <span className={styles.mobileContactCardCopy}>
+                              <span className={styles.mobilePrimaryContactLine}>
+                                <ContactPersonIcon />
+                                <b>{contactName}</b>
+                                <i>
+                                  {isConfirmedPrimary
+                                    ? "Primary"
+                                    : hasContact
+                                      ? "Contact"
+                                      : "Not assigned"}
+                                </i>
+                              </span>
+                              <span className={styles.mobileContactDetailLine}>
+                                <EmailIcon />
+                                <span className={styles.mobileEmailLine} data-empty={!email}>
+                                  {email || "No email on file"}
+                                </span>
+                              </span>
+                              <span className={styles.mobileContactDetailLine}>
+                                <PhoneIcon />
+                                <span className={styles.mobilePhoneLine}>
+                                  {phone || "No phone on file"}
+                                </span>
+                              </span>
+                            </span>
+                          </button>
+                          <div className={styles.mobileCardActions}>
+                            <button
+                              aria-label={
+                                email
+                                  ? `Email ${contactName} at ${row.companyName}`
+                                  : `${contactName} does not have an email address`
+                              }
+                              className={styles.mobileCardEmailButton}
+                              disabled={!email}
+                              onClick={() => openEmailComposerFromRow(row)}
+                              title={email ? `Email ${email}` : "No email address on file"}
+                              type="button"
+                            >
+                              <EmailIcon />
+                            </button>
+                            <CallPhoneButton
+                              className={styles.mobileCardCallButton}
+                              context={{
+                                sourcePage: "accounts",
+                                linkedBusinessAccountId: row.businessAccountId,
+                                linkedAccountRowKey: row.rowKey ?? row.id,
+                                linkedContactId: resolveRowContactId(row),
+                                linkedCompanyName: row.companyName,
+                                linkedContactName: row.primaryContactName,
+                              }}
+                              label={`${contactName} at ${row.companyName}`}
+                              phone={phone}
+                            />
+                          </div>
+                        </section>
+                      );
+                    })}
+                  </div>
+
+                  {group.contactRows.length > 2 ? (
+                    <button
+                      aria-expanded={isExpanded}
+                      className={styles.mobileShowMoreContacts}
+                      onClick={() => {
+                        setExpandedMobileAccountKeys((current) =>
+                          current.includes(group.key)
+                            ? current.filter((key) => key !== group.key)
+                            : [...current, group.key],
+                        );
+                      }}
+                      type="button"
+                    >
+                      {isExpanded
+                        ? "Show fewer contacts"
+                        : `Show ${hiddenContactCount} more contact${hiddenContactCount === 1 ? "" : "s"}`}
+                    </button>
+                  ) : null}
+                </article>
+              );
+            })
+          )}
+        </div>
+
+        {mobileTotalPages > 1 ? (
+          <nav aria-label="Mobile account pages" className={styles.mobilePagination}>
+            <button
+              disabled={mobilePage <= 1}
+              onClick={() => setPage(Math.max(1, mobilePage - 1))}
+              type="button"
+            >
+              Previous
+            </button>
+            <span>Page {mobilePage} of {mobileTotalPages}</span>
+            <button
+              disabled={mobilePage >= mobileTotalPages}
+              onClick={() => setPage(Math.min(mobileTotalPages, mobilePage + 1))}
+              type="button"
+            >
+              Next
+            </button>
+          </nav>
+        ) : null}
+      </section>
+
+      {mobileAccountsSheet ? (
+        <div
+          className={styles.mobileSheetBackdrop}
+          onClick={() => setMobileAccountsSheet(null)}
+        >
+          <section
+            aria-label={mobileAccountsSheet === "filters" ? "Account filters" : "Account sorting"}
+            aria-modal="true"
+            className={styles.mobileSheet}
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <header className={styles.mobileSheetHeader}>
+              <button onClick={() => setMobileAccountsSheet(null)} type="button">×</button>
+              <strong>{mobileAccountsSheet === "filters" ? "Filters" : "Sort accounts"}</strong>
+              <button
+                className={styles.mobileSheetReset}
+                onClick={() => {
+                  if (mobileAccountsSheet === "filters") {
+                    clearAllFilters();
+                  } else {
+                    setSortBy("companyName");
+                    setSortDir("asc");
+                    setPage(1);
+                  }
+                }}
+                type="button"
+              >
+                Reset
+              </button>
+            </header>
+
+            {mobileAccountsSheet === "filters" ? (
+              <div className={styles.mobileSheetBody}>
+                <fieldset className={`${styles.mobileFilterGroup} ${styles.mobileListFilterGroup}`}>
+                  <legend>List</legend>
+                  <button
+                    aria-pressed={isAllAccountsListActive}
+                    onClick={applyAllAccountsList}
+                    type="button"
+                  >
+                    <span>All Accounts</span>
+                    <b>{mobileAllAccountCount.toLocaleString()}</b>
+                  </button>
+                  {accountListItemsWithCounts.map((list) => (
+                    <button
+                      aria-pressed={list.isActive}
+                      disabled={deletingAccountListId === list.id}
+                      key={`mobile-sheet-list-${list.id}`}
+                      onClick={() => applyAccountListFilterSnapshot(list.filters)}
+                      type="button"
+                    >
+                      <span>{list.name}</span>
+                      <b>{list.resultCount.toLocaleString()}</b>
+                    </button>
+                  ))}
+                  <button
+                    className={styles.mobileNewListButton}
+                    onClick={() => {
+                      setMobileAccountsSheet(null);
+                      openCreateAccountListModal();
+                    }}
+                    type="button"
+                  >
+                    + Create a new list
+                  </button>
+                </fieldset>
+
+                <fieldset className={styles.mobileFilterGroup}>
+                  <legend>View</legend>
+                  <button
+                    aria-pressed={activeFilterView === "allCompanies"}
+                    onClick={() => {
+                      setActiveFilterView("allCompanies");
+                      setPage(1);
+                    }}
+                    type="button"
+                  >
+                    All accounts
+                  </button>
+                  <button
+                    aria-pressed={activeFilterView === "marketingOnly"}
+                    onClick={() => {
+                      setActiveFilterView("marketingOnly");
+                      setPage(1);
+                    }}
+                    type="button"
+                  >
+                    Marketing only
+                  </button>
+                </fieldset>
+
+                <fieldset className={styles.mobileFilterGroup}>
+                  <legend>Category</legend>
+                  <div className={styles.mobileFilterChips}>
+                    {CATEGORY_FILTER_OPTIONS.map((category) => (
+                      <button
+                        aria-pressed={selectedCategoryFilterSet.has(category)}
+                        key={`mobile-filter-${category}`}
+                        onClick={() => toggleCategoryFilter(category)}
+                        type="button"
+                      >
+                        {getCategoryFilterLabel(category)}
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <label className={styles.mobileFilterSelect}>
+                  <span>Sales rep</span>
+                  <select
+                    onChange={(event) => {
+                      setSelectedSalesRepFilters(event.target.value ? [event.target.value] : []);
+                      setPage(1);
+                    }}
+                    value={selectedSalesRepFilters.length === 1 ? selectedSalesRepFilters[0] : ""}
+                  >
+                    <option value="">All sales reps</option>
+                    {salesRepFilterOptions.map((salesRepName) => (
+                      <option key={`mobile-rep-${salesRepName}`} value={salesRepName}>
+                        {getSalesRepFilterLabel(salesRepName)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className={styles.mobileFilterSelect}>
+                  <span>Follow-up week</span>
+                  <select
+                    onChange={(event) => {
+                      setSelectedWeekFilters(event.target.value ? [event.target.value] : []);
+                      setPage(1);
+                    }}
+                    value={selectedWeekFilters.length === 1 ? selectedWeekFilters[0] : ""}
+                  >
+                    <option value="">Any week</option>
+                    {availableWeekFilters.map((week) => (
+                      <option key={`mobile-week-${week}`} value={week}>{week}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            ) : (
+              <div className={styles.mobileSheetBody}>
+                <fieldset className={styles.mobileFilterGroup}>
+                  <legend>Sort by</legend>
+                  {(
+                    [
+                      ["companyName", "Company name"],
+                      ["salesRepName", "Sales rep"],
+                      ["lastCalledAt", "Last called"],
+                      ["lastModifiedIso", "Last updated"],
+                    ] as Array<[SortBy, string]>
+                  ).map(([value, label]) => (
+                    <button
+                      aria-pressed={sortBy === value}
+                      key={`mobile-sort-${value}`}
+                      onClick={() => {
+                        setSortBy(value);
+                        setPage(1);
+                      }}
+                      type="button"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </fieldset>
+                <fieldset className={styles.mobileFilterGroup}>
+                  <legend>Direction</legend>
+                  <div className={styles.mobileFilterChips}>
+                    <button aria-pressed={sortDir === "asc"} onClick={() => setSortDir("asc")} type="button">
+                      Ascending
+                    </button>
+                    <button aria-pressed={sortDir === "desc"} onClick={() => setSortDir("desc")} type="button">
+                      Descending
+                    </button>
+                  </div>
+                </fieldset>
+              </div>
+            )}
+
+            <button
+              className={styles.mobileSheetApply}
+              onClick={() => setMobileAccountsSheet(null)}
+              type="button"
+            >
+              Show {mobileAccountGroups.length.toLocaleString()} accounts
+            </button>
+          </section>
+        </div>
+      ) : null}
+
       <section className={styles.tableCard}>
         {syncProgress ? (
           <section className={styles.syncProgressSection}>
@@ -10491,7 +11124,309 @@ export function AccountsClient({
       />
 
       <aside className={`${styles.drawer} ${selected ? styles.drawerOpen : ""}`}>
-        <div className={styles.drawerHeader}>
+        {selected && draft ? (
+          <div className={styles.mobileAccountDetail}>
+            <header className={styles.mobileDetailTopBar}>
+              <button
+                aria-label="Back to accounts"
+                onClick={() => closeDrawer()}
+                type="button"
+              >
+                ‹
+              </button>
+              <strong>Account details</strong>
+              <button
+                aria-label="More account actions"
+                onClick={() => setMobileDetailTab("activity")}
+                type="button"
+              >
+                <MoreIcon />
+              </button>
+            </header>
+
+            <div className={styles.mobileDetailScroll}>
+              <section className={styles.mobileDetailHero}>
+                <span className={styles.mobileDetailAvatar} data-category={selected.category ?? "blank"}>
+                  {buildCompanyInitials(selected.companyName)}
+                </span>
+                <div>
+                  <h2>{selected.companyName}</h2>
+                  <p>{selected.address?.trim() || "No address on file"}</p>
+                </div>
+                {isDrawerHydrating ? <span className={styles.mobileLoadingBadge}>Refreshing…</span> : null}
+              </section>
+
+              <section className={styles.mobilePrimaryContactCard}>
+                <div className={styles.mobileContactCardHeader}>
+                  <span className={styles.mobileContactAvatar}>
+                    {buildCompanyInitials(selectedIsPrimaryContact ? selected.primaryContactName : null)}
+                  </span>
+                  <div>
+                    <span>Primary contact</span>
+                    <strong>{selectedIsPrimaryContact ? selected.primaryContactName?.trim() || "Unnamed contact" : "Not assigned"}</strong>
+                    <small>{selectedIsPrimaryContact ? selected.primaryContactJobTitle?.trim() || "No role on file" : "Add a primary contact to this account"}</small>
+                  </div>
+                </div>
+                <div className={styles.mobilePrimaryActions}>
+                  <CallPhoneButton
+                    className={styles.mobilePrimaryActionButton}
+                    context={{
+                      sourcePage: "accounts",
+                      linkedBusinessAccountId: selected.businessAccountId,
+                      linkedAccountRowKey: selected.rowKey ?? selected.id,
+                      linkedContactId: selectedIsPrimaryContact ? resolveRowContactId(selected) : null,
+                      linkedCompanyName: selected.companyName,
+                      linkedContactName: selectedIsPrimaryContact ? selected.primaryContactName : null,
+                    }}
+                    label={`${selectedIsPrimaryContact ? selected.primaryContactName ?? selected.companyName : selected.companyName} phone`}
+                    phone={selectedIsPrimaryContact ? selected.primaryContactPhone ?? resolveCompanyPhone(selected) : resolveCompanyPhone(selected)}
+                  />
+                  <button
+                    disabled={!selectedIsPrimaryContact || !hasRowContactEmail(selected)}
+                    onClick={() => openEmailComposerFromRow(selected)}
+                    type="button"
+                  >
+                    Email
+                  </button>
+                  <button
+                    onClick={() => openCreateMeetingDrawerFromRow(selected, "Meeting")}
+                    type="button"
+                  >
+                    Meeting
+                  </button>
+                </div>
+              </section>
+
+              <nav aria-label="Account detail sections" className={styles.mobileDetailTabs}>
+                {(
+                  [
+                    ["overview", "Overview"],
+                    ["company", "Company"],
+                    ["contact", "Contact"],
+                    ["activity", "Activity"],
+                  ] as Array<[MobileAccountDetailTab, string]>
+                ).map(([value, label]) => (
+                  <button
+                    aria-current={mobileDetailTab === value ? "page" : undefined}
+                    key={`mobile-detail-${value}`}
+                    onClick={() => setMobileDetailTab(value)}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </nav>
+
+              {mobileDetailTab === "overview" ? (
+                <div className={styles.mobileDetailPanel}>
+                  <section className={styles.mobileInfoCard}>
+                    <h3>About this company</h3>
+                    <p>{draft.companyDescription?.trim() || "No company description has been added yet."}</p>
+                  </section>
+
+                  <section className={styles.mobileInfoCard}>
+                    <h3>Account overview</h3>
+                    <dl className={styles.mobileDefinitionList}>
+                      <div><dt>Account ID</dt><dd>{selected.businessAccountId || "—"}</dd></div>
+                      <div><dt>Category</dt><dd>{draft.category ?? "Unassigned"}</dd></div>
+                      <div><dt>Marketing eligible</dt><dd>{draft.marketingEligible !== false ? "Yes" : "No"}</dd></div>
+                      <div><dt>Sales rep</dt><dd>{draft.salesRepName?.trim() || "Unassigned"}</dd></div>
+                      <div><dt>Last activity</dt><dd>{formatLastCalled(readLatestIso([
+                        selected.lastCalledAt,
+                        selected.lastCalendarInvitedAt,
+                        selected.lastEmailedAt,
+                      ]))}</dd></div>
+                    </dl>
+                  </section>
+
+                  <div className={styles.mobileOverviewActions}>
+                    <button onClick={() => setMobileDetailTab("company")} type="button">Edit company</button>
+                    <button onClick={() => setMobileDetailTab("activity")} type="button">View notes & calls</button>
+                  </div>
+                </div>
+              ) : null}
+
+              {mobileDetailTab === "company" ? (
+                <div className={styles.mobileDetailPanel}>
+                  <section className={styles.mobileFormCard}>
+                    <div className={styles.mobileSectionHeading}>
+                      <div><span>Company</span><h3>Company information</h3></div>
+                      <button disabled={isSaving} onClick={handleSave} type="button">
+                        {isSaving ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+                    <label>
+                      <span>Company name</span>
+                      <input
+                        onChange={(event) => setDraft((current) => current ? { ...current, companyName: event.target.value } : current)}
+                        value={draft.companyName}
+                      />
+                    </label>
+                    <label>
+                      <span>Company phone</span>
+                      <input
+                        inputMode="tel"
+                        onChange={(event) => setDraft((current) => current ? { ...current, companyPhone: event.target.value } : current)}
+                        value={draft.companyPhone ?? ""}
+                      />
+                    </label>
+                    <label>
+                      <span>Company description</span>
+                      <textarea
+                        onChange={(event) => setDraft((current) => current ? { ...current, companyDescription: event.target.value } : current)}
+                        rows={5}
+                        value={draft.companyDescription ?? ""}
+                      />
+                    </label>
+                    <label className={styles.mobileToggleRow}>
+                      <span><b>Marketing eligible</b><small>Include this account in marketing views.</small></span>
+                      <input
+                        checked={draft.marketingEligible !== false}
+                        onChange={(event) => setDraft((current) => current ? { ...current, marketingEligible: event.target.checked } : current)}
+                        type="checkbox"
+                      />
+                    </label>
+                    <label>
+                      <span>Sales rep</span>
+                      <select
+                        onChange={(event) => {
+                          const employee = findEmployeeById(sortedEmployeeOptions, event.target.value);
+                          setDraft((current) => current ? {
+                            ...current,
+                            salesRepId: employee?.id ?? null,
+                            salesRepName: employee?.name ?? null,
+                          } : current);
+                        }}
+                        value={draft.salesRepId ?? ""}
+                      >
+                        <option value="">Unassigned</option>
+                        {selectedSalesRepOption && !findEmployeeById(sortedEmployeeOptions, selectedSalesRepOption.id) ? (
+                          <option value={selectedSalesRepOption.id}>{selectedSalesRepOption.name}</option>
+                        ) : null}
+                        {sortedEmployeeOptions.map((employee) => (
+                          <option key={`mobile-company-rep-${employee.id}`} value={employee.id}>{employee.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </section>
+
+                  <section className={styles.mobileFormCard}>
+                    <h3>Address</h3>
+                    <label><span>Address line 1</span><input onChange={(event) => setDraft((current) => current ? { ...current, addressLine1: event.target.value } : current)} value={draft.addressLine1} /></label>
+                    <label><span>Unit number</span><input onChange={(event) => setDraft((current) => current ? { ...current, addressLine2: event.target.value } : current)} value={draft.addressLine2} /></label>
+                    <div className={styles.mobileFormGrid}>
+                      <label><span>City</span><input onChange={(event) => setDraft((current) => current ? { ...current, city: event.target.value } : current)} value={draft.city} /></label>
+                      <label><span>Province</span><input onChange={(event) => setDraft((current) => current ? { ...current, state: event.target.value } : current)} value={draft.state} /></label>
+                    </div>
+                    <div className={styles.mobileFormGrid}>
+                      <label><span>Postal code</span><input onChange={(event) => setDraft((current) => current ? { ...current, postalCode: event.target.value } : current)} value={draft.postalCode} /></label>
+                      <label><span>Country</span><input onChange={(event) => setDraft((current) => current ? { ...current, country: event.target.value } : current)} value={draft.country} /></label>
+                    </div>
+                    <button className={styles.mobileSaveButton} disabled={isSaving} onClick={handleSave} type="button">
+                      {isSaving ? "Saving changes…" : "Save company changes"}
+                    </button>
+                  </section>
+                </div>
+              ) : null}
+
+              {mobileDetailTab === "contact" ? (
+                <div className={styles.mobileDetailPanel}>
+                  <section className={styles.mobileContactProfile}>
+                    <span className={styles.mobileContactProfileAvatar}>{buildCompanyInitials(selectedIsPrimaryContact ? draft.primaryContactName : null)}</span>
+                    <strong>{selectedIsPrimaryContact ? draft.primaryContactName?.trim() || "Unnamed primary contact" : "No primary contact"}</strong>
+                    <span>{selectedIsPrimaryContact ? draft.primaryContactJobTitle?.trim() || "No role on file" : "Assign a primary contact before editing"}</span>
+                    <small>This is the account’s primary contact, not the assigned sales rep.</small>
+                  </section>
+
+                  <section className={styles.mobileFormCard}>
+                    <div className={styles.mobileSectionHeading}>
+                      <div><span>Primary contact</span><h3>Contact information</h3></div>
+                      <button disabled={isSaving || !selected.contactId || !selectedIsPrimaryContact} onClick={handleSave} type="button">
+                        {isSaving ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+                    {!selected.contactId || !selectedIsPrimaryContact ? <p className={styles.mobileInlineNotice}>This account does not have an editable primary contact ID yet.</p> : null}
+                    <label><span>Name</span><input disabled={!selected.contactId || !selectedIsPrimaryContact} onChange={(event) => setDraft((current) => current ? { ...current, primaryContactName: event.target.value } : current)} value={selectedIsPrimaryContact ? draft.primaryContactName ?? "" : ""} /></label>
+                    <label><span>Job title</span><input disabled={!selected.contactId || !selectedIsPrimaryContact} onChange={(event) => setDraft((current) => current ? { ...current, primaryContactJobTitle: event.target.value } : current)} value={selectedIsPrimaryContact ? draft.primaryContactJobTitle ?? "" : ""} /></label>
+                    <label><span>Phone</span><input disabled={!selected.contactId || !selectedIsPrimaryContact} inputMode="tel" onChange={(event) => setDraft((current) => current ? { ...current, primaryContactPhone: formatPhoneDraftValue(event.target.value) } : current)} value={selectedIsPrimaryContact ? draft.primaryContactPhone ?? "" : ""} /></label>
+                    <label><span>Extension</span><input disabled={!selected.contactId || !selectedIsPrimaryContact} inputMode="numeric" onChange={(event) => setDraft((current) => current ? { ...current, primaryContactExtension: event.target.value } : current)} value={selectedIsPrimaryContact ? draft.primaryContactExtension ?? "" : ""} /></label>
+                    <label><span>Email</span><input disabled={!selected.contactId || !selectedIsPrimaryContact} inputMode="email" onChange={(event) => setDraft((current) => current ? { ...current, primaryContactEmail: event.target.value } : current)} value={selectedIsPrimaryContact ? draft.primaryContactEmail ?? "" : ""} /></label>
+                  </section>
+
+                  <section className={styles.mobileInfoCard}>
+                    <h3>Account relationship</h3>
+                    <dl className={styles.mobileDefinitionList}>
+                      <div><dt>Company</dt><dd>{selected.companyName}</dd></div>
+                      <div><dt>Sales rep</dt><dd>{selected.salesRepName?.trim() || "Unassigned"}</dd></div>
+                      <div><dt>Employee ID</dt><dd>{selected.salesRepId?.trim() || "—"}</dd></div>
+                    </dl>
+                  </section>
+                </div>
+              ) : null}
+
+              {mobileDetailTab === "activity" ? (
+                <div className={styles.mobileDetailPanel}>
+                  <section className={styles.mobileActivitySection}>
+                    <div className={styles.mobileSectionHeading}>
+                      <div><span>Shared with the team</span><h3>Company notes</h3></div>
+                      <b>{companyNotes.length}</b>
+                    </div>
+                    <textarea onChange={(event) => setNewAccountNote(event.target.value)} placeholder="Add a note about this company…" rows={3} value={newAccountNote} />
+                    <button disabled={isSavingAccountNote || !newAccountNote.trim()} onClick={() => void handleAddAccountNote("company")} type="button">
+                      {isSavingAccountNote ? "Saving…" : "Add company note"}
+                    </button>
+                    {accountNotesLoading ? <p className={styles.mobileInlineNotice}>Loading notes…</p> : null}
+                    {accountNotesError ? <p className={styles.mobileErrorNotice}>{accountNotesError}</p> : null}
+                    <ul className={styles.mobileNotesList}>{companyNotes.map((note) => renderAccountNote(note))}</ul>
+                  </section>
+
+                  {selectedIsPrimaryContact && selectedNotesContactId !== null ? (
+                    <section className={styles.mobileActivitySection}>
+                      <div className={styles.mobileSectionHeading}>
+                        <div><span>{selected.primaryContactName || "Primary contact"}</span><h3>Contact notes</h3></div>
+                        <b>{contactNotes.length}</b>
+                      </div>
+                      <textarea onChange={(event) => setNewContactNote(event.target.value)} placeholder="Add a note for this contact…" rows={3} value={newContactNote} />
+                      <button disabled={isSavingContactNote || !newContactNote.trim()} onClick={() => void handleAddAccountNote("contact")} type="button">
+                        {isSavingContactNote ? "Saving…" : "Add contact note"}
+                      </button>
+                      <ul className={styles.mobileNotesList}>{contactNotes.map((note) => renderAccountNote(note))}</ul>
+                    </section>
+                  ) : null}
+
+                  <section className={styles.mobileActivitySection}>
+                    <div className={styles.mobileSectionHeading}>
+                      <div><span>Activity history</span><h3>Prior calls</h3></div>
+                      <b>{callHistory.length}</b>
+                    </div>
+                    {callHistoryLoading ? (
+                      <p className={styles.mobileInlineNotice}>Loading prior calls…</p>
+                    ) : callHistoryError ? (
+                      <p className={styles.mobileErrorNotice}>{callHistoryError}</p>
+                    ) : callHistory.length === 0 ? (
+                      <p className={styles.mobileInlineNotice}>No prior calls are linked to this contact yet.</p>
+                    ) : (
+                      <div className={styles.mobileCallList}>
+                        {callHistory.map((item) => (
+                          <article key={`mobile-call-${item.sessionId}`}>
+                            <div><strong>{item.direction === "inbound" ? "Inbound call" : "Outbound call"}</strong><span>{buildCallHistoryMeta(item)}</span></div>
+                            <small>{item.outcome.replace(/_/g, " ")}</small>
+                            {item.summaryText ? <p>{truncateLongText(item.summaryText, 320)}</p> : null}
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                </div>
+              ) : null}
+
+              {saveError ? <p className={styles.mobileErrorNotice}>{saveError}</p> : null}
+              {saveNotice ? <p className={styles.mobileSuccessNotice}>{saveNotice}</p> : null}
+            </div>
+          </div>
+        ) : null}
+
+        <div className={`${styles.drawerHeader} ${styles.desktopDrawerOnly}`}>
           <div className={styles.drawerHeaderContent}>
             <h2>{selected ? selected.companyName : "Account details"}</h2>
             {selected ? (
@@ -10552,7 +11487,7 @@ export function AccountsClient({
         </div>
 
         {selected && draft ? (
-          <div className={styles.drawerBody}>
+          <div className={`${styles.drawerBody} ${styles.desktopDrawerOnly}`}>
             <label>
               Company Name
               {drawerNeedsCompanyAssignment ? (
@@ -11626,7 +12561,7 @@ export function AccountsClient({
             </div>
           </div>
         ) : (
-          <div className={styles.drawerBody}>
+          <div className={`${styles.drawerBody} ${styles.desktopDrawerOnly}`}>
             <p>Select a row to view or edit details.</p>
           </div>
         )}

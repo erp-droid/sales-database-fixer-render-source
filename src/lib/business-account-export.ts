@@ -1,9 +1,38 @@
-import type { BusinessAccountRow } from "@/types/business-account";
+import type { BusinessAccountRow, SortBy } from "@/types/business-account";
 
-const CSV_COLUMNS: Array<{
+type CsvColumn = {
   header: string;
   read: (row: BusinessAccountRow) => string | number | null | undefined;
-}> = [
+};
+
+const VISIBLE_CSV_COLUMNS: Record<SortBy, CsvColumn> = {
+  companyName: { header: "Company Name", read: (row) => row.companyName },
+  accountType: { header: "Account Type", read: (row) => row.accountType ?? null },
+  opportunityCount: { header: "Opportunities", read: (row) => row.opportunityCount ?? null },
+  salesRepName: { header: "Sales Rep", read: (row) => row.salesRepName ?? null },
+  industryType: { header: "Industry Type", read: (row) => row.industryType ?? null },
+  subCategory: { header: "Subcategory", read: (row) => row.subCategory ?? null },
+  companyRegion: { header: "Company Region", read: (row) => row.companyRegion ?? null },
+  week: { header: "Week", read: (row) => row.week ?? null },
+  address: { header: "Address", read: (row) => row.address },
+  companyPhone: { header: "Company Phone", read: (row) => row.companyPhone ?? null },
+  primaryContactName: { header: "Contact", read: (row) => row.primaryContactName ?? null },
+  primaryContactJobTitle: { header: "Job Title", read: (row) => row.primaryContactJobTitle ?? null },
+  primaryContactPhone: { header: "Contact Phone", read: (row) => row.primaryContactPhone ?? null },
+  primaryContactExtension: { header: "Extension", read: (row) => row.primaryContactExtension ?? null },
+  primaryContactEmail: { header: "Email", read: (row) => row.primaryContactEmail ?? null },
+  notes: { header: "Notes", read: (row) => row.notes ?? null },
+  category: { header: "Category", read: (row) => row.category ?? null },
+  lastCalledAt: { header: "Last Called", read: (row) => row.lastCalledAt ?? null },
+  lastCalendarInvitedAt: {
+    header: "Last Invited",
+    read: (row) => row.lastCalendarInvitedAt ?? null,
+  },
+  lastEmailedAt: { header: "Last Emailed", read: (row) => row.lastEmailedAt ?? null },
+  lastModifiedIso: { header: "Updated", read: (row) => row.lastModifiedIso ?? null },
+};
+
+const CSV_COLUMNS: CsvColumn[] = [
   { header: "Account Record ID", read: (row) => row.accountRecordId ?? row.id },
   { header: "Row ID", read: (row) => row.id },
   { header: "Row Key", read: (row) => row.rowKey ?? null },
@@ -69,10 +98,17 @@ function escapeCsvCell(value: string | number | null | undefined): string {
   return `"${text.replace(/"/g, "\"\"")}"`;
 }
 
-export function buildBusinessAccountsCsv(rows: readonly BusinessAccountRow[]): string {
-  const headerLine = CSV_COLUMNS.map((column) => escapeCsvCell(column.header)).join(",");
+export function buildBusinessAccountsCsv(
+  rows: readonly BusinessAccountRow[],
+  visibleColumns?: readonly SortBy[],
+): string {
+  const columns =
+    visibleColumns && visibleColumns.length > 0
+      ? visibleColumns.map((columnId) => VISIBLE_CSV_COLUMNS[columnId])
+      : CSV_COLUMNS;
+  const headerLine = columns.map((column) => escapeCsvCell(column.header)).join(",");
   const dataLines = rows.map((row) =>
-    CSV_COLUMNS.map((column) => escapeCsvCell(column.read(row))).join(","),
+    columns.map((column) => escapeCsvCell(column.read(row))).join(","),
   );
 
   return `\uFEFF${[headerLine, ...dataLines].join("\r\n")}`;

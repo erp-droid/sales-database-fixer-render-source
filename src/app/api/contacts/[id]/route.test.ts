@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const requireAuthCookieValue = vi.fn(() => "cookie");
 const setAuthCookie = vi.fn();
-const resolveDeferredActionActor = vi.fn(async () => ({
+const resolveStoredDeferredActionActor = vi.fn(() => ({
   loginName: "jserrano",
   name: "Jorge Serrano",
 }));
@@ -31,7 +31,7 @@ vi.mock("@/lib/auth", () => ({
 }));
 
 vi.mock("@/lib/deferred-action-actor", () => ({
-  resolveDeferredActionActor,
+  resolveStoredDeferredActionActor,
 }));
 
 vi.mock("@/lib/deferred-actions-store", () => ({
@@ -107,5 +107,6 @@ describe("DELETE /api/contacts/[id]", () => {
         sourceSurface: "accounts",
       }),
     );
+    expect(resolveStoredDeferredActionActor).toHaveBeenCalledTimes(1);
   });
 });

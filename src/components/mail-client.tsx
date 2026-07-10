@@ -573,6 +573,7 @@ export function MailClient() {
         status: "connected",
         senderEmail: current?.senderEmail ?? null,
         senderDisplayName: current?.senderDisplayName ?? null,
+        senderSignatureHtml: current?.senderSignatureHtml ?? null,
         expectedGoogleEmail:
           current?.expectedGoogleEmail ?? current?.senderEmail ?? null,
         connectedGoogleEmail:
@@ -588,6 +589,7 @@ export function MailClient() {
         folders: current?.folders ?? ["inbox", "sent", "drafts", "starred"],
       }));
       setSessionError(null);
+      void loadSession({ forceRefresh: true });
       void loadThreads(folder, searchInput, { forceConnected: true });
       return;
     }
