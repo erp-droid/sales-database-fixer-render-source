@@ -42,11 +42,6 @@ import {
   resolveCompanyPhone,
 } from "@/lib/business-accounts";
 import {
-  buildBusinessAccountsCsv,
-  buildBusinessAccountsCsvFilename,
-  buildDistinctContactPhoneExportRows,
-} from "@/lib/business-account-export";
-import {
   buildBusinessAccountConcurrencySnapshot,
   collectUpdatedConcurrencyFields,
 } from "@/lib/business-account-concurrency";
@@ -792,6 +787,75 @@ function normalizeStoredAccountsFilterPreferences(
     q: typeof record.q === "string" ? record.q : "",
     headerFilters: normalizeStoredHeaderFilters(record.headerFilters),
   };
+}
+
+function buildAccountsCsvExportHref(input: {
+  activeFilterView: AccountsFilterView;
+  selectedCategoryFilters: CategoryFilterValue[];
+  selectedWeekFilters: string[];
+  selectedSalesRepFilters: string[];
+  q: string;
+  headerFilters: HeaderFilters;
+  sortBy: SortBy;
+  sortDir: SortDir;
+  visibleColumns: SortBy[];
+}): string {
+  const params = new URLSearchParams();
+
+  const append = (key: string, value: string | null | undefined) => {
+    const trimmed = value?.trim();
+    if (trimmed) {
+      params.set(key, trimmed);
+    }
+  };
+
+  params.set("filterView", input.activeFilterView);
+  input.selectedCategoryFilters.forEach((category) => {
+    params.append("selectedCategory", category);
+  });
+  input.selectedWeekFilters.forEach((week) => {
+    const trimmed = week.trim();
+    if (trimmed) {
+      params.append("selectedWeek", trimmed);
+    }
+  });
+  input.selectedSalesRepFilters.forEach((salesRepName) => {
+    const trimmed = salesRepName.trim();
+    if (trimmed) {
+      params.append("selectedSalesRep", trimmed);
+    }
+  });
+  input.visibleColumns.forEach((column) => params.append("column", column));
+  append("q", input.q);
+  append("filterCompanyName", input.headerFilters.companyName);
+  append("filterAccountType", input.headerFilters.accountType);
+  append("filterOpportunityCount", input.headerFilters.opportunityCount);
+  append("filterSalesRep", input.headerFilters.salesRepName);
+  append("filterIndustryType", input.headerFilters.industryType);
+  append("filterSubCategory", input.headerFilters.subCategory);
+  append("filterCompanyRegion", input.headerFilters.companyRegion);
+  append("filterWeek", input.headerFilters.week);
+  append("filterAddress", input.headerFilters.address);
+  append("filterCompanyPhone", input.headerFilters.companyPhone);
+  append("filterPrimaryContactName", input.headerFilters.primaryContactName);
+  append("filterPrimaryContactJobTitle", input.headerFilters.primaryContactJobTitle);
+  append("filterPrimaryContactPhone", input.headerFilters.primaryContactPhone);
+  append("filterPrimaryContactExtension", input.headerFilters.primaryContactExtension);
+  append("filterPrimaryContactEmail", input.headerFilters.primaryContactEmail);
+  append("filterNotes", input.headerFilters.notes);
+  if (input.headerFilters.category) {
+    params.set("filterCategory", input.headerFilters.category);
+  }
+  append("filterLastCalled", input.headerFilters.lastCalled);
+  append("filterLastCalendarInvited", input.headerFilters.lastCalendarInvited);
+  append("filterLastEmailed", input.headerFilters.lastEmailed);
+  append("filterLastModified", input.headerFilters.lastModified);
+  params.set("sortBy", input.sortBy);
+  params.set("sortDir", input.sortDir);
+  params.set("page", "1");
+  params.set("pageSize", "1");
+
+  return `/api/business-accounts/export?${params.toString()}`;
 }
 
 const COLUMN_STORAGE_KEY = "businessAccounts.columnOrder.v2";
@@ -2608,12 +2672,12 @@ function buildAccountViewMetrics(rows: BusinessAccountRow[]): AccountViewMetric[
       companyPhoneValues.add(companyPhone);
     }
 
-    [row.primaryContactPhone, row.phoneNumber].forEach((value) => {
-      const normalized = normalizeMetricPhone(value);
-      if (normalized) {
-        contactPhoneValues.add(normalized);
+    if (rowHasMetricContact(row)) {
+      const contactPhone = normalizeMetricPhone(row.primaryContactPhone);
+      if (contactPhone) {
+        contactPhoneValues.add(contactPhone);
       }
-    });
+    }
 
     const email = row.primaryContactEmail?.trim().toLowerCase();
     if (email) {
@@ -4535,16 +4599,30 @@ export function AccountsClient({
     () => columnOrder.filter((columnId) => visibleColumns.includes(columnId)),
     [columnOrder, visibleColumns],
   );
-  const contactPhoneExportRows = useMemo(
-    () => buildDistinctContactPhoneExportRows(accountViewMetricRows),
-    [accountViewMetricRows],
-  );
-  const contactPhoneExportColumns = useMemo(
+  const accountsCsvExportHref = useMemo(
     () =>
-      visibleColumnOrder.includes("primaryContactPhone")
-        ? visibleColumnOrder
-        : [...visibleColumnOrder, "primaryContactPhone" as const],
-    [visibleColumnOrder],
+      buildAccountsCsvExportHref({
+        activeFilterView,
+        selectedCategoryFilters,
+        selectedWeekFilters,
+        selectedSalesRepFilters,
+        q: debouncedQ,
+        headerFilters: debouncedHeaderFilters,
+        sortBy,
+        sortDir,
+        visibleColumns: visibleColumnOrder,
+      }),
+    [
+      activeFilterView,
+      debouncedHeaderFilters,
+      debouncedQ,
+      selectedCategoryFilters,
+      selectedSalesRepFilters,
+      selectedWeekFilters,
+      sortBy,
+      sortDir,
+      visibleColumnOrder,
+    ],
   );
   const rows = queryResult.items;
   const total = queryResult.total;
@@ -4552,20 +4630,6 @@ export function AccountsClient({
     () => groupMobileAccountRows(accountViewMetricRows),
     [accountViewMetricRows],
   );
-
-  function handleExportAccountsCsv() {
-    const csv = buildBusinessAccountsCsv(contactPhoneExportRows, contactPhoneExportColumns);
-    const objectUrl = URL.createObjectURL(
-      new Blob([csv], { type: "text/csv;charset=utf-8" }),
-    );
-    const anchor = document.createElement("a");
-    anchor.href = objectUrl;
-    anchor.download = buildBusinessAccountsCsvFilename();
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(objectUrl);
-  }
   const mobileAllAccountCount = mobileAccountGroups.length;
   const mobileTotalPages = Math.max(1, Math.ceil(mobileAccountGroups.length / PAGE_SIZE));
   const mobilePage = Math.min(page, mobileTotalPages);
@@ -9747,13 +9811,9 @@ export function AccountsClient({
             </button>
           ) : null}
           {canExportAccountsCsv ? (
-            <button
-              className={styles.toolbarButton}
-              onClick={handleExportAccountsCsv}
-              type="button"
-            >
-              Export CSV ({contactPhoneExportRows.length.toLocaleString()})
-            </button>
+            <a className={styles.toolbarButton} href={accountsCsvExportHref}>
+              Export CSV
+            </a>
           ) : null}
           <div className={styles.createMenu} data-transient-menu="true">
             <button
@@ -10012,13 +10072,9 @@ export function AccountsClient({
             </button>
           ) : null}
           {canExportAccountsCsv ? (
-            <button
-              className={styles.toolbarButton}
-              onClick={handleExportAccountsCsv}
-              type="button"
-            >
-              Export CSV ({contactPhoneExportRows.length.toLocaleString()})
-            </button>
+            <a className={styles.toolbarButton} href={accountsCsvExportHref}>
+              Export CSV
+            </a>
           ) : null}
           <div className={styles.createMenu} data-transient-menu="true">
             <button

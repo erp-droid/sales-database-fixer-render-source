@@ -12,7 +12,6 @@ import { queryBusinessAccounts } from "@/lib/business-accounts";
 import {
   buildBusinessAccountsCsv,
   buildBusinessAccountsCsvFilename,
-  buildDistinctContactPhoneExportRows,
   canExportBusinessAccountsCsv,
 } from "@/lib/business-account-export";
 import { fetchAllSyncRows } from "@/lib/data-quality-live";
@@ -214,13 +213,12 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
 
     const viewRows = applyExportViewFilters(sourceRows, viewFilters);
-    const filteredRows = queryBusinessAccounts(viewRows, {
+    const exportRows = queryBusinessAccounts(viewRows, {
       ...params,
       includeInternalRows: true,
       page: 1,
       pageSize: Math.max(1, viewRows.length || 1),
     }).items;
-    const exportRows = buildDistinctContactPhoneExportRows(filteredRows);
 
     const response = new NextResponse(
       buildBusinessAccountsCsv(exportRows, exportColumns),

@@ -114,47 +114,6 @@ export function buildBusinessAccountsCsv(
   return `\uFEFF${[headerLine, ...dataLines].join("\r\n")}`;
 }
 
-function normalizeContactPhoneKey(value: string | null | undefined): string | null {
-  const trimmed = value?.trim() ?? "";
-  if (!trimmed) {
-    return null;
-  }
-
-  const digits = trimmed.replace(/\D/g, "");
-  return digits.length >= 7 ? digits : trimmed.toLowerCase();
-}
-
-/**
- * Expands the filtered account rows into the exact distinct phone-number set
- * represented by the Contact phones KPI. A contact can contribute more than
- * one number, while duplicate numbers are exported only once.
- */
-export function buildDistinctContactPhoneExportRows(
-  rows: readonly BusinessAccountRow[],
-): BusinessAccountRow[] {
-  const seenPhoneKeys = new Set<string>();
-  const exportRows: BusinessAccountRow[] = [];
-
-  for (const row of rows) {
-    for (const value of [row.primaryContactPhone, row.phoneNumber]) {
-      const phone = value?.trim() ?? "";
-      const key = normalizeContactPhoneKey(phone);
-      if (!key || seenPhoneKeys.has(key)) {
-        continue;
-      }
-
-      seenPhoneKeys.add(key);
-      exportRows.push({
-        ...row,
-        primaryContactPhone: phone,
-        phoneNumber: phone,
-      });
-    }
-  }
-
-  return exportRows;
-}
-
 export function buildBusinessAccountsCsvFilename(date = new Date()): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");

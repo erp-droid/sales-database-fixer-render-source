@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildBusinessAccountsCsv,
   buildBusinessAccountsCsvFilename,
-  buildDistinctContactPhoneExportRows,
   canExportBusinessAccountsCsv,
 } from "@/lib/business-account-export";
 import type { BusinessAccountRow } from "@/types/business-account";
@@ -72,34 +71,6 @@ describe("business account export", () => {
     expect(buildBusinessAccountsCsvFilename(new Date("2026-04-06T12:00:00.000Z"))).toBe(
       "accounts-export-2026-04-06.csv",
     );
-  });
-
-  it("exports one row for every distinct contact phone represented by the KPI", () => {
-    const rows = buildDistinctContactPhoneExportRows([
-      buildRow({
-        primaryContactPhone: "905-695-9900",
-        phoneNumber: "(905) 695-9900",
-      }),
-      buildRow({
-        id: "acct-2",
-        rowKey: "acct-2:contact:202",
-        primaryContactPhone: "416-555-0101",
-        phoneNumber: "647-555-0102",
-      }),
-      buildRow({
-        id: "acct-3",
-        rowKey: "acct-3:primary",
-        primaryContactPhone: null,
-        phoneNumber: "647-555-0102",
-      }),
-    ]);
-
-    expect(rows).toHaveLength(3);
-    expect(rows.map((row) => row.primaryContactPhone)).toEqual([
-      "905-695-9900",
-      "416-555-0101",
-      "647-555-0102",
-    ]);
   });
 
   it("only allows jserrano to export", () => {
