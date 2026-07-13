@@ -38,6 +38,9 @@ function parseArgs(argv) {
     sqlitePath: process.env.READ_MODEL_SQLITE_PATH || DEFAULT_SQLITE_PATH,
     clusterIterations: 40,
     clearNonAbWeeks: true,
+    salesRepId: "",
+    salesRepName: "",
+    includeAssignments: false,
     reportPath: "",
   };
 
@@ -55,6 +58,12 @@ function parseArgs(argv) {
       options.clearNonAbWeeks = true;
     } else if (arg === "--keep-non-ab-weeks") {
       options.clearNonAbWeeks = false;
+    } else if (arg === "--sales-rep-id") {
+      options.salesRepId = normalizeText(argv[++index]) || "";
+    } else if (arg === "--sales-rep-name") {
+      options.salesRepName = normalizeText(argv[++index]) || "";
+    } else if (arg === "--include-assignments") {
+      options.includeAssignments = true;
     } else if (arg === "--report") {
       options.reportPath = argv[++index];
     } else {
@@ -67,6 +76,78 @@ function parseArgs(argv) {
   }
 
   return options;
+}
+
+function normalizedComparable(value) {
+  return normalizeText(value)?.toLowerCase() || "";
+}
+
+function hasTargetRep(options) {
+  return Boolean(options.salesRepId || options.salesRepName);
+}
+
+function matchesTargetRep(account, options) {
+  if (!hasTargetRep(options)) {
+    return true;
+  }
+
+  const idMatches =
+    Boolean(options.salesRepId) &&
+    normalizedComparable(account.salesRepId) === normalizedComparable(options.salesRepId);
+  const nameMatches =
+    Boolean(options.salesRepName) &&
+    normalizedComparable(account.salesRepName) === normalizedComparable(options.salesRepName);
+  return idMatches || nameMatches;
+}
+
+function compareAccountIdentity(left, right) {
+  for (const key of ["companyName", "businessAccountId", "accountRecordId"]) {
+    const comparison = String(left[key] || "").localeCompare(String(right[key] || ""), undefined, {
+      sensitivity: "base",
+      numeric: true,
+    });
+    if (comparison !== 0) {
+      return comparison;
+    }
+  }
+  return 0;
+}
+
+function applyAuthoritativeRouteWeeks(db, accounts) {
+  if (!tableExists(db, "account_route_weeks")) {
+    return accounts;
+  }
+  const routeWeekByAccountId = new Map(
+    db
+      .prepare(
+        `
+        SELECT account_record_id, route_week_label
+        FROM account_route_weeks
+        WHERE account_record_id IS NOT NULL
+          AND route_week_label IS NOT NULL
+        `,
+      )
+      .all()
+      .map((row) => [normalizeText(row.account_record_id), normalizeText(row.route_week_label)]),
+  );
+  return accounts.map((account) => ({
+    ...account,
+    week: routeWeekByAccountId.get(account.accountRecordId) || account.week,
+  }));
+}
+
+function findDuplicateValues(accounts, key) {
+  const counts = new Map();
+  for (const account of accounts) {
+    const value = normalizeText(account[key]);
+    if (value) {
+      counts.set(value, (counts.get(value) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([value, count]) => ({ value, count }))
+    .sort((left, right) => left.value.localeCompare(right.value));
 }
 
 function repKey(account) {
@@ -142,7 +223,7 @@ function updateWeekOnSourceRows(db, tableName, account, weekLabel, timestamp) {
 
   const matchClauses = [];
   const params = {};
-  if (columns.has("account_record_id") || columns.has("id")) {
+  if (account.accountRecordId && (columns.has("account_record_id") || columns.has("id"))) {
     const recordExpr =
       columns.has("account_record_id") && columns.has("id")
         ? "COALESCE(NULLIF(account_record_id, ''), id)"
@@ -151,8 +232,7 @@ function updateWeekOnSourceRows(db, tableName, account, weekLabel, timestamp) {
           : "id";
     matchClauses.push(`${recordExpr} = @account_record_id`);
     params.account_record_id = account.accountRecordId;
-  }
-  if (columns.has("business_account_id") && account.businessAccountId) {
+  } else if (columns.has("business_account_id") && account.businessAccountId) {
     matchClauses.push("business_account_id = @business_account_id");
     params.business_account_id = account.businessAccountId;
   }
@@ -205,7 +285,7 @@ function updateWeekOnSourceRows(db, tableName, account, weekLabel, timestamp) {
   return updated;
 }
 
-function applyAssignments(db, plan, sourceTables, assignmentVersion, timestamp) {
+function applyAssignments(db, plan, sourceTables, assignmentVersion, timestamp, targeted) {
   ensureRouteWeekTables(db);
   const insertRouteWeek = db.prepare(`
     INSERT INTO account_route_weeks (
@@ -290,12 +370,14 @@ function applyAssignments(db, plan, sourceTables, assignmentVersion, timestamp) 
       }
     }
 
-    db.prepare(
-      `
-      DELETE FROM account_route_weeks
-      WHERE account_record_id NOT IN (SELECT account_record_id FROM rep_route_candidate_ids)
-      `,
-    ).run();
+    if (!targeted) {
+      db.prepare(
+        `
+        DELETE FROM account_route_weeks
+        WHERE account_record_id NOT IN (SELECT account_record_id FROM rep_route_candidate_ids)
+        `,
+      ).run();
+    }
     db.prepare("DROP TABLE rep_route_candidate_ids").run();
 
     if (tableExists(db, "sync_state")) {
@@ -331,15 +413,27 @@ async function main() {
 
   try {
     ensureRouteWeekTables(db);
-    const accounts = readAccounts(db);
-    const routable = accounts.filter(isRoutableAccount);
+    const accounts = applyAuthoritativeRouteWeeks(db, readAccounts(db));
+    const routable = accounts
+      .filter(isRoutableAccount)
+      .filter((account) => matchesTargetRep(account, options));
+    if (hasTargetRep(options) && routable.length === 0) {
+      throw new Error("No category A/B accounts matched the requested sales rep.");
+    }
 
     const repGroups = new Map();
-    for (const account of routable) {
-      const key = repKey(account);
-      const group = repGroups.get(key) || [];
-      group.push(account);
-      repGroups.set(key, group);
+    if (hasTargetRep(options)) {
+      repGroups.set(
+        `target:${options.salesRepId || normalizedComparable(options.salesRepName)}`,
+        routable,
+      );
+    } else {
+      for (const account of routable) {
+        const key = repKey(account);
+        const group = repGroups.get(key) || [];
+        group.push(account);
+        repGroups.set(key, group);
+      }
     }
 
     const assignments = [];
@@ -347,8 +441,9 @@ async function main() {
     for (const [key, repAccounts] of [...repGroups.entries()].sort((left, right) =>
       left[0].localeCompare(right[0]),
     )) {
+      const stableRepAccounts = [...repAccounts].sort(compareAccountIdentity);
       const repAssignments = assignRouteWeeks(
-        repAccounts,
+        stableRepAccounts,
         options.clusterIterations,
         ASSIGNMENT_REASON_PREFIX,
       );
@@ -372,6 +467,7 @@ async function main() {
     const weekClearAccounts = options.clearNonAbWeeks
       ? accounts.filter(
           (account) =>
+            matchesTargetRep(account, options) &&
             !isRoutableAccount(account) &&
             Boolean(normalizeText(account.salesRepId) || normalizeText(account.salesRepName)) &&
             Boolean(normalizeText(account.week)),
@@ -380,13 +476,31 @@ async function main() {
 
     const plan = { assignments, weekClearAccounts };
 
+    const uniqueAssignmentIds = new Set(assignments.map((assignment) => assignment.accountRecordId));
+    if (uniqueAssignmentIds.size !== assignments.length || assignments.length !== routable.length) {
+      throw new Error(
+        `Assignment coverage failed: ${assignments.length} assignments for ${routable.length} accounts (${uniqueAssignmentIds.size} unique ids).`,
+      );
+    }
+    const balanceViolations = repReports.filter((report) => report.countBalanceViolation);
+    if (balanceViolations.length > 0) {
+      throw new Error("At least one sales rep did not receive balanced route-week counts.");
+    }
+
     if (options.apply) {
       backupPath = await createBackup(db, sqlitePath, safeTimestamp, "rep-route-weeks-preapply");
       const sourceTables = [
         "account_rows",
         ...(tableExists(db, "local_account_rows") ? ["local_account_rows"] : []),
       ];
-      applyAssignments(db, plan, sourceTables, assignmentVersion, timestamp);
+      applyAssignments(
+        db,
+        plan,
+        sourceTables,
+        assignmentVersion,
+        timestamp,
+        hasTargetRep(options),
+      );
     }
 
     const report = {
@@ -397,6 +511,9 @@ async function main() {
       options: {
         clusterIterations: options.clusterIterations,
         clearNonAbWeeks: options.clearNonAbWeeks,
+        salesRepId: options.salesRepId || null,
+        salesRepName: options.salesRepName || null,
+        includeAssignments: options.includeAssignments,
       },
       accountTotal: accounts.length,
       routableAccountTotal: routable.length,
@@ -404,6 +521,27 @@ async function main() {
       assignedTotal: assignments.length,
       weekClearTotal: weekClearAccounts.length,
       reps: repReports,
+      duplicateBusinessAccountIds: findDuplicateValues(routable, "businessAccountId"),
+      assignments: options.includeAssignments
+        ? [...assignments]
+            .sort(
+              (left, right) =>
+                left.assignedWeek - right.assignedWeek || compareAccountIdentity(left, right),
+            )
+            .map((assignment) => ({
+              accountRecordId: assignment.accountRecordId,
+              businessAccountId: assignment.businessAccountId,
+              companyName: assignment.companyName,
+              address: assignment.address,
+              city: assignment.city,
+              category: assignment.category,
+              previousWeek: assignment.week,
+              assignedWeek: `Week ${assignment.assignedWeek}`,
+              latitude: assignment.latitude,
+              longitude: assignment.longitude,
+              assignmentReason: assignment.assignmentReason,
+            }))
+        : undefined,
       weekClearSamples: weekClearAccounts.slice(0, 15).map(summarizeAccount),
     };
     const output = JSON.stringify(report);
