@@ -27,6 +27,11 @@ function parsePositiveInteger(value: string | null, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseOptionalText(value: string | null): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed || null;
+}
+
 function parseReport(stdout: string): unknown {
   const lines = stdout
     .split(/\r?\n/)
@@ -54,8 +59,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     request.nextUrl.searchParams.get("clusterIterations"),
     40,
   );
-  const clearNonAbWeeks =
-    request.nextUrl.searchParams.get("clearNonAbWeeks")?.trim().toLowerCase() !== "false";
+  const salesRepId = parseOptionalText(request.nextUrl.searchParams.get("salesRepId"));
+  const salesRepName = parseOptionalText(request.nextUrl.searchParams.get("salesRepName"));
+  const targeted = Boolean(salesRepId || salesRepName);
+  const clearNonAbWeeksValue = request.nextUrl.searchParams.get("clearNonAbWeeks");
+  const clearNonAbWeeks = clearNonAbWeeksValue
+    ? clearNonAbWeeksValue.trim().toLowerCase() !== "false"
+    : !targeted;
+  const includeAssignments =
+    request.nextUrl.searchParams.get("includeAssignments")?.trim().toLowerCase() === "true";
 
   const scriptPath = path.join(process.cwd(), "scripts", "reassign-route-weeks-by-rep.cjs");
   const args = [
@@ -65,6 +77,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     String(clusterIterations),
     clearNonAbWeeks ? "--clear-non-ab-weeks" : "--keep-non-ab-weeks",
   ];
+  if (salesRepId) {
+    args.push("--sales-rep-id", salesRepId);
+  }
+  if (salesRepName) {
+    args.push("--sales-rep-name", salesRepName);
+  }
+  if (includeAssignments) {
+    args.push("--include-assignments");
+  }
   if (mode === "apply") {
     args.push("--report", REPORT_PATH);
   }
