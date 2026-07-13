@@ -115,4 +115,39 @@ describe("appendLocalContactRow", () => {
       isPrimaryContact: true,
     });
   });
+
+  it("carries the contactless row's company data into the created row even when it is not first", () => {
+    const existingContact = buildRow({
+      rowKey: "account-1:contact:101",
+      contactId: 101,
+      primaryContactId: 101,
+      primaryContactName: "Existing Contact",
+      isPrimaryContact: true,
+      notes: "Contact-scoped note",
+      companyPhone: "905-555-0101",
+    });
+    const contactlessRow = buildRow({
+      contactId: null,
+      primaryContactId: null,
+      primaryContactName: null,
+      notes: "Company-level note from import",
+      companyPhone: "905-555-0500",
+    });
+
+    const result = appendLocalContactRow(
+      [existingContact, contactlessRow],
+      buildContactRequest(),
+    );
+    const createdRow = result.rows.find((row) => row.contactId === result.contactId);
+
+    expect(createdRow).toMatchObject({
+      notes: "Company-level note from import",
+      companyPhone: "905-555-0500",
+      primaryContactName: "New Contact",
+      isPrimaryContact: true,
+    });
+    expect(result.rows.find((row) => row.contactId === 101)).toMatchObject({
+      notes: "Contact-scoped note",
+    });
+  });
 });

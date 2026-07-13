@@ -17,6 +17,8 @@ import {
   setBusinessAccountPrimaryContact,
 } from "@/lib/contact-merge-server";
 import { logContactCreateAudit } from "@/lib/audit-log-store";
+import { publishBusinessAccountChanged } from "@/lib/business-account-live";
+import { markDashboardSnapshotCacheStale } from "@/lib/call-analytics/dashboard-cache";
 import { resolveStoredDeferredActionActor } from "@/lib/deferred-action-actor";
 import { HttpError, getErrorMessage } from "@/lib/errors";
 import { getEnv } from "@/lib/env";
@@ -166,6 +168,14 @@ export async function POST(
       contactId: responseBody.contactId,
       createdRow: responseBody.createdRow,
     });
+
+    publishBusinessAccountChanged({
+      accountRecordId: responseBody.businessAccountRecordId,
+      businessAccountId: responseBody.businessAccountId || null,
+      targetContactId: responseBody.contactId,
+      reason: "business-account-updated",
+    });
+    markDashboardSnapshotCacheStale();
 
     const response = NextResponse.json(
       {

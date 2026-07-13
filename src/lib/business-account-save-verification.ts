@@ -123,13 +123,20 @@ export function applyOptimisticSavedUpdateToRow(
         : row.isPrimaryContact,
   };
 
-  if (effectiveTargetContactId === null || row.contactId !== effectiveTargetContactId) {
+  // A null target means the account has no contact rows at all: the bare
+  // account-level row is the edit target, so contact fields and notes must
+  // still land there instead of being silently discarded.
+  const isTargetContactRow =
+    effectiveTargetContactId !== null
+      ? row.contactId === effectiveTargetContactId
+      : (row.contactId ?? null) === null;
+  if (!isTargetContactRow) {
     return nextRow;
   }
 
   return {
     ...nextRow,
-    contactId: effectiveTargetContactId,
+    contactId: effectiveTargetContactId ?? row.contactId ?? null,
     primaryContactName: sanitizeNullableInput(optimisticUpdate.primaryContactName),
     primaryContactJobTitle: sanitizeNullableInput(optimisticUpdate.primaryContactJobTitle),
     primaryContactPhone: sanitizeNullableInput(optimisticUpdate.primaryContactPhone),

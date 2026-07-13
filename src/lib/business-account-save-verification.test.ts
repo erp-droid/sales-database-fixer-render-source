@@ -221,6 +221,66 @@ describe("business-account save verification", () => {
     });
   });
 
+  it("applies contact fields and notes to the bare account row when the account has no contacts", () => {
+    const contactlessRow = buildRow({
+      rowKey: "account-1",
+      contactId: null,
+      isPrimaryContact: false,
+      primaryContactId: null,
+      primaryContactName: null,
+      primaryContactJobTitle: null,
+      primaryContactPhone: null,
+      primaryContactEmail: null,
+      notes: null,
+    });
+    const updateRequest = buildUpdate({
+      targetContactId: null,
+      primaryContactName: "New Person",
+      primaryContactJobTitle: "Estimator",
+      primaryContactPhone: "416-555-0199",
+      primaryContactEmail: "new@example.com",
+      notes: "Called and left a voicemail",
+    });
+
+    const nextRows = applyOptimisticSavedUpdateToRows(
+      [contactlessRow],
+      contactlessRow,
+      updateRequest,
+      null,
+    );
+
+    expect(nextRows[0]).toMatchObject({
+      contactId: null,
+      primaryContactName: "New Person",
+      primaryContactJobTitle: "Estimator",
+      primaryContactPhone: "416-555-0199",
+      primaryContactEmail: "new@example.com",
+      notes: "Called and left a voicemail",
+    });
+  });
+
+  it("keeps contact rows untouched by contact fields when the target contact is null", () => {
+    const contactRow = buildRow();
+    const updateRequest = buildUpdate({
+      targetContactId: null,
+      primaryContactName: "Should Not Apply",
+      notes: "Should not apply either",
+    });
+
+    const nextRows = applyOptimisticSavedUpdateToRows(
+      [contactRow],
+      contactRow,
+      updateRequest,
+      null,
+    );
+
+    expect(nextRows[0]).toMatchObject({
+      contactId: 100,
+      primaryContactName: "Jane Doe",
+      notes: "Existing note",
+    });
+  });
+
   it("propagates a verified primary contact switch across sibling rows when merging the response row", () => {
     const currentPrimaryRow = buildRow({
       rowKey: "account-1:contact:100",

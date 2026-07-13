@@ -5641,6 +5641,14 @@ export function AccountsClient({
   }, [selected, session?.authenticated]);
 
   // Load the company notes log whenever the drawer opens for a different account.
+  // Keyed on the resolved account record id (a string), NOT the `selected` row
+  // object: background refreshes (drawer hydration, live call-sync events)
+  // replace the row object for the same account, and keying on identity wiped
+  // in-progress note drafts before users could save them.
+  const selectedNotesAccountRecordId =
+    session?.authenticated && selected
+      ? resolveRowBusinessAccountRecordId(selected) || null
+      : null;
   useEffect(() => {
     setNewAccountNote("");
     setNewContactNote("");
@@ -5648,20 +5656,13 @@ export function AccountsClient({
     setEditingNoteText("");
     setAccountNoteBusyId(null);
 
-    if (!session?.authenticated || !selected) {
+    if (!selectedNotesAccountRecordId) {
       setAccountNotes([]);
       setAccountNotesLoading(false);
       setAccountNotesError(null);
       return;
     }
-
-    const accountRecordId = resolveRowBusinessAccountRecordId(selected);
-    if (!accountRecordId) {
-      setAccountNotes([]);
-      setAccountNotesLoading(false);
-      setAccountNotesError(null);
-      return;
-    }
+    const accountRecordId = selectedNotesAccountRecordId;
 
     const controller = new AbortController();
     setAccountNotesLoading(true);
@@ -5698,7 +5699,8 @@ export function AccountsClient({
     return () => {
       controller.abort();
     };
-  }, [selected, session?.authenticated]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNotesAccountRecordId]);
 
   useEffect(() => {
     if (!session?.authenticated || !selected) {

@@ -183,7 +183,11 @@ export function appendLocalContactRow(
   createdRow: BusinessAccountRow;
 } {
   const contactId = generateLocalContactId();
-  const anchor = rows[0];
+  // Contact-less account-level rows are replaced by the new contact row, so
+  // anchor on one when present: cloning from a contact row instead would
+  // silently discard the company-level notes/phone stored on the bare row.
+  const contactlessRow = rows.find((row) => (row.contactId ?? null) === null);
+  const anchor = contactlessRow ?? rows[0];
   if (!anchor) {
     throw new Error("Cannot append a local contact row without an existing account row.");
   }
