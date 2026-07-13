@@ -205,6 +205,17 @@ describe("resolveSignedInCallerIdentity", () => {
       total: 1,
       latestUpdatedAt: new Date().toISOString(),
     });
+    // A phone-less cached entry now triggers a source-system re-check before
+    // failing; keep that re-check phone-less so the 422 still applies.
+    searchContacts.mockResolvedValue([]);
+    searchEmployeeProfiles.mockResolvedValue([]);
+    syncCallEmployeeDirectory.mockResolvedValue([
+      buildEmployee({
+        loginName: "jserrano",
+        normalizedPhone: null,
+        callerIdPhone: null,
+      }),
+    ]);
 
     const { resolveSignedInCallerIdentity } = await import("@/lib/caller-identity");
 
@@ -212,6 +223,33 @@ describe("resolveSignedInCallerIdentity", () => {
       status: 422,
       message: expect.stringContaining("valid phone number"),
     });
+  });
+
+  it("re-checks the source system when the fresh cached entry has no phone", async () => {
+    readCallEmployeeDirectory.mockReturnValue([
+      buildEmployee({
+        loginName: "jserrano",
+        normalizedPhone: null,
+        callerIdPhone: null,
+      }),
+    ]);
+    readCallEmployeeDirectoryMeta.mockReturnValue({
+      total: 1,
+      latestUpdatedAt: new Date().toISOString(),
+    });
+    searchContacts.mockResolvedValue([
+      {
+        ContactID: { value: 12 },
+        DisplayName: { value: "Jorge Serrano" },
+        Email: { value: "jserrano@meadowb.com" },
+        Phone1: { value: "4165550100" },
+      },
+    ]);
+
+    const { resolveSignedInCallerIdentity } = await import("@/lib/caller-identity");
+
+    const identity = await resolveSignedInCallerIdentity("cookie", "jserrano");
+    expect(identity.userPhone).toBe("+14165550100");
   });
 
   it("refreshes when the cached directory is stale", async () => {

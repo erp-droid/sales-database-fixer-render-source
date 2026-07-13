@@ -692,9 +692,16 @@ export async function resolveSignedInCallerIdentity(
   let items = readCallEmployeeDirectory();
   let candidate = findExactLoginMatch(items, normalizedLogin);
   const directoryMeta = readCallEmployeeDirectoryMeta();
+  // A cached entry without a phone must not be trusted while the directory is
+  // fresh: a number added in the source system after the last sync would stay
+  // invisible for the whole staleness window, blocking calling for that user.
+  const candidateHasResolvablePhone =
+    candidate !== null &&
+    normalizeTwilioPhoneNumber(candidate.normalizedPhone ?? candidate.callerIdPhone) !== null;
   const shouldRefresh =
     items.length === 0 ||
     candidate === null ||
+    !candidateHasResolvablePhone ||
     !isFreshDirectory(directoryMeta.latestUpdatedAt, env.CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS);
 
   if (shouldRefresh) {
