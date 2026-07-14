@@ -517,7 +517,12 @@ export async function PATCH(request: NextRequest): Promise<NextResponse> {
 
   try {
     if (!getEnv().LOCAL_DATABASE_ONLY) {
-      await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
+      // Best-effort cookie refresh only. Hanging up is a Twilio + local-DB
+      // operation; an expired source-system session (common after a long
+      // call, since sessions idle out) must never block ending the call.
+      await validateSessionWithAcumatica(cookieValue, authCookieRefresh).catch(
+        () => undefined,
+      );
     }
 
     const body = (await request.json().catch(() => null)) as EndPayload | null;
