@@ -22,6 +22,7 @@ export function proxy(request: NextRequest) {
       pathname.startsWith("/dashboard") ||
       pathname.startsWith("/map") ||
       pathname.startsWith("/quality") ||
+      pathname.startsWith("/support") ||
       pathname.startsWith("/tasks")) &&
     !hasSessionCookie
   ) {
@@ -39,6 +40,7 @@ export const config = {
     "/dashboard/:path*",
     "/map/:path*",
     "/quality/:path*",
+    "/support/:path*",
     "/tasks/:path*",
     "/signin",
   ],

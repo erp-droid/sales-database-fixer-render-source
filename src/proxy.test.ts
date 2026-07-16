@@ -43,4 +43,16 @@ describe("route auth proxy", () => {
       "http://localhost:3010/signin?next=%2Faccounts%3Fq%3Dmelrose",
     );
   });
+
+  it("requires a signed-in work session for the support page", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("LOCAL_DEV_AUTH_BYPASS", "false");
+
+    const response = proxy(new NextRequest("https://sales-meadowb.onrender.com/support"));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe(
+      "https://sales-meadowb.onrender.com/signin?next=%2Fsupport",
+    );
+  });
 });
