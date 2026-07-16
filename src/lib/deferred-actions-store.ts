@@ -183,7 +183,7 @@ function parsePreview(
     const record = parsed as Record<string, unknown>;
     if (actionType === "deleteContact") {
       const contactId = Number(record.contactId);
-      if (!Number.isInteger(contactId) || contactId <= 0) {
+      if (!Number.isInteger(contactId) || contactId === 0) {
         return null;
       }
 
@@ -1440,7 +1440,11 @@ function getActiveDeferredHiddenContactIds(): Set<number> {
     .filter((record) => ACTIVE_PREVIEW_STATUSES.has(record.status))
     .forEach((record) => {
       if (record.actionType === "deleteContact") {
-        if (typeof record.contactId === "number" && Number.isInteger(record.contactId) && record.contactId > 0) {
+        if (
+          typeof record.contactId === "number" &&
+          Number.isInteger(record.contactId) &&
+          record.contactId !== 0
+        ) {
           hiddenContactIds.add(record.contactId);
         }
         return;

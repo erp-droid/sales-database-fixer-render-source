@@ -408,7 +408,7 @@ async function resolveDeleteCandidateRows(
   authCookieRefresh: AuthCookieRefreshState,
 ): Promise<BusinessAccountRow[]> {
   const storedRows = readStoredBusinessAccountRowsFromReadModel(accountRecordId);
-  if (getEnv().LOCAL_DATABASE_ONLY) {
+  if (getEnv().LOCAL_DATABASE_ONLY || storedRows.some(isLocalOnlyStoredRow)) {
     return storedRows;
   }
 
