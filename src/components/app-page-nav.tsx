@@ -10,7 +10,8 @@ type AppNavIconName =
   | "dashboard"
   | "quality"
   | "audit"
-  | "deletions";
+  | "deletions"
+  | "support";
 
 const APP_NAV_ITEMS: Array<{
   href: string;
@@ -23,6 +24,7 @@ const APP_NAV_ITEMS: Array<{
   { href: "/calendar", label: "Calendar", icon: "calendar" },
   { href: "/mail", label: "Mail", icon: "mail" },
   { href: "/quality", label: "Data quality", icon: "quality" },
+  { href: "/support", label: "CRM support", icon: "support" },
   { href: "/audit", label: "Audit", icon: "audit" },
   { href: "/deletions", label: "Deletion queue", icon: "deletions" },
 ] as const;
@@ -101,6 +103,16 @@ function AppNavIcon({
       <svg aria-hidden="true" className={className} fill="none" viewBox="0 0 24 24">
         <path d="M8 6h9M8 11h9M8 16h5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
         <path d="M5 6h.01M5 11h.01M5 16h.01" stroke="currentColor" strokeLinecap="round" strokeWidth="2.6" />
+      </svg>
+    );
+  }
+
+  if (icon === "support") {
+    return (
+      <svg aria-hidden="true" className={className} fill="none" viewBox="0 0 24 24">
+        <path d="M12 3.5a7.5 7.5 0 0 0-7.5 7.5v3.5A2.5 2.5 0 0 0 7 17h1v-6H4.5M12 3.5a7.5 7.5 0 0 1 7.5 7.5v3.5A2.5 2.5 0 0 1 17 17h-1v-6h3.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+        <path d="M16 17c0 2-1.8 3.5-4 3.5h-1.5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" />
+        <circle cx="9.5" cy="20.5" fill="currentColor" r="1" />
       </svg>
     );
   }

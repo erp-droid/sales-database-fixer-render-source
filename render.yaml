@@ -14,7 +14,7 @@ services:
     disk:
       name: sales-database-data
       mountPath: /app/data
-      sizeGB: 5
+      sizeGB: 20
     envVars:
       - key: NODE_ENV
         value: production
@@ -122,6 +122,36 @@ services:
         value: meadowb.com
       - key: MAIL_CONNECT_RETURN_PATH
         value: /mail
+      - key: TICKET_AGENT_ENABLED
+        value: "true"
+      - key: TICKET_AGENT_POLL_INTERVAL_MS
+        value: "30000"
+      - key: TICKET_AGENT_MODEL
+        value: gpt-5.6-terra
+      - key: TICKET_AGENT_SENDER_LOGIN
+        value: jserrano
+      - key: TICKET_AGENT_SENDER_EMAIL
+        value: jserrano@meadowb.com
+      - key: TICKET_AGENT_SENDER_NAME
+        value: MeadowBrook CRM Support
+      - key: TICKET_AGENT_SECRET
+        generateValue: true
+      - key: TICKET_REPAIR_ENABLED
+        value: "false"
+      - key: TICKET_REPAIR_GITHUB_OWNER
+        value: erp-droid
+      - key: TICKET_REPAIR_GITHUB_REPO
+        value: sales-database-fixer-render-source
+      - key: TICKET_REPAIR_GITHUB_WORKFLOW
+        value: crm-ticket-repair.yml
+      - key: TICKET_REPAIR_GITHUB_REF
+        value: main
+      - key: TICKET_REPAIR_GITHUB_TOKEN
+        sync: false
+      - key: TICKET_REPAIR_CALLBACK_SECRET
+        sync: false
+      - key: TICKET_REPAIR_TIMEOUT_MINUTES
+        value: "45"
       - key: TWILIO_ACCOUNT_SID
         sync: false
       - key: TWILIO_API_KEY_SID
@@ -261,7 +291,7 @@ services:
     repo: https://github.com/erp-droid/sales-database-fixer-render-source
     branch: main
     plan: starter
-    region: ohio
+    region: oregon
     dockerfilePath: ./Dockerfile
     dockerContext: .
     schedule: "*/15 * * * *"
@@ -282,7 +312,7 @@ services:
     repo: https://github.com/erp-droid/sales-database-fixer-render-source
     branch: main
     plan: starter
-    region: ohio
+    region: oregon
     dockerfilePath: ./Dockerfile
     dockerContext: .
     schedule: "*/15 * * * *"

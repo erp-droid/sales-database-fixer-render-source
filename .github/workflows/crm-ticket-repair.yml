@@ -1,0 +1,266 @@
+name: CRM ticket repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticketId:
+        description: Durable support ticket ID
+        required: true
+        type: string
+      ticketNumber:
+        description: Human-readable support ticket number
+        required: true
+        type: string
+      repairRunId:
+        description: Unique repair attempt ID
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  CRM_TICKET_APP_BASE_URL: ${{ vars.CRM_TICKET_APP_BASE_URL || 'https://sales-meadowb.onrender.com' }}
+
+concurrency:
+  group: crm-ticket-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      inputs.ticketId != '' &&
+      inputs.repairRunId != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - name: Check out dispatch commit without write credentials
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Preserve immutable guard scripts
+        run: |
+          cp scripts/prepare-ticket-repair-context.cjs "$RUNNER_TEMP/prepare-ticket-repair-context.cjs"
+          cp scripts/validate-ticket-repair.cjs "$RUNNER_TEMP/validate-ticket-repair.cjs"
+          cp scripts/lint-ticket-repair.cjs "$RUNNER_TEMP/lint-ticket-repair.cjs"
+
+      - name: Fetch canonical ticket evidence
+        env:
+          TICKET_ID: ${{ inputs.ticketId }}
+          REPAIR_RUN_ID: ${{ inputs.repairRunId }}
+          REPAIR_SECRET: ${{ secrets.TICKET_REPAIR_CALLBACK_SECRET }}
+        run: |
+          node -e 'for(const v of [process.env.TICKET_ID,process.env.REPAIR_RUN_ID])if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v||""))throw new Error("Invalid repair identifier");const u=new URL(process.env.CRM_TICKET_APP_BASE_URL);if(u.protocol!=="https:")throw new Error("CRM ticket origin must use HTTPS");'
+          context_url="$CRM_TICKET_APP_BASE_URL/api/support/tickets/repair-context?ticketId=$TICKET_ID&repairRunId=$REPAIR_RUN_ID"
+          mkdir -p .ticket-repair
+          curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
+            --header "x-ticket-repair-secret: $REPAIR_SECRET" \
+            --output "$RUNNER_TEMP/raw-ticket-context.json" \
+            "$context_url"
+          node "$RUNNER_TEMP/prepare-ticket-repair-context.cjs" \
+            "$RUNNER_TEMP/raw-ticket-context.json" .ticket-repair
+
+      - name: Run isolated coding agent
+        id: codex_repair
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/crm-ticket-repair.md
+          output-file: .ticket-repair/codex-result.md
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-args: '["--ephemeral", "--ignore-user-config"]'
+
+      - name: Stage and deterministically validate the patch
+        run: |
+          git add -A -- ':!.ticket-repair'
+          node "$RUNNER_TEMP/validate-ticket-repair.cjs"
+          git diff --cached --check
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: Run production build
+        run: npm run build
+
+      - name: Run lint
+        run: node "$RUNNER_TEMP/lint-ticket-repair.cjs"
+
+      - name: Run independent read-only risk review
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/crm-ticket-review.md
+          output-file: .ticket-repair/review.json
+          sandbox: read-only
+          safety-strategy: drop-sudo
+          codex-args: '["--ephemeral", "--ignore-user-config", "--output-schema", ".github/codex/schemas/crm-ticket-review.schema.json"]'
+
+      - name: Enforce low-risk review verdict
+        run: |
+          node -e 'const fs=require("fs");const v=JSON.parse(fs.readFileSync(".ticket-repair/review.json","utf8"));if(v.approved!==true||v.riskLevel!=="low")throw new Error(`Repair review rejected: ${v.summary}; ${(v.concerns||[]).join("; ")}`);'
+
+      - name: Package the verified patch and evidence
+        run: |
+          mkdir -p "$RUNNER_TEMP/repair-artifact"
+          git diff --cached --binary > "$RUNNER_TEMP/repair-artifact/repair.patch"
+          cp .ticket-repair/codex-result.md "$RUNNER_TEMP/repair-artifact/codex-result.md"
+          cp .ticket-repair/review.json "$RUNNER_TEMP/repair-artifact/review.json"
+          git rev-parse HEAD > "$RUNNER_TEMP/repair-artifact/base-sha.txt"
+
+      - name: Upload verified repair artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: crm-repair-${{ inputs.repairRunId }}
+          path: ${{ runner.temp }}/repair-artifact
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    needs: repair
+    if: needs.repair.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    outputs:
+      commit_sha: ${{ steps.commit.outputs.commit_sha }}
+    steps:
+      - name: Check out the exact reviewed base
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Download verified repair artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: crm-repair-${{ inputs.repairRunId }}
+          path: ${{ runner.temp }}/repair-artifact
+
+      - name: Apply the verified patch to a clean checkout
+        run: |
+          cp scripts/lint-ticket-repair.cjs "$RUNNER_TEMP/lint-ticket-repair.cjs"
+          test "$(git rev-parse HEAD)" = "$(cat "$RUNNER_TEMP/repair-artifact/base-sha.txt")"
+          git apply --check "$RUNNER_TEMP/repair-artifact/repair.patch"
+          git apply --index "$RUNNER_TEMP/repair-artifact/repair.patch"
+          git diff --cached --check
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Re-run verification without the coding-agent credential
+        run: |
+          npm ci
+          npm test
+          npm run build
+          node "$RUNNER_TEMP/lint-ticket-repair.cjs"
+
+      - name: Commit and atomically publish to main
+        id: commit
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TICKET_NUMBER: ${{ inputs.ticketNumber }}
+        run: |
+          git config user.name "MeadowBrook CRM Repair Robot"
+          git config user.email "jserrano@meadowb.com"
+          git commit -m "fix: verified repair for CRM-${TICKET_NUMBER}"
+          commit_sha="$(git rev-parse HEAD)"
+          git push origin "HEAD:${DEFAULT_BRANCH}"
+          echo "commit_sha=$commit_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Render to serve the exact healthy commit
+        env:
+          COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          healthy=false
+          for attempt in $(seq 1 90); do
+            deployed_commit="$(curl --silent --show-error --max-time 10 \
+              "$CRM_TICKET_APP_BASE_URL/api/health" \
+              | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>{try{const p=JSON.parse(s);process.stdout.write(String(p.runtimeIdentity?.gitCommit||""))}catch{}})')"
+            if [ "$deployed_commit" = "$COMMIT_SHA" ]; then
+              healthy=true
+              break
+            fi
+            sleep 10
+          done
+          if [ "$healthy" = true ]; then
+            exit 0
+          fi
+
+          git fetch origin "$DEFAULT_BRANCH"
+          if [ "$(git rev-parse "origin/$DEFAULT_BRANCH")" = "$COMMIT_SHA" ]; then
+            git revert --no-edit "$COMMIT_SHA"
+            git push origin "HEAD:$DEFAULT_BRANCH"
+          fi
+          echo "Render did not report the repaired commit as healthy; rollback was attempted when main was unchanged." >&2
+          exit 1
+
+  callback:
+    needs: [repair, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Download repair summary when available
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: crm-repair-${{ inputs.repairRunId }}
+          path: ${{ runner.temp }}/repair-artifact
+
+      - name: Build callback payload
+        env:
+          TICKET_ID: ${{ inputs.ticketId }}
+          REPAIR_RUN_ID: ${{ inputs.repairRunId }}
+          REPAIR_RESULT: ${{ needs.repair.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          COMMIT_SHA: ${{ needs.deploy.outputs.commit_sha }}
+        run: |
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const successful = process.env.REPAIR_RESULT === "success" && process.env.DEPLOY_RESULT === "success";
+          const resultPath = path.join(process.env.RUNNER_TEMP, "repair-artifact", "codex-result.md");
+          let agentSummary = "";
+          try { agentSummary = fs.readFileSync(resultPath, "utf8").trim(); } catch {}
+          const summary = successful
+            ? (agentSummary || "The isolated repair passed every verification gate and the exact commit is healthy on Render.")
+            : `The automated repair stopped safely before a verified healthy deployment. Repair job: ${process.env.REPAIR_RESULT}; deploy job: ${process.env.DEPLOY_RESULT}.`;
+          fs.writeFileSync("callback.json", JSON.stringify({
+            ticketId: process.env.TICKET_ID,
+            repairRunId: process.env.REPAIR_RUN_ID,
+            status: successful ? "deployed" : "failed",
+            commitSha: process.env.COMMIT_SHA || "",
+            summary: summary.slice(0, 3000)
+          }));
+          NODE
+
+      - name: Report result on the ticket thread
+        env:
+          REPAIR_SECRET: ${{ secrets.TICKET_REPAIR_CALLBACK_SECRET }}
+        run: |
+          curl --fail-with-body --silent --show-error --retry 5 --retry-all-errors \
+            --request POST \
+            --header "content-type: application/json" \
+            --header "x-ticket-repair-secret: $REPAIR_SECRET" \
+            --data-binary @callback.json \
+            "$CRM_TICKET_APP_BASE_URL/api/support/tickets/repair-callback"

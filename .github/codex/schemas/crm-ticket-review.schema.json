@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["approved", "riskLevel", "summary", "concerns"],
+  "properties": {
+    "approved": { "type": "boolean" },
+    "riskLevel": { "type": "string", "enum": ["low", "medium", "high"] },
+    "summary": { "type": "string" },
+    "concerns": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

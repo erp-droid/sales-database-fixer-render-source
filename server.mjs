@@ -1129,6 +1129,60 @@ server.listen(port, hostname, () => {
     });
   }
 
+  const ticketAgentEnabled = readFeatureEnabled(process.env.TICKET_AGENT_ENABLED, true);
+  const ticketAgentPollIntervalMs = readBoundedInteger(
+    process.env.TICKET_AGENT_POLL_INTERVAL_MS,
+    30_000,
+    10_000,
+    5 * 60_000,
+  );
+  if (ticketAgentEnabled && clusterBackgroundTasksEnabled) {
+    let ticketAgentInFlight = false;
+    const runTicketAgentCycle = async (trigger) => {
+      if (ticketAgentInFlight) {
+        return;
+      }
+      ticketAgentInFlight = true;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2 * 60_000);
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/api/support/tickets/process`, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            ...(process.env.TICKET_AGENT_SECRET
+              ? { "x-ticket-agent-secret": process.env.TICKET_AGENT_SECRET }
+              : {}),
+          },
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          console.error("[ticket-agent] queue cycle failed", { trigger, status: response.status, payload });
+        } else if ((payload?.processed ?? 0) > 0) {
+          console.log("[ticket-agent] queue cycle completed", { trigger, processed: payload.processed });
+        }
+      } catch (error) {
+        console.error("[ticket-agent] queue cycle crashed", {
+          trigger,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        clearTimeout(timeoutId);
+        ticketAgentInFlight = false;
+      }
+    };
+    setTimeout(() => {
+      void runTicketAgentCycle("startup");
+      setInterval(() => void runTicketAgentCycle("interval"), ticketAgentPollIntervalMs);
+    }, 5_000);
+    console.log(`[ticket-agent] worker started; polling every ${Math.round(ticketAgentPollIntervalMs / 1000)}s`);
+  } else if (ticketAgentEnabled) {
+    console.log("[ticket-agent] worker skipped on web-only cluster worker");
+  } else {
+    console.log("[ticket-agent] worker disabled");
+  }
+
   // Scheduled local backups of the read-model SQLite database. In
   // local-database-only mode this file is the sole system of record, so we
   // snapshot it on an interval (online backup API, safe during writes) and
