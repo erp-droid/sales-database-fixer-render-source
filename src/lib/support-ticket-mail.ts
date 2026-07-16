@@ -90,6 +90,23 @@ function formatTicketNumber(ticket: SupportTicketRecord): string {
   return `CRM-${String(ticket.ticketNumber).padStart(4, "0")}`;
 }
 
+export function buildTicketAcknowledgementCopy(
+  ticket: SupportTicketRecord,
+  attachmentCount: number,
+): { heading: string; paragraphs: string[] } {
+  return {
+    heading: "We received your CRM support request",
+    paragraphs: [
+      `Hi ${ticket.employeeName},`,
+      `We received your report about “${ticket.title}”. Your ticket number is ${formatTicketNumber(ticket)}.`,
+      ...(attachmentCount > 0
+        ? [`We also received ${attachmentCount} file${attachmentCount === 1 ? "" : "s"} with your ticket.`]
+        : []),
+      "We are checking the problem now. We will reply to this email when we have an update. You can reply here at any time if you want to add more details.",
+    ],
+  };
+}
+
 function formatEmailHtml(input: { ticket: SupportTicketRecord; heading: string; paragraphs: string[] }): string {
   const paragraphs = input.paragraphs
     .map((paragraph) => `<p style="margin:0 0 14px;line-height:1.6;color:#334155">${escapeHtml(paragraph)}</p>`)
@@ -103,7 +120,7 @@ function formatEmailHtml(input: { ticket: SupportTicketRecord; heading: string; 
         </div>
         <div style="padding:24px">${paragraphs}</div>
       </div>
-      <p style="margin:12px 4px 0;color:#7b8798;font-size:11px;line-height:1.5">Automated support is limited to diagnostics and allowlisted reversible actions. Reply to this email to keep the ticket moving.</p>
+      <p style="margin:12px 4px 0;color:#7b8798;font-size:11px;line-height:1.5">Reply to this email if you have more details or need help. Your reply will stay with this ticket.</p>
     </div>
   `;
 }
@@ -120,7 +137,13 @@ function buildPayload(input: {
     draftId: null,
     subject: `[${formatTicketNumber(input.ticket)}] ${input.ticket.title}`,
     htmlBody: formatEmailHtml(input),
-    textBody: [input.heading, "", ...input.paragraphs, "", "Reply to this email to keep the ticket moving."].join("\n"),
+    textBody: [
+      input.heading,
+      "",
+      ...input.paragraphs,
+      "",
+      "Reply to this email if you have more details or need help. Your reply will stay with this ticket.",
+    ].join("\n"),
     to: [{
       email: input.ticket.employeeEmail,
       name: input.ticket.employeeName,
@@ -158,19 +181,8 @@ export async function sendTicketAcknowledgement(ticket: SupportTicketRecord): Pr
     sizeBytes: attachment.sizeBytes,
     base64Data: readSupportTicketAttachment(attachment).toString("base64"),
   }));
-  const payload = buildPayload({
-    ticket,
-    heading: "Your CRM support ticket is being investigated",
-    paragraphs: [
-      `Hi ${ticket.employeeName},`,
-      `I received your report about “${ticket.title}” and started ticket ${formatTicketNumber(ticket)}.`,
-      ...(attachments.length > 0
-        ? [`I also received ${attachments.length} attachment${attachments.length === 1 ? "" : "s"} and included ${attachments.length === 1 ? "it" : "them"} with this ticket.`]
-        : []),
-      "I’ll check the CRM’s health and sync signals now. I’ll reply on this same email chain with what I found, any safe action taken, and a request for you to confirm the result.",
-    ],
-    attachments,
-  });
+  const copy = buildTicketAcknowledgementCopy(ticket, attachments.length);
+  const payload = buildPayload({ ticket, ...copy, attachments });
   return assertSendResponse(await requestMailService<MailSendResponse>("/api/mail/messages/send", {
     method: "POST",
     body: payload,

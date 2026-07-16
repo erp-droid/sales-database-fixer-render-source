@@ -53,11 +53,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (input.status === "deployed") {
       const commitLabel = input.commitSha ? input.commitSha.slice(0, 12) : "the verified commit";
       const sent = await replyToTicketEmail(ticket, {
-        heading: "A verified code repair is now deployed",
+        heading: "The fix is ready",
         paragraphs: [
-          input.summary,
-          `The full test, build, lint, independent review, and Render health gates passed for ${commitLabel}.`,
-          "Please try the original action again and reply “resolved” if it now works, or “still broken” with what you see if it does not.",
+          "We fixed the CRM problem you reported. The updated CRM passed our checks and is ready to use.",
+          "Please try the same thing again. Reply “resolved” if it works now. If it does not, reply “still broken” and tell us what happened.",
         ],
       });
       updateSupportTicket(ticket.id, {
@@ -77,10 +76,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       });
     } else {
       const sent = await replyToTicketEmail(ticket, {
-        heading: "The automated repair needs human review",
+        heading: "Your ticket is still open",
         paragraphs: [
-          input.summary,
-          "The repair pipeline did not complete a verified healthy deployment. The ticket remains open and has been flagged for human review.",
+          "We were not able to finish the fix. We did not leave an untested change in the CRM.",
+          "Your ticket is still open. You do not need to send another ticket. A support person will review it.",
         ],
       });
       updateSupportTicket(ticket.id, {

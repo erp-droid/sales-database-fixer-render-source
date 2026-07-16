@@ -125,7 +125,7 @@ async function investigateAndReply(
   });
 
   const decision = await decideTicketAction({ ticket, diagnostics, latestEmployeeReply });
-  let remediationNote = "No automatic change was made.";
+  let remediationNote = "I did not change anything in the CRM.";
   let remediationSucceeded = false;
 
   if (decision.remediation === "code_repair" && canDispatchTicketCodeRepair(ticket)) {
@@ -133,11 +133,11 @@ async function investigateAndReply(
       const repair = await dispatchTicketCodeRepair(ticket);
       const latestTicket = readSupportTicket(ticket.id) ?? ticket;
       const sent = await replyToTicketEmail(latestTicket, {
-        heading: "I’m preparing a verified code repair",
+        heading: "We are working on a fix",
         paragraphs: [
           decision.employeeMessage,
-          "An isolated coding agent is inspecting the repository now. A patch can deploy only after path restrictions, the full test suite, production build, lint checks, and an independent risk review all pass.",
-          "After Render reports the exact repaired commit as healthy, I’ll reply here and ask you to test the original problem. If validation or deployment fails, no unverified repair will remain active.",
+          "We found a problem that needs a change to the CRM. We are making that change now.",
+          "We will test the fix before it goes live. You do not need to do anything right now. We will email you when it is ready.",
         ],
       });
       updateSupportTicket(ticket.id, {
@@ -156,10 +156,10 @@ async function investigateAndReply(
       });
       return;
     } catch {
-      remediationNote = "The isolated code repair job could not be started, so no repository or production change was made.";
+      remediationNote = "We could not start the fix yet. Your ticket is still open, and nothing was changed in the CRM.";
     }
   } else if (decision.remediation === "code_repair") {
-    remediationNote = "The proposed code repair did not meet the automatic repair gate, so no repository or production change was made.";
+    remediationNote = "We could not confirm a safe fix yet. Your ticket is still open, and nothing was changed in the CRM.";
     addSupportTicketEvent({
       ticketId: ticket.id,
       eventType: "remediation_blocked",
@@ -177,8 +177,8 @@ async function investigateAndReply(
     const result = await runReadModelRefresh();
     remediationSucceeded = result.ok;
     remediationNote = result.ok
-      ? "I started a safe refresh of the CRM’s local account cache. No source CRM records were changed."
-      : "The safe cache refresh could not be started, so I left the data unchanged and flagged the ticket for review.";
+      ? "We reloaded the CRM information. No customer records were deleted or changed."
+      : "We could not reload the CRM information. Nothing was changed, and your ticket is still open.";
     addSupportTicketEvent({
       ticketId: ticket.id,
       eventType: result.ok ? "read_model_refresh_started" : "read_model_refresh_failed",
@@ -187,7 +187,7 @@ async function investigateAndReply(
       details: { result, reason: decision.remediationReason },
     });
   } else if (decision.remediation !== "none" && decision.remediation !== "code_repair") {
-    remediationNote = "The suggested action did not meet the automatic safety rule, so I left the CRM unchanged.";
+    remediationNote = "We could not confirm that the change would fix the problem. Nothing was changed, and your ticket is still open.";
     addSupportTicketEvent({
       ticketId: ticket.id,
       eventType: "remediation_blocked",
@@ -199,11 +199,11 @@ async function investigateAndReply(
 
   const latestTicket = readSupportTicket(ticket.id) ?? ticket;
   const sent = await replyToTicketEmail(latestTicket, {
-    heading: remediationSucceeded ? "I found a safe action to try" : "Investigation update",
+    heading: remediationSucceeded ? "We made a safe update" : "We checked your report",
     paragraphs: [
       decision.employeeMessage,
       remediationNote,
-      `${decision.confirmationQuestion} Please reply with “resolved” if it is working, or “still broken” and what you see if it is not.`,
+      `${decision.confirmationQuestion} Reply “resolved” if it works now. If it does not, reply “still broken” and tell us what happened.`,
     ],
   });
   const shouldEscalate = decision.shouldEscalate ||
@@ -257,10 +257,10 @@ async function checkEmployeeReply(ticket: SupportTicketRecord): Promise<void> {
   if (confirmation === "confirmed") {
     const latestTicket = readSupportTicket(ticket.id) ?? ticket;
     const sent = await replyToTicketEmail(latestTicket, {
-      heading: "Ticket resolved",
+      heading: "Your ticket is closed",
       paragraphs: [
-        `Thanks for confirming, ${ticket.employeeName}.`,
-        "I’ve marked this CRM support ticket as resolved. Reply on this thread if the same problem returns and it can be reopened for review.",
+        `Thanks for letting us know, ${ticket.employeeName}.`,
+        "We marked this ticket as resolved. If the problem comes back, reply to this email and we will check it again.",
       ],
     });
     updateSupportTicket(ticket.id, {
@@ -295,10 +295,10 @@ async function processClaimedTicket(ticket: SupportTicketRecord): Promise<void> 
   }
   if (acknowledged.status === "repairing") {
     const sent = await replyToTicketEmail(acknowledged, {
-      heading: "The automated repair needs human review",
+      heading: "Your ticket is still open",
       paragraphs: [
-        "The isolated repair job did not report a verified deployment before its safety deadline.",
-        "I left the ticket open for human review. A late successful deployment callback will still be verified and reported on this same thread.",
+        "We need more time to finish the fix.",
+        "Your ticket is still open. You do not need to send another ticket. We will reply here when there is an update.",
       ],
     });
     updateSupportTicket(acknowledged.id, {

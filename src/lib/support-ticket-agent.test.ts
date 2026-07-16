@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { canRunReadModelRefresh, type TicketDiagnostic } from "@/lib/support-ticket-agent";
+import {
+  canRunReadModelRefresh,
+  isPlainSupportLanguage,
+  type TicketDiagnostic,
+} from "@/lib/support-ticket-agent";
 import type { SupportTicketRecord } from "@/lib/support-ticket-store";
 import { classifyTicketConfirmation } from "@/lib/support-ticket-worker";
 
@@ -85,5 +89,25 @@ describe("employee confirmation classification", () => {
     expect(classifyTicketConfirmation("I will try again after lunch.")).toBe("unclear");
     expect(classifyTicketConfirmation("Thanks for looking into this.")).toBe("unclear");
     expect(classifyTicketConfirmation("Yes.")).toBe("unclear");
+  });
+});
+
+describe("employee-facing language", () => {
+  it("accepts short, clear support language", () => {
+    expect(isPlainSupportLanguage(
+      "We found the problem and are working on a fix. We will email you when it is ready.",
+    )).toBe(true);
+  });
+
+  it("rejects internal technical wording", () => {
+    expect(isPlainSupportLanguage(
+      "The deployment passed the runtime health check for the latest commit.",
+    )).toBe(false);
+  });
+
+  it("rejects sentences that are too long for the intended reader", () => {
+    expect(isPlainSupportLanguage(
+      "We reviewed all of the information that was provided with your ticket and carefully checked several parts of the CRM before deciding what should happen next.",
+    )).toBe(false);
   });
 });
