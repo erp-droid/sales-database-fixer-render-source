@@ -195,6 +195,38 @@ describe("deferred actions store", () => {
     expect(items.find((item) => item.id === "legacy-action")?.reason).toBeNull();
   });
 
+  it("retains deletion previews for locally-created negative contact IDs", async () => {
+    const {
+      enqueueDeferredContactDeleteAction,
+      getStoredDeferredActionById,
+    } = await import("@/lib/deferred-actions-store");
+
+    const queued = enqueueDeferredContactDeleteAction({
+      sourceSurface: "accounts",
+      businessAccountRecordId: "local-account-1",
+      businessAccountId: "LOCAL-ACCOUNT-1",
+      companyName: "Local Company",
+      contactId: -12345,
+      contactName: "Local Contact",
+      contactRowKey: "local-account-1:contact:-12345",
+      reason: "Created by mistake",
+      actor: {
+        loginName: "jserrano",
+        name: "Jorge Serrano",
+      },
+    });
+
+    expect(getStoredDeferredActionById(queued.id)).toMatchObject({
+      actionType: "deleteContact",
+      contactId: -12345,
+      preview: {
+        actionType: "deleteContact",
+        contactId: -12345,
+        rowKey: "local-account-1:contact:-12345",
+      },
+    });
+  });
+
   it("dedupes active merge actions for the same keep and loser contacts", async () => {
     const {
       enqueueDeferredMergeContactsAction,

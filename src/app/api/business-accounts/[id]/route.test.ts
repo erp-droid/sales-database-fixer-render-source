@@ -546,6 +546,12 @@ describe("GET /api/business-accounts/[id]", () => {
 describe("DELETE /api/business-accounts/[id]", () => {
   beforeEach(() => {
     vi.resetModules();
+    getEnv.mockReset();
+    getEnv.mockReturnValue({
+      LOCAL_DATABASE_ONLY: false,
+      READ_MODEL_ENABLED: true,
+      READ_MODEL_LOCAL_WRITES_ENABLED: true,
+    });
     applyLastCalledAtToBusinessAccountRows.mockReset();
     applyLastCalledAtToBusinessAccountRows.mockImplementation((rows) => rows);
     requireAuthCookieValue.mockReset();
@@ -568,6 +574,49 @@ describe("DELETE /api/business-accounts/[id]", () => {
       id: "delete-account-1",
       executeAfterAt: "2026-04-16T01:00:00.000Z",
     });
+  });
+
+  it("queues app-created local accounts without looking them up in Acumatica", async () => {
+    readStoredBusinessAccountRowsFromReadModel.mockReturnValue([
+      buildRow({
+        id: "local-account-123",
+        accountRecordId: "local-account-123",
+        rowKey: "local-account-123:contact:-12345",
+        businessAccountId: "LOCAL-ABC123",
+        companyName: "Local Company",
+        contactId: -12345,
+        primaryContactId: -12345,
+      }),
+    ]);
+
+    const { DELETE } = await import("@/app/api/business-accounts/[id]/route");
+    const response = await DELETE(
+      new NextRequest(
+        "http://localhost/api/business-accounts/local-account-123?source=accounts",
+        {
+          method: "DELETE",
+          body: JSON.stringify({ reason: "Created by mistake" }),
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      ),
+      {
+        params: Promise.resolve({
+          id: "local-account-123",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchBusinessAccountById).not.toHaveBeenCalled();
+    expect(enqueueDeferredBusinessAccountDeleteAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessAccountRecordId: "local-account-123",
+        businessAccountId: "LOCAL-ABC123",
+        reason: "Created by mistake",
+      }),
+    );
   });
 
   it("queues deleting a business account even while contacts still exist", async () => {

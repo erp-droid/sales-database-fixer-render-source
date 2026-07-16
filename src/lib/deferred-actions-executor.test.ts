@@ -9,6 +9,7 @@ const deleteContactMock = vi.fn();
 const fetchBusinessAccountByIdMock = vi.fn();
 const executeDeferredContactMergeRequestMock = vi.fn();
 const normalizeBusinessAccountRowsMock = vi.fn(() => []);
+const readStoredBusinessAccountRowsFromReadModelMock = vi.fn(() => []);
 const removeReadModelRowsByAccountMock = vi.fn();
 const removeReadModelRowsByContactIdMock = vi.fn();
 const replaceReadModelAccountRowsMock = vi.fn();
@@ -24,10 +25,12 @@ vi.mock("@/lib/contact-merge-execution", () => ({
 }));
 
 vi.mock("@/lib/business-accounts", () => ({
+  enforceSinglePrimaryPerAccountRows: vi.fn((rows) => rows),
   normalizeBusinessAccountRows: normalizeBusinessAccountRowsMock,
 }));
 
 vi.mock("@/lib/read-model/accounts", () => ({
+  readStoredBusinessAccountRowsFromReadModel: readStoredBusinessAccountRowsFromReadModelMock,
   removeReadModelRowsByAccount: removeReadModelRowsByAccountMock,
   removeReadModelRowsByContactId: removeReadModelRowsByContactIdMock,
   replaceReadModelAccountRows: replaceReadModelAccountRowsMock,
@@ -77,6 +80,7 @@ describe("deferred actions executor", () => {
     tempDir = mkdtempSync(path.join(tmpdir(), "deferred-actions-executor-"));
     vi.resetModules();
     vi.clearAllMocks();
+    readStoredBusinessAccountRowsFromReadModelMock.mockReturnValue([]);
     setBaseEnv(path.join(tempDir, "read-model.sqlite"), path.join(tempDir, "history.json"));
   });
 
@@ -291,6 +295,66 @@ describe("deferred actions executor", () => {
     expect(record?.attemptCount).toBe(1);
   });
 
+  it("deletes negative-ID local contacts without calling Acumatica", async () => {
+    const {
+      approveDeferredActions,
+      enqueueDeferredContactDeleteAction,
+      getStoredDeferredActionById,
+    } = await import("@/lib/deferred-actions-store");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const { runDueDeferredActions } = await import("@/lib/deferred-actions-executor");
+
+    const actor = { loginName: "jserrano", name: "Jorge Serrano" };
+    const queued = enqueueDeferredContactDeleteAction({
+      sourceSurface: "accounts",
+      businessAccountRecordId: "record-1",
+      businessAccountId: "BA0001",
+      companyName: "Local Company",
+      contactId: -12345,
+      contactName: "Local Contact",
+      contactRowKey: "record-1:contact:-12345",
+      reason: "Created by mistake",
+      actor,
+    });
+    approveDeferredActions([queued.id], actor);
+
+    readStoredBusinessAccountRowsFromReadModelMock.mockReturnValue([
+      {
+        id: "record-1",
+        accountRecordId: "record-1",
+        rowKey: "record-1:contact:-12345",
+        businessAccountId: "BA0001",
+        contactId: -12345,
+        isPrimaryContact: true,
+        primaryContactId: -12345,
+        primaryContactName: "Local Contact",
+        primaryContactPhone: null,
+        primaryContactEmail: null,
+        notes: null,
+      },
+    ]);
+
+    getReadModelDb()
+      .prepare("UPDATE deferred_actions SET execute_after_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), queued.id);
+
+    const result = await runDueDeferredActions("cookie", actor, { value: null });
+
+    expect(result).toEqual({ executedCount: 1, failedCount: 0 });
+    expect(replaceReadModelAccountRowsMock).toHaveBeenCalledWith("record-1", [
+      expect.objectContaining({
+        rowKey: "record-1:primary",
+        contactId: null,
+        isPrimaryContact: false,
+        primaryContactId: null,
+      }),
+    ]);
+    expect(removeReadModelRowsByContactIdMock).not.toHaveBeenCalled();
+    expect(deleteContactMock).not.toHaveBeenCalled();
+    expect(fetchBusinessAccountByIdMock).not.toHaveBeenCalled();
+    expect(getStoredDeferredActionById(queued.id)?.status).toBe("executed");
+  });
+
   it("executes queued business account deletions and removes the account from the read model", async () => {
     const {
       approveDeferredActions,
@@ -329,6 +393,42 @@ describe("deferred actions executor", () => {
 
     const record = getStoredDeferredActionById(queued.id);
     expect(record?.status).toBe("executed");
+  });
+
+  it("deletes app-created local accounts without calling Acumatica", async () => {
+    const {
+      approveDeferredActions,
+      enqueueDeferredBusinessAccountDeleteAction,
+      getStoredDeferredActionById,
+    } = await import("@/lib/deferred-actions-store");
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const { runDueDeferredActions } = await import("@/lib/deferred-actions-executor");
+
+    const actor = { loginName: "jserrano", name: "Jorge Serrano" };
+    const queued = enqueueDeferredBusinessAccountDeleteAction({
+      sourceSurface: "accounts",
+      businessAccountRecordId: "local-account-123",
+      businessAccountId: "LOCAL-ABC123",
+      companyName: "Local Company",
+      reason: "Created by mistake",
+      actor,
+    });
+    approveDeferredActions([queued.id], actor);
+
+    getReadModelDb()
+      .prepare("UPDATE deferred_actions SET execute_after_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), queued.id);
+
+    const result = await runDueDeferredActions("cookie", actor, { value: null });
+
+    expect(result).toEqual({ executedCount: 1, failedCount: 0 });
+    expect(removeReadModelRowsByAccountMock).toHaveBeenCalledWith(
+      "local-account-123",
+      "LOCAL-ABC123",
+    );
+    expect(deleteBusinessAccountMock).not.toHaveBeenCalled();
+    expect(fetchBusinessAccountByIdMock).not.toHaveBeenCalled();
+    expect(getStoredDeferredActionById(queued.id)?.status).toBe("executed");
   });
 
   it("defers queued business account deletions until queued contact deletes finish upstream", async () => {

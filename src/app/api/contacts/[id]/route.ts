@@ -20,8 +20,8 @@ type RouteContext = {
 
 function parseContactId(value: string): number {
   const contactId = Number(value);
-  if (!Number.isInteger(contactId) || contactId <= 0) {
-    throw new HttpError(400, "Contact ID must be a positive integer.");
+  if (!Number.isInteger(contactId) || contactId === 0) {
+    throw new HttpError(400, "Contact ID must be a non-zero integer.");
   }
 
   return contactId;

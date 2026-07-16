@@ -109,4 +109,37 @@ describe("DELETE /api/contacts/[id]", () => {
     );
     expect(resolveStoredDeferredActionActor).toHaveBeenCalledTimes(1);
   });
+
+  it("queues locally-created contacts with negative IDs", async () => {
+    const { DELETE } = await import("@/app/api/contacts/[id]/route");
+
+    const response = await DELETE(
+      new NextRequest("http://localhost/api/contacts/-12345?source=accounts", {
+        method: "DELETE",
+        body: JSON.stringify({ reason: "Created by mistake" }),
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+      {
+        params: Promise.resolve({
+          id: "-12345",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      queued: true,
+      actionType: "deleteContact",
+      contactId: -12345,
+      reason: "Created by mistake",
+    });
+    expect(enqueueDeferredContactDeleteAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contactId: -12345,
+        reason: "Created by mistake",
+      }),
+    );
+  });
 });
