@@ -17,6 +17,7 @@ import {
   addSupportTicketEvent,
   claimSupportTicketForProcessing,
   hasSupportTicketEvent,
+  listSupportTicketEvents,
   readSupportTicket,
   releaseSupportTicketAfterFailure,
   updateSupportTicket,
@@ -30,10 +31,41 @@ function messageTimestamp(message: MailMessage): string | null {
   return message.receivedAt || message.sentAt || null;
 }
 
-function newestIncomingMessage(ticket: SupportTicketRecord, messages: MailMessage[]): MailMessage | null {
+function normalizeEmail(value: string | null | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function robotMessageIds(ticket: SupportTicketRecord): Set<string> {
+  const ids = new Set<string>();
+  if (ticket.emailMessageId) {
+    ids.add(ticket.emailMessageId);
+  }
+  for (const event of listSupportTicketEvents(ticket.id, 500)) {
+    const messageId = event.details?.messageId;
+    if (typeof messageId === "string" && messageId.trim()) {
+      ids.add(messageId.trim());
+    }
+  }
+  return ids;
+}
+
+export function newestEmployeeMessage(
+  ticket: Pick<SupportTicketRecord, "employeeEmail" | "lastIncomingMessageAt">,
+  messages: MailMessage[],
+  knownRobotMessageIds: ReadonlySet<string>,
+  robotSenderEmail = process.env.TICKET_AGENT_SENDER_EMAIL ?? "jserrano@meadowb.com",
+): MailMessage | null {
   const lastProcessedMs = ticket.lastIncomingMessageAt ? Date.parse(ticket.lastIncomingMessageAt) : 0;
+  const employeeUsesRobotMailbox = normalizeEmail(ticket.employeeEmail) === normalizeEmail(robotSenderEmail);
   return messages
-    .filter((message) => message.direction === "incoming")
+    .filter((message) =>
+      message.direction === "incoming" ||
+      (
+        employeeUsesRobotMailbox &&
+        message.direction === "outgoing" &&
+        !knownRobotMessageIds.has(message.messageId)
+      ),
+    )
     .filter((message) => {
       const timestamp = messageTimestamp(message);
       return timestamp ? Date.parse(timestamp) > lastProcessedMs : false;
@@ -199,7 +231,7 @@ async function investigateAndReply(
 
 async function checkEmployeeReply(ticket: SupportTicketRecord): Promise<void> {
   const thread = await readTicketEmailThread(ticket);
-  const incoming = newestIncomingMessage(ticket, thread.messages);
+  const incoming = newestEmployeeMessage(ticket, thread.messages, robotMessageIds(ticket));
   if (!incoming) {
     updateSupportTicket(ticket.id, {
       processingStartedAt: null,
