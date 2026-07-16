@@ -82,7 +82,7 @@ jobs:
           output-file: .ticket-repair/codex-result.md
           sandbox: workspace-write
           safety-strategy: drop-sudo
-          codex-args: '["--ephemeral", "--ignore-user-config"]'
+          codex-args: '["--ephemeral"]'
 
       - name: Stage and deterministically validate the patch
         run: |
@@ -107,7 +107,7 @@ jobs:
           output-file: .ticket-repair/review.json
           sandbox: read-only
           safety-strategy: drop-sudo
-          codex-args: '["--ephemeral", "--ignore-user-config", "--output-schema", ".github/codex/schemas/crm-ticket-review.schema.json"]'
+          codex-args: '["--ephemeral", "--output-schema", ".github/codex/schemas/crm-ticket-review.schema.json"]'
 
       - name: Enforce low-risk review verdict
         run: |
