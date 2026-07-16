@@ -109,6 +109,53 @@ jobs:
       - name: Run lint
         run: node "$RUNNER_TEMP/lint-ticket-repair.cjs"
 
+      - name: Package the tested patch and evidence
+        run: |
+          mkdir -p "$RUNNER_TEMP/repair-artifact"
+          git diff --cached --binary > "$RUNNER_TEMP/repair-artifact/repair.patch"
+          cp .ticket-repair/codex-result.md "$RUNNER_TEMP/repair-artifact/codex-result.md"
+          cp .ticket-repair/context.json "$RUNNER_TEMP/repair-artifact/context.json"
+          git rev-parse HEAD > "$RUNNER_TEMP/repair-artifact/base-sha.txt"
+
+      - name: Upload tested repair artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: crm-repair-${{ inputs.repairRunId }}
+          path: ${{ runner.temp }}/repair-artifact
+          if-no-files-found: error
+          retention-days: 7
+
+  review:
+    needs: repair
+    if: needs.repair.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact tested base without write credentials
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the tested repair artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: crm-repair-${{ inputs.repairRunId }}
+          path: ${{ runner.temp }}/repair-artifact
+
+      - name: Reconstruct the tested patch for independent review
+        run: |
+          test "$(git rev-parse HEAD)" = "$(cat "$RUNNER_TEMP/repair-artifact/base-sha.txt")"
+          git apply --check "$RUNNER_TEMP/repair-artifact/repair.patch"
+          git apply --index "$RUNNER_TEMP/repair-artifact/repair.patch"
+          git diff --cached --check
+          mkdir -p .ticket-repair
+          cp "$RUNNER_TEMP/repair-artifact/context.json" .ticket-repair/context.json
+          cp "$RUNNER_TEMP/repair-artifact/codex-result.md" .ticket-repair/codex-result.md
+
       - name: Run independent read-only risk review
         uses: openai/codex-action@v1
         with:
@@ -123,25 +170,17 @@ jobs:
         run: |
           node -e 'const fs=require("fs");const v=JSON.parse(fs.readFileSync(".ticket-repair/review.json","utf8"));if(v.approved!==true||v.riskLevel!=="low")throw new Error(`Repair review rejected: ${v.summary}; ${(v.concerns||[]).join("; ")}`);'
 
-      - name: Package the verified patch and evidence
-        run: |
-          mkdir -p "$RUNNER_TEMP/repair-artifact"
-          git diff --cached --binary > "$RUNNER_TEMP/repair-artifact/repair.patch"
-          cp .ticket-repair/codex-result.md "$RUNNER_TEMP/repair-artifact/codex-result.md"
-          cp .ticket-repair/review.json "$RUNNER_TEMP/repair-artifact/review.json"
-          git rev-parse HEAD > "$RUNNER_TEMP/repair-artifact/base-sha.txt"
-
-      - name: Upload verified repair artifact
+      - name: Upload the independent review record
         uses: actions/upload-artifact@v4
         with:
-          name: crm-repair-${{ inputs.repairRunId }}
-          path: ${{ runner.temp }}/repair-artifact
+          name: crm-review-${{ inputs.repairRunId }}
+          path: .ticket-repair/review.json
           if-no-files-found: error
           retention-days: 7
 
   deploy:
-    needs: repair
-    if: needs.repair.result == 'success'
+    needs: [repair, review]
+    if: needs.repair.result == 'success' && needs.review.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -224,7 +263,7 @@ jobs:
           exit 1
 
   callback:
-    needs: [repair, deploy]
+    needs: [repair, review, deploy]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -242,19 +281,20 @@ jobs:
           TICKET_ID: ${{ inputs.ticketId }}
           REPAIR_RUN_ID: ${{ inputs.repairRunId }}
           REPAIR_RESULT: ${{ needs.repair.result }}
+          REVIEW_RESULT: ${{ needs.review.result }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
           COMMIT_SHA: ${{ needs.deploy.outputs.commit_sha }}
         run: |
           node - <<'NODE'
           const fs = require("node:fs");
           const path = require("node:path");
-          const successful = process.env.REPAIR_RESULT === "success" && process.env.DEPLOY_RESULT === "success";
+          const successful = process.env.REPAIR_RESULT === "success" && process.env.REVIEW_RESULT === "success" && process.env.DEPLOY_RESULT === "success";
           const resultPath = path.join(process.env.RUNNER_TEMP, "repair-artifact", "codex-result.md");
           let agentSummary = "";
           try { agentSummary = fs.readFileSync(resultPath, "utf8").trim(); } catch {}
           const summary = successful
             ? (agentSummary || "The isolated repair passed every verification gate and the exact commit is healthy on Render.")
-            : `The automated repair stopped safely before a verified healthy deployment. Repair job: ${process.env.REPAIR_RESULT}; deploy job: ${process.env.DEPLOY_RESULT}.`;
+            : `The automated repair stopped safely before a verified healthy deployment. Repair job: ${process.env.REPAIR_RESULT}; review job: ${process.env.REVIEW_RESULT}; deploy job: ${process.env.DEPLOY_RESULT}.`;
           fs.writeFileSync("callback.json", JSON.stringify({
             ticketId: process.env.TICKET_ID,
             repairRunId: process.env.REPAIR_RUN_ID,
