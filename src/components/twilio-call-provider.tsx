@@ -337,6 +337,12 @@ function shouldOfferCallerPhoneSetup(message: string): boolean {
   );
 }
 
+export function shouldRestoreCallerVerification(
+  status: CallerVerificationResponse["status"],
+): boolean {
+  return status === "pending" || status === "failed";
+}
+
 export function TwilioCallProvider({ children }: { children: ReactNode }) {
   const [callSid, setCallSid] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -383,7 +389,11 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
       .catch(() => undefined);
     void readCallerVerificationStatus()
       .then((verification) => {
-        if (!cancelled && verification && verification.status !== "idle") {
+        if (
+          !cancelled &&
+          verification &&
+          shouldRestoreCallerVerification(verification.status)
+        ) {
           setCallerVerification(verification);
           if (verification.phoneNumber) {
             setCachedCallerPhone(verification.phoneNumber);
