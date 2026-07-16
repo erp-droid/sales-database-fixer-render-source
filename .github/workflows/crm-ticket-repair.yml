@@ -84,6 +84,16 @@ jobs:
           safety-strategy: drop-sudo
           codex-args: '["--ephemeral"]'
 
+      - name: Restore the project Node runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Verify the native dependency runtime
+        run: |
+          node -e 'if (process.versions.modules !== "115") throw new Error(`Expected Node 20 ABI 115, received ${process.versions.modules}`); const Database=require("better-sqlite3"); const db=new Database(":memory:"); db.close();'
+
       - name: Stage and deterministically validate the patch
         run: |
           git add -A -- ':!.ticket-repair'

@@ -22,12 +22,14 @@ const callbackSchema = z.object({
   summary: z.string().trim().min(1).max(3000),
 });
 
-function callbackEventExists(ticketId: string, repairRunId: string) {
-  return listSupportTicketEvents(ticketId, 500).some(
-    (event) =>
-      ["code_repair_deployed", "code_repair_failed"].includes(event.eventType) &&
-      event.details?.repairRunId === repairRunId,
+function callbackState(ticketId: string, repairRunId: string) {
+  const matchingEvents = listSupportTicketEvents(ticketId, 500).filter(
+    (event) => event.details?.repairRunId === repairRunId,
   );
+  return {
+    deployed: matchingEvents.some((event) => event.eventType === "code_repair_deployed"),
+    failed: matchingEvents.some((event) => event.eventType === "code_repair_failed"),
+  };
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -41,7 +43,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (!findTicketRepairDispatch(input.ticketId, input.repairRunId)) {
       throw new HttpError(404, "Repair job was not found.");
     }
-    if (callbackEventExists(input.ticketId, input.repairRunId)) {
+    const existingCallback = callbackState(input.ticketId, input.repairRunId);
+    if (existingCallback.deployed || (input.status === "failed" && existingCallback.failed)) {
       return NextResponse.json({ ok: true, alreadyProcessed: true });
     }
 
