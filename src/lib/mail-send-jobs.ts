@@ -44,7 +44,7 @@ type EnqueueMailSendJobInput = {
   response: unknown;
 };
 
-let drainPromise: Promise<void> | null = null;
+let drainPromise: Promise<number> | null = null;
 
 function normalizeStatus(value: string | null | undefined): MailSendJobStatus {
   switch (value) {
@@ -177,6 +177,27 @@ function buildMailSendAuditEventId(jobId: string): string {
   return `email-send-job:${jobId}`;
 }
 
+function recordDeliveredMailAudit(job: MailSendJobRecord): boolean {
+  const payload = parseJson<Partial<MailComposePayload>>(job.payloadJson, "mail payload");
+  const response = parseJson<unknown>(job.responseJson, "mail response");
+  if (!isMailSendResponse(response)) {
+    return false;
+  }
+
+  logMailSendAudit({
+    actor: {
+      loginName: job.requestedByLoginName,
+      name: job.requestedByName,
+    },
+    payload,
+    resultCode: buildAuditResultCode(response),
+    response,
+    auditEventId: buildMailSendAuditEventId(job.id),
+    occurredAt: job.createdAt,
+  });
+  return true;
+}
+
 export function enqueueMailSendJob(input: EnqueueMailSendJobInput): MailSendJobRecord {
   const db = getReadModelDb();
   const now = new Date().toISOString();
@@ -211,7 +232,59 @@ export function enqueueMailSendJob(input: EnqueueMailSendJobInput): MailSendJobR
     throw new Error("Failed to enqueue mail send job.");
   }
 
-  return normalizeRow(row);
+  const job = normalizeRow(row);
+  try {
+    // Gmail delivery and CRM activity synchronization are separate outcomes.
+    // Record the confirmed delivery immediately so a later CRM sync failure
+    // cannot make the sent email disappear from the dashboard.
+    recordDeliveredMailAudit(job);
+  } catch {
+    // The durable job remains available for startup recovery and retries.
+  }
+
+  return job;
+}
+
+export function recoverDeliveredMailSendAudits(limit = 500): number {
+  const db = getReadModelDb();
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        jobs.id,
+        jobs.requested_by_login_name,
+        jobs.requested_by_name,
+        jobs.payload_json,
+        jobs.response_json,
+        jobs.status,
+        jobs.attempts,
+        jobs.error_message,
+        jobs.created_at,
+        jobs.updated_at
+      FROM mail_send_jobs AS jobs
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM audit_events AS events
+        WHERE events.id = 'email-send-job:' || jobs.id
+      )
+      ORDER BY jobs.created_at ASC
+      LIMIT ?
+      `,
+    )
+    .all(Math.max(1, Math.trunc(limit))) as StoredMailSendJobRow[];
+
+  let recovered = 0;
+  for (const row of rows) {
+    try {
+      if (recordDeliveredMailAudit(normalizeRow(row))) {
+        recovered += 1;
+      }
+    } catch {
+      // One malformed historical job must not prevent recovery of the rest.
+    }
+  }
+
+  return recovered;
 }
 
 export function listPendingMailSendJobs(limit = 25): MailSendJobRecord[] {
@@ -310,22 +383,30 @@ export async function processMailSendJob(id: string): Promise<MailSendJobRecord 
       ),
       response: isMailSendResponse(repairedResponse) ? repairedResponse : null,
       auditEventId: buildMailSendAuditEventId(claimed.id),
+      occurredAt: claimed.createdAt,
     });
 
     return markMailSendJobSucceeded(claimed.id, repairedResponse);
   } catch (error) {
+    try {
+      // The email was already delivered even if the separate CRM activity
+      // repair failed. Preserve it as a partial audit event for the dashboard.
+      recordDeliveredMailAudit(claimed);
+    } catch {
+      // Keep the job retryable if its stored data or the audit write is broken.
+    }
     return markMailSendJobFailed(claimed.id, getErrorMessage(error));
   }
 }
 
-export async function drainPendingMailSendJobs(limit = 25): Promise<void> {
+export async function drainPendingMailSendJobs(limit = 25): Promise<number> {
   if (drainPromise) {
-    await drainPromise;
-    return;
+    return drainPromise;
   }
 
   drainPromise = (async () => {
     let remaining = Math.max(1, Math.trunc(limit));
+    let processed = 0;
     const processedIds = new Set<string>();
 
     while (remaining > 0) {
@@ -339,15 +420,17 @@ export async function drainPendingMailSendJobs(limit = 25): Promise<void> {
       for (const job of jobs) {
         processedIds.add(job.id);
         await processMailSendJob(job.id);
+        processed += 1;
         remaining -= 1;
         if (remaining <= 0) {
           break;
         }
       }
     }
+    return processed;
   })().finally(() => {
     drainPromise = null;
   });
 
-  await drainPromise;
+  return drainPromise;
 }

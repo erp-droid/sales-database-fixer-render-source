@@ -890,6 +890,7 @@ export function logMailSendAudit(input: {
   resultCode: "succeeded" | "partial" | "failed";
   response?: Partial<MailSendResponse> | null;
   auditEventId?: string | null;
+  occurredAt?: string | null;
 }): void {
   const recipients = [...(input.payload.to ?? []), ...(input.payload.cc ?? []), ...(input.payload.bcc ?? [])];
   const linkedContact = input.payload.linkedContact ?? null;
@@ -926,7 +927,7 @@ export function logMailSendAudit(input: {
   writeAuditEvent(
     {
       id: cleanString(input.auditEventId) ?? createAuditEventId("email-send"),
-      occurredAt: new Date().toISOString(),
+      occurredAt: cleanString(input.occurredAt) ?? new Date().toISOString(),
       itemType: "email",
       actionGroup: "email_send",
       resultCode: input.resultCode,

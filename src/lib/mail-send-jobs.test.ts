@@ -126,7 +126,7 @@ describe("mail send jobs", () => {
     expect(await processMailSendJob(job.id)).toBeNull();
   });
 
-  it("keeps failed jobs retryable", async () => {
+  it("counts delivered email while keeping failed CRM sync jobs retryable", async () => {
     repairMailActivitySyncWithServiceSession.mockRejectedValue(
       new Error("Acumatica unavailable"),
     );
@@ -175,6 +175,19 @@ describe("mail send jobs", () => {
       attempts: 1,
     });
     expect(failedJob.error).toContain("Acumatica unavailable");
-    expect(logMailSendAudit).not.toHaveBeenCalled();
+    expect(logMailSendAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: {
+          loginName: "jserrano",
+          name: "Jorge Serrano",
+        },
+        resultCode: "partial",
+        response: expect.objectContaining({
+          sent: true,
+          messageId: "message-2",
+          activitySyncStatus: "failed",
+        }),
+      }),
+    );
   });
 });
