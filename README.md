@@ -30,7 +30,6 @@ AUTH_PROVIDER=acumatica
 AUTH_LOGIN_URL=
 AUTH_ME_URL=
 AUTH_LOGOUT_URL=
-AUTH_FORGOT_PASSWORD_URL=
 AUTH_COOKIE_NAME=.ASPXAUTH
 AUTH_COOKIE_DOMAIN=
 AUTH_COOKIE_SECURE=false
@@ -63,8 +62,9 @@ If you want to mirror Jeff's custom auth gateway instead of direct Acumatica log
 - `AUTH_LOGOUT_URL` (optional)
 
 The Sign in page includes a **Forgot your password?** link:
-- Defaults to `https://<ACUMATICA_BASE_URL>/Frames/Login.aspx`
-- Override with `AUTH_FORGOT_PASSWORD_URL` if you have a dedicated reset URL
+- Opens a MeadowBrook CRM recovery page instead of sending the user to the source system
+- Submits the username to the source-system recovery service in the background and shows a neutral confirmation
+- Rate limits repeated requests and never reveals whether a username exists
 
 ## Run
 
