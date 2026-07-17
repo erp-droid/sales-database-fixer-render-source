@@ -38,6 +38,7 @@ export function AppChrome({
   topBarSearch,
   children,
   userName,
+  userMenuActions,
   onSignOut,
   contentClassName,
 }: {
@@ -50,6 +51,10 @@ export function AppChrome({
   topBarSearch?: ReactNode;
   children: ReactNode;
   userName?: string | null;
+  userMenuActions?: ReadonlyArray<{
+    label: string;
+    onSelect: () => void | Promise<void>;
+  }>;
   onSignOut?: () => void | Promise<void>;
   contentClassName?: string;
 }) {
@@ -109,6 +114,11 @@ export function AppChrome({
     router.refresh();
   }
 
+  async function handleUserMenuAction(action: () => void | Promise<void>) {
+    setIsUserMenuOpen(false);
+    await action();
+  }
+
   return (
     <main className={styles.page}>
       <header className={styles.appBar}>
@@ -153,6 +163,16 @@ export function AppChrome({
                   <strong>{resolvedUserName}</strong>
                   <span>Signed in</span>
                 </div>
+                {userMenuActions?.map((action) => (
+                  <button
+                    className={styles.dropdownMenuAction}
+                    key={action.label}
+                    onClick={() => void handleUserMenuAction(action.onSelect)}
+                    type="button"
+                  >
+                    {action.label}
+                  </button>
+                ))}
                 <button className={styles.dropdownMenuAction} onClick={() => void handleSignOut()} type="button">
                   Sign out
                 </button>
