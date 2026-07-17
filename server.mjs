@@ -60,6 +60,21 @@ async function applyOptionalBrockAbSqliteRepair() {
   }
 }
 
+async function applyOptionalJeffSpecialContactRepair() {
+  try {
+    const repairModule = await import("./src/lib/read-model/jeff-special-contact-repair.mjs");
+    return repairModule.applyJeffSpecialContactRepair();
+  } catch (error) {
+    if (error?.code === "ERR_MODULE_NOT_FOUND") {
+      console.warn("[startup] Jeff special contact repair module unavailable; continuing startup", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return { status: "disabled", reason: "module_unavailable" };
+    }
+    throw error;
+  }
+}
+
 function readLocalDateParts(date, timeZone) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -1107,9 +1122,26 @@ server.listen(port, hostname, () => {
         console.error("[startup] Brock A/B SQLite repair failed", {
           message: error instanceof Error ? error.message : String(error),
         });
+      })
+      .then(() => applyOptionalJeffSpecialContactRepair())
+      .then((repairResult) => {
+        if (repairResult?.status === "applied") {
+          console.log("[startup] Jeff special contact repair applied", repairResult);
+        } else if (repairResult?.status === "already_applied") {
+          console.log("[startup] Jeff special contact repair already applied", repairResult);
+        } else if (repairResult?.status === "verified") {
+          console.log("[startup] Jeff special contact repair verified", repairResult);
+        } else if (repairResult?.status === "disabled") {
+          console.log("[startup] Jeff special contact repair disabled", repairResult);
+        }
+      })
+      .catch((error) => {
+        console.error("[startup] Jeff special contact repair failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
   } else {
-    console.log("[startup] Brock A/B SQLite repair skipped on web-only cluster worker");
+    console.log("[startup] SQLite data repairs skipped on web-only cluster worker");
   }
   if (pricingBookAutoSyncEnabled && clusterBackgroundTasksEnabled) {
     startPricingBookAutoSync(console);
