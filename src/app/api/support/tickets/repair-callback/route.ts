@@ -65,6 +65,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       updateSupportTicket(ticket.id, {
         status: "waiting_for_employee",
         resolution: `Verified code repair deployed at ${commitLabel}.`,
+        nextAction: "Wait for the employee to confirm the deployed fix.",
         emailMessageId: sent.messageId,
         processingStartedAt: null,
         nextCheckAt: new Date(Date.now() + 60_000).toISOString(),
@@ -78,18 +79,24 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         details: { repairRunId: input.repairRunId, commitSha: input.commitSha, summary: input.summary },
       });
     } else {
+      const retryAvailable = ticket.remediationAttempts < 2;
       const sent = await replyToTicketEmail(ticket, {
         heading: "Your ticket is still open",
         paragraphs: [
           "We were not able to finish the fix. We did not leave an untested change in the CRM.",
-          "Your ticket is still open. You do not need to send another ticket. A support person will review it.",
+          retryAvailable
+            ? "The CRM will try another safe approach. You do not need to send another ticket."
+            : "The CRM will keep checking for a safe next step. You do not need to send another ticket.",
         ],
       });
       updateSupportTicket(ticket.id, {
-        status: "escalated",
+        status: retryAvailable ? "queued" : "monitoring",
+        nextAction: retryAvailable
+          ? "Reinvestigate and choose a different automated repair."
+          : "Monitor for new evidence or a safe automated action.",
         emailMessageId: sent.messageId,
         processingStartedAt: null,
-        nextCheckAt: new Date(Date.now() + 60_000).toISOString(),
+        nextCheckAt: new Date(Date.now() + (retryAvailable ? 60_000 : 5 * 60_000)).toISOString(),
         lastError: input.summary.slice(0, 1200),
       });
       addSupportTicketEvent({

@@ -10,14 +10,16 @@ The authenticated `/support` page accepts MeadowBrook CRM tickets and places eve
    - `/api/healthz`
    - `/api/runtime/health-slo`
    - `/api/sync/status`
-4. OpenAI returns a strict structured diagnosis and one of three remediation choices: `none`, `refresh_read_model`, or `code_repair`. Supported screenshots and photos are included as untrusted supporting evidence; HEIC files and non-image attachments remain on the ticket but are not sent to the diagnostic model for image analysis.
-5. Deterministic server-side gates decide whether a cache refresh or isolated code-repair job may start.
-6. A code repair runs in GitHub Actions using the official Codex action, without repository-write credentials. The resulting patch must pass deterministic diff restrictions, the full tests, production build, lint, and a separate read-only low-risk review.
-7. A separate credential-isolated job reapplies the exact patch, repeats verification, and pushes it to `main`. Render auto-deploys it, and the workflow waits for `/api/health` to report the exact commit before declaring success.
-8. The worker replies on the Gmail thread created for that ticket and polls only that stored thread ID.
-9. The employee is asked to reply with `resolved` or `still broken`. The ticket closes only after an explicit resolution confirmation.
+4. OpenAI returns a strict structured understanding, its confidence, assumptions, unknowns, and one action: `clarify`, `guidance`, `refresh_read_model`, `code_repair`, or `monitor`. Supported screenshots and photos are included as untrusted supporting evidence; HEIC files and non-image attachments remain on the ticket but are not sent to the diagnostic model for image analysis.
+5. When a missing answer could change the safe action, the worker may send at most two clarification emails. Each email contains no more than three one-fact questions in basic, non-technical language. Questions cannot repeat, and every email says that `not sure` is an acceptable answer.
+6. The original submission, employee answers, understanding, unknowns, decisions, attempts, and automatic next action are stored on the ticket and shown in the employee's ticket history.
+7. Deterministic server-side gates decide whether guidance, a read-model refresh, monitoring, or an isolated code-repair job may start. A `still broken` reply forces a new action key, so the previous advice is not repeated.
+8. A code repair runs in GitHub Actions using the official Codex action, without repository-write credentials. The resulting patch must pass deterministic diff restrictions, the full tests, production build, lint, and a separate read-only low-risk review.
+9. A separate credential-isolated job reapplies the exact patch, repeats verification, and pushes it to `main`. Render auto-deploys it, and the workflow waits for `/api/health` to report the exact commit before declaring success.
+10. The worker replies on the Gmail thread created for that ticket and polls only that stored thread ID.
+11. The employee is asked to reply with `resolved` or `still broken`. The ticket closes only after an explicit resolution confirmation. Every other state retains an automatic next action; there is no staff handoff or human-review state.
 
-The agent never searches or reviews the mailbox. It reads only Gmail thread IDs that it created for submitted support tickets.
+The agent never searches or reviews the mailbox. It reads only Gmail thread IDs that it created for submitted support tickets. Legacy `escalated` tickets are treated as automatic-monitoring tickets and re-enter the same autonomous workflow.
 
 ## Attachments
 
@@ -39,7 +41,7 @@ The local read-model refresh is allowed only when:
 For a reproducible frontend or backend application defect—including API routes, server libraries, background workers, and runtime errors—the diagnostic model may request `code_repair`. The verified commit is pushed to `main`, causing the existing Render service to rebuild and redeploy. That request is limited as follows:
 
 - no more than two repair jobs may be dispatched for one ticket;
-- questions never dispatch code repair;
+- question-only tickets never dispatch code repair;
 - ticket content and attachments remain untrusted data;
 - the coding job has workspace-write access but no GitHub write credential;
 - changes to workflows, deployment configuration, package manifests, environment files, authentication, mail authentication, and the ticket automation itself are blocked;
@@ -49,7 +51,7 @@ For a reproducible frontend or backend application defect—including API routes
 - the publisher uses a normal non-force push, so a concurrent change to `main` causes the repair to stop;
 - Render must report the exact commit as healthy within 15 minutes; otherwise the publisher reverts it when `main` has not moved.
 
-The coding agent cannot access GitHub write credentials, Render credentials, or the callback secret. The publisher never receives the Codex API key. The robot still cannot edit source CRM business records, change credentials, or perform arbitrary infrastructure operations.
+The coding agent cannot access GitHub write credentials, Render credentials, or the callback secret. The publisher never receives the Codex API key. The robot still cannot edit source CRM business records, change credentials, or perform arbitrary infrastructure operations. Failed actions remain queued for a different automatic attempt or evidence recheck; they are never assigned to support staff.
 
 ## Required production configuration
 
@@ -74,11 +76,11 @@ Code repair additionally requires:
 
 1. Sign in and open `/support`.
 2. Submit a low-impact test ticket to your own `@meadowb.com` address.
-3. Confirm the acknowledgement and investigation update arrive on one Gmail thread.
+3. Confirm the acknowledgement and investigation update arrive on one Gmail thread. For an unclear report, confirm no email has more than three simple questions and no third clarification email is sent.
 4. For a dedicated test defect, confirm the ticket moves to Repairing & validating and the GitHub workflow runs.
 5. Confirm the workflow tests the patch, publishes it, and waits for the exact Render commit.
 6. Confirm the deployed-update email arrives on the original thread.
 7. Reply `resolved` and confirm the ticket status changes to Resolved.
 
 Set `TICKET_AGENT_ENABLED=false` to stop immediate and scheduled ticket processing without removing submitted tickets from the queue.
-Set `TICKET_REPAIR_ENABLED=false` to keep diagnostics and cache refreshes active while disabling all repository changes and deployments.
+Set `TICKET_REPAIR_ENABLED=false` only for an intentional maintenance stop. In that mode diagnostics, guidance, clarification, monitoring, and read-model refreshes continue, but application-code defects cannot be repaired autonomously.

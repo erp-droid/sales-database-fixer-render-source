@@ -45,4 +45,10 @@ describe("CRM ticket repair workflow authentication", () => {
     expect(reviewJob).toContain("sandbox: read-only");
     expect(reviewJob).toContain("safety-strategy: drop-sudo");
   });
+
+  it("keeps autonomous code repair enabled in the Render blueprint", () => {
+    const blueprint = readFileSync(path.join(process.cwd(), "render.yaml"), "utf8");
+
+    expect(blueprint).toMatch(/- key: TICKET_REPAIR_ENABLED\s+value: "true"/);
+  });
 });

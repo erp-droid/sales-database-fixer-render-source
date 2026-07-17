@@ -110,10 +110,35 @@
 .status_queued,
 .status_investigating,
 .status_repairing { background: #edf4ff; color: #2f64aa; }
+.status_waiting_for_details,
 .status_waiting_for_employee { background: #fff6de; color: #8a6512; }
-.status_escalated { background: #fff0ee; color: #a13d34; }
+.status_monitoring,
+.status_escalated { background: #f0efff; color: #5d4da5; }
 .status_resolved,
 .status_closed { background: #eaf7f0; color: #27704f; }
+
+.ticketDetails { margin-top: 10px; border-top: 1px solid #e7ebf0; }
+.ticketDetails > summary { padding-top: 9px; color: #39745d; font-size: 10px; font-weight: 750; cursor: pointer; }
+.ticketDetailContent { display: grid; gap: 13px; margin-top: 11px; }
+.ticketDetailContent section { display: grid; gap: 6px; padding: 10px; border-radius: 9px; background: #fff; }
+.ticketDetailContent section > strong { color: #314057; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.ticketDetailContent section > p,
+.understanding > p { margin: 0; color: #59677a; font-size: 10px; line-height: 1.5; white-space: pre-wrap; }
+.ticketDetailGrid { display: grid; gap: 7px; margin: 0; }
+.ticketDetailGrid div { display: grid; gap: 2px; }
+.ticketDetailGrid dt { color: #8792a2; font-size: 9px; }
+.ticketDetailGrid dd { margin: 0; color: #4a586c; font-size: 10px; line-height: 1.45; white-space: pre-wrap; }
+.breakText { overflow-wrap: anywhere; }
+.understanding { display: grid; gap: 7px; }
+.understanding > span,
+.attemptSummary { color: #7a8697; font-size: 9px; }
+.understanding div { color: #59677a; font-size: 9px; }
+.understanding b { color: #647185; }
+.understanding ul { margin: 3px 0 0; padding-left: 16px; }
+.understanding li { margin-top: 2px; line-height: 1.4; }
+.ticketHistory { display: grid; gap: 7px; margin: 0; padding-left: 18px; color: #59677a; font-size: 9px; line-height: 1.45; }
+.ticketHistory li span { display: block; color: #8b95a4; }
+.ticketHistory blockquote { margin: 4px 0 0; padding: 5px 7px; border-left: 2px solid #c8ded4; background: #f6faf8; color: #536277; white-space: pre-wrap; }
 
 @media (max-width: 1080px) {
   .layout { grid-template-columns: 1fr; }

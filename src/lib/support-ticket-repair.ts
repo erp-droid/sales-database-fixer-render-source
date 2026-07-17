@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 import {
   addSupportTicketEvent,
-  listSupportTicketEvents,
+  listSupportTicketEventsByType,
   updateSupportTicket,
   type SupportTicketEvent,
   type SupportTicketRecord,
@@ -47,9 +47,7 @@ export function isTicketCodeRepairEnabled() {
 }
 
 export function ticketRepairDispatchEvents(ticketId: string): SupportTicketEvent[] {
-  return listSupportTicketEvents(ticketId, 500).filter(
-    (event) => event.eventType === "code_repair_dispatched",
-  );
+  return listSupportTicketEventsByType(ticketId, "code_repair_dispatched", MAX_REPAIR_ATTEMPTS + 1);
 }
 
 export function findTicketRepairDispatch(ticketId: string, repairRunId: string) {
@@ -116,9 +114,10 @@ export async function dispatchTicketCodeRepair(ticket: SupportTicketRecord) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     updateSupportTicket(ticket.id, {
-      status: "escalated",
+      status: "monitoring",
+      nextAction: "Retry the automated repair decision after the dispatch failure.",
       processingStartedAt: null,
-      nextCheckAt: new Date(Date.now() + 60_000).toISOString(),
+      nextCheckAt: new Date(Date.now() + 5 * 60_000).toISOString(),
       lastError: message.slice(0, 1200),
     });
     addSupportTicketEvent({

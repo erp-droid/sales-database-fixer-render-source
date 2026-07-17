@@ -5,6 +5,10 @@ import {
   runReadModelRefresh,
 } from "@/lib/support-ticket-agent";
 import {
+  clarificationEmailParagraphs,
+  MAX_CLARIFICATION_ROUNDS,
+} from "@/lib/support-ticket-clarification";
+import {
   readTicketEmailThread,
   replyToTicketEmail,
   sendTicketAcknowledgement,
@@ -26,6 +30,7 @@ import {
 import type { MailMessage } from "@/types/mail-thread";
 
 const POLL_INTERVAL_MS = 60_000;
+const MONITOR_INTERVAL_MS = 5 * 60_000;
 
 function messageTimestamp(message: MailMessage): string | null {
   return message.receivedAt || message.sentAt || null;
@@ -125,55 +130,122 @@ async function investigateAndReply(
   });
 
   const decision = await decideTicketAction({ ticket, diagnostics, latestEmployeeReply });
-  let remediationNote = "I did not change anything in the CRM.";
-  let remediationSucceeded = false;
+  addSupportTicketEvent({
+    ticketId: ticket.id,
+    eventType: "autonomous_decision_made",
+    actorType: "robot",
+    message: `Autonomous next action selected: ${decision.remediation}.`,
+    details: { decision },
+  });
 
-  if (decision.remediation === "code_repair" && canDispatchTicketCodeRepair(ticket)) {
+  if (decision.remediation === "clarify" && ticket.clarificationRounds < MAX_CLARIFICATION_ROUNDS) {
+    const sent = await replyToTicketEmail(ticket, {
+      heading: "A few quick questions",
+      paragraphs: clarificationEmailParagraphs(decision.questions),
+    });
+    updateSupportTicket(ticket.id, {
+      status: "waiting_for_details",
+      clarificationRounds: ticket.clarificationRounds + 1,
+      understanding: decision.understanding,
+      nextAction: "Wait for the employee's answers, then choose an automated action.",
+      lastActionKey: decision.actionKey,
+      emailMessageId: sent.messageId,
+      processingStartedAt: null,
+      nextCheckAt: new Date(Date.now() + POLL_INTERVAL_MS).toISOString(),
+      lastError: null,
+    });
+    addSupportTicketEvent({
+      ticketId: ticket.id,
+      eventType: "clarification_questions_sent",
+      actorType: "robot",
+      message: `Clarification round ${ticket.clarificationRounds + 1} sent with ${decision.questions.length} question${decision.questions.length === 1 ? "" : "s"}.`,
+      details: {
+        round: ticket.clarificationRounds + 1,
+        questions: decision.questions,
+        messageId: sent.messageId,
+        understanding: decision.understanding,
+      },
+    });
+    return;
+  }
+
+  let remediation = decision.remediation;
+  const refreshAllowed = remediation === "refresh_read_model" &&
+    !hasSupportTicketEvent(ticket.id, "read_model_refresh_started") &&
+    !hasSupportTicketEvent(ticket.id, "read_model_refresh_failed") &&
+    canRunReadModelRefresh(ticket, diagnostics);
+  if (remediation === "refresh_read_model" && !refreshAllowed) {
+    remediation = canDispatchTicketCodeRepair(ticket) ? "code_repair" : "monitor";
+  }
+  if (remediation === "guidance" && decision.guidanceSteps.length === 0 && ticket.impact !== "question") {
+    remediation = "monitor";
+  }
+
+  if (remediation === "code_repair" && canDispatchTicketCodeRepair(ticket)) {
+    let repair: Awaited<ReturnType<typeof dispatchTicketCodeRepair>>;
     try {
-      const repair = await dispatchTicketCodeRepair(ticket);
+      repair = await dispatchTicketCodeRepair(ticket);
+    } catch (error) {
+      updateSupportTicket(ticket.id, {
+        status: "monitoring",
+        understanding: decision.understanding,
+        nextAction: "Retry the automated repair decision after the dispatch failure.",
+        lastActionKey: decision.actionKey,
+        processingStartedAt: null,
+        nextCheckAt: new Date(Date.now() + MONITOR_INTERVAL_MS).toISOString(),
+        lastError: error instanceof Error ? error.message.slice(0, 1200) : String(error).slice(0, 1200),
+      });
+      return;
+    }
+
+    updateSupportTicket(ticket.id, {
+      status: "repairing",
+      diagnosis: decision.diagnosis,
+      understanding: decision.understanding,
+      remediationAttempts: ticket.remediationAttempts + 1,
+      nextAction: "Wait for the verified repair callback and deployed-version check.",
+      lastActionKey: decision.actionKey,
+      processingStartedAt: null,
+      lastError: null,
+    });
+    try {
       const latestTicket = readSupportTicket(ticket.id) ?? ticket;
       const sent = await replyToTicketEmail(latestTicket, {
         heading: "We are working on a fix",
         paragraphs: [
           decision.employeeMessage,
-          "We found a problem that needs a change to the CRM. We are making that change now.",
-          "We will test the fix before it goes live. You do not need to do anything right now. We will email you when it is ready.",
+          "We found a problem that needs a change to the CRM. We are making and testing that change now.",
+          "You do not need to do anything. We will email you when the tested fix is ready.",
         ],
       });
       updateSupportTicket(ticket.id, {
-        status: "repairing",
-        diagnosis: decision.diagnosis,
         emailMessageId: sent.messageId,
-        processingStartedAt: null,
-        lastError: null,
       });
       addSupportTicketEvent({
         ticketId: ticket.id,
         eventType: "code_repair_update_sent",
         actorType: "robot",
-        message: "The employee was told that a verified code repair is in progress.",
+        message: "The employee was told that a verified automated code repair is in progress.",
         details: { repairRunId: repair.repairRunId, messageId: sent.messageId },
       });
-      return;
-    } catch {
-      remediationNote = "We could not start the fix yet. Your ticket is still open, and nothing was changed in the CRM.";
+    } catch (error) {
+      addSupportTicketEvent({
+        ticketId: ticket.id,
+        eventType: "code_repair_update_email_failed",
+        actorType: "system",
+        message: "The repair job is running, but its progress email could not be sent.",
+        details: { repairRunId: repair.repairRunId },
+      });
+      updateSupportTicket(ticket.id, {
+        lastError: error instanceof Error ? error.message.slice(0, 1200) : String(error).slice(0, 1200),
+      });
     }
-  } else if (decision.remediation === "code_repair") {
-    remediationNote = "We could not confirm a safe fix yet. Your ticket is still open, and nothing was changed in the CRM.";
-    addSupportTicketEvent({
-      ticketId: ticket.id,
-      eventType: "remediation_blocked",
-      actorType: "system",
-      message: remediationNote,
-      details: { requested: decision.remediation, reason: decision.remediationReason },
-    });
+    return;
   }
 
-  if (
-    decision.remediation === "refresh_read_model" &&
-    !hasSupportTicketEvent(ticket.id, "read_model_refresh_started") &&
-    canRunReadModelRefresh(ticket, diagnostics)
-  ) {
+  let remediationNote = "I did not change anything in the CRM.";
+  let remediationSucceeded = false;
+  if (refreshAllowed) {
     const result = await runReadModelRefresh();
     remediationSucceeded = result.ok;
     remediationNote = result.ok
@@ -186,33 +258,93 @@ async function investigateAndReply(
       message: remediationNote,
       details: { result, reason: decision.remediationReason },
     });
-  } else if (decision.remediation !== "none" && decision.remediation !== "code_repair") {
-    remediationNote = "We could not confirm that the change would fix the problem. Nothing was changed, and your ticket is still open.";
+    if (!result.ok) {
+      const latestTicket = readSupportTicket(ticket.id) ?? ticket;
+      const sent = await replyToTicketEmail(latestTicket, {
+        heading: "Your ticket is still being checked",
+        paragraphs: [
+          decision.employeeMessage,
+          remediationNote,
+          "The CRM will choose a different safe step automatically. You do not need to send another ticket.",
+        ],
+      });
+      updateSupportTicket(ticket.id, {
+        status: "monitoring",
+        diagnosis: decision.diagnosis,
+        understanding: decision.understanding,
+        remediationAttempts: ticket.remediationAttempts + 1,
+        nextAction: "Reinvestigate after the CRM information reload did not finish.",
+        lastActionKey: decision.actionKey,
+        emailMessageId: sent.messageId,
+        processingStartedAt: null,
+        nextCheckAt: new Date(Date.now() + MONITOR_INTERVAL_MS).toISOString(),
+        lastError: result.detail.slice(0, 1200),
+      });
+      return;
+    }
+  } else if (remediation === "guidance") {
+    remediationNote = decision.guidanceSteps.length > 0
+      ? "Please try the steps below."
+      : "No CRM information was changed.";
+  } else if (remediation === "monitor" || remediation === "code_repair") {
+    const shouldNotify = ticket.lastActionKey !== decision.actionKey;
+    let messageId = ticket.emailMessageId;
+    if (shouldNotify) {
+      const sent = await replyToTicketEmail(ticket, {
+        heading: "Your ticket is still being checked",
+        paragraphs: [
+          decision.employeeMessage,
+          "The ticket is still open. The CRM will check again automatically.",
+          "You do not need to send another ticket.",
+        ],
+      });
+      messageId = sent.messageId;
+    }
+    updateSupportTicket(ticket.id, {
+      status: "monitoring",
+      diagnosis: decision.diagnosis,
+      understanding: decision.understanding,
+      nextAction: "Recheck the available evidence automatically.",
+      lastActionKey: decision.actionKey,
+      emailMessageId: messageId,
+      processingStartedAt: null,
+      nextCheckAt: new Date(Date.now() + MONITOR_INTERVAL_MS).toISOString(),
+      lastError: null,
+    });
     addSupportTicketEvent({
       ticketId: ticket.id,
-      eventType: "remediation_blocked",
-      actorType: "system",
-      message: remediationNote,
-      details: { requested: decision.remediation, reason: decision.remediationReason },
+      eventType: "automatic_monitoring_scheduled",
+      actorType: "robot",
+      message: "The ticket remains active and has an automatic recheck scheduled.",
+      details: { actionKey: decision.actionKey, verificationPlan: decision.verificationPlan },
     });
+    return;
   }
 
   const latestTicket = readSupportTicket(ticket.id) ?? ticket;
+  const confirmationQuestion = decision.confirmationQuestion || (ticket.impact === "question"
+    ? "Did that answer your question?"
+    : "Does it work now?");
+  const confirmationInstruction = ticket.impact === "question"
+    ? `${confirmationQuestion} Reply “resolved” if that answers your question. If not, reply “still broken” and tell us what is still unclear.`
+    : `${confirmationQuestion} Reply “resolved” if it works now. If it does not, reply “still broken” and tell us what happened.`;
   const sent = await replyToTicketEmail(latestTicket, {
     heading: remediationSucceeded ? "We made a safe update" : "We checked your report",
     paragraphs: [
       decision.employeeMessage,
       remediationNote,
-      `${decision.confirmationQuestion} Reply “resolved” if it works now. If it does not, reply “still broken” and tell us what happened.`,
+      ...decision.guidanceSteps.map((step, index) => `${index + 1}. ${step}`),
+      confirmationInstruction,
     ],
   });
-  const shouldEscalate = decision.shouldEscalate ||
-    decision.remediation === "code_repair" ||
-    (decision.remediation === "refresh_read_model" && !remediationSucceeded);
   updateSupportTicket(ticket.id, {
-    status: shouldEscalate ? "escalated" : "waiting_for_employee",
+    status: "waiting_for_employee",
     diagnosis: decision.diagnosis,
+    understanding: decision.understanding,
     resolution: remediationSucceeded ? remediationNote : null,
+    remediationAttempts: ticket.remediationAttempts + 1,
+    nextAction: "Wait for the employee to confirm the verified result or report that it is still broken.",
+    lastActionKey: decision.actionKey,
     emailMessageId: sent.messageId,
     processingStartedAt: null,
     nextCheckAt: new Date(Date.now() + POLL_INTERVAL_MS).toISOString(),
@@ -222,10 +354,8 @@ async function investigateAndReply(
     ticketId: ticket.id,
     eventType: "investigation_update_sent",
     actorType: "robot",
-    message: shouldEscalate
-      ? "Investigation update sent; the ticket also needs human review."
-      : "Investigation update sent; waiting for the employee to confirm.",
-    details: { decision, messageId: sent.messageId },
+    message: "Autonomous action update sent; waiting for the employee to confirm the result.",
+    details: { decision, effectiveRemediation: remediation, messageId: sent.messageId },
   });
 }
 
@@ -233,6 +363,10 @@ async function checkEmployeeReply(ticket: SupportTicketRecord): Promise<void> {
   const thread = await readTicketEmailThread(ticket);
   const incoming = newestEmployeeMessage(ticket, thread.messages, robotMessageIds(ticket));
   if (!incoming) {
+    if (ticket.status === "monitoring" || ticket.status === "escalated") {
+      await investigateAndReply(ticket, null);
+      return;
+    }
     updateSupportTicket(ticket.id, {
       processingStartedAt: null,
       nextCheckAt: new Date(Date.now() + POLL_INTERVAL_MS).toISOString(),
@@ -266,6 +400,7 @@ async function checkEmployeeReply(ticket: SupportTicketRecord): Promise<void> {
     updateSupportTicket(ticket.id, {
       status: "resolved",
       resolution: ticket.resolution || "Employee confirmed the issue is resolved.",
+      nextAction: null,
       emailMessageId: sent.messageId,
       processingStartedAt: null,
       nextCheckAt: null,
@@ -289,7 +424,12 @@ async function processClaimedTicket(ticket: SupportTicketRecord): Promise<void> 
     await investigateAndReply(acknowledged, null);
     return;
   }
-  if (acknowledged.status === "waiting_for_employee" || acknowledged.status === "escalated") {
+  if (
+    acknowledged.status === "waiting_for_details" ||
+    acknowledged.status === "waiting_for_employee" ||
+    acknowledged.status === "monitoring" ||
+    acknowledged.status === "escalated"
+  ) {
     await checkEmployeeReply(acknowledged);
     return;
   }
@@ -297,12 +437,13 @@ async function processClaimedTicket(ticket: SupportTicketRecord): Promise<void> 
     const sent = await replyToTicketEmail(acknowledged, {
       heading: "Your ticket is still open",
       paragraphs: [
-        "We need more time to finish the fix.",
-        "Your ticket is still open. You do not need to send another ticket. We will reply here when there is an update.",
+        "The first automated fix took longer than expected.",
+        "The CRM will try another safe approach. You do not need to send another ticket.",
       ],
     });
     updateSupportTicket(acknowledged.id, {
-      status: "escalated",
+      status: "queued",
+      nextAction: "Reinvestigate and choose a different automated repair attempt.",
       emailMessageId: sent.messageId,
       processingStartedAt: null,
       nextCheckAt: new Date(Date.now() + POLL_INTERVAL_MS).toISOString(),
@@ -310,9 +451,9 @@ async function processClaimedTicket(ticket: SupportTicketRecord): Promise<void> 
     });
     addSupportTicketEvent({
       ticketId: acknowledged.id,
-      eventType: "code_repair_timed_out",
+      eventType: "code_repair_timed_out_retry_scheduled",
       actorType: "system",
-      message: "The automated code repair exceeded its reporting deadline and needs human review.",
+      message: "The automated code repair exceeded its reporting deadline; autonomous reinvestigation was scheduled.",
     });
   }
 }

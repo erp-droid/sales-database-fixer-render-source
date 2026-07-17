@@ -13,6 +13,7 @@ import type {
   SupportTicketImpact,
   SupportTicketStatus,
   SupportTicketSummary,
+  SupportTicketUnderstanding,
 } from "@/types/support-ticket";
 
 export type SupportTicketRecord = SupportTicketSummary & {
@@ -30,6 +31,7 @@ export type SupportTicketRecord = SupportTicketSummary & {
   processingStartedAt: string | null;
   nextCheckAt: string | null;
   lastError: string | null;
+  lastActionKey: string | null;
 };
 
 export type SupportTicketEvent = {
@@ -65,6 +67,11 @@ type TicketRow = {
   processing_started_at: string | null;
   next_check_at: string | null;
   last_error: string | null;
+  clarification_rounds: number;
+  remediation_attempts: number;
+  next_action: string | null;
+  last_action_key: string | null;
+  understanding_json: string | null;
   latest_update: string | null;
   attachment_count: number;
   created_at: string;
@@ -139,6 +146,11 @@ function ensureSupportTicketSchema(): void {
       processing_started_at TEXT,
       next_check_at TEXT,
       last_error TEXT,
+      clarification_rounds INTEGER NOT NULL DEFAULT 0,
+      remediation_attempts INTEGER NOT NULL DEFAULT 0,
+      next_action TEXT,
+      last_action_key TEXT,
+      understanding_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -178,6 +190,22 @@ function ensureSupportTicketSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_support_ticket_events_ticket
       ON support_ticket_events(ticket_id, created_at DESC);
   `);
+
+  const existingColumns = new Set(
+    (db.prepare("PRAGMA table_info(support_tickets)").all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  const migrations = [
+    ["clarification_rounds", "ALTER TABLE support_tickets ADD COLUMN clarification_rounds INTEGER NOT NULL DEFAULT 0"],
+    ["remediation_attempts", "ALTER TABLE support_tickets ADD COLUMN remediation_attempts INTEGER NOT NULL DEFAULT 0"],
+    ["next_action", "ALTER TABLE support_tickets ADD COLUMN next_action TEXT"],
+    ["last_action_key", "ALTER TABLE support_tickets ADD COLUMN last_action_key TEXT"],
+    ["understanding_json", "ALTER TABLE support_tickets ADD COLUMN understanding_json TEXT"],
+  ] as const;
+  for (const [column, statement] of migrations) {
+    if (!existingColumns.has(column)) {
+      db.exec(statement);
+    }
+  }
   schemaReady = true;
 }
 
@@ -197,6 +225,25 @@ function parseDetails(value: string | null): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function parseUnderstanding(value: string | null): SupportTicketUnderstanding | null {
+  const parsed = parseDetails(value);
+  if (
+    !parsed ||
+    typeof parsed.summary !== "string" ||
+    !["low", "medium", "high"].includes(String(parsed.confidence)) ||
+    !Array.isArray(parsed.assumptions) ||
+    !Array.isArray(parsed.unknowns)
+  ) {
+    return null;
+  }
+  return {
+    summary: parsed.summary,
+    confidence: parsed.confidence as SupportTicketUnderstanding["confidence"],
+    assumptions: parsed.assumptions.filter((item): item is string => typeof item === "string"),
+    unknowns: parsed.unknowns.filter((item): item is string => typeof item === "string"),
+  };
 }
 
 function mapTicketRow(row: TicketRow): SupportTicketRecord {
@@ -223,6 +270,11 @@ function mapTicketRow(row: TicketRow): SupportTicketRecord {
     processingStartedAt: row.processing_started_at,
     nextCheckAt: row.next_check_at,
     lastError: row.last_error,
+    clarificationRounds: row.clarification_rounds,
+    remediationAttempts: row.remediation_attempts,
+    nextAction: row.next_action,
+    lastActionKey: row.last_action_key,
+    understanding: parseUnderstanding(row.understanding_json),
     latestUpdate: row.latest_update,
     attachmentCount: row.attachment_count,
     createdAt: row.created_at,
@@ -462,12 +514,34 @@ export function listSupportTicketsForLogin(loginName: string, limit = 20): Suppo
 export function listSupportTicketEvents(ticketId: string, limit = 100): SupportTicketEvent[] {
   ensureSupportTicketSchema();
   const rows = getReadModelDb().prepare(`
-    SELECT *
-    FROM support_ticket_events
-    WHERE ticket_id = ?
+    SELECT * FROM (
+      SELECT *
+      FROM support_ticket_events
+      WHERE ticket_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    ) recent_events
     ORDER BY created_at ASC
-    LIMIT ?
   `).all(ticketId, Math.max(1, Math.min(limit, 500))) as EventRow[];
+  return rows.map(mapEventRow);
+}
+
+export function listSupportTicketEventsByType(
+  ticketId: string,
+  eventType: string,
+  limit = 100,
+): SupportTicketEvent[] {
+  ensureSupportTicketSchema();
+  const rows = getReadModelDb().prepare(`
+    SELECT * FROM (
+      SELECT *
+      FROM support_ticket_events
+      WHERE ticket_id = ? AND event_type = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    ) recent_events
+    ORDER BY created_at ASC
+  `).all(ticketId, eventType, Math.max(1, Math.min(limit, 500))) as EventRow[];
   return rows.map(mapEventRow);
 }
 
@@ -512,6 +586,11 @@ export function updateSupportTicket(
     processingStartedAt: string | null;
     nextCheckAt: string | null;
     lastError: string | null;
+    clarificationRounds: number;
+    remediationAttempts: number;
+    nextAction: string | null;
+    lastActionKey: string | null;
+    understanding: SupportTicketUnderstanding | null;
   }>,
 ): SupportTicketRecord | null {
   ensureSupportTicketSchema();
@@ -525,8 +604,16 @@ export function updateSupportTicket(
     processingStartedAt: "processing_started_at",
     nextCheckAt: "next_check_at",
     lastError: "last_error",
+    clarificationRounds: "clarification_rounds",
+    remediationAttempts: "remediation_attempts",
+    nextAction: "next_action",
+    lastActionKey: "last_action_key",
+    understanding: "understanding_json",
   } as const;
-  const entries = Object.entries(patch) as Array<[keyof typeof fieldMap, string | null]>;
+  const entries = Object.entries(patch) as Array<[
+    keyof typeof fieldMap,
+    string | number | SupportTicketUnderstanding | null,
+  ]>;
   if (entries.length === 0) {
     return readSupportTicket(id);
   }
@@ -537,7 +624,11 @@ export function updateSupportTicket(
     UPDATE support_tickets
     SET ${assignments.join(", ")}, updated_at = ?
     WHERE id = ?
-  `).run(...entries.map(([, value]) => value), now, id);
+  `).run(
+    ...entries.map(([key, value]) => key === "understanding" && value !== null ? JSON.stringify(value) : value),
+    now,
+    id,
+  );
   return readSupportTicket(id);
 }
 
@@ -556,7 +647,10 @@ export function claimSupportTicketForProcessing(ticketId?: string | null): Suppo
         (t.status = 'queued' AND COALESCE(t.next_check_at, t.created_at) <= ?)
         OR (t.status = 'investigating' AND t.processing_started_at < ?)
         OR (t.status = 'repairing' AND t.next_check_at <= ?)
-        OR (t.status IN ('waiting_for_employee', 'escalated') AND t.next_check_at <= ?)
+        OR (
+          t.status IN ('waiting_for_details', 'waiting_for_employee', 'monitoring', 'escalated')
+          AND COALESCE(t.next_check_at, t.updated_at, t.created_at) <= ?
+        )
       )
       ${ticketFilter}
       ORDER BY
@@ -595,21 +689,24 @@ export function releaseSupportTicketAfterFailure(
   ticket: SupportTicketRecord,
   errorMessage: string,
 ): void {
-  const shouldRetry = ticket.processingAttempts < 3;
+  const shouldRetrySoon = ticket.processingAttempts < 3;
   const now = Date.now();
   updateSupportTicket(ticket.id, {
-    status: shouldRetry ? "queued" : "escalated",
+    status: shouldRetrySoon ? "queued" : "monitoring",
+    nextAction: shouldRetrySoon
+      ? "Retry the autonomous investigation after a temporary failure."
+      : "Recheck the failed dependency automatically.",
     processingStartedAt: null,
-    nextCheckAt: new Date(now + (shouldRetry ? 60_000 : 5 * 60_000)).toISOString(),
+    nextCheckAt: new Date(now + (shouldRetrySoon ? 60_000 : 5 * 60_000)).toISOString(),
     lastError: errorMessage.slice(0, 1200),
   });
   addSupportTicketEvent({
     ticketId: ticket.id,
-    eventType: shouldRetry ? "retry_scheduled" : "escalated",
+    eventType: shouldRetrySoon ? "retry_scheduled" : "automatic_monitoring_scheduled",
     actorType: "system",
-    message: shouldRetry
+    message: shouldRetrySoon
       ? "A transient investigation error occurred; the ticket will retry automatically."
-      : "Automatic investigation needs human review after repeated errors.",
+      : "Repeated investigation errors occurred; automatic dependency monitoring will continue.",
     details: { error: errorMessage.slice(0, 1200) },
   });
 }
