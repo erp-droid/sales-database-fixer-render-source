@@ -1,0 +1,211 @@
+.reportCard {
+  width: min(820px, 100%);
+  margin: 4px auto 40px;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: 22px;
+  background: var(--app-surface);
+  box-shadow: 0 22px 55px rgba(21, 52, 88, 0.11);
+}
+.cardHeading {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  padding: 30px 32px 24px;
+}
+
+.fileIcon {
+  width: 54px;
+  height: 54px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: var(--app-green-soft);
+  color: var(--app-green);
+}
+
+.fileIcon svg {
+  width: 29px;
+  height: 29px;
+}
+
+.eyebrow {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--app-green);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.cardHeading h2 {
+  margin: 0;
+  color: var(--app-text);
+  font-size: clamp(23px, 3vw, 29px);
+  line-height: 1.15;
+}
+
+.cardHeading p {
+  max-width: 610px;
+  margin: 8px 0 0;
+  color: var(--app-text-secondary);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-block: 1px solid var(--app-border);
+  background: #f7fafd;
+}
+
+.steps span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 17px 22px;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+}
+
+.steps span + span {
+  border-left: 1px solid var(--app-border);
+}
+
+.steps strong {
+  color: var(--app-text);
+  font-size: 17px;
+}
+
+.formArea {
+  display: grid;
+  gap: 11px;
+  padding: 28px 32px 30px;
+}
+
+.fieldLabel {
+  color: var(--app-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.select {
+  width: 100%;
+  height: 52px;
+  padding: 0 46px 0 15px;
+  border: 1px solid var(--app-border-strong);
+  border-radius: 12px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  outline: none;
+}
+
+.select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(33, 95, 154, 0.13);
+}
+
+.select:disabled {
+  color: var(--app-text-soft);
+  background: #f3f6f9;
+}
+
+.downloadButton {
+  min-height: 54px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 3px;
+  padding: 13px 20px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--app-green);
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 12px 25px rgba(63, 120, 34, 0.2);
+  transition: transform 0.16s ease, filter 0.16s ease;
+}
+
+.downloadButton:hover:not(:disabled) {
+  filter: brightness(0.94);
+  transform: translateY(-1px);
+}
+
+.downloadButton:disabled {
+  opacity: 0.58;
+  cursor: wait;
+  box-shadow: none;
+}
+
+.downloadButton svg {
+  width: 21px;
+  height: 21px;
+}
+
+.helperText {
+  margin: 0;
+  color: var(--app-text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.errorMessage,
+.successMessage {
+  margin: 0 32px 28px;
+  padding: 13px 15px;
+  border-radius: 11px;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.errorMessage {
+  background: var(--app-red-soft);
+  color: var(--app-red);
+}
+
+.successMessage {
+  background: var(--app-green-soft);
+  color: var(--app-green);
+}
+
+@media (max-width: 680px) {
+  .cardHeading {
+    padding: 24px 20px 20px;
+  }
+
+  .steps {
+    grid-template-columns: 1fr;
+  }
+
+  .steps span {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    padding: 12px 20px;
+  }
+
+  .steps span + span {
+    border-left: 0;
+    border-top: 1px solid var(--app-border);
+  }
+
+  .formArea {
+    padding: 24px 20px 26px;
+  }
+
+  .errorMessage,
+  .successMessage {
+    margin: 0 20px 24px;
+  }
+}

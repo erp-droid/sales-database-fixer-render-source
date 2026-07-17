@@ -8,6 +8,7 @@ type AppNavIconName =
   | "mail"
   | "calendar"
   | "dashboard"
+  | "reports"
   | "quality"
   | "audit"
   | "deletions"
@@ -23,6 +24,7 @@ const APP_NAV_ITEMS: Array<{
   { href: "/map", label: "Map view", icon: "map" },
   { href: "/calendar", label: "Calendar", icon: "calendar" },
   { href: "/mail", label: "Mail", icon: "mail" },
+  { href: "/reports", label: "Reports", icon: "reports" },
   { href: "/quality", label: "Data quality", icon: "quality" },
   { href: "/support", label: "CRM support", icon: "support" },
   { href: "/audit", label: "Audit", icon: "audit" },
@@ -85,6 +87,15 @@ function AppNavIcon({
     return (
       <svg aria-hidden="true" className={className} fill="none" viewBox="0 0 24 24">
         <path d="M4 5.5h7v6H4v-6ZM13 5.5h7v4h-7v-4ZM13 11.5h7v7h-7v-7ZM4 13.5h7v5H4v-5Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.8" />
+      </svg>
+    );
+  }
+
+  if (icon === "reports") {
+    return (
+      <svg aria-hidden="true" className={className} fill="none" viewBox="0 0 24 24">
+        <path d="M6 3.5h8l4 4V21H6V3.5Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.8" />
+        <path d="M14 3.5v4h4M9 12h6M9 15.5h6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
       </svg>
     );
   }
