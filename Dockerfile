@@ -40,6 +40,8 @@ COPY --from=builder ["/app/MB - Regular Clients.kml", "./MB - Regular Clients.km
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/src/lib/read-model/jeff-special-contact-repair.mjs ./src/lib/read-model/jeff-special-contact-repair.mjs
+COPY --from=builder /app/src/lib/read-model/jeff-special-contact-repairs.json ./src/lib/read-model/jeff-special-contact-repairs.json
 COPY --from=builder /app/server-cluster.mjs ./server-cluster.mjs
 COPY --from=builder /app/server.mjs ./server.mjs
 

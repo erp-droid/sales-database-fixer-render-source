@@ -176,6 +176,17 @@ function readRows(db, accountRecordId) {
 }
 
 describe("Jeff special contact repair", () => {
+  it("packages the Jeff contact repair assets in the production image", () => {
+    const dockerfile = fs.readFileSync(path.join(process.cwd(), "Dockerfile"), "utf8");
+    for (const asset of [
+      "jeff-special-contact-repair.mjs",
+      "jeff-special-contact-repairs.json",
+    ]) {
+      expect(dockerfile).toContain(`/app/src/lib/read-model/${asset}`);
+      expect(dockerfile).toContain(`./src/lib/read-model/${asset}`);
+    }
+  });
+
   it("creates each missing source contact once and makes it primary when the account has no primary", async () => {
     const { db, sqlitePath } = createDatabase();
     for (const spec of specs) {
