@@ -82,7 +82,7 @@ type StoredNoteActivityRow = {
   company_name: string | null;
   contact_name: string | null;
   note_text: string | null;
-  source: "account_note";
+  source: "account_note" | "contact_note";
 };
 
 type EmailSenderAggregate = {
@@ -436,7 +436,7 @@ function filterNoteActivityRows(
 
 function listNoteActivityRows(filters: DashboardFilters): StoredNoteActivityRow[] {
   const db = getReadModelDb();
-  const accountNoteRows = db
+  const noteActivityRows = db
     .prepare(
       `
       SELECT
@@ -452,12 +452,29 @@ function listNoteActivityRows(filters: DashboardFilters): StoredNoteActivityRow[
       WHERE created_at >= ?
         AND created_at <= ?
         AND TRIM(COALESCE(note, '')) <> ''
+
+      UNION ALL
+
+      SELECT
+        'contact-note:' || identity_key AS id,
+        updated_at AS occurred_at,
+        updated_by AS actor_login_name,
+        updated_by AS actor_name,
+        company_name,
+        contact_name,
+        notes AS note_text,
+        'contact_note' AS source
+      FROM contact_identity_notes
+      WHERE updated_at >= ?
+        AND updated_at <= ?
+        AND TRIM(COALESCE(notes, '')) <> ''
       `,
     )
-    .all(filters.start, filters.end) as StoredNoteActivityRow[];
-  // Only explicit note-log entries are counted. A generic contact save can
-  // include the notes field even when its value was unchanged or cleared.
-  return filterNoteActivityRows(accountNoteRows, filters);
+    .all(filters.start, filters.end, filters.start, filters.end) as StoredNoteActivityRow[];
+  // Count both timestamped note-log entries and pinned contact notes. The
+  // contact-note table stores one current note per contact, so it does not
+  // duplicate the separate note-log entries.
+  return filterNoteActivityRows(noteActivityRows, filters);
 }
 
 function resolveEmailSenderDisplayName(

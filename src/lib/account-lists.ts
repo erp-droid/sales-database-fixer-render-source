@@ -14,6 +14,26 @@ import { HttpError } from "@/lib/errors";
 const BLANK_CATEGORY_FILTER = "__blank_category__";
 const UNASSIGNED_SALES_REP_FILTER = "__unassigned__";
 const ACCOUNT_LIST_NAME_MAX_LENGTH = 80;
+const SYSTEM_ACCOUNT_LIST_OWNER = "system";
+
+const SYSTEM_ACCOUNT_LISTS = [
+  {
+    id: "system:justin-settle-ab",
+    name: "Justin Settle A/B",
+    filters: {
+      selectedCategoryFilters: ["A", "B"],
+      selectedSalesRepFilters: ["Justin Settle"],
+    },
+  },
+  {
+    id: "system:brock-koczka-ab",
+    name: "Brock Koczka A/B",
+    filters: {
+      selectedCategoryFilters: ["A", "B"],
+      selectedSalesRepFilters: ["Brock Koczka"],
+    },
+  },
+] as const;
 
 const DEFAULT_HEADER_FILTERS: AccountListHeaderFilters = {
   companyName: "",
@@ -69,6 +89,42 @@ function ensureAccountListSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_account_filter_lists_updated_at
       ON account_filter_lists(updated_at);
   `);
+}
+
+function ensureSystemAccountLists(): void {
+  const db = getReadModelDb();
+  const now = new Date().toISOString();
+  const upsert = db.prepare(`
+    INSERT INTO account_filter_lists (
+      id,
+      name,
+      scope,
+      owner_login_name,
+      filters_json,
+      created_at,
+      updated_at
+    ) VALUES (?, ?, 'company', ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      scope = excluded.scope,
+      owner_login_name = excluded.owner_login_name,
+      filters_json = excluded.filters_json
+  `);
+
+  const write = db.transaction(() => {
+    for (const list of SYSTEM_ACCOUNT_LISTS) {
+      upsert.run(
+        list.id,
+        list.name,
+        SYSTEM_ACCOUNT_LIST_OWNER,
+        JSON.stringify(normalizeAccountListFilters(list.filters)),
+        now,
+        now,
+      );
+    }
+  });
+
+  write();
 }
 
 function normalizeLoginName(value: string): string {
@@ -216,6 +272,7 @@ function rowToSummary(row: AccountListRow): AccountListSummary {
 
 export function listVisibleAccountLists(loginName: string): AccountListSummary[] {
   ensureAccountListSchema();
+  ensureSystemAccountLists();
   const normalizedLoginName = normalizeLoginName(loginName);
   if (!normalizedLoginName) {
     throw new HttpError(401, "Signed-in username is unavailable.");

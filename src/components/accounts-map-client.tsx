@@ -16,6 +16,11 @@ import {
   type PostalRegion,
   type PostalRegionsResponse,
 } from "@/types/business-account";
+import type {
+  AccountListFilters,
+  AccountListSummary,
+  AccountListsResponse,
+} from "@/types/account-list";
 import { enforceSinglePrimaryPerAccountRows, resolveCompanyPhone } from "@/lib/business-accounts";
 import { buildBusinessAccountConcurrencySnapshot } from "@/lib/business-account-concurrency";
 import {
@@ -360,6 +365,33 @@ function parseError(payload: unknown): string {
   return typeof value === "string" && value.trim() ? value : "Request failed.";
 }
 
+function isAccountListSummary(payload: unknown): payload is AccountListSummary {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const record = payload as Record<string, unknown>;
+  return (
+    typeof record.id === "string" &&
+    typeof record.name === "string" &&
+    (record.scope === "user" || record.scope === "company") &&
+    typeof record.ownerLoginName === "string" &&
+    Boolean(record.filters) &&
+    typeof record.filters === "object" &&
+    typeof record.createdAt === "string" &&
+    typeof record.updatedAt === "string"
+  );
+}
+
+function isAccountListsResponse(payload: unknown): payload is AccountListsResponse {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const record = payload as Record<string, unknown>;
+  return Array.isArray(record.items) && record.items.every(isAccountListSummary);
+}
+
 function renderText(value: string | null): string {
   if (!value || !value.trim()) {
     return "-";
@@ -394,6 +426,68 @@ function hasText(value: string | null | undefined): value is string {
 
 function normalizeOptionComparable(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function accountListSalesRepValueToMapKey(value: string): string | null {
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized === "__unassigned__"
+    ? "unassigned"
+    : `name:${normalizeTextToken(normalized)}`;
+}
+
+function hasMapUnsupportedAccountListFilters(filters: AccountListFilters): boolean {
+  return Object.values(filters.headerFilters).some(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
+}
+
+function buildMapAccountListSignature(input: {
+  activeFilterView: AccountsFilterView;
+  selectedCategoryFilters: readonly string[];
+  selectedWeekFilters: readonly string[];
+  selectedSalesRepKeys: readonly string[];
+  q: string;
+}): string {
+  return JSON.stringify({
+    activeFilterView: input.activeFilterView,
+    selectedCategoryFilters: [...input.selectedCategoryFilters].sort((left, right) =>
+      left.localeCompare(right, undefined, { sensitivity: "base", numeric: true }),
+    ),
+    selectedWeekFilters: [...input.selectedWeekFilters].sort(compareWeekFilterValues),
+    selectedSalesRepKeys: [...input.selectedSalesRepKeys].sort((left, right) =>
+      left.localeCompare(right, undefined, { sensitivity: "base", numeric: true }),
+    ),
+    q: input.q.trim(),
+  });
+}
+
+function buildMapAccountListSignatureFromSavedList(list: AccountListSummary): string | null {
+  if (hasMapUnsupportedAccountListFilters(list.filters)) {
+    return null;
+  }
+
+  const selectedCategoryFilters = list.filters.selectedCategoryFilters.filter(
+    (value): value is Category => CATEGORY_VALUES.includes(value as Category),
+  );
+  if (selectedCategoryFilters.length !== list.filters.selectedCategoryFilters.length) {
+    return null;
+  }
+
+  const selectedSalesRepKeys = list.filters.selectedSalesRepFilters
+    .map(accountListSalesRepValueToMapKey)
+    .filter((value): value is string => Boolean(value));
+
+  return buildMapAccountListSignature({
+    activeFilterView: list.filters.activeFilterView,
+    selectedCategoryFilters,
+    selectedWeekFilters: list.filters.selectedWeekFilters,
+    selectedSalesRepKeys,
+    q: list.filters.q,
+  });
 }
 
 function normalizeWeekValue(value: string | null | undefined): string | null {
@@ -1760,6 +1854,9 @@ export function AccountsMapClient() {
 
   const [cachedDatasetRows, setCachedDatasetRows] = useState<BusinessAccountRow[]>([]);
   const [session, setSession] = useState<SessionResponse | null>(null);
+  const [accountLists, setAccountLists] = useState<AccountListSummary[]>([]);
+  const [accountListsError, setAccountListsError] = useState<string | null>(null);
+  const [isLoadingAccountLists, setIsLoadingAccountLists] = useState(false);
   const [q, setQ] = useState("");
   const [activeFilterView, setActiveFilterView] = useState<AccountsFilterView>("allCompanies");
   const [selectedCategoryFilters, setSelectedCategoryFilters] = useState<Category[]>([]);
@@ -1809,6 +1906,45 @@ export function AccountsMapClient() {
     () => new Set(selectedSalesRepKeys),
     [selectedSalesRepKeys],
   );
+  const currentMapAccountListSignature = useMemo(
+    () =>
+      buildMapAccountListSignature({
+        activeFilterView,
+        selectedCategoryFilters,
+        selectedWeekFilters,
+        selectedSalesRepKeys,
+        q,
+      }),
+    [
+      activeFilterView,
+      q,
+      selectedCategoryFilters,
+      selectedSalesRepKeys,
+      selectedWeekFilters,
+    ],
+  );
+  const mapAccountListItems = useMemo(
+    () =>
+      accountLists
+        .map((list) => ({
+          ...list,
+          mapSignature: buildMapAccountListSignatureFromSavedList(list),
+        }))
+        .filter(
+          (list): list is AccountListSummary & { mapSignature: string } =>
+            list.mapSignature !== null,
+        ),
+    [accountLists],
+  );
+  const isAllAccountsListActive =
+    currentMapAccountListSignature ===
+    buildMapAccountListSignature({
+      activeFilterView: "allCompanies",
+      selectedCategoryFilters: [],
+      selectedWeekFilters: [],
+      selectedSalesRepKeys: [],
+      q: "",
+    });
   const normalizedMapSearch = q.trim().toLowerCase();
   const salesRepOptions = useMemo(() => {
     if (points.length > 0) {
@@ -2117,14 +2253,6 @@ export function AccountsMapClient() {
   }, [selectedPoint?.id]);
 
   useEffect(() => {
-    const optionKeys = new Set(salesRepOptions.map((option) => option.key));
-    setSelectedSalesRepKeys((current) => {
-      const next = current.filter((key) => optionKeys.has(key));
-      return next.length === current.length ? current : next;
-    });
-  }, [salesRepOptions]);
-
-  useEffect(() => {
     if (!salesRepFilterOpen) {
       return;
     }
@@ -2199,6 +2327,57 @@ export function AccountsMapClient() {
       );
     });
   }, [router]);
+
+  useEffect(() => {
+    if (!session?.authenticated) {
+      setAccountLists([]);
+      setAccountListsError(null);
+      setIsLoadingAccountLists(false);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function loadAccountLists() {
+      setIsLoadingAccountLists(true);
+      setAccountListsError(null);
+
+      try {
+        const response = await fetch("/api/account-lists", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = await readJsonResponse<AccountListsResponse | { error?: string }>(
+          response,
+        );
+
+        if (!response.ok) {
+          throw new Error(parseError(payload));
+        }
+        if (!isAccountListsResponse(payload)) {
+          throw new Error("Unexpected saved lists response.");
+        }
+
+        if (!controller.signal.aborted) {
+          setAccountLists(payload.items);
+        }
+      } catch (loadError) {
+        if (!controller.signal.aborted) {
+          setAccountListsError(
+            loadError instanceof Error ? loadError.message : "Unable to load saved lists.",
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoadingAccountLists(false);
+        }
+      }
+    }
+
+    void loadAccountLists();
+
+    return () => controller.abort();
+  }, [session?.authenticated, session?.user?.id]);
 
   useEffect(() => {
     if (!session?.authenticated) {
@@ -2628,6 +2807,26 @@ export function AccountsMapClient() {
     setSalesRepFilterOpen(false);
   }
 
+  function applyMapAccountList(list: AccountListSummary) {
+    const categories = list.filters.selectedCategoryFilters.filter(
+      (value): value is Category => CATEGORY_VALUES.includes(value as Category),
+    );
+    const weeks = list.filters.selectedWeekFilters
+      .map(normalizeWeekValue)
+      .filter((value): value is string => Boolean(value))
+      .sort(compareWeekFilterValues);
+    const salesRepKeys = list.filters.selectedSalesRepFilters
+      .map(accountListSalesRepValueToMapKey)
+      .filter((value): value is string => Boolean(value));
+
+    setQ(list.filters.q);
+    setActiveFilterView(list.filters.activeFilterView);
+    setSelectedCategoryFilters(categories);
+    setSelectedWeekFilters(weeks);
+    setSelectedSalesRepKeys(salesRepKeys);
+    setSalesRepFilterOpen(false);
+  }
+
   async function handleSaveContactEdits(contact: MapContactSummary) {
     if (!selectedPoint) {
       return;
@@ -3028,6 +3227,48 @@ export function AccountsMapClient() {
             </div>
           </article>
         ))}
+      </section>
+
+      <section aria-label="Saved account lists" className={accountStyles.accountListsRail}>
+        <div className={accountStyles.accountListsHeader}>
+          <span className={accountStyles.filterRailLabel}>Lists</span>
+          {accountListsError ? (
+            <span className={accountStyles.accountListsError}>{accountListsError}</span>
+          ) : isLoadingAccountLists ? (
+            <span className={accountStyles.accountListsMeta}>Loading lists...</span>
+          ) : null}
+        </div>
+        <div className={accountStyles.accountListChips}>
+          <button
+            aria-pressed={isAllAccountsListActive}
+            className={`${accountStyles.accountListChip} ${
+              isAllAccountsListActive ? accountStyles.accountListChipActive : ""
+            }`}
+            onClick={clearAllFilters}
+            type="button"
+          >
+            <span>All Accounts</span>
+          </button>
+          {mapAccountListItems.map((list) => {
+            const isActive = list.mapSignature === currentMapAccountListSignature;
+            return (
+              <button
+                aria-pressed={isActive}
+                className={`${accountStyles.accountListChip} ${
+                  isActive ? accountStyles.accountListChipActive : ""
+                }`}
+                key={list.id}
+                onClick={() => applyMapAccountList(list)}
+                type="button"
+              >
+                <span>{list.name}</span>
+                <span className={accountStyles.accountListScope}>
+                  {list.scope === "company" ? "Company" : "Mine"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </section>
 
       <section
