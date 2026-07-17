@@ -1043,7 +1043,6 @@ const DEFAULT_COLUMN_ORDER: SortBy[] = [...DEFAULT_ACCOUNT_COLUMN_ORDER];
 const JEFFERY_DIRECTORY_VISIBLE_COLUMNS: SortBy[] = [
   "companyName",
   "address",
-  "salesRepName",
   ...DEFAULT_VISIBLE_COLUMNS.filter(
     (columnId) =>
       ![
