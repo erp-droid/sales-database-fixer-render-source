@@ -4,8 +4,12 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const requestMailService = vi.fn();
 const readCallEmployeeDirectory = vi.fn();
-const fetchMock = vi.fn();
+
+vi.mock("@/lib/mail-proxy", () => ({
+  requestMailService,
+}));
 
 vi.mock("@/lib/call-analytics/employee-directory", () => ({
   readCallEmployeeDirectory,
@@ -17,8 +21,7 @@ describe("mailbox dashboard audit reconciliation", () => {
 
   beforeEach(() => {
     vi.resetModules();
-    fetchMock.mockReset();
-    vi.stubGlobal("fetch", fetchMock);
+    requestMailService.mockReset();
     readCallEmployeeDirectory.mockReset();
     tempDir = mkdtempSync(path.join(tmpdir(), "mail-audit-reconciliation-"));
     process.env.AUTH_PROVIDER = "acumatica";
@@ -28,9 +31,6 @@ describe("mailbox dashboard audit reconciliation", () => {
     process.env.AUTH_COOKIE_NAME = ".ASPXAUTH";
     process.env.AUTH_COOKIE_SECURE = "false";
     process.env.READ_MODEL_SQLITE_PATH = path.join(tempDir, "read-model.sqlite");
-    process.env.MAIL_PROXY_SHARED_SECRET = "mail-reconciliation-test-secret";
-    process.env.PORT = "10000";
-    process.env.MBQ_BASE_PATH = "/quotes";
 
     readCallEmployeeDirectory.mockReturnValue([
       {
@@ -44,16 +44,16 @@ describe("mailbox dashboard audit reconciliation", () => {
         updatedAt: "2026-07-17T16:00:00.000Z",
       },
     ]);
-    fetchMock.mockResolvedValue(
+    requestMailService.mockResolvedValue(
       new Response(
         JSON.stringify({
           items: [
             {
-              messageId: "gmail-message-krishna",
-              internetMessageId: "<f47ac10b-58cc-4372-a567-0e02b2c3d479@meadowb.com>",
-              threadId: "gmail-thread-krishna",
-              subject: "Dashboard count test",
-              sentAt: "2026-07-17T16:20:00.000Z",
+              messageId: "19f708100545160b",
+              internetMessageId: "<legacy-generated@mail.gmail.com>",
+              threadId: "19f708100545160b",
+              subject: "Facility Maintenance & Infrastructure Support",
+              sentAt: "2026-07-17T14:35:30.000Z",
               to: [],
               cc: [],
               bcc: [],
@@ -73,7 +73,6 @@ describe("mailbox dashboard audit reconciliation", () => {
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     for (const key of Object.keys(process.env)) {
       if (!(key in originalEnv)) {
@@ -84,68 +83,42 @@ describe("mailbox dashboard audit reconciliation", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("uses the authoritative mailbox to restore or correct a missing sent-email count", async () => {
-    const { logMailSendAudit } = await import("@/lib/audit-log-store");
+  it("uses the authoritative mailbox to restore a verified legacy sent-email count", async () => {
     const { getReadModelDb } = await import("@/lib/read-model/db");
     const { reconcileDeliveredMailboxAudits } = await import(
       "@/lib/mail-audit-reconciliation"
     );
 
-    // Reproduce the ambiguous state from the screenshot: the Gmail message is
-    // present, but its existing dashboard row is attributed to Justin.
-    logMailSendAudit({
-      actor: { loginName: "jsettle", name: "Justin" },
-      payload: {
-        subject: "Dashboard count test",
-        to: [],
-        cc: [],
-        bcc: [],
-        attachments: [],
-        sourceSurface: "mail",
-      },
-      resultCode: "partial",
-      response: {
-        sent: true,
-        threadId: "gmail-thread-krishna",
-        messageId: "gmail-message-krishna",
-        draftId: null,
-        activitySyncStatus: "failed",
-      },
-      auditEventId: "existing-ambiguous-email",
-      occurredAt: "2026-07-17T16:20:00.000Z",
-    });
-
     await expect(reconcileDeliveredMailboxAudits()).resolves.toEqual({
       mailboxesChecked: 1,
       mailboxesFailed: 0,
       messagesChecked: 1,
-      recovered: 0,
-      reattributed: 1,
+      recovered: 1,
+      reattributed: 0,
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:10000/quotes/api/mail/sent-app-messages?limit=500",
+    expect(requestMailService).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: expect.stringMatching(/^Bearer mbmail\.v1\./),
-        }),
+        path: "/api/mail/sent-app-messages",
+        query: expect.any(URLSearchParams),
+        resolvedSender: {
+          loginName: "kpareek",
+          displayName: "Krishna Pareek",
+          senderEmail: "kpareek@meadowb.com",
+        },
       }),
     );
-    const requestHeaders = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
-    const assertionPayload = JSON.parse(
-      Buffer.from(requestHeaders.Authorization.split(".")[2] ?? "", "base64url").toString("utf8"),
-    ) as { loginName?: string; senderEmail?: string };
-    expect(assertionPayload).toMatchObject({
-      loginName: "kpareek",
-      senderEmail: "kpareek@meadowb.com",
-    });
+    const query = requestMailService.mock.calls[0]?.[1]?.query as URLSearchParams;
+    expect(query.get("limit")).toBe("500");
+    expect(query.getAll("includeMessageId")).toEqual(["19f708100545160b"]);
 
     const audit = getReadModelDb()
       .prepare(
         `
         SELECT actor_login_name, actor_name, result_code, email_message_id
         FROM audit_events
-        WHERE id = 'existing-ambiguous-email'
+        WHERE email_message_id = '19f708100545160b'
         `,
       )
       .get();
@@ -153,7 +126,7 @@ describe("mailbox dashboard audit reconciliation", () => {
       actor_login_name: "kpareek",
       actor_name: "Krishna Pareek",
       result_code: "partial",
-      email_message_id: "gmail-message-krishna",
+      email_message_id: "19f708100545160b",
     });
   });
 });

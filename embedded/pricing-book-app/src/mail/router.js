@@ -1056,12 +1056,22 @@ router.get("/sent-app-messages", async (req, res, next) => {
     const auth = requireMailAssertion(req);
     await ensureConnectedMailbox(auth);
     const limit = Math.max(1, Math.min(1000, Number(req.query.limit || 500) || 500));
+    const requestedMessageIds = new Set(
+      (Array.isArray(req.query.includeMessageId)
+        ? req.query.includeMessageId
+        : [req.query.includeMessageId]
+      )
+        .map((value) => cleanString(value))
+        .filter(Boolean)
+        .slice(0, 25)
+    );
     const messages = await listMailboxMessages(auth.loginName, { limit: 5000 });
     const items = messages
       .filter(
         (message) =>
           cleanString(message?.direction) === "outgoing" &&
-          isMeadowBrookAppMessage(message)
+          (isMeadowBrookAppMessage(message) ||
+            requestedMessageIds.has(cleanString(message?.messageId)))
       )
       .sort((left, right) => String(right.sentAt || "").localeCompare(String(left.sentAt || "")))
       .slice(0, limit)
