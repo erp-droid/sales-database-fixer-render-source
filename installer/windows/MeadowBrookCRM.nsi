@@ -3,7 +3,7 @@ Unicode True
 !include "MUI2.nsh"
 
 !define APP_NAME "MeadowBrook CRM"
-!define APP_VERSION "1.0.0"
+!define APP_VERSION "1.0.1"
 !define APP_PUBLISHER "MeadowBrook"
 !define APP_URL "https://sales-meadowb.onrender.com/accounts"
 !define APP_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\MeadowBrook CRM"
@@ -19,7 +19,7 @@ Icon "MeadowBrook-CRM.ico"
 UninstallIcon "MeadowBrook-CRM.ico"
 BrandingText "MeadowBrook CRM"
 
-VIProductVersion "1.0.0.0"
+VIProductVersion "1.0.1.0"
 VIAddVersionKey /LANG=1033 "ProductName" "${APP_NAME}"
 VIAddVersionKey /LANG=1033 "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey /LANG=1033 "FileVersion" "${APP_VERSION}"
@@ -30,6 +30,11 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "MeadowBrook"
 !define MUI_ABORTWARNING
 !define MUI_ICON "MeadowBrook-CRM.ico"
 !define MUI_UNICON "MeadowBrook-CRM.ico"
+!define MUI_FINISHPAGE_TITLE "MeadowBrook CRM is ready"
+!define MUI_FINISHPAGE_TEXT "Setup has finished installing MeadowBrook CRM on your computer."
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_TEXT "Open MeadowBrook CRM"
+!define MUI_FINISHPAGE_RUN_FUNCTION "LaunchMeadowBrookCRM"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_INSTFILES
@@ -72,6 +77,10 @@ chrome_not_found:
   StrCpy $ChromePath ""
 
 chrome_found:
+FunctionEnd
+
+Function LaunchMeadowBrookCRM
+  ExecShell "open" "$DESKTOP\MeadowBrook CRM.lnk"
 FunctionEnd
 
 Function .onInit
@@ -122,7 +131,6 @@ Section "MeadowBrook CRM" MainSection
   WriteRegDWORD HKCU "${APP_REG_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${APP_REG_KEY}" "NoRepair" 1
 
-  ExecShell "open" "$DESKTOP\MeadowBrook CRM.lnk"
 SectionEnd
 
 Section "Uninstall"
