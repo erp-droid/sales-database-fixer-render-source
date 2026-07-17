@@ -1,15 +1,27 @@
-import { getEnv } from "@/lib/env";
+import { cookies } from "next/headers";
+
+import { LOGIN_NAME_COOKIE } from "@/lib/account-directory-access";
+import {
+  getEnv,
+  getLocalDevLoginName,
+  isLocalDevAuthBypassEnabled,
+} from "@/lib/env";
 import { AccountsClient } from "@/components/accounts-client";
 
 export const dynamic = "force-dynamic";
 
-export default function AccountsPage() {
+export default async function AccountsPage() {
   const env = getEnv();
+  const cookieStore = await cookies();
+  const initialLoginName = isLocalDevAuthBypassEnabled()
+    ? getLocalDevLoginName()
+    : cookieStore.get(LOGIN_NAME_COOKIE)?.value ?? null;
 
   return (
     <AccountsClient
       acumaticaBaseUrl={env.ACUMATICA_BASE_URL}
       acumaticaCompanyId={env.ACUMATICA_COMPANY ?? "MeadowBrook Live"}
+      initialLoginName={initialLoginName}
       openAiAttributeSuggestEnabled={Boolean(env.OPENAI_API_KEY?.trim())}
       rocketReachEnabled={Boolean(env.ROCKETREACH_API_KEY?.trim())}
     />

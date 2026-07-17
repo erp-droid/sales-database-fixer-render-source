@@ -55,4 +55,38 @@ describe("route auth proxy", () => {
       "https://sales-meadowb.onrender.com/signin?next=%2Fsupport",
     );
   });
+
+  it("redirects Jeffery from every non-directory page", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("LOCAL_DEV_AUTH_BYPASS", "false");
+
+    const response = proxy(
+      new NextRequest("https://sales-meadowb.onrender.com/dashboard", {
+        headers: {
+          cookie: ".ASPXAUTH=session; mb_login_name=jbuhagiar@meadowb.com",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe(
+      "https://sales-meadowb.onrender.com/accounts",
+    );
+  });
+
+  it("allows Jeffery to open the directory", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("LOCAL_DEV_AUTH_BYPASS", "false");
+
+    const response = proxy(
+      new NextRequest("https://sales-meadowb.onrender.com/accounts", {
+        headers: {
+          cookie: ".ASPXAUTH=session; mb_login_name=jbuhagiar@meadowb.com",
+        },
+      }),
+    );
+
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("x-middleware-next")).toBe("1");
+  });
 });

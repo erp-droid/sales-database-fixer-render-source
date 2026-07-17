@@ -3,7 +3,8 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 
-import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import { getStoredLoginName, requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import { filterAccountRowsForDirectoryUser } from "@/lib/account-directory-access";
 import {
   createBusinessAccount,
   fetchBusinessAccountById,
@@ -67,6 +68,7 @@ type QueryAccountsOptions = {
   full?: boolean;
   includeInternal?: boolean;
   forceLive?: boolean;
+  loginName?: string | null;
 };
 
 type RawRecord = Record<string, unknown>;
@@ -838,19 +840,25 @@ async function queryAccountsWithCookie(
       maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
     }
     const total = options?.full
-      ? queryReadModelBusinessAccounts({
-          ...params,
-          includeInternalRows: options?.includeInternal,
-          page: 1,
-          pageSize: 1,
-        }).total
+      ? queryReadModelBusinessAccounts(
+          {
+            ...params,
+            includeInternalRows: options?.includeInternal,
+            page: 1,
+            pageSize: 1,
+          },
+          options?.loginName,
+        ).total
       : null;
-    const result = queryReadModelBusinessAccounts({
-      ...params,
-      includeInternalRows: options?.includeInternal,
-      page: options?.full ? 1 : params.page,
-      pageSize: options?.full ? Math.max(1, total ?? 1) : params.pageSize,
-    });
+    const result = queryReadModelBusinessAccounts(
+      {
+        ...params,
+        includeInternalRows: options?.includeInternal,
+        page: options?.full ? 1 : params.page,
+        pageSize: options?.full ? Math.max(1, total ?? 1) : params.pageSize,
+      },
+      options?.loginName,
+    );
 
     return result;
   }
@@ -890,12 +898,16 @@ async function queryAccountsWithCookie(
       includeInternalRows: options?.includeInternal,
     },
   );
-  const queried = queryBusinessAccounts(normalizedRows, {
+  const scopedRows = filterAccountRowsForDirectoryUser(
+    normalizedRows,
+    options?.loginName,
+  );
+  const queried = queryBusinessAccounts(scopedRows, {
     ...params,
     includeInternalRows: options?.includeInternal,
     page: isFullDatasetRequest ? 1 : params.page,
     pageSize: isFullDatasetRequest
-      ? Math.max(1, normalizedRows.length)
+      ? Math.max(1, scopedRows.length)
       : params.pageSize,
   });
 
@@ -928,24 +940,33 @@ async function querySyncBatchWithCookie(
       maybeTriggerReadModelSync(cookieValue, authCookieRefresh);
     }
     if (options?.full) {
-      const total = queryReadModelBusinessAccounts({
-        ...params,
-        includeInternalRows: options?.includeInternal,
-        page: 1,
-        pageSize: 1,
-      }).total;
-      return queryReadModelBusinessAccounts({
-        ...params,
-        includeInternalRows: options?.includeInternal,
-        page: 1,
-        pageSize: Math.max(1, total ?? 1),
-      });
+      const total = queryReadModelBusinessAccounts(
+        {
+          ...params,
+          includeInternalRows: options?.includeInternal,
+          page: 1,
+          pageSize: 1,
+        },
+        options?.loginName,
+      ).total;
+      return queryReadModelBusinessAccounts(
+        {
+          ...params,
+          includeInternalRows: options?.includeInternal,
+          page: 1,
+          pageSize: Math.max(1, total ?? 1),
+        },
+        options?.loginName,
+      );
     }
 
-    const result = queryReadModelBusinessAccounts({
-      ...params,
-      includeInternalRows: options?.includeInternal,
-    });
+    const result = queryReadModelBusinessAccounts(
+      {
+        ...params,
+        includeInternalRows: options?.includeInternal,
+      },
+      options?.loginName,
+    );
     return {
       ...result,
       hasMore: params.page * params.pageSize < result.total,
@@ -965,11 +986,15 @@ async function querySyncBatchWithCookie(
       includeInternal: options?.includeInternal,
     });
 
-    return queryBusinessAccounts(normalizedRows, {
+    const scopedRows = filterAccountRowsForDirectoryUser(
+      normalizedRows,
+      options?.loginName,
+    );
+    return queryBusinessAccounts(scopedRows, {
       ...params,
       includeInternalRows: options?.includeInternal,
       page: 1,
-      pageSize: Math.max(1, normalizedRows.length),
+      pageSize: Math.max(1, scopedRows.length),
     });
   }
 
@@ -1034,11 +1059,15 @@ async function querySyncBatchWithCookie(
       includeInternalRows: options?.includeInternal,
     },
   );
-  const queried = queryBusinessAccounts(normalizedRows, {
+  const scopedRows = filterAccountRowsForDirectoryUser(
+    normalizedRows,
+    options?.loginName,
+  );
+  const queried = queryBusinessAccounts(scopedRows, {
     ...params,
     includeInternalRows: options?.includeInternal,
     page: 1,
-    pageSize: Math.max(1, normalizedRows.length),
+    pageSize: Math.max(1, scopedRows.length),
   });
   const hasMore = rawContactsPage.length === pageSize;
   const estimatedTotal = hasMore
@@ -1197,12 +1226,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   try {
     cookieValue = requireAuthCookieValue(request);
+    const loginName = getStoredLoginName(request);
     params = parseListQuery(request.nextUrl.searchParams);
     const result = shouldUseSyncDataset
       ? await querySyncBatchWithCookie(cookieValue, params, authCookieRefresh, {
           full: fullDataset,
           includeInternal,
           forceLive,
+          loginName,
         })
       : await queryAccountsWithCookie(
           cookieValue,
@@ -1212,6 +1243,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             full: fullDataset,
             includeInternal,
             forceLive,
+            loginName,
           },
         );
 
@@ -1235,6 +1267,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     ) {
       const retryAuthCookieRefresh: AuthCookieRefresh = { value: null };
       const retryCookieValue = authCookieRefresh.value ?? cookieValue;
+      const loginName = getStoredLoginName(request);
       try {
         const retryResult = shouldUseSyncDataset
           ? await querySyncBatchWithCookie(
@@ -1245,6 +1278,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                 full: fullDataset,
                 includeInternal,
                 forceLive,
+                loginName,
               },
             )
           : await queryAccountsWithCookie(
@@ -1255,6 +1289,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
                 full: fullDataset,
                 includeInternal,
                 forceLive,
+                loginName,
               },
             );
 

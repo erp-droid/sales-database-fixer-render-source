@@ -5,6 +5,7 @@ import { ZodError } from "zod";
 import type { BusinessAccountRow } from "@/types/business-account";
 
 import { getStoredLoginName, requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import { canDirectoryUserAccessAccount } from "@/lib/account-directory-access";
 import {
   createAuditActor,
   logBusinessAccountUpdateAudit,
@@ -152,6 +153,15 @@ function readRequestedContactId(request: NextRequest): number | null {
 
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed !== 0 ? parsed : null;
+}
+
+function requireDirectoryAccountAccess(
+  request: NextRequest,
+  row: BusinessAccountRow,
+): void {
+  if (!canDirectoryUserAccessAccount(getStoredLoginName(request), row)) {
+    throw new HttpError(404, "Business account not found.");
+  }
 }
 
 function requestBodyHasOwnField(requestBody: unknown, key: string): boolean {
@@ -1164,6 +1174,7 @@ export async function GET(
         if (isAlwaysExcludedBusinessAccountRow(cached.row)) {
           throw new HttpError(404, "Business account not found.");
         }
+        requireDirectoryAccountAccess(request, cached.row);
         const response = NextResponse.json({
           ...cached,
           row: applyLocalAccountMetadataToRow(cached.row) ?? cached.row,
@@ -1200,6 +1211,7 @@ export async function GET(
     if (isAlwaysExcludedBusinessAccountRow(refreshedAccountRow)) {
       throw new HttpError(404, "Business account not found.");
     }
+    requireDirectoryAccountAccess(request, refreshedAccountRow);
 
     const normalizedRows = normalizeBusinessAccountRows(rawAccount);
     const responseRows = mergeDetailRowIntoRows(
@@ -1250,6 +1262,7 @@ export async function GET(
         if (isAlwaysExcludedBusinessAccountRow(refreshedAccountRow)) {
           throw new HttpError(404, "Business account not found.");
         }
+        requireDirectoryAccountAccess(request, refreshedAccountRow);
 
         const normalizedRows = normalizeBusinessAccountRows(rawAccount);
         const responseRows = mergeDetailRowIntoRows(

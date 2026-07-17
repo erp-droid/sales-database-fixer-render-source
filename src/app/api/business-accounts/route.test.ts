@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BusinessAccountRow } from "@/types/business-account";
 
 const requireAuthCookieValue = vi.fn(() => "cookie");
+const getStoredLoginName = vi.fn(() => "jserrano");
 const setAuthCookie = vi.fn();
 const getEnv = vi.fn(() => ({
   READ_MODEL_ENABLED: false,
@@ -22,6 +23,7 @@ const retrieveCanadaPostAddressCompleteAddress = vi.fn(
 const logBusinessAccountCreateAudit = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
+  getStoredLoginName,
   requireAuthCookieValue,
   setAuthCookie,
 }));
@@ -117,6 +119,7 @@ describe("GET /api/business-accounts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requireAuthCookieValue.mockReturnValue("cookie");
+    getStoredLoginName.mockReturnValue("jserrano");
     getEnv.mockReturnValue({
       READ_MODEL_ENABLED: false,
     });
@@ -278,6 +281,7 @@ describe("GET /api/business-accounts", () => {
         page: 1,
         pageSize: 1,
       }),
+      "jserrano",
     );
     expect(queryReadModelBusinessAccounts).toHaveBeenNthCalledWith(
       2,
@@ -286,6 +290,7 @@ describe("GET /api/business-accounts", () => {
         page: 1,
         pageSize: 1,
       }),
+      "jserrano",
     );
     expect(payload.total).toBe(1);
     expect(payload.items[0]?.primaryContactName).toBe("Jacky Lee");
@@ -340,6 +345,62 @@ describe("GET /api/business-accounts", () => {
     expect(payload.items.map((item) => item.companyName)).toEqual([
       "Universal Matter",
       "Vermeer Canada",
+    ]);
+  });
+
+  it("limits Jeffery's full dataset to his A and B accounts", async () => {
+    getStoredLoginName.mockReturnValue("jbuhagiar@meadowb.com");
+    fetchAllSyncRows.mockResolvedValue([
+      buildRow({
+        category: "A",
+        id: "acct-a-jeffery",
+        businessAccountId: "BA2001",
+        companyName: "Jeffery A Account",
+        primaryContactName: "Avery Stone",
+        salesRepName: "Jeffery Buhagiar",
+      }),
+      buildRow({
+        category: "B",
+        id: "acct-b-jeffery",
+        businessAccountId: "BA2002",
+        companyName: "Jeffery B Account",
+        primaryContactName: "Bailey Chen",
+        salesRepName: "Jeff Buhagiar",
+      }),
+      buildRow({
+        category: "C",
+        id: "acct-c-jeffery",
+        businessAccountId: "BA2003",
+        companyName: "Jeffery C Account",
+        primaryContactName: "Casey Nguyen",
+        salesRepName: "Jeffery Buhagiar",
+      }),
+      buildRow({
+        category: "A",
+        id: "acct-a-justin",
+        businessAccountId: "BA2004",
+        companyName: "Justin A Account",
+        primaryContactName: "Drew Patel",
+        salesRepName: "Justin Settle",
+      }),
+    ]);
+
+    const { GET } = await import("@/app/api/business-accounts/route");
+    const response = await GET(
+      new NextRequest(
+        "http://localhost/api/business-accounts?sync=1&full=1&includeInternal=1",
+      ),
+    );
+    const payload = (await response.json()) as {
+      items: BusinessAccountRow[];
+      total: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.total).toBe(2);
+    expect(payload.items.map((row) => row.id)).toEqual([
+      "acct-a-jeffery",
+      "acct-b-jeffery",
     ]);
   });
 });
