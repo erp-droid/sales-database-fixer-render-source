@@ -19,8 +19,31 @@ const monoFont = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sales MeadowBrook",
+  applicationName: "MeadowBrook CRM",
+  title: "MeadowBrook CRM",
   description: "Local business account and contact management for MeadowBrook",
+  manifest: "/manifest.webmanifest",
+  icons: {
+    apple: [
+      {
+        url: "/icons/meadowbrook-crm-192.png",
+        sizes: "192x192",
+        type: "image/png",
+      },
+    ],
+    icon: [
+      {
+        url: "/icons/meadowbrook-crm-192.png",
+        sizes: "192x192",
+        type: "image/png",
+      },
+      {
+        url: "/icons/meadowbrook-crm-512.png",
+        sizes: "512x512",
+        type: "image/png",
+      },
+    ],
+  },
 };
 
 export default function RootLayout({

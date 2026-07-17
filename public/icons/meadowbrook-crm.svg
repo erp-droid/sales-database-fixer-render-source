@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">MeadowBrook CRM</title>
+  <defs>
+    <linearGradient id="outer" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#141414" />
+      <stop offset="1" stop-color="#1a1a1a" />
+    </linearGradient>
+    <linearGradient id="inner" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" />
+      <stop offset="1" stop-color="#f8f9fb" />
+    </linearGradient>
+    <filter id="outer-shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000000" flood-opacity="0.32" />
+    </filter>
+    <filter id="inner-shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="9" stdDeviation="12" flood-color="#000000" flood-opacity="0.28" />
+    </filter>
+  </defs>
+
+  <rect
+    x="25"
+    y="25"
+    width="974"
+    height="974"
+    rx="270"
+    fill="url(#outer)"
+    stroke="#4b4b4b"
+    stroke-width="8"
+    filter="url(#outer-shadow)"
+  />
+
+  <rect
+    x="200"
+    y="221"
+    width="606"
+    height="590"
+    rx="138"
+    fill="url(#inner)"
+    stroke="#eceef1"
+    stroke-width="5"
+    filter="url(#inner-shadow)"
+  />
+
+  <g fill="#08b938">
+    <path d="M238 594 L412 493 L503 582 L605 500 L773 594 Z" />
+    <path d="M503 386 L580 430 L503 506 L432 430 Z" />
+  </g>
+</svg>
