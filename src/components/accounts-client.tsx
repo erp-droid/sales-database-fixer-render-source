@@ -66,6 +66,7 @@ import {
   parsePhoneWithExtension,
 } from "@/lib/phone";
 import { CallPhoneButton } from "@/components/call-phone-button";
+import { useTwilioCall } from "@/components/twilio-call-provider";
 import { CreateBusinessAccountDrawer } from "@/components/create-business-account-drawer";
 import {
   CreateContactDrawer,
@@ -3720,6 +3721,7 @@ export function AccountsClient({
   rocketReachEnabled: boolean;
 }) {
   const router = useRouter();
+  const { beginCallerVerification, isStartingCallerVerification } = useTwilioCall();
 
   const [session, setSession] = useState<SessionResponse | null>(null);
   const effectiveLoginName = initialLoginName ?? session?.user?.id ?? null;
@@ -9541,6 +9543,18 @@ export function AccountsClient({
       }
       title="Sales MeadowBrook"
       userName={session?.user?.name ?? "Signed in"}
+      userMenuActions={
+        isDirectoryOnlyUser
+          ? [
+              {
+                label: isStartingCallerVerification
+                  ? "Starting phone verification…"
+                  : "Verify phone number",
+                onSelect: beginCallerVerification,
+              },
+            ]
+          : undefined
+      }
     >
       <section
         aria-label="Current view metrics"

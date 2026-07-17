@@ -73,8 +73,10 @@ type StartCallContext = {
 
 type TwilioCallContextValue = {
   startCall: (phone: string, label?: string, context?: StartCallContext) => Promise<void>;
+  beginCallerVerification: () => Promise<void>;
   endCall: () => Promise<void>;
   isInitializing: boolean;
+  isStartingCallerVerification: boolean;
   activeLabel: string | null;
   error: string | null;
 };
@@ -747,8 +749,10 @@ export function TwilioCallProvider({ children }: { children: ReactNode }) {
     <TwilioCallContext.Provider
       value={{
         startCall,
+        beginCallerVerification,
         endCall,
         isInitializing,
+        isStartingCallerVerification,
         activeLabel,
         error,
       }}
