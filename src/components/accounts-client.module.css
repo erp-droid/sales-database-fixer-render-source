@@ -2082,15 +2082,6 @@
   font-size: 24px;
 }
 
-.drawerRecordLinks {
-  margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  color: var(--accounts-text-secondary);
-  font-size: 13px;
-}
-
 .closeButton {
   min-height: 40px;
   padding: 0 12px;

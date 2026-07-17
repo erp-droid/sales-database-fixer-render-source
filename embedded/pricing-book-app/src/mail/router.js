@@ -39,6 +39,10 @@ import {
   upsertMailMessage,
   upsertMailThread
 } from "./store.js";
+import {
+  DEFAULT_SIGNATURE_REFRESH_INTERVAL_MS,
+  shouldRefreshMailboxSignature
+} from "./signature-sync.js";
 import { cleanString, nowIso } from "./utils.js";
 
 const router = express.Router();
@@ -458,8 +462,22 @@ async function ensureConnectedMailbox(auth) {
 
 const mailboxRefreshJobs = new Map();
 
-async function syncMailboxSignature(connection) {
-  if (cleanString(connection?.signatureSyncedAt)) {
+function readSignatureRefreshIntervalMs() {
+  const configuredMinutes = Number(process.env.MAIL_SIGNATURE_REFRESH_MINUTES);
+  if (!Number.isFinite(configuredMinutes) || configuredMinutes <= 0) {
+    return DEFAULT_SIGNATURE_REFRESH_INTERVAL_MS;
+  }
+
+  return Math.max(5, configuredMinutes) * 60 * 1000;
+}
+
+async function syncMailboxSignature(connection, options = {}) {
+  if (
+    !shouldRefreshMailboxSignature(connection, {
+      force: options.force === true,
+      refreshIntervalMs: readSignatureRefreshIntervalMs()
+    })
+  ) {
     return connection;
   }
 
@@ -684,9 +702,9 @@ router.get("/oauth/callback", async (req, res) => {
       connectedGoogleEmail: exchange.googleEmail,
       googleDisplayName: exchange.googleDisplayName || displayName,
       senderSignatureHtml:
-        cleanString(exchange.senderSignatureHtml) ||
-        cleanString(existing?.senderSignatureHtml) ||
-        null,
+        exchange.senderSignatureRead === true
+          ? cleanString(exchange.senderSignatureHtml) || null
+          : cleanString(existing?.senderSignatureHtml) || null,
       signatureSyncedAt:
         exchange.senderSignatureRead === true
           ? nowIso()
@@ -761,7 +779,9 @@ router.get("/session", async (req, res, next) => {
       return;
     }
 
-    const connection = await syncMailboxSignature(storedConnection);
+    const connection = await syncMailboxSignature(storedConnection, {
+      force: forceRefresh
+    });
 
     try {
       if (forceRefresh) {

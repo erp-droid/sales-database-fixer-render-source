@@ -29,7 +29,6 @@ export type DeferredActionSummary = {
   companyName: string | null;
   accountType: BusinessAccountType | null;
   opportunityCount: number | null;
-  acumaticaBusinessAccountUrl: string | null;
   contactId: number | null;
   contactName: string | null;
   keptContactId: number | null;

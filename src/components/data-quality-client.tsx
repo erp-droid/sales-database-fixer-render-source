@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
 
@@ -45,10 +44,6 @@ import {
   buildDataQualityIssueKey,
   buildDataQualityReviewedItemKey,
 } from "@/lib/data-quality";
-import {
-  buildAcumaticaBusinessAccountUrl,
-  buildAcumaticaContactUrl,
-} from "@/lib/acumatica-links";
 import { buildBusinessAccountConcurrencySnapshot } from "@/lib/business-account-concurrency";
 import { BUSINESS_ACCOUNT_REGION_VALUES } from "@/lib/business-account-region-values";
 import { enforceSinglePrimaryPerAccountRows } from "@/lib/business-accounts";
@@ -597,23 +592,6 @@ function renderText(value: string | null | undefined): string {
   return value;
 }
 
-function renderRecordLink(
-  label: string | null | undefined,
-  url: string | null,
-  className: string,
-): ReactNode {
-  const text = renderText(label);
-  if (!url || text === "-") {
-    return text;
-  }
-
-  return (
-    <a className={className} href={url} rel="noreferrer" target="_blank">
-      {text}
-    </a>
-  );
-}
-
 function hasUsableContactLabel(value: string | null | undefined): value is string {
   return typeof value === "string" && value.trim().length > 0 && !/^[.\s]+$/.test(value);
 }
@@ -825,13 +803,7 @@ function describeActivityTrend(created: number, fixed: number): string {
   return "Backlog was flat over this 14-day window because fixes matched new issues.";
 }
 
-export function DataQualityClient({
-  acumaticaBaseUrl,
-  acumaticaCompanyId,
-}: {
-  acumaticaBaseUrl: string;
-  acumaticaCompanyId: string;
-}) {
+export function DataQualityClient() {
   const router = useRouter();
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [sessionWarning, setSessionWarning] = useState<string | null>(null);
@@ -2940,28 +2912,10 @@ export function DataQualityClient({
                             key={`${group.key}:${item.rowKey ?? index}`}
                           >
                             <p className={styles.duplicateCardTitle}>
-                              {renderRecordLink(
-                                item.companyName,
-                                buildAcumaticaBusinessAccountUrl(
-                                  acumaticaBaseUrl,
-                                  item.businessAccountId,
-                                  acumaticaCompanyId,
-                                ),
-                                styles.recordLink,
-                              )}
+                              {renderText(item.companyName)}
                             </p>
                             <p>
-                              {renderRecordLink(
-                                getIssueContactLabel(selectedMetric, item),
-                                hasUsableContactLabel(item.contactName)
-                                  ? buildAcumaticaContactUrl(
-                                      acumaticaBaseUrl,
-                                      item.contactId,
-                                      acumaticaCompanyId,
-                                    )
-                                  : null,
-                                styles.recordLink,
-                              )}
+                              {renderText(getIssueContactLabel(selectedMetric, item))}
                             </p>
                             <p>{renderText(item.contactPhone)}</p>
                             <p>{renderText(item.contactEmail)}</p>
@@ -3086,54 +3040,18 @@ export function DataQualityClient({
                             <strong className={styles.rowTitle}>
                               {selectedMetric === "invalidPhone" ||
                               selectedMetric === "missingContactEmail"
-                                ? renderRecordLink(
-                                    getIssueContactLabel(selectedMetric, item),
-                                    hasUsableContactLabel(item.contactName)
-                                      ? buildAcumaticaContactUrl(
-                                          acumaticaBaseUrl,
-                                          item.contactId,
-                                          acumaticaCompanyId,
-                                        )
-                                      : null,
-                                    styles.recordLink,
-                                  )
-                                : renderRecordLink(
-                                    item.companyName,
-                                    buildAcumaticaBusinessAccountUrl(
-                                      acumaticaBaseUrl,
-                                      item.businessAccountId,
-                                      acumaticaCompanyId,
-                                    ),
-                                    styles.recordLink,
-                                  )}
+                                ? renderText(getIssueContactLabel(selectedMetric, item))
+                                : renderText(item.companyName)}
                             </strong>
                             <div className={styles.rowSubline}>
                               {selectedMetric === "invalidPhone" ||
                               selectedMetric === "missingContactEmail" ? (
                                 <span>
-                                  {renderRecordLink(
-                                    item.companyName,
-                                    buildAcumaticaBusinessAccountUrl(
-                                      acumaticaBaseUrl,
-                                      item.businessAccountId,
-                                      acumaticaCompanyId,
-                                    ),
-                                    styles.recordLink,
-                                  )}
+                                  {renderText(item.companyName)}
                                 </span>
                               ) : (
                                 <span>
-                                  {renderRecordLink(
-                                    getIssueContactLabel(selectedMetric, item),
-                                    hasUsableContactLabel(item.contactName)
-                                      ? buildAcumaticaContactUrl(
-                                          acumaticaBaseUrl,
-                                          item.contactId,
-                                          acumaticaCompanyId,
-                                        )
-                                      : null,
-                                    styles.recordLink,
-                                  )}
+                                  {renderText(getIssueContactLabel(selectedMetric, item))}
                                 </span>
                               )}
                               {item.isPrimaryContact ? (

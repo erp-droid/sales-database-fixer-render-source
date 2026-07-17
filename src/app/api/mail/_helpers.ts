@@ -468,6 +468,7 @@ export async function proxyMailSessionJson(
 
     const upstream = await requestMailService(request, {
       path: "/api/mail/session",
+      query: forceRefresh ? new URLSearchParams({ refresh: "1" }) : undefined,
       authCookieRefresh,
       timeoutMs: MAIL_SESSION_TIMEOUT_MS,
       timeoutMessage:
