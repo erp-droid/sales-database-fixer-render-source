@@ -224,6 +224,7 @@ export async function proxyMailJson(
     method?: string;
     body?: BodyInit | Record<string, unknown> | null;
     query?: URLSearchParams;
+    headers?: Record<string, string>;
     forwardAcumaticaSession?: boolean;
     timeoutMs?: number;
     timeoutMessage?: string;
@@ -290,6 +291,7 @@ export async function proxyAuditedMailSendJson(
     method?: string;
     body?: BodyInit | Record<string, unknown> | null;
     query?: URLSearchParams;
+    headers?: Record<string, string>;
     forwardAcumaticaSession?: boolean;
     timeoutMs?: number;
     timeoutMessage?: string;
@@ -316,6 +318,10 @@ export async function proxyAuditedMailSendJson(
       ...options,
       body: requestBody,
       authCookieRefresh,
+      headers: {
+        ...options.headers,
+        "x-mb-skip-activity-sync": "1",
+      },
       resolvedSender,
       timeoutMs: options.timeoutMs ?? MAIL_SEND_TIMEOUT_MS,
       timeoutMessage: options.timeoutMessage ?? MAIL_SEND_TIMEOUT_MESSAGE,

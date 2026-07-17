@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getErrorMessage, HttpError } from "@/lib/errors";
+import { reconcileDeliveredMailboxAudits } from "@/lib/mail-audit-reconciliation";
 import { recoverDeliveredMailSendAudits } from "@/lib/mail-send-jobs";
 
 function ensureInternalRequest(request: NextRequest): void {
@@ -20,8 +21,17 @@ function ensureInternalRequest(request: NextRequest): void {
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     ensureInternalRequest(request);
-    const recovered = recoverDeliveredMailSendAudits(1_000);
-    return NextResponse.json({ ok: true, recovered });
+    const jobAuditsRecovered = recoverDeliveredMailSendAudits(1_000);
+    const mailboxReconciliation = await reconcileDeliveredMailboxAudits();
+    return NextResponse.json({
+      ok: true,
+      recovered:
+        jobAuditsRecovered +
+        mailboxReconciliation.recovered +
+        mailboxReconciliation.reattributed,
+      jobAuditsRecovered,
+      mailboxReconciliation,
+    });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
     return NextResponse.json({ ok: false, error: getErrorMessage(error) }, { status });
