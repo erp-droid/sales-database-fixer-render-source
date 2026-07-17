@@ -4,7 +4,6 @@ import ExcelJS, { type Fill, type PaperSize } from "exceljs";
 
 import type {
   JeffSpecialReportPlan,
-  JeffSpecialResolvedVisit,
 } from "@/lib/jeff-special-report";
 
 const COLUMN_HEADERS = [
@@ -22,17 +21,22 @@ const COLUMN_HEADERS = [
 
 const BRAND_BLUE = "FF163A63";
 const BRAND_GREEN = "FF78A22F";
-const PALE_BLUE = "FFEAF1F8";
 const PALE_GREEN = "FFF1F7E8";
 const BORDER_BLUE = "FF9FB2C8";
 const TEXT_DARK = "FF172033";
-const TEXT_MUTED = "FF536176";
 const WHITE = "FFFFFFFF";
 const PALE_AMBER = "FFFFF2CC";
 const PALE_RED = "FFFDE9E7";
 const TEXT_GREEN = "FF3D6B12";
 const TEXT_AMBER = "FF8A5700";
 const TEXT_RED = "FF9B2C22";
+const SOURCE_TITLE_FILL = "FFDBE8F4";
+const SOURCE_HEADER_FILL = "FFEFF2F4";
+const SOURCE_NOTES_FILL = "FFF7F9FC";
+const SOURCE_TEXT = "FF1E1E1E";
+const SOURCE_MUTED = "FF59606B";
+const SOURCE_BORDER = "FFD6DBE2";
+const SOURCE_HEADER_BORDER = "FFADB2B7";
 
 const THIN_BORDER: Partial<ExcelJS.Borders> = {
   top: { style: "thin", color: { argb: BORDER_BLUE } },
@@ -41,13 +45,15 @@ const THIN_BORDER: Partial<ExcelJS.Borders> = {
   right: { style: "thin", color: { argb: BORDER_BLUE } },
 };
 
+const SOURCE_THIN_BORDER: Partial<ExcelJS.Borders> = {
+  top: { style: "thin", color: { argb: SOURCE_BORDER } },
+  left: { style: "thin", color: { argb: SOURCE_BORDER } },
+  bottom: { style: "thin", color: { argb: SOURCE_BORDER } },
+  right: { style: "thin", color: { argb: SOURCE_BORDER } },
+};
+
 function solidFill(argb: string): Fill {
   return { type: "pattern", pattern: "solid", fgColor: { argb } };
-}
-
-function mapUrl(visit: JeffSpecialResolvedVisit): string {
-  const query = visit.address || [visit.companyName, visit.city].filter(Boolean).join(", ");
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 }
 
 export function buildJeffSpecialWorkbookFilename(date: Date = new Date()): string {
@@ -64,18 +70,58 @@ function styleHeaderRow(row: ExcelJS.Row): void {
   });
 }
 
-function styleVisitRow(row: ExcelJS.Row, isAlternate: boolean): void {
-  row.height = 32;
-  row.eachCell({ includeEmpty: true }, (cell) => {
-    cell.fill = solidFill(isAlternate ? "FFF7FAFD" : WHITE);
-    cell.font = { color: { argb: TEXT_DARK }, size: 9 };
-    cell.alignment = { vertical: "middle", wrapText: true };
-    cell.border = THIN_BORDER;
+function styleRouteHeaderRow(row: ExcelJS.Row): void {
+  row.height = 24;
+  row.eachCell((cell) => {
+    cell.fill = solidFill(SOURCE_HEADER_FILL);
+    cell.font = { bold: true, color: { argb: SOURCE_TEXT }, size: 10, name: "Arial" };
+    cell.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+    cell.border = {
+      bottom: { style: "medium", color: { argb: SOURCE_HEADER_BORDER } },
+    };
   });
-  row.getCell(1).font = { bold: true, color: { argb: BRAND_BLUE }, size: 9 };
+}
+
+function styleRouteVisitRow(row: ExcelJS.Row, height: number): void {
+  row.height = height;
+  row.eachCell({ includeEmpty: true }, (cell) => {
+    cell.font = { color: { argb: SOURCE_TEXT }, size: 10, name: "Arial" };
+    cell.alignment = { vertical: "middle", wrapText: true };
+    cell.border = SOURCE_THIN_BORDER;
+  });
+  row.getCell(1).font = { color: { argb: SOURCE_TEXT }, size: 9, name: "Arial" };
   row.getCell(1).alignment = { horizontal: "center", vertical: "middle" };
-  row.getCell(2).font = { bold: true, color: { argb: TEXT_DARK }, size: 9 };
-  row.getCell(3).font = { color: { argb: "FF1155A3" }, underline: true, size: 9 };
+}
+
+function routeSheetDetails(weekNumber: number): {
+  name: string;
+  title: string;
+  visitRowHeight: number;
+} {
+  return weekNumber === 1
+    ? {
+        name: "Today — Jul 14",
+        title: "Tuesday, July 14, 2026 - Customer Visit Route",
+        visitRowHeight: 28.5,
+      }
+    : {
+        name: "Tomorrow — Jul 15",
+        title: "Wednesday, July 15, 2026 - Customer Visit Route",
+        visitRowHeight: 36,
+      };
+}
+
+function routeNotesRowHeight(weekNumber: number, visitIndex: number): number {
+  if (weekNumber === 1 && visitIndex === 0) {
+    return 39;
+  }
+  if (weekNumber === 1 && visitIndex === 3) {
+    return 33;
+  }
+  if (weekNumber === 2 && visitIndex < 2) {
+    return 39;
+  }
+  return 28.5;
 }
 
 function addWeekWorksheet(
@@ -83,7 +129,8 @@ function addWeekWorksheet(
   week: JeffSpecialReportPlan["weeks"][number],
   logoImageId: number,
 ): void {
-  const worksheet = workbook.addWorksheet(`Week ${week.week}`, {
+  const sheetDetails = routeSheetDetails(week.week);
+  const worksheet = workbook.addWorksheet(sheetDetails.name, {
     properties: { defaultRowHeight: 15 },
     pageSetup: {
       // OOXML paper size 3 is Tabloid / Ledger (11 x 17 inches).
@@ -94,74 +141,69 @@ function addWeekWorksheet(
       fitToHeight: 1,
       horizontalCentered: true,
       verticalCentered: false,
-      showGridLines: false,
+      showGridLines: true,
       margins: {
         left: 0.25,
         right: 0.25,
-        top: 0.35,
-        bottom: 0.35,
-        header: 0.15,
-        footer: 0.15,
+        top: 0.75,
+        bottom: 0.75,
+        header: 0,
+        footer: 0,
       },
     },
-    views: [{ state: "frozen", ySplit: 3, activeCell: "A4", showGridLines: false }],
+    views: [{ state: "frozen", ySplit: 4, activeCell: "A5", showGridLines: true }],
   });
 
   worksheet.columns = [
-    { key: "time", width: 14 },
-    { key: "company", width: 23 },
-    { key: "address", width: 29 },
-    { key: "city", width: 15 },
-    { key: "companyPhone", width: 16 },
-    { key: "contactName", width: 19 },
-    { key: "jobTitle", width: 18 },
-    { key: "contactPhone", width: 16 },
-    { key: "extension", width: 9 },
-    { key: "email", width: 27 },
+    { key: "time", width: 9.5 },
+    { key: "company", width: 22 },
+    { key: "address", width: 27 },
+    { key: "city", width: 11.38 },
+    { key: "companyPhone", width: 14.5 },
+    { key: "contactName", width: 16.38 },
+    { key: "jobTitle", width: 33.88 },
+    { key: "contactPhone", width: 14.5 },
+    { key: "extension", width: 9.5 },
+    { key: "email", width: 33.88 },
   ];
 
-  worksheet.mergeCells("A1:H1");
+  worksheet.mergeCells("A1:I1");
   const titleCell = worksheet.getCell("A1");
-  titleCell.value = `Jeff Special Report — Week ${week.week}`;
-  titleCell.fill = solidFill(BRAND_BLUE);
-  titleCell.font = { bold: true, color: { argb: WHITE }, size: 18 };
+  titleCell.value = sheetDetails.title;
+  titleCell.fill = solidFill(SOURCE_TITLE_FILL);
+  titleCell.font = { bold: true, color: { argb: SOURCE_TEXT }, size: 14, name: "Arial" };
   titleCell.alignment = { vertical: "middle", horizontal: "left" };
-  worksheet.getRow(1).height = 38;
-  for (let column = 1; column <= 8; column += 1) {
-    worksheet.getRow(1).getCell(column).fill = solidFill(BRAND_BLUE);
-  }
+  worksheet.getRow(1).height = 39;
 
-  worksheet.mergeCells("I1:J1");
-  worksheet.getCell("I1").fill = solidFill(WHITE);
   worksheet.addImage(logoImageId, {
-    tl: { col: 8.14, row: 0.08 },
-    ext: { width: 135, height: 38 },
+    tl: { col: 9.1, row: 0.04 },
+    ext: { width: 134, height: 38 },
   });
 
   worksheet.mergeCells("A2:J2");
   const instructionCell = worksheet.getCell("A2");
   instructionCell.value =
-    `${week.visits.length} customer visits • Current CRM details • Fixed special route order and visit notes • Print 11×17 landscape`;
-  instructionCell.fill = solidFill(PALE_GREEN);
-  instructionCell.font = { bold: true, color: { argb: BRAND_GREEN }, size: 10 };
+    `${week.visits.length} customer visits • Details from the MeadowBrook sales website • Notes are copied from the calendar invitations • Print 11x17 landscape.`;
+  instructionCell.fill = solidFill(WHITE);
+  instructionCell.font = { italic: true, color: { argb: "FF595959" }, size: 10, name: "Arial" };
   instructionCell.alignment = { vertical: "middle", horizontal: "left" };
-  worksheet.getRow(2).height = 22;
+  worksheet.getRow(2).height = 18;
 
-  const headerRow = worksheet.getRow(3);
+  worksheet.getRow(3).height = 6;
+
+  const headerRow = worksheet.getRow(4);
   COLUMN_HEADERS.forEach((header, index) => {
     headerRow.getCell(index + 1).value = header;
   });
-  styleHeaderRow(headerRow);
+  styleRouteHeaderRow(headerRow);
 
-  let nextRowNumber = 4;
+  let nextRowNumber = 5;
   week.visits.forEach((visit, index) => {
     const visitRow = worksheet.getRow(nextRowNumber);
     visitRow.values = [
       visit.time,
       visit.companyName,
-      visit.address
-        ? { text: visit.address, hyperlink: mapUrl(visit), tooltip: "Open in Google Maps" }
-        : "CRM record not found",
+      visit.address || "CRM record not found",
       visit.city,
       visit.companyPhone,
       visit.contactName || (visit.matched ? "Contact needed" : "CRM record not found"),
@@ -170,33 +212,30 @@ function addWeekWorksheet(
       visit.contactExtension,
       visit.contactEmail,
     ];
-    styleVisitRow(visitRow, index % 2 === 1);
+    styleRouteVisitRow(visitRow, sheetDetails.visitRowHeight);
     nextRowNumber += 1;
 
     const notesRow = worksheet.getRow(nextRowNumber);
     const notesLabel = notesRow.getCell(1);
     notesLabel.value = "Notes:";
-    notesLabel.fill = solidFill(PALE_BLUE);
-    notesLabel.font = { bold: true, italic: true, color: { argb: TEXT_MUTED }, size: 9 };
-    notesLabel.alignment = { vertical: "top", horizontal: "center" };
-    notesLabel.border = THIN_BORDER;
+    for (let column = 1; column <= 10; column += 1) {
+      const cell = notesRow.getCell(column);
+      cell.fill = solidFill(SOURCE_NOTES_FILL);
+      cell.font = { italic: true, color: { argb: SOURCE_MUTED }, size: 10, name: "Arial" };
+      cell.alignment = { vertical: "top", horizontal: "left", wrapText: true };
+      cell.border = SOURCE_THIN_BORDER;
+    }
     worksheet.mergeCells(`B${nextRowNumber}:J${nextRowNumber}`);
     const notesCell = notesRow.getCell(2);
     notesCell.value = visit.matched
       ? visit.notes
       : `CRM record not found for this fixed report company. ${visit.notes}`;
-    notesCell.fill = solidFill(PALE_BLUE);
-    notesCell.font = { color: { argb: TEXT_MUTED }, size: 9 };
-    notesCell.alignment = { vertical: "top", wrapText: true };
-    notesCell.border = THIN_BORDER;
-    notesRow.height = Math.min(58, 20 + Math.ceil(notesCell.text.length / 120) * 12);
+    notesRow.height = routeNotesRowHeight(week.week, index);
     nextRowNumber += 1;
   });
 
   worksheet.pageSetup.printArea = `A1:J${nextRowNumber - 1}`;
-  worksheet.pageSetup.printTitlesRow = "1:3";
-  worksheet.headerFooter.oddFooter = "&LMeadowBrook&CJeff Special Report&RPage &P of &N";
-  worksheet.headerFooter.evenFooter = worksheet.headerFooter.oddFooter;
+  worksheet.pageSetup.printTitlesRow = "1:4";
 }
 
 function addChangesWorksheet(
