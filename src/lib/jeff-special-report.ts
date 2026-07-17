@@ -447,25 +447,103 @@ function normalizeComparable(value: string | null | undefined): string {
   return normalizeText(value).toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+const COMPANY_SUFFIXES = new Set([
+  "co",
+  "company",
+  "corp",
+  "corporation",
+  "inc",
+  "incorporated",
+  "ltd",
+  "limited",
+]);
+
+const GENERIC_COMPANY_TOKENS = new Set([
+  ...COMPANY_SUFFIXES,
+  "canada",
+  "canadian",
+  "group",
+  "industries",
+  "international",
+  "manufacturing",
+  "sales",
+  "solutions",
+  "systems",
+]);
+
+function normalizeCompanyComparable(value: string | null | undefined): string {
+  const words = normalizeComparable(value).split(" ").filter(Boolean);
+  while (words.length > 1 && COMPANY_SUFFIXES.has(words.at(-1) ?? "")) {
+    words.pop();
+  }
+  return words.join(" ");
+}
+
+function normalizeAddressComparable(value: string | null | undefined): string {
+  return normalizeComparable(value).replace(/\s+(?:ca|canada)$/, "").trim();
+}
+
+function companyTokens(value: string | null | undefined): Set<string> {
+  return new Set(
+    normalizeCompanyComparable(value)
+      .split(" ")
+      .filter((word) => word.length >= 4 && !GENERIC_COMPANY_TOKENS.has(word)),
+  );
+}
+
+function hasCompanyTokenOverlap(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const leftTokens = companyTokens(left);
+  return [...companyTokens(right)].some((token) => leftTokens.has(token));
+}
+
 function rowAccountRecordId(row: BusinessAccountRow): string {
   return normalizeText(row.accountRecordId) || normalizeText(row.id);
 }
 
-function groupRowsBy(
-  rows: BusinessAccountRow[],
-  valueForRow: (row: BusinessAccountRow) => string,
-): Map<string, BusinessAccountRow[]> {
-  const grouped = new Map<string, BusinessAccountRow[]>();
-  for (const row of rows) {
-    const value = normalizeComparable(valueForRow(row));
-    if (!value) {
-      continue;
-    }
-    const group = grouped.get(value) ?? [];
-    group.push(row);
-    grouped.set(value, group);
+function rowAccountIdentity(row: BusinessAccountRow, index: number): string {
+  const accountRecordId = normalizeComparable(rowAccountRecordId(row));
+  if (accountRecordId) {
+    return `record:${accountRecordId}`;
   }
-  return grouped;
+  const businessAccountId = normalizeComparable(row.businessAccountId);
+  if (businessAccountId) {
+    return `business:${businessAccountId}`;
+  }
+  return `fallback:${normalizeCompanyComparable(row.companyName)}:${normalizeAddressComparable(fullAddress(row))}:${index}`;
+}
+
+function groupAccountRows(rows: BusinessAccountRow[]): BusinessAccountRow[][] {
+  const grouped = new Map<string, BusinessAccountRow[]>();
+  rows.forEach((row, index) => {
+    const key = rowAccountIdentity(row, index);
+    const group = grouped.get(key) ?? [];
+    group.push(row);
+    grouped.set(key, group);
+  });
+  return [...grouped.values()];
+}
+
+function indexAccountGroups(
+  accountGroups: BusinessAccountRow[][],
+  valueForRow: (row: BusinessAccountRow) => string,
+): Map<string, BusinessAccountRow[][]> {
+  const indexed = new Map<string, BusinessAccountRow[][]>();
+  for (const accountRows of accountGroups) {
+    const values = new Set(
+      accountRows
+        .map((row) => normalizeComparable(valueForRow(row)))
+        .filter(Boolean),
+    );
+    for (const value of values) {
+      const groups = indexed.get(value) ?? [];
+      groups.push(accountRows);
+      indexed.set(value, groups);
+    }
+  }
+  return indexed;
 }
 
 function contactCompleteness(row: BusinessAccountRow): number {
@@ -622,15 +700,32 @@ function chooseAccountRow(rows: BusinessAccountRow[]): BusinessAccountRow {
   )[0];
 }
 
-function chooseContactRow(rows: BusinessAccountRow[]): BusinessAccountRow {
-  return [...rows].sort(
-    (left, right) =>
-      contactCompleteness(right) +
-        (right.isPrimaryContact && contactCompleteness(right) > 0 ? 6 : 0) -
-        (contactCompleteness(left) +
-          (left.isPrimaryContact && contactCompleteness(left) > 0 ? 6 : 0)) ||
-      normalizeText(left.primaryContactName).localeCompare(normalizeText(right.primaryContactName)),
-  )[0];
+function isDesignatedPrimaryContact(row: BusinessAccountRow): boolean {
+  return Boolean(row.isPrimaryContact) || (
+    row.contactId != null &&
+    row.primaryContactId != null &&
+    row.contactId === row.primaryContactId
+  );
+}
+
+function chooseContactRow(rows: BusinessAccountRow[]): BusinessAccountRow | null {
+  const primaryRows = rows.filter(isDesignatedPrimaryContact);
+  if (primaryRows.length > 0) {
+    return primaryRows.sort(
+      (left, right) =>
+        contactCompleteness(right) - contactCompleteness(left) ||
+        normalizeText(left.primaryContactName).localeCompare(normalizeText(right.primaryContactName)),
+    )[0];
+  }
+
+  const onlyRow = rows.length === 1 ? rows[0] : null;
+  const isLegacyPrimarySnapshot = Boolean(
+    onlyRow &&
+    onlyRow.isPrimaryContact === undefined &&
+    onlyRow.contactId == null &&
+    onlyRow.primaryContactId == null,
+  );
+  return isLegacyPrimarySnapshot ? onlyRow : null;
 }
 
 function fullAddress(row: BusinessAccountRow): string {
@@ -651,11 +746,101 @@ function firstText(values: Array<string | null | undefined>): string {
   return values.map(normalizeText).find(Boolean) ?? "";
 }
 
+type AccountGroupIndex = Map<string, BusinessAccountRow[][]>;
+
+function addCandidateGroups(
+  candidates: Map<BusinessAccountRow[], number>,
+  groups: BusinessAccountRow[][] | undefined,
+  score: number,
+  predicate: (rows: BusinessAccountRow[]) => boolean = () => true,
+): void {
+  for (const rows of groups ?? []) {
+    if (predicate(rows)) {
+      candidates.set(rows, (candidates.get(rows) ?? 0) + score);
+    }
+  }
+}
+
+function currentAccountScore(rows: BusinessAccountRow[]): number {
+  const contactRow = chooseContactRow(rows);
+  const primaryContactName = sanitizeContactName(contactRow?.primaryContactName);
+  const primaryContactScore = primaryContactName
+    ? 200 + contactCompleteness(contactRow!) * 2
+    : 0;
+  return primaryContactScore + (isLocalAccountGroup(rows) ? 0 : 10);
+}
+
+function isLocalAccountGroup(rows: BusinessAccountRow[]): boolean {
+  const accountRow = chooseAccountRow(rows);
+  return /^local[-_]/i.test(
+    normalizeText(accountRow.businessAccountId) || rowAccountRecordId(accountRow),
+  );
+}
+
+function selectMatchingAccountRows(
+  definition: JeffSpecialVisitDefinition,
+  original: JeffSpecialReportSnapshot,
+  rowsByAccountRecordId: AccountGroupIndex,
+  rowsByBusinessAccountId: AccountGroupIndex,
+  rowsByCompanyName: AccountGroupIndex,
+  rowsByRelaxedCompanyName: AccountGroupIndex,
+  rowsByAddress: AccountGroupIndex,
+): BusinessAccountRow[] {
+  const candidates = new Map<BusinessAccountRow[], number>();
+  addCandidateGroups(
+    candidates,
+    rowsByAccountRecordId.get(normalizeComparable(definition.accountRecordId)),
+    50,
+  );
+  addCandidateGroups(
+    candidates,
+    rowsByBusinessAccountId.get(normalizeComparable(definition.businessAccountId)),
+    45,
+  );
+  addCandidateGroups(
+    candidates,
+    rowsByCompanyName.get(normalizeComparable(definition.companyName)),
+    35,
+  );
+  addCandidateGroups(
+    candidates,
+    rowsByRelaxedCompanyName.get(normalizeCompanyComparable(definition.companyName)),
+    25,
+  );
+  const addressGroups = (
+    rowsByAddress.get(normalizeAddressComparable(original.address)) ?? []
+  ).filter((rows) =>
+    hasCompanyTokenOverlap(definition.companyName, chooseAccountRow(rows).companyName),
+  );
+  const onlyLocalIdentityCandidates =
+    candidates.size > 0 && [...candidates.keys()].every(isLocalAccountGroup);
+  const safeAddressGroups =
+    (candidates.size === 0 && addressGroups.length <= 1) || onlyLocalIdentityCandidates
+      ? addressGroups
+      : [];
+  addCandidateGroups(
+    candidates,
+    safeAddressGroups,
+    30,
+  );
+
+  return [...candidates.entries()].sort(
+    ([leftRows, leftMatchScore], [rightRows, rightMatchScore]) =>
+      rightMatchScore + currentAccountScore(rightRows) -
+        (leftMatchScore + currentAccountScore(leftRows)) ||
+      normalizeText(chooseAccountRow(leftRows).companyName).localeCompare(
+        normalizeText(chooseAccountRow(rightRows).companyName),
+      ),
+  )[0]?.[0] ?? [];
+}
+
 function resolveVisit(
   definition: JeffSpecialVisitDefinition,
-  rowsByAccountRecordId: Map<string, BusinessAccountRow[]>,
-  rowsByBusinessAccountId: Map<string, BusinessAccountRow[]>,
-  rowsByCompanyName: Map<string, BusinessAccountRow[]>,
+  rowsByAccountRecordId: AccountGroupIndex,
+  rowsByBusinessAccountId: AccountGroupIndex,
+  rowsByCompanyName: AccountGroupIndex,
+  rowsByRelaxedCompanyName: AccountGroupIndex,
+  rowsByAddress: AccountGroupIndex,
 ): JeffSpecialResolvedVisit {
   const original = JEFF_SPECIAL_BASELINE_BY_ACCOUNT_RECORD_ID[definition.accountRecordId] ?? {
     companyName: definition.companyName,
@@ -668,11 +853,15 @@ function resolveVisit(
     contactExtension: "",
     contactEmail: "",
   };
-  const matchingRows =
-    rowsByAccountRecordId.get(normalizeComparable(definition.accountRecordId)) ??
-    rowsByBusinessAccountId.get(normalizeComparable(definition.businessAccountId)) ??
-    rowsByCompanyName.get(normalizeComparable(definition.companyName)) ??
-    [];
+  const matchingRows = selectMatchingAccountRows(
+    definition,
+    original,
+    rowsByAccountRecordId,
+    rowsByBusinessAccountId,
+    rowsByCompanyName,
+    rowsByRelaxedCompanyName,
+    rowsByAddress,
+  );
   if (matchingRows.length === 0) {
     return {
       ...definition,
@@ -703,11 +892,11 @@ function resolveVisit(
     companyPhone: sanitizePhone(
       firstText(matchingRows.map((row) => row.companyPhone ?? row.phoneNumber)),
     ),
-    contactName: sanitizeContactName(contactRow.primaryContactName),
-    contactJobTitle: sanitizeJobTitle(contactRow.primaryContactJobTitle),
-    contactPhone: sanitizePhone(contactRow.primaryContactPhone),
-    contactExtension: normalizeText(contactRow.primaryContactExtension),
-    contactEmail: sanitizeEmail(contactRow.primaryContactEmail),
+    contactName: sanitizeContactName(contactRow?.primaryContactName),
+    contactJobTitle: sanitizeJobTitle(contactRow?.primaryContactJobTitle),
+    contactPhone: sanitizePhone(contactRow?.primaryContactPhone),
+    contactExtension: normalizeText(contactRow?.primaryContactExtension),
+    contactEmail: sanitizeEmail(contactRow?.primaryContactEmail),
   };
 }
 
@@ -715,13 +904,35 @@ export function buildJeffSpecialReportPlan(
   rows: BusinessAccountRow[],
   generatedAt: Date = new Date(),
 ): JeffSpecialReportPlan {
-  const rowsByAccountRecordId = groupRowsBy(rows, rowAccountRecordId);
-  const rowsByBusinessAccountId = groupRowsBy(rows, (row) => normalizeText(row.businessAccountId));
-  const rowsByCompanyName = groupRowsBy(rows, (row) => normalizeText(row.companyName));
+  const accountGroups = groupAccountRows(rows);
+  const rowsByAccountRecordId = indexAccountGroups(accountGroups, rowAccountRecordId);
+  const rowsByBusinessAccountId = indexAccountGroups(
+    accountGroups,
+    (row) => normalizeText(row.businessAccountId),
+  );
+  const rowsByCompanyName = indexAccountGroups(
+    accountGroups,
+    (row) => normalizeText(row.companyName),
+  );
+  const rowsByRelaxedCompanyName = indexAccountGroups(
+    accountGroups,
+    (row) => normalizeCompanyComparable(row.companyName),
+  );
+  const rowsByAddress = indexAccountGroups(
+    accountGroups,
+    (row) => normalizeAddressComparable(fullAddress(row)),
+  );
   const weeks = JEFF_SPECIAL_REPORT_VISITS.map((week) => ({
     week: week.week,
     visits: week.visits.map((visit) =>
-      resolveVisit(visit, rowsByAccountRecordId, rowsByBusinessAccountId, rowsByCompanyName),
+      resolveVisit(
+        visit,
+        rowsByAccountRecordId,
+        rowsByBusinessAccountId,
+        rowsByCompanyName,
+        rowsByRelaxedCompanyName,
+        rowsByAddress,
+      ),
     ),
   }));
   const visits = weeks.flatMap((week) => week.visits);
