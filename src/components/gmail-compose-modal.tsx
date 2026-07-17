@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import { dedupeMailRecipients } from "@/lib/mail-ui";
+import { appendGmailSignatureToComposeHtml } from "@/lib/mail-signature";
 import type { MailSessionResponse } from "@/types/mail";
 import type {
   MailAttachmentInput,
@@ -416,7 +417,12 @@ export function GmailComposeModal({
 
   useEffect(() => {
     const rawSignature = cleanText(session?.senderSignatureHtml);
-    if (!isOpen || sendMode !== "compose" || !rawSignature) {
+    if (
+      !isOpen ||
+      sendMode !== "compose" ||
+      initialState?.draftId ||
+      !rawSignature
+    ) {
       return;
     }
 
@@ -425,17 +431,17 @@ export function GmailComposeModal({
       return;
     }
 
-    appliedGmailSignatureRef.current = signatureKey;
-    if (cleanText(htmlToText(draft.htmlBody))) {
-      return;
-    }
-
     const safeSignature = sanitizeSignatureHtml(rawSignature);
     if (!safeSignature) {
       return;
     }
 
-    const nextHtml = `<div><br></div><div data-mb-gmail-signature="true">${safeSignature}</div>`;
+    const nextHtml = appendGmailSignatureToComposeHtml(draft.htmlBody, safeSignature);
+    appliedGmailSignatureRef.current = signatureKey;
+    if (nextHtml === draft.htmlBody) {
+      return;
+    }
+
     setDraft((current) => ({
       ...current,
       htmlBody: nextHtml,
@@ -444,7 +450,14 @@ export function GmailComposeModal({
     if (editorRef.current) {
       editorRef.current.innerHTML = nextHtml;
     }
-  }, [draft.htmlBody, isOpen, sendMode, session?.connectedGoogleEmail, session?.senderSignatureHtml]);
+  }, [
+    draft.htmlBody,
+    initialState?.draftId,
+    isOpen,
+    sendMode,
+    session?.connectedGoogleEmail,
+    session?.senderSignatureHtml,
+  ]);
 
   useEffect(() => {
     if (!isOpen || !editorRef.current) {
