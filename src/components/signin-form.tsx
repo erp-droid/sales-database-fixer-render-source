@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -252,14 +253,16 @@ export function SignInForm({
         Remember my password
       </label>
 
-      <a
+      <Link
         className={styles.forgotPassword}
-        href="/api/auth/forgot-password"
-        rel="noopener noreferrer"
-        target="_blank"
+        href={
+          username.trim()
+            ? `/forgot-password?username=${encodeURIComponent(username.trim())}`
+            : "/forgot-password"
+        }
       >
         Forgot your password?
-      </a>
+      </Link>
 
       {error ? <p className={styles.error}>{error}</p> : null}
       {isCheckingSession ? (

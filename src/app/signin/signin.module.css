@@ -122,10 +122,34 @@
   color: var(--accent);
 }
 
+.backLink {
+  display: inline-block;
+  margin-top: 18px;
+  color: var(--accent-strong);
+  font-size: 14px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.backLink:hover {
+  color: var(--accent);
+}
+
 .error {
   margin: 0;
   color: var(--danger);
   font-size: 14px;
+}
+
+.success {
+  margin: 0;
+  border: 1px solid rgba(22, 151, 84, 0.35);
+  border-radius: 10px;
+  background: rgba(234, 250, 241, 0.9);
+  color: #0d6b3b;
+  font-size: 14px;
+  line-height: 1.45;
+  padding: 11px 12px;
 }
 
 .hint {
