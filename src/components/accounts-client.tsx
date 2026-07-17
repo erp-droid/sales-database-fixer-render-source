@@ -51,10 +51,6 @@ import {
 } from "@/lib/business-account-concurrency";
 import { buildContactIdentityKeyForRow } from "@/lib/contact-identity";
 import {
-  buildAcumaticaBusinessAccountUrl,
-  buildAcumaticaContactUrl,
-} from "@/lib/acumatica-links";
-import {
   BUSINESS_ACCOUNT_REGION_VALUES,
   normalizeBusinessAccountRegionValue,
 } from "@/lib/business-account-region-values";
@@ -3715,14 +3711,10 @@ function buildPaginationNumbers(
 }
 
 export function AccountsClient({
-  acumaticaBaseUrl,
-  acumaticaCompanyId,
   initialLoginName,
   openAiAttributeSuggestEnabled,
   rocketReachEnabled,
 }: {
-  acumaticaBaseUrl: string;
-  acumaticaCompanyId: string;
   initialLoginName: string | null;
   openAiAttributeSuggestEnabled: boolean;
   rocketReachEnabled: boolean;
@@ -9287,31 +9279,12 @@ export function AccountsClient({
   function renderCellContent(row: BusinessAccountRow, columnId: SortBy): ReactNode {
     if (columnId === "companyName") {
       const companyLabel = readTextValue(row.companyName);
-      const companyUrl = buildAcumaticaBusinessAccountUrl(
-        acumaticaBaseUrl,
-        row.businessAccountId,
-        acumaticaCompanyId,
-      );
 
       if (!companyLabel) {
         return renderBlankCell("No company name");
       }
 
-      if (!companyUrl) {
-        return companyLabel;
-      }
-
-      return (
-        <a
-          className={styles.recordLink}
-          href={companyUrl}
-          onClick={(event) => event.stopPropagation()}
-          rel="noreferrer"
-          target="_blank"
-        >
-          {companyLabel}
-        </a>
-      );
+      return companyLabel;
     }
 
     if (columnId === "accountType") {
@@ -9332,28 +9305,11 @@ export function AccountsClient({
 
     if (columnId === "primaryContactName") {
       const nameValue = readTextValue(row.primaryContactName);
-      const contactUrl = buildAcumaticaContactUrl(
-        acumaticaBaseUrl,
-        row.contactId ?? row.primaryContactId ?? null,
-        acumaticaCompanyId,
-      );
 
       return (
         <div className={styles.contactCellWrap}>
           {nameValue ? (
-            contactUrl ? (
-              <a
-                className={styles.recordLink}
-                href={contactUrl}
-                onClick={(event) => event.stopPropagation()}
-                rel="noreferrer"
-                target="_blank"
-              >
-                {nameValue}
-              </a>
-            ) : (
-              <span>{nameValue}</span>
-            )
+            <span>{nameValue}</span>
           ) : (
             renderBlankCell("No primary contact")
           )}
@@ -11521,51 +11477,6 @@ export function AccountsClient({
         <div className={`${styles.drawerHeader} ${styles.desktopDrawerOnly}`}>
           <div className={styles.drawerHeaderContent}>
             <h2>{selected ? selected.companyName : "Account details"}</h2>
-            {selected ? (
-              <p className={styles.drawerRecordLinks}>
-                {(() => {
-                  const companyUrl = buildAcumaticaBusinessAccountUrl(
-                    acumaticaBaseUrl,
-                    selected.businessAccountId,
-                    acumaticaCompanyId,
-                  );
-                  const contactUrl = buildAcumaticaContactUrl(
-                    acumaticaBaseUrl,
-                    selected.contactId ?? selected.primaryContactId ?? null,
-                    acumaticaCompanyId,
-                  );
-                  const contactLabel = selected.primaryContactName?.trim();
-
-                  return (
-                    <>
-                      {companyUrl ? (
-                        <a
-                          className={styles.recordLink}
-                          href={companyUrl}
-                          rel="noreferrer"
-                          target="_blank"
-                        >
-                          Open account record
-                        </a>
-                      ) : null}
-                      {contactUrl && contactLabel ? (
-                        <>
-                          {companyUrl ? <span>•</span> : null}
-                          <a
-                            className={styles.recordLink}
-                            href={contactUrl}
-                            rel="noreferrer"
-                            target="_blank"
-                          >
-                            Open contact record
-                          </a>
-                        </>
-                      ) : null}
-                    </>
-                  );
-                })()}
-              </p>
-            ) : null}
           </div>
           <button
             className={styles.closeButton}

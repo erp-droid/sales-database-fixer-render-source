@@ -536,7 +536,6 @@ export function DeletionQueueClient() {
               <th>Company</th>
               <th>Account Type</th>
               <th>Opportunities</th>
-              <th>source system</th>
               <th>Affected Fields</th>
               <th>Reason</th>
               <th>Requested</th>
@@ -548,13 +547,13 @@ export function DeletionQueueClient() {
           <tbody>
             {loading ? (
               <tr>
-                <td className={styles.loadingCell} colSpan={12}>
+                <td className={styles.loadingCell} colSpan={11}>
                   Loading queued actions...
                 </td>
               </tr>
             ) : filteredItems.length === 0 ? (
               <tr>
-                <td className={styles.loadingCell} colSpan={12}>
+                <td className={styles.loadingCell} colSpan={11}>
                   No queued actions match the current filter.
                 </td>
               </tr>
@@ -596,20 +595,6 @@ export function DeletionQueueClient() {
                     </td>
                     <td>{item.accountType ?? "-"}</td>
                     <td>{item.opportunityCount ?? 0}</td>
-                    <td>
-                      {item.acumaticaBusinessAccountUrl ? (
-                        <a
-                          className={styles.accountLink}
-                          href={item.acumaticaBusinessAccountUrl}
-                          rel="noreferrer"
-                          target="_blank"
-                        >
-                          Open account
-                        </a>
-                      ) : (
-                        "-"
-                      )}
-                    </td>
                     <td>{item.affectedFields.length ? item.affectedFields.join(", ") : "-"}</td>
                     <td className={styles.reasonCell}>{item.reason?.trim() || "-"}</td>
                     <td>{formatDateTime(item.requestedAt)}</td>

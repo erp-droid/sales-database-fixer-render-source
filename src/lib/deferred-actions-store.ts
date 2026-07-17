@@ -1,7 +1,6 @@
 import { getReadModelDb } from "@/lib/read-model/db";
 import { invalidateReadModelCaches } from "@/lib/read-model/cache";
 import { upsertDeferredActionAuditEvents } from "@/lib/audit-log-store";
-import { buildAcumaticaBusinessAccountUrl } from "@/lib/acumatica-links";
 import {
   applyDeferredContactOperationToRows,
   getDeferredActionAccountKey,
@@ -9,7 +8,6 @@ import {
   type DeferredContactOperationPreview,
 } from "@/lib/deferred-contact-operations";
 import { publishDeferredActionsChanged } from "@/lib/deferred-actions-live";
-import { getEnv } from "@/lib/env";
 import { readStoredAccountRowsFromReadModel } from "@/lib/read-model/accounts";
 import { CONTACT_MERGE_FIELD_KEYS } from "@/types/contact-merge";
 import type { BusinessAccountRow, BusinessAccountType } from "@/types/business-account";
@@ -334,7 +332,6 @@ type DeferredActionAccountMetadata = {
   companyName: string | null;
   accountType: BusinessAccountType | null;
   opportunityCount: number | null;
-  acumaticaBusinessAccountUrl: string | null;
 };
 
 function normalizeAccountKey(value: string | null | undefined): string | null {
@@ -366,7 +363,6 @@ function choosePreferredAccountRow(
 }
 
 function buildDeferredActionAccountMetadataMap(): Map<string, DeferredActionAccountMetadata> {
-  const env = getEnv();
   const rows = readStoredAccountRowsFromReadModel();
   const rowsByKey = new Map<string, BusinessAccountRow>();
 
@@ -389,11 +385,6 @@ function buildDeferredActionAccountMetadataMap(): Map<string, DeferredActionAcco
       companyName: row.companyName?.trim() || null,
       accountType: row.accountType ?? null,
       opportunityCount: Number.isFinite(row.opportunityCount ?? null) ? row.opportunityCount ?? null : null,
-      acumaticaBusinessAccountUrl: buildAcumaticaBusinessAccountUrl(
-        env.ACUMATICA_BASE_URL,
-        row.businessAccountId,
-        env.ACUMATICA_COMPANY ?? "MeadowBrook Live",
-      ),
     });
   }
 
@@ -435,7 +426,6 @@ function toSummary(
     companyName: record.companyName ?? accountMetadata?.companyName ?? null,
     accountType: accountMetadata?.accountType ?? null,
     opportunityCount: accountMetadata?.opportunityCount ?? null,
-    acumaticaBusinessAccountUrl: accountMetadata?.acumaticaBusinessAccountUrl ?? null,
     contactId: record.contactId,
     contactName: record.contactName,
     keptContactId: record.keptContactId,

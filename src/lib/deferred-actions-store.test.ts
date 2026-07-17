@@ -128,11 +128,10 @@ describe("deferred actions store", () => {
       actionType: "deleteContact",
       accountType: "Customer",
       opportunityCount: 3,
-      acumaticaBusinessAccountUrl:
-        "https://example.acumatica.com/Main?ScreenId=CR303000&CompanyID=MeadowBrook+Live&AcctCD=BA0001",
       contactId: 157497,
       reason: "Duplicate contact",
     });
+    expect(items[0]).not.toHaveProperty("acumaticaBusinessAccountUrl");
   });
 
   it("reads legacy delete rows without reasons", async () => {

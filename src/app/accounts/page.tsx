@@ -19,8 +19,6 @@ export default async function AccountsPage() {
 
   return (
     <AccountsClient
-      acumaticaBaseUrl={env.ACUMATICA_BASE_URL}
-      acumaticaCompanyId={env.ACUMATICA_COMPANY ?? "MeadowBrook Live"}
       initialLoginName={initialLoginName}
       openAiAttributeSuggestEnabled={Boolean(env.OPENAI_API_KEY?.trim())}
       rocketReachEnabled={Boolean(env.ROCKETREACH_API_KEY?.trim())}
