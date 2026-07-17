@@ -626,6 +626,29 @@ function attachFinalActivitySyncStatus(sendResponse, syncedThreadResult) {
   };
 }
 
+function shouldDeferActivitySync(req) {
+  return cleanString(req.get("x-mb-skip-activity-sync")) === "1";
+}
+
+function buildDeferredActivitySyncResponse(response) {
+  return {
+    ...response,
+    activitySyncStatus: "not_linked",
+    activityId: null,
+    activityIds: [],
+    activityError: null
+  };
+}
+
+function isMeadowBrookAppMessage(message) {
+  const internetMessageId = cleanString(message?.internetMessageId);
+  const domain = readInternalMailDomain().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `^<[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}@${domain}>$`,
+    "i"
+  ).test(internetMessageId);
+}
+
 router.get("/oauth/start", async (req, res, next) => {
   try {
     const token = cleanString(req.query.token);
@@ -1028,6 +1051,40 @@ router.get("/threads", async (req, res, next) => {
   }
 });
 
+router.get("/sent-app-messages", async (req, res, next) => {
+  try {
+    const auth = requireMailAssertion(req);
+    await ensureConnectedMailbox(auth);
+    const limit = Math.max(1, Math.min(1000, Number(req.query.limit || 500) || 500));
+    const messages = await listMailboxMessages(auth.loginName, { limit: 5000 });
+    const items = messages
+      .filter(
+        (message) =>
+          cleanString(message?.direction) === "outgoing" &&
+          isMeadowBrookAppMessage(message)
+      )
+      .sort((left, right) => String(right.sentAt || "").localeCompare(String(left.sentAt || "")))
+      .slice(0, limit)
+      .map((message) => ({
+        messageId: cleanString(message.messageId),
+        internetMessageId: cleanString(message.internetMessageId),
+        threadId: cleanString(message.threadId),
+        subject: cleanString(message.subject),
+        sentAt: cleanString(message.sentAt) || null,
+        to: Array.isArray(message.to) ? message.to : [],
+        cc: Array.isArray(message.cc) ? message.cc : [],
+        bcc: Array.isArray(message.bcc) ? message.bcc : [],
+        linkedContact: message.linkedContact || null,
+        matchedContacts: Array.isArray(message.matchedContacts) ? message.matchedContacts : [],
+        activitySyncStatus: cleanString(message.activitySyncStatus) || "not_linked"
+      }));
+
+    res.json({ items, total: items.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/threads/:threadId", async (req, res, next) => {
   try {
     const auth = requireMailAssertion(req);
@@ -1083,7 +1140,7 @@ router.post("/messages/send", async (req, res, next) => {
     const auth = requireMailAssertion(req);
     const connection = await ensureConnectedMailbox(auth);
     const acumaticaCookieHeader = cleanString(req.get("x-mb-acumatica-cookie"));
-    const skipActivitySync = cleanString(req.get("x-mb-skip-activity-sync")) === "1";
+    const skipActivitySync = shouldDeferActivitySync(req);
     const activityClient = getMailActivityAcumaticaClient({
       cookieHeader: acumaticaCookieHeader
     });
@@ -1091,13 +1148,7 @@ router.post("/messages/send", async (req, res, next) => {
     assertResolvedRecipients(payload);
     const response = await sendMessage(connection, payload);
     if (skipActivitySync) {
-      res.json({
-        ...response,
-        activitySyncStatus: "not_linked",
-        activityId: null,
-        activityIds: [],
-        activityError: null
-      });
+      res.json(buildDeferredActivitySyncResponse(response));
       return;
     }
     const synced = await syncThreadActivities(auth.loginName, response.threadId, activityClient);
@@ -1122,6 +1173,10 @@ router.post("/threads/:threadId/reply", async (req, res, next) => {
     const response = await sendMessage(connection, payload, {
       threadId: req.params.threadId
     });
+    if (shouldDeferActivitySync(req)) {
+      res.json(buildDeferredActivitySyncResponse(response));
+      return;
+    }
     const synced = await syncThreadActivities(auth.loginName, response.threadId, activityClient);
     res.json(attachFinalActivitySyncStatus(response, synced));
   } catch (error) {
@@ -1143,6 +1198,10 @@ router.post("/threads/:threadId/forward", async (req, res, next) => {
     }));
     assertResolvedRecipients(payload);
     const response = await sendMessage(connection, payload);
+    if (shouldDeferActivitySync(req)) {
+      res.json(buildDeferredActivitySyncResponse(response));
+      return;
+    }
     const synced = await syncThreadActivities(auth.loginName, response.threadId, activityClient);
     res.json(attachFinalActivitySyncStatus(response, synced));
   } catch (error) {
@@ -1185,6 +1244,10 @@ router.post("/drafts/:draftId/send", async (req, res, next) => {
     });
     await ensureConnectedMailbox(auth);
     const response = await sendDraft(await ensureConnectedMailbox(auth), req.params.draftId);
+    if (shouldDeferActivitySync(req)) {
+      res.json(buildDeferredActivitySyncResponse(response));
+      return;
+    }
     const synced = await syncThreadActivities(auth.loginName, response.threadId, activityClient);
     res.json(attachFinalActivitySyncStatus(response, synced));
   } catch (error) {

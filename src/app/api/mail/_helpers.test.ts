@@ -127,6 +127,9 @@ describe("proxyAuditedMailSendJson", () => {
     expect(requestMailService).toHaveBeenCalledWith(
       request,
       expect.objectContaining({
+        headers: {
+          "x-mb-skip-activity-sync": "1",
+        },
         resolvedSender: {
           loginName: "jserrano",
           senderEmail: "jserrano@meadowb.com",
