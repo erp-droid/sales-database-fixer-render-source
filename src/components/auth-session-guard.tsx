@@ -14,6 +14,7 @@ const RECENT_SIGN_IN_GRACE_MS = 60_000;
 function isPublicPath(pathname: string | null): boolean {
   return (
     pathname === "/install" ||
+    pathname === "/forgot-password" ||
     pathname === "/signin" ||
     pathname === "/tv" ||
     pathname?.startsWith("/tv/") === true
