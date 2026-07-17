@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 
-import { InstallAppButton } from "@/components/install-app-button";
+import { WindowsInstallerDownload } from "@/components/windows-installer-download";
 
 import styles from "./install.module.css";
 
@@ -20,10 +20,11 @@ export default function InstallPage() {
         <p className={styles.eyebrow}>MeadowBrook</p>
         <h1 className={styles.title}>Install MeadowBrook CRM</h1>
         <p className={styles.subtitle}>
-          Add the CRM to your Windows or Mac computer for fast access in Google Chrome.
+          Install MeadowBrook CRM on Windows with an automatic desktop shortcut for Google
+          Chrome.
         </p>
 
-        <InstallAppButton />
+        <WindowsInstallerDownload />
 
         <Link className={styles.browserLink} href="/accounts">
           Continue in the browser
