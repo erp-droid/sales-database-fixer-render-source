@@ -1,0 +1,185 @@
+[
+  {
+    "accountRecordId": "93976f17-7eed-f011-8370-025dbe72350a",
+    "businessAccountId": "B20204",
+    "companyName": "CuBE Plastics",
+    "address": "200 Industrial Pkwy N, Aurora, ON L4G 4C3",
+    "contact": {
+      "displayName": "David Rubio",
+      "jobTitle": "Maintenance Manager",
+      "phone": "877-260-2823",
+      "extension": "",
+      "email": "david.rubio@cubep.com"
+    }
+  },
+  {
+    "accountRecordId": "local-jeff-import-20260605-706a5b3a5b580e2acb",
+    "businessAccountId": "LOCAL-JEFF-0256",
+    "companyName": "Piramal Pharma Solutions",
+    "address": "110 Industrial Pky N, Aurora, ON L4G 4C3",
+    "contact": {
+      "displayName": "Tyler Clements",
+      "jobTitle": "",
+      "phone": "",
+      "extension": "",
+      "email": "tyler.clements@piramal.com"
+    }
+  },
+  {
+    "accountRecordId": "local-jeff-import-20260605-7078a3d47b03b929bf",
+    "businessAccountId": "LOCAL-JEFF-0348",
+    "companyName": "Transcontinental Aurora",
+    "address": "275 Wellington St E, Aurora, ON L4G 6J9",
+    "contact": {
+      "displayName": "Tim Vanslingerland",
+      "jobTitle": "",
+      "phone": "416-788-6391",
+      "extension": "",
+      "email": ""
+    }
+  },
+  {
+    "accountRecordId": "local-jeff-import-20260605-606b4b6288b597a4c4",
+    "businessAccountId": "LOCAL-JEFF-0345",
+    "companyName": "General Conveyor Inc.",
+    "address": "245 Industrial Pky S, Aurora, ON L4G 3V5",
+    "contact": {
+      "displayName": "Gord",
+      "jobTitle": "",
+      "phone": "",
+      "extension": "",
+      "email": ""
+    }
+  },
+  {
+    "accountRecordId": "local-jeff-import-20260605-aac62dcc18943bdaba",
+    "businessAccountId": "LOCAL-JEFF-0344",
+    "companyName": "Louisville Ladder",
+    "address": "100 Engelhard Dr, Aurora, ON L4G 3V2",
+    "contact": {
+      "displayName": "David Martinez",
+      "jobTitle": "",
+      "phone": "",
+      "extension": "",
+      "email": ""
+    }
+  },
+  {
+    "accountRecordId": "local-account-80a4fd25-f936-41bb-b2c6-3e6aa7415439",
+    "businessAccountId": "LOCAL-1DB6C960-4C0",
+    "companyName": "Kirchhoff Automotive",
+    "address": "200 Vandorf Siderd, Aurora, ON L4G 0A2",
+    "contact": {
+      "displayName": "Rajeev Ganju",
+      "jobTitle": "Procurement",
+      "phone": "905-751-9995",
+      "extension": "",
+      "email": "rajeev.ganju@kirchhoff-automotive.com"
+    }
+  },
+  {
+    "accountRecordId": "c5b019dc-4142-f111-8374-025dbe72350a",
+    "businessAccountId": "B200002527",
+    "companyName": "Cam Slide West",
+    "address": "550 Newpark Blvd, Newmarket, ON L3X 2S2",
+    "contact": {
+      "displayName": "Sumanth Kundula",
+      "jobTitle": "Maintenance Manager",
+      "phone": "905-895-4701",
+      "extension": "",
+      "email": "sumanth.kundula@magna.com"
+    }
+  },
+  {
+    "accountRecordId": "local-jeff-import-20260605-ac2355364f58b3a1f3",
+    "businessAccountId": "LOCAL-JEFF-0350",
+    "companyName": "Stairfab",
+    "address": "A-450 Kent Dr, Newmarket, ON L3Y 4Y9",
+    "contact": {
+      "displayName": "Claudio",
+      "jobTitle": "",
+      "phone": "",
+      "extension": "",
+      "email": ""
+    }
+  },
+  {
+    "accountRecordId": "local-jeff-import-20260605-0903c18948263fdef9",
+    "businessAccountId": "LOCAL-JEFF-0403",
+    "companyName": "Alloy Fusion Inc",
+    "address": "395 Harry Walker Pky S, Newmarket, ON L3Y 8T3",
+    "contactAliases": ["Sergio", "Sandra"],
+    "contact": {
+      "displayName": "Sergio / Sandra",
+      "jobTitle": "",
+      "phone": "647-979-2956",
+      "extension": "",
+      "email": ""
+    }
+  },
+  {
+    "accountRecordId": "local-jeff-import-20260612-07302c7113bf075db4",
+    "businessAccountId": "LOCAL-JEFF-0987",
+    "companyName": "TS Tech Canada",
+    "address": "17855 Leslie St, Newmarket, ON L3Y 3E3",
+    "contact": {
+      "displayName": "Stuart Craig",
+      "jobTitle": "Maintenance",
+      "phone": "289-383-6031",
+      "extension": "",
+      "email": "stuart.craig@tstech.com"
+    }
+  },
+  {
+    "accountRecordId": "local-jeff-import-20260605-1ae9cfe709216bd28a",
+    "businessAccountId": "LOCAL-JEFF-0408",
+    "companyName": "Ce De Candy Company Limited",
+    "address": "150 Harry Walker Pky N, Newmarket, ON L3Y 7B2",
+    "contact": {
+      "displayName": "Andrew Kam",
+      "jobTitle": "Maintenance Manager",
+      "phone": "905-853-7171",
+      "extension": "128",
+      "email": "akam@cedecandy.ca"
+    }
+  },
+  {
+    "accountRecordId": "local-account-9dab422f-63fd-4de9-b781-8e86697c4001",
+    "businessAccountId": "LOCAL-9A4F2760-BE9",
+    "companyName": "Canadian Plastics Group LTD",
+    "address": "265 Pony Dr, Newmarket, ON L3Y 7B5",
+    "contact": {
+      "displayName": "Michael Waddington",
+      "jobTitle": "VP of Operations",
+      "phone": "",
+      "extension": "",
+      "email": ""
+    }
+  },
+  {
+    "accountRecordId": "928d4945-3242-f111-8374-025dbe72350a",
+    "businessAccountId": "B200002526",
+    "companyName": "Agility Tooling",
+    "address": "1215 Kerrisdale Blvd, Newmarket, ON L3Y 8W1",
+    "contact": {
+      "displayName": "Stefan Mouradian",
+      "jobTitle": "Maintenance Manager",
+      "phone": "",
+      "extension": "",
+      "email": "stefan.mouradian@agilitytooling.com"
+    }
+  },
+  {
+    "accountRecordId": "647f7196-a548-f111-bb0e-0255004b97ab",
+    "businessAccountId": "B200002548",
+    "companyName": "Descon Conveyor Systems",
+    "address": "1-1274 Ringwell Dr, Newmarket, ON L3Y 9C7",
+    "contact": {
+      "displayName": "Steve Nixon",
+      "jobTitle": "",
+      "phone": "",
+      "extension": "",
+      "email": ""
+    }
+  }
+]
