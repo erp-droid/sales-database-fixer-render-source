@@ -762,6 +762,7 @@ router.get("/session", async (req, res, next) => {
   try {
     const auth = requireMailAssertion(req);
     const forceRefresh = cleanString(req.query.refresh) === "1";
+    const forceSignatureRefresh = cleanString(req.query.refreshSignature) === "1";
     if (!hasOauthConfig()) {
       res.json(
         buildSessionResponse(auth, null, {
@@ -780,7 +781,7 @@ router.get("/session", async (req, res, next) => {
     }
 
     const connection = await syncMailboxSignature(storedConnection, {
-      force: forceRefresh
+      force: forceRefresh || forceSignatureRefresh
     });
 
     try {

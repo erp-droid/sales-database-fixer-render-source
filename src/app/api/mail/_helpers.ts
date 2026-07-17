@@ -453,8 +453,10 @@ export async function proxyMailSessionJson(
     resolvedSender = await resolveMailSenderForRequest(request, authCookieRefresh);
     cacheKey = resolvedSender.senderEmail.trim().toLowerCase();
     const forceRefresh = request.nextUrl.searchParams.get("refresh") === "1";
+    const forceSignatureRefresh =
+      request.nextUrl.searchParams.get("refreshSignature") === "1";
 
-    if (!forceRefresh && cacheKey) {
+    if (!forceRefresh && !forceSignatureRefresh && cacheKey) {
       const cached = readCachedMailSession(cacheKey);
       if (cached) {
         const response = NextResponse.json(cached);
@@ -468,7 +470,11 @@ export async function proxyMailSessionJson(
 
     const upstream = await requestMailService(request, {
       path: "/api/mail/session",
-      query: forceRefresh ? new URLSearchParams({ refresh: "1" }) : undefined,
+      query: forceRefresh
+        ? new URLSearchParams({ refresh: "1" })
+        : forceSignatureRefresh
+          ? new URLSearchParams({ refreshSignature: "1" })
+          : undefined,
       authCookieRefresh,
       timeoutMs: MAIL_SESSION_TIMEOUT_MS,
       timeoutMessage:
