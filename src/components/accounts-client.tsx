@@ -650,7 +650,7 @@ type StoredAccountsFilterPreferences = {
   headerFilters?: HeaderFilters;
 };
 
-const DEFAULT_HEADER_FILTERS: HeaderFilters = {
+export const DEFAULT_HEADER_FILTERS: HeaderFilters = {
   companyName: "",
   accountType: "",
   opportunityCount: "",
@@ -2276,7 +2276,7 @@ function buildVisibleRowsFallback(
   };
 }
 
-function matchesFallbackTextFilters(
+export function matchesFallbackTextFilters(
   row: BusinessAccountRow,
   options: {
     q: string;
@@ -4481,50 +4481,15 @@ export function AccountsClient({
   );
 
   const tableFallbackRows = useMemo(() => {
-    if (workbenchFilteredRows.length > 0) {
-      return workbenchFilteredRows;
-    }
-
-    let fallbackRows =
-      activeFilterView === "marketingOnly"
-        ? displayRows.filter((row) => row.marketingEligible !== false)
-        : displayRows;
-
-    if (selectedCategoryFilterSet.size > 0) {
-      fallbackRows = fallbackRows.filter((row) =>
-        rowMatchesSelectedCategoryFilters(row, selectedCategoryFilterSet),
-      );
-    }
-
-    if (selectedWeekFilterSet.size > 0) {
-      fallbackRows = fallbackRows.filter((row) => {
-        const week = normalizeWeekValue(row.week);
-        return week ? selectedWeekFilterSet.has(normalizeOptionComparable(week)) : false;
-      });
-    }
-
-    if (selectedSalesRepFilterSet.size > 0) {
-      fallbackRows = fallbackRows.filter((row) =>
-        rowMatchesSelectedSalesRepFilters(row, selectedSalesRepFilterSet),
-      );
-    }
-
-    fallbackRows = fallbackRows.filter((row) =>
+    return workbenchFilteredRows.filter((row) =>
       matchesFallbackTextFilters(row, {
         q: debouncedQ,
         headerFilters: debouncedHeaderFilters,
       }),
     );
-
-    return fallbackRows;
   }, [
-    activeFilterView,
     debouncedHeaderFilters,
     debouncedQ,
-    displayRows,
-    selectedCategoryFilterSet,
-    selectedSalesRepFilterSet,
-    selectedWeekFilterSet,
     workbenchFilteredRows,
   ]);
 
@@ -10314,7 +10279,13 @@ export function AccountsClient({
           {loading ? (
             <div className={styles.mobileEmptyState}>Loading accounts…</div>
           ) : mobileGroups.length === 0 ? (
-            <div className={styles.mobileEmptyState}>No accounts match these filters.</div>
+            <div className={styles.mobileEmptyState}>
+              {debouncedQ.trim()
+                ? "No records match that search."
+                : hasActiveWorkbenchFilters
+                  ? "No records match the current filters."
+                  : "No records are available."}
+            </div>
           ) : (
             mobileGroups.map((group) => {
               const isExpanded = expandedMobileAccountKeys.includes(group.key);
@@ -10887,7 +10858,11 @@ export function AccountsClient({
                     className={styles.loadingCell}
                     colSpan={visibleColumnOrder.length + (isDirectoryOnlyUser ? 1 : 3)}
                   >
-                    No contacts found.
+                    {debouncedQ.trim()
+                      ? "No records match that search."
+                      : hasActiveWorkbenchFilters
+                        ? "No records match the current filters."
+                        : "No records are available."}
                   </td>
                 </tr>
               ) : (
