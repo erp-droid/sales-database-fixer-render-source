@@ -1,6 +1,6 @@
 import { after, NextRequest, NextResponse } from "next/server";
 
-import { getStoredLoginName, requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
+import { requireAuthCookieValue, setAuthCookie } from "@/lib/auth";
 import { logMailSendAudit } from "@/lib/audit-log-store";
 import { resolveDeferredActionActor } from "@/lib/deferred-action-actor";
 import { getErrorMessage, HttpError } from "@/lib/errors";
@@ -192,17 +192,6 @@ function scheduleAfterWork(callback: () => void | Promise<void>): void {
   }
 }
 
-function buildDeferredMailActor(request: NextRequest): {
-  loginName: string | null;
-  name: string | null;
-} {
-  const storedLoginName = getStoredLoginName(request);
-  return {
-    loginName: storedLoginName,
-    name: storedLoginName,
-  };
-}
-
 function buildMailThreadListCacheKey(
   senderEmail: string,
   query: URLSearchParams,
@@ -309,6 +298,7 @@ export async function proxyAuditedMailSendJson(
 ): Promise<NextResponse> {
   const authCookieRefresh: AuthCookieRefreshState = { value: null };
   let normalizedPayload: Partial<MailComposePayload> = {};
+  let resolvedSender: ResolvedMailSender | null = null;
 
   try {
     const requestBody =
@@ -321,10 +311,12 @@ export async function proxyAuditedMailSendJson(
     if (options.body && typeof requestBody === "object") {
       assertResolvedMailRecipients(normalizedPayload);
     }
+    resolvedSender = await resolveMailSenderForRequest(request, authCookieRefresh);
     const upstream = await requestMailService(request, {
       ...options,
       body: requestBody,
       authCookieRefresh,
+      resolvedSender,
       timeoutMs: options.timeoutMs ?? MAIL_SEND_TIMEOUT_MS,
       timeoutMessage: options.timeoutMessage ?? MAIL_SEND_TIMEOUT_MESSAGE,
     });
@@ -334,7 +326,10 @@ export async function proxyAuditedMailSendJson(
     if (upstream.ok && options.body && typeof requestBody === "object" && isMailSendResponse(payload)) {
       try {
         enqueueMailSendJob({
-          actor: buildDeferredMailActor(request),
+          actor: {
+            loginName: resolvedSender.loginName,
+            name: resolvedSender.displayName,
+          },
           payload: normalizedPayload,
           response: payload,
         });
@@ -368,12 +363,13 @@ export async function proxyAuditedMailSendJson(
             );
           }
 
-          const cookieValue = requireAuthCookieValue(request);
-          const actor = await resolveDeferredActionActor(
-            request,
-            cookieValue,
-            authCookieRefresh,
-          );
+          const actor = resolvedSender
+            ? { loginName: resolvedSender.loginName, name: resolvedSender.displayName }
+            : await resolveDeferredActionActor(
+                request,
+                requireAuthCookieValue(request),
+                authCookieRefresh,
+              );
           const resultCode =
             upstream.ok && isMailSendResponse(repairedPayload)
               ? repairedPayload.activitySyncStatus === "failed" ||
@@ -402,12 +398,13 @@ export async function proxyAuditedMailSendJson(
   } catch (error) {
     scheduleAfterWork(async () => {
       try {
-        const cookieValue = requireAuthCookieValue(request);
-        const actor = await resolveDeferredActionActor(
-          request,
-          cookieValue,
-          authCookieRefresh,
-        );
+        const actor = resolvedSender
+          ? { loginName: resolvedSender.loginName, name: resolvedSender.displayName }
+          : await resolveDeferredActionActor(
+              request,
+              requireAuthCookieValue(request),
+              authCookieRefresh,
+            );
         logMailSendAudit({
           actor,
           payload: normalizedPayload,

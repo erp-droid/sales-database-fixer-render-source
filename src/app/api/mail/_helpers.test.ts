@@ -71,6 +71,11 @@ describe("proxyAuditedMailSendJson", () => {
       async (_request: NextRequest, body: unknown) => body,
     );
     collectUnresolvedMailRecipientEmails.mockReturnValue([]);
+    resolveMailSenderForRequest.mockResolvedValue({
+      loginName: "jserrano",
+      senderEmail: "jserrano@meadowb.com",
+      displayName: "Jorge Serrano",
+    });
     requestMailService.mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -122,6 +127,11 @@ describe("proxyAuditedMailSendJson", () => {
     expect(requestMailService).toHaveBeenCalledWith(
       request,
       expect.objectContaining({
+        resolvedSender: {
+          loginName: "jserrano",
+          senderEmail: "jserrano@meadowb.com",
+          displayName: "Jorge Serrano",
+        },
         timeoutMs: 20_000,
       }),
     );
@@ -155,7 +165,14 @@ describe("proxyAuditedMailSendJson", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(enqueueMailSendJob).toHaveBeenCalled();
+    expect(enqueueMailSendJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: {
+          loginName: "jserrano",
+          name: "Jorge Serrano",
+        },
+      }),
+    );
     expect(drainPendingMailSendJobs).toHaveBeenCalledWith(25);
   });
 });

@@ -1215,6 +1215,35 @@ server.listen(port, hostname, () => {
     console.log("[ticket-agent] worker disabled");
   }
 
+  // Recover dashboard audit rows for emails that Gmail accepted before a
+  // separate CRM activity-sync attempt failed. This is idempotent and runs on
+  // the background worker after every deployment, so historical sends do not
+  // require someone to reopen Mail or the Dashboard.
+  if (clusterBackgroundTasksEnabled) {
+    const recoverDeliveredMailAudits = async () => {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/api/mail/jobs/recover-audits`, {
+          method: "POST",
+          headers: { Accept: "application/json" },
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${JSON.stringify(payload)}`);
+        }
+        console.log("[mail-audit-recovery] completed", {
+          recovered: payload?.recovered ?? 0,
+        });
+      } catch (error) {
+        console.error("[mail-audit-recovery] failed; retrying", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        setTimeout(() => void recoverDeliveredMailAudits(), 30_000);
+      }
+    };
+
+    setTimeout(() => void recoverDeliveredMailAudits(), 7_000);
+  }
+
   // Scheduled local backups of the read-model SQLite database. In
   // local-database-only mode this file is the sole system of record, so we
   // snapshot it on an interval (online backup API, safe during writes) and
