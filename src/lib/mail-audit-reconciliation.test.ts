@@ -4,12 +4,8 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const requestMailService = vi.fn();
 const readCallEmployeeDirectory = vi.fn();
-
-vi.mock("@/lib/mail-proxy", () => ({
-  requestMailService,
-}));
+const fetchMock = vi.fn();
 
 vi.mock("@/lib/call-analytics/employee-directory", () => ({
   readCallEmployeeDirectory,
@@ -21,7 +17,8 @@ describe("mailbox dashboard audit reconciliation", () => {
 
   beforeEach(() => {
     vi.resetModules();
-    requestMailService.mockReset();
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
     readCallEmployeeDirectory.mockReset();
     tempDir = mkdtempSync(path.join(tmpdir(), "mail-audit-reconciliation-"));
     process.env.AUTH_PROVIDER = "acumatica";
@@ -31,6 +28,9 @@ describe("mailbox dashboard audit reconciliation", () => {
     process.env.AUTH_COOKIE_NAME = ".ASPXAUTH";
     process.env.AUTH_COOKIE_SECURE = "false";
     process.env.READ_MODEL_SQLITE_PATH = path.join(tempDir, "read-model.sqlite");
+    process.env.MAIL_PROXY_SHARED_SECRET = "mail-reconciliation-test-secret";
+    process.env.PORT = "10000";
+    process.env.MBQ_BASE_PATH = "/quotes";
 
     readCallEmployeeDirectory.mockReturnValue([
       {
@@ -44,7 +44,7 @@ describe("mailbox dashboard audit reconciliation", () => {
         updatedAt: "2026-07-17T16:00:00.000Z",
       },
     ]);
-    requestMailService.mockResolvedValue(
+    fetchMock.mockResolvedValue(
       new Response(
         JSON.stringify({
           items: [
@@ -73,6 +73,7 @@ describe("mailbox dashboard audit reconciliation", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     for (const key of Object.keys(process.env)) {
       if (!(key in originalEnv)) {
@@ -122,17 +123,22 @@ describe("mailbox dashboard audit reconciliation", () => {
       reattributed: 1,
     });
 
-    expect(requestMailService).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:10000/quotes/api/mail/sent-app-messages?limit=500",
       expect.objectContaining({
-        path: "/api/mail/sent-app-messages",
-        resolvedSender: {
-          loginName: "kpareek",
-          displayName: "Krishna Pareek",
-          senderEmail: "kpareek@meadowb.com",
-        },
+        headers: expect.objectContaining({
+          Authorization: expect.stringMatching(/^Bearer mbmail\.v1\./),
+        }),
       }),
     );
+    const requestHeaders = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    const assertionPayload = JSON.parse(
+      Buffer.from(requestHeaders.Authorization.split(".")[2] ?? "", "base64url").toString("utf8"),
+    ) as { loginName?: string; senderEmail?: string };
+    expect(assertionPayload).toMatchObject({
+      loginName: "kpareek",
+      senderEmail: "kpareek@meadowb.com",
+    });
 
     const audit = getReadModelDb()
       .prepare(

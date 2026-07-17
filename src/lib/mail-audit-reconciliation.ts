@@ -1,8 +1,6 @@
-import { NextRequest } from "next/server";
-
 import { logMailSendAudit } from "@/lib/audit-log-store";
 import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
-import { requestMailService } from "@/lib/mail-proxy";
+import { buildMailProxyAssertion } from "@/lib/mail-auth";
 import { getReadModelDb } from "@/lib/read-model/db";
 import type { MailLinkedContact } from "@/types/mail";
 import type { MailMatchedContact, MailRecipient } from "@/types/mail-compose";
@@ -79,26 +77,49 @@ function isMailboxMessageResponse(value: unknown): value is StoredMailboxMessage
   );
 }
 
+function buildLocalMailServiceUrl(query: URLSearchParams): string {
+  const port = clean(process.env.PORT) || "10000";
+  const rawMountPath = clean(process.env.MBQ_BASE_PATH) || "/quotes";
+  const mountPath = `/${rawMountPath.replace(/^\/+|\/+$/g, "")}`;
+  return `http://127.0.0.1:${port}${mountPath}/api/mail/sent-app-messages?${query.toString()}`;
+}
+
+async function requestLocalMailboxMessages(employee: {
+  loginName: string;
+  displayName: string;
+  email: string;
+}): Promise<Response> {
+  const assertion = buildMailProxyAssertion({
+    loginName: employee.loginName,
+    displayName: employee.displayName,
+    senderEmail: employee.email,
+  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15_000);
+
+  try {
+    return await fetch(
+      buildLocalMailServiceUrl(new URLSearchParams({ limit: "500" })),
+      {
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${assertion}`,
+        },
+        cache: "no-store",
+        signal: controller.signal,
+      },
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function reconcileEmployeeMailbox(employee: {
   loginName: string;
   displayName: string;
   email: string;
 }): Promise<Omit<MailboxAuditReconciliationResult, "mailboxesChecked">> {
-  const query = new URLSearchParams({ limit: "500" });
-  const response = await requestMailService(
-    new NextRequest("http://127.0.0.1/internal/mail-audit-reconciliation"),
-    {
-      path: "/api/mail/sent-app-messages",
-      query,
-      resolvedSender: {
-        loginName: employee.loginName,
-        displayName: employee.displayName,
-        senderEmail: employee.email,
-      },
-      timeoutMs: 15_000,
-      timeoutMessage: `Timed out reading ${employee.loginName}'s sent mail.`,
-    },
-  );
+  const response = await requestLocalMailboxMessages(employee);
 
   if (!response.ok) {
     return { mailboxesFailed: 1, messagesChecked: 0, recovered: 0, reattributed: 0 };
