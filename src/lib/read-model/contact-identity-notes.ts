@@ -1,4 +1,5 @@
 import { buildContactIdentityKeyForRow } from "@/lib/contact-identity";
+import { markDashboardSnapshotCacheStale } from "@/lib/call-analytics/dashboard-cache";
 import { invalidateReadModelCaches } from "@/lib/read-model/cache";
 import { getReadModelDb } from "@/lib/read-model/db";
 import type { BusinessAccountRow } from "@/types/business-account";
@@ -218,6 +219,7 @@ export function upsertSharedContactNotesForRow(input: {
     now,
   );
   invalidateReadModelCaches();
+  markDashboardSnapshotCacheStale();
 
   return {
     ...input.row,

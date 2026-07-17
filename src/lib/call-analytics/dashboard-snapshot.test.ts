@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CallSessionRecord, DashboardFilters } from "@/lib/call-analytics/types";
@@ -467,6 +471,81 @@ describe("dashboard snapshot builder and cache", () => {
         totalActivities: 2,
       }),
     ]);
+  });
+
+  it("counts both timestamped note entries and pinned contact notes", async () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "dashboard-contact-notes-test-"));
+    process.env.READ_MODEL_SQLITE_PATH = path.join(tempDir, "read-model.sqlite");
+    readCallSessionsMock.mockReturnValue([]);
+    readCallEmployeeDirectoryMock.mockReturnValue([
+      {
+        loginName: "kpareek",
+        contactId: 1,
+        displayName: "Krishna",
+        email: null,
+        normalizedPhone: null,
+        callerIdPhone: null,
+        isActive: true,
+        updatedAt: "2026-03-08T00:00:00.000Z",
+      },
+    ]);
+
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const db = getReadModelDb();
+
+    try {
+      db.prepare(
+        `
+        INSERT INTO account_notes (
+          id, account_record_id, business_account_id, company_name, contact_id, contact_name,
+          note, author, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      ).run(
+        "note-log-1",
+        "record-1",
+        "B2001",
+        "Northwind",
+        null,
+        null,
+        "Company follow-up",
+        "kpareek",
+        "2026-03-08T14:00:00.000Z",
+        "2026-03-08T14:00:00.000Z",
+      );
+      db.prepare(
+        `
+        INSERT INTO contact_identity_notes (
+          identity_key, company_name, contact_name, notes, source_row_key, source_contact_id,
+          updated_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      ).run(
+        "contact:91",
+        "Northwind",
+        "Alex Prospect",
+        "Pinned contact follow-up",
+        "row-1",
+        91,
+        "kpareek",
+        "2026-03-08T15:00:00.000Z",
+        "2026-03-08T15:00:00.000Z",
+      );
+
+      const { getDashboardSnapshot } = await import("@/lib/call-analytics/dashboard-snapshot");
+      const snapshot = await getDashboardSnapshot(baseFilters);
+
+      expect(snapshot.activityLeaderboard).toContainEqual(
+        expect.objectContaining({
+          loginName: "kpareek",
+          notes: 2,
+          totalActivities: 2,
+        }),
+      );
+    } finally {
+      db.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("dedupes duplicate sales roster rows by caller ID", async () => {

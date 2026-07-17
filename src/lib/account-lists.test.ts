@@ -51,11 +51,48 @@ describe("account-lists", () => {
 
     expect(listVisibleAccountLists("jserrano").map((list) => list.name)).toEqual([
       "Brock A/B",
+      "Brock Koczka A/B",
       "Dormant Customers",
+      "Justin Settle A/B",
     ]);
     expect(listVisibleAccountLists("sarah").map((list) => list.name)).toEqual([
+      "Brock Koczka A/B",
       "Dormant Customers",
+      "Justin Settle A/B",
     ]);
+  });
+
+  it("seeds the shared A/B sales-rep lists for the Directory and Map", async () => {
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const { listVisibleAccountLists } = await import("@/lib/account-lists");
+    closeDb = () => getReadModelDb().close();
+
+    const lists = listVisibleAccountLists("sarah");
+
+    expect(lists).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "system:justin-settle-ab",
+          name: "Justin Settle A/B",
+          scope: "company",
+          ownerLoginName: "system",
+          filters: expect.objectContaining({
+            selectedCategoryFilters: ["A", "B"],
+            selectedSalesRepFilters: ["Justin Settle"],
+          }),
+        }),
+        expect.objectContaining({
+          id: "system:brock-koczka-ab",
+          name: "Brock Koczka A/B",
+          scope: "company",
+          ownerLoginName: "system",
+          filters: expect.objectContaining({
+            selectedCategoryFilters: ["A", "B"],
+            selectedSalesRepFilters: ["Brock Koczka"],
+          }),
+        }),
+      ]),
+    );
   });
 
   it("normalizes invalid filter values before saving", async () => {
@@ -127,6 +164,9 @@ describe("account-lists", () => {
       "List was not found or cannot be deleted by this user.",
     );
     deleteAccountList(list.id, "jserrano");
-    expect(listVisibleAccountLists("jserrano")).toEqual([]);
+    expect(listVisibleAccountLists("jserrano").map((entry) => entry.name)).toEqual([
+      "Brock Koczka A/B",
+      "Justin Settle A/B",
+    ]);
   });
 });
