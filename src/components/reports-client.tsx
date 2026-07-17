@@ -31,6 +31,17 @@ async function errorMessageFromResponse(response: Response): Promise<string> {
   }
 }
 
+function triggerFileDownload(response: Response, blob: Blob, fallbackName: string): void {
+  const downloadUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = downloadUrl;
+  anchor.download = filenameFromResponse(response, fallbackName);
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(downloadUrl);
+}
+
 export function ReportsClient({ initialLoginName }: { initialLoginName: string | null }) {
   const [options, setOptions] = useState<SalesRepOption[]>([]);
   const [selectedRepKey, setSelectedRepKey] = useState("");
@@ -38,6 +49,9 @@ export function ReportsClient({ initialLoginName }: { initialLoginName: string |
   const [isDownloading, setIsDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [isDownloadingSpecial, setIsDownloadingSpecial] = useState(false);
+  const [specialError, setSpecialError] = useState<string | null>(null);
+  const [specialSuccess, setSpecialSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -96,17 +110,11 @@ export function ReportsClient({ initialLoginName }: { initialLoginName: string |
         throw new Error(await errorMessageFromResponse(response));
       }
       const blob = await response.blob();
-      const downloadUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = downloadUrl;
-      anchor.download = filenameFromResponse(
+      triggerFileDownload(
         response,
+        blob,
         `${selectedRep.name}-12-week-visitation-routes.xlsx`,
       );
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(downloadUrl);
 
       const accountCount = response.headers.get("x-report-account-count") ?? String(selectedRep.accountCount);
       const mappedCount = response.headers.get("x-report-mapped-count");
@@ -120,6 +128,41 @@ export function ReportsClient({ initialLoginName }: { initialLoginName: string |
       setError(downloadError instanceof Error ? downloadError.message : "The report could not be downloaded.");
     } finally {
       setIsDownloading(false);
+    }
+  }
+
+  async function downloadSpecialReport() {
+    if (isDownloadingSpecial) {
+      return;
+    }
+    setIsDownloadingSpecial(true);
+    setSpecialError(null);
+    setSpecialSuccess(null);
+    try {
+      const response = await fetch("/api/reports/jeff-special", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(await errorMessageFromResponse(response));
+      }
+      const blob = await response.blob();
+      triggerFileDownload(response, blob, "jeff-special-report.xlsx");
+      const accountCount = response.headers.get("x-report-account-count") ?? "20";
+      const matchedCount = response.headers.get("x-report-matched-count") ?? accountCount;
+      const missingCount = response.headers.get("x-report-missing-count") ?? "0";
+      const differenceCount = response.headers.get("x-report-difference-count") ?? "0";
+      const missingNote = missingCount === "0"
+        ? ""
+        : ` ${matchedCount} of ${accountCount} companies matched current CRM records; missing companies are clearly marked in the workbook.`;
+      setSpecialSuccess(
+        `Downloaded the Jeff Special Report for all ${accountCount} fixed companies with ${differenceCount} field differences listed.${missingNote}`,
+      );
+    } catch (downloadError) {
+      setSpecialError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "The Jeff Special Report could not be downloaded.",
+      );
+    } finally {
+      setIsDownloadingSpecial(false);
     }
   }
 
@@ -196,6 +239,52 @@ export function ReportsClient({ initialLoginName }: { initialLoginName: string |
 
         {error ? <div className={styles.errorMessage} role="alert">{error}</div> : null}
         {success ? <div className={styles.successMessage} role="status">{success}</div> : null}
+      </section>
+
+      <section className={`${styles.reportCard} ${styles.specialReportCard}`}>
+        <div className={styles.cardHeading}>
+          <div className={`${styles.fileIcon} ${styles.specialFileIcon}`} aria-hidden="true">
+            <svg fill="none" viewBox="0 0 24 24">
+              <path d="m12 3 2.1 4.7 5.1.5-3.8 3.5 1.1 5-4.5-2.6-4.5 2.6 1.1-5-3.8-3.5 5.1-.5L12 3Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.7" />
+            </svg>
+          </div>
+          <div>
+            <span className={styles.specialEyebrow}>Fixed company list</span>
+            <h2>Jeff Special Report</h2>
+            <p>
+              Recreates the original two-week route for the same companies, refreshed with the latest company and contact details from the CRM.
+            </p>
+          </div>
+        </div>
+
+        <div className={styles.steps} aria-label="Jeff Special Report contents">
+          <span><strong>20</strong> specific companies</span>
+          <span><strong>2</strong> route tabs</span>
+          <span><strong>1</strong> changes tab</span>
+        </div>
+
+        <div className={styles.formArea}>
+          <div className={styles.specialCallout}>
+            The company list, visit order, times, and instructions stay fixed. Current CRM fields are refreshed every time, and a third tab highlights exactly what changed from the original report.
+          </div>
+          <button
+            className={`${styles.downloadButton} ${styles.specialDownloadButton}`}
+            disabled={isDownloadingSpecial}
+            onClick={() => void downloadSpecialReport()}
+            type="button"
+          >
+            <svg aria-hidden="true" fill="none" viewBox="0 0 24 24">
+              <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19.5h14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.9" />
+            </svg>
+            {isDownloadingSpecial ? "Building Jeff Special Report…" : "Download Jeff Special Report"}
+          </button>
+          <p className={styles.helperText}>
+            Opens in Excel with two route tabs, a changes comparison, clickable map addresses, original visit notes, and 11×17 landscape print settings.
+          </p>
+        </div>
+
+        {specialError ? <div className={styles.errorMessage} role="alert">{specialError}</div> : null}
+        {specialSuccess ? <div className={styles.successMessage} role="status">{specialSuccess}</div> : null}
       </section>
     </AppChrome>
   );
