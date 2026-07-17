@@ -9,7 +9,14 @@ import {
   MAX_CLARIFICATION_ROUNDS,
 } from "@/lib/support-ticket-clarification";
 import {
+  isAllowedSupportAttachment,
+  SUPPORT_ATTACHMENT_MAX_FILE_BYTES,
+  SUPPORT_ATTACHMENT_MAX_FILES,
+  SUPPORT_ATTACHMENT_MAX_TOTAL_BYTES,
+} from "@/lib/support-ticket-attachment-policy";
+import {
   readTicketEmailThread,
+  readTicketEmailAttachments,
   replyToTicketEmail,
   sendTicketAcknowledgement,
 } from "@/lib/support-ticket-mail";
@@ -24,6 +31,7 @@ import {
   listSupportTicketEvents,
   readSupportTicket,
   releaseSupportTicketAfterFailure,
+  storeSupportTicketReplyAttachments,
   updateSupportTicket,
   type SupportTicketRecord,
 } from "@/lib/support-ticket-store";
@@ -54,6 +62,20 @@ function robotMessageIds(ticket: SupportTicketRecord): Set<string> {
   return ids;
 }
 
+function isEmployeeMessage(
+  ticket: Pick<SupportTicketRecord, "employeeEmail">,
+  message: MailMessage,
+  knownRobotMessageIds: ReadonlySet<string>,
+  robotSenderEmail = process.env.TICKET_AGENT_SENDER_EMAIL ?? "jserrano@meadowb.com",
+): boolean {
+  const employeeUsesRobotMailbox = normalizeEmail(ticket.employeeEmail) === normalizeEmail(robotSenderEmail);
+  return message.direction === "incoming" || (
+    employeeUsesRobotMailbox &&
+    message.direction === "outgoing" &&
+    !knownRobotMessageIds.has(message.messageId)
+  );
+}
+
 export function newestEmployeeMessage(
   ticket: Pick<SupportTicketRecord, "employeeEmail" | "lastIncomingMessageAt">,
   messages: MailMessage[],
@@ -61,22 +83,93 @@ export function newestEmployeeMessage(
   robotSenderEmail = process.env.TICKET_AGENT_SENDER_EMAIL ?? "jserrano@meadowb.com",
 ): MailMessage | null {
   const lastProcessedMs = ticket.lastIncomingMessageAt ? Date.parse(ticket.lastIncomingMessageAt) : 0;
-  const employeeUsesRobotMailbox = normalizeEmail(ticket.employeeEmail) === normalizeEmail(robotSenderEmail);
   return messages
-    .filter((message) =>
-      message.direction === "incoming" ||
-      (
-        employeeUsesRobotMailbox &&
-        message.direction === "outgoing" &&
-        !knownRobotMessageIds.has(message.messageId)
-      ),
-    )
+    .filter((message) => isEmployeeMessage(ticket, message, knownRobotMessageIds, robotSenderEmail))
     .filter((message) => {
       const timestamp = messageTimestamp(message);
       return timestamp ? Date.parse(timestamp) > lastProcessedMs : false;
     })
     .sort((left, right) => Date.parse(messageTimestamp(left) ?? "") - Date.parse(messageTimestamp(right) ?? ""))
     .at(-1) ?? null;
+}
+
+async function ingestEmployeeReplyAttachments(
+  ticket: SupportTicketRecord,
+  messages: MailMessage[],
+  knownRobotMessageIds: ReadonlySet<string>,
+): Promise<{ storedCount: number; latestEvidenceMessage: MailMessage | null }> {
+  const alreadyChecked = new Set(
+    listSupportTicketEvents(ticket.id, 500)
+      .filter((event) => event.eventType === "email_attachments_checked")
+      .map((event) => event.details?.messageId)
+      .filter((value): value is string => typeof value === "string" && Boolean(value.trim())),
+  );
+  const candidates = messages
+    .filter((message) => message.hasAttachments)
+    .filter((message) => isEmployeeMessage(ticket, message, knownRobotMessageIds))
+    .filter((message) => !alreadyChecked.has(message.messageId))
+    .sort((left, right) => Date.parse(messageTimestamp(left) ?? "") - Date.parse(messageTimestamp(right) ?? ""));
+
+  let storedCount = 0;
+  let latestEvidenceMessage: MailMessage | null = null;
+  for (const message of candidates) {
+    const payload = await readTicketEmailAttachments(ticket, message.messageId);
+    const accepted = [];
+    let totalBytes = 0;
+    for (const attachment of payload.items) {
+      if (accepted.length >= SUPPORT_ATTACHMENT_MAX_FILES) break;
+      if (!isAllowedSupportAttachment(attachment.fileName, attachment.mimeType)) continue;
+      const data = Buffer.from(attachment.base64Data, "base64");
+      if (
+        data.byteLength === 0 ||
+        data.byteLength > SUPPORT_ATTACHMENT_MAX_FILE_BYTES ||
+        totalBytes + data.byteLength > SUPPORT_ATTACHMENT_MAX_TOTAL_BYTES
+      ) {
+        continue;
+      }
+      accepted.push({
+        fileName: attachment.fileName,
+        mimeType: attachment.mimeType,
+        data,
+        sourceMessageId: message.messageId,
+        sourceAttachmentId: attachment.id,
+      });
+      totalBytes += data.byteLength;
+    }
+
+    const stored = storeSupportTicketReplyAttachments(ticket.id, accepted);
+    addSupportTicketEvent({
+      ticketId: ticket.id,
+      eventType: "email_attachments_checked",
+      actorType: "robot",
+      message: stored.length > 0
+        ? `Stored ${stored.length} attachment${stored.length === 1 ? "" : "s"} from the employee's email reply as ticket evidence.`
+        : "Checked the employee's email reply for supported ticket evidence.",
+      details: {
+        messageId: message.messageId,
+        storedAttachmentIds: stored.map((attachment) => attachment.id),
+        fileNames: stored.map((attachment) => attachment.fileName),
+      },
+      createdAt: messageTimestamp(message) ?? undefined,
+    });
+    if (stored.length > 0) {
+      addSupportTicketEvent({
+        ticketId: ticket.id,
+        eventType: "email_attachments_stored",
+        actorType: "employee",
+        message: "Pictures or files attached to the employee's reply were added to the ticket evidence.",
+        details: {
+          messageId: message.messageId,
+          attachmentIds: stored.map((attachment) => attachment.id),
+          fileNames: stored.map((attachment) => attachment.fileName),
+        },
+        createdAt: messageTimestamp(message) ?? undefined,
+      });
+      storedCount += stored.length;
+      latestEvidenceMessage = message;
+    }
+  }
+  return { storedCount, latestEvidenceMessage };
 }
 
 export function classifyTicketConfirmation(text: string): "confirmed" | "not_resolved" | "unclear" {
@@ -361,8 +454,17 @@ async function investigateAndReply(
 
 async function checkEmployeeReply(ticket: SupportTicketRecord): Promise<void> {
   const thread = await readTicketEmailThread(ticket);
-  const incoming = newestEmployeeMessage(ticket, thread.messages, robotMessageIds(ticket));
+  const knownRobotMessageIds = robotMessageIds(ticket);
+  const evidence = await ingestEmployeeReplyAttachments(ticket, thread.messages, knownRobotMessageIds);
+  const incoming = newestEmployeeMessage(ticket, thread.messages, knownRobotMessageIds);
   if (!incoming) {
+    if (evidence.storedCount > 0 && evidence.latestEvidenceMessage) {
+      const text = (evidence.latestEvidenceMessage.textBody || evidence.latestEvidenceMessage.htmlBody || "")
+        .trim()
+        .slice(0, 5000);
+      await investigateAndReply(readSupportTicket(ticket.id) ?? ticket, text || null);
+      return;
+    }
     if (ticket.status === "monitoring" || ticket.status === "escalated") {
       await investigateAndReply(ticket, null);
       return;

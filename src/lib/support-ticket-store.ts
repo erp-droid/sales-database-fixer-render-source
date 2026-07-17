@@ -85,6 +85,9 @@ type AttachmentRow = {
   mime_type: string;
   size_bytes: number;
   storage_path: string;
+  source_type: "submission" | "email_reply";
+  source_message_id: string | null;
+  source_attachment_id: string | null;
   created_at: string;
 };
 
@@ -101,7 +104,15 @@ export type SupportTicketAttachmentRecord = {
   mimeType: string;
   sizeBytes: number;
   storagePath: string;
+  sourceType: "submission" | "email_reply";
+  sourceMessageId: string | null;
+  sourceAttachmentId: string | null;
   createdAt: string;
+};
+
+export type SupportTicketReplyAttachmentInput = SupportTicketAttachmentInput & {
+  sourceMessageId: string;
+  sourceAttachmentId: string;
 };
 
 type EventRow = {
@@ -169,6 +180,9 @@ function ensureSupportTicketSchema(): void {
       mime_type TEXT NOT NULL,
       size_bytes INTEGER NOT NULL,
       storage_path TEXT NOT NULL,
+      source_type TEXT NOT NULL DEFAULT 'submission',
+      source_message_id TEXT,
+      source_attachment_id TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY(ticket_id) REFERENCES support_tickets(id) ON DELETE CASCADE
     );
@@ -206,6 +220,25 @@ function ensureSupportTicketSchema(): void {
       db.exec(statement);
     }
   }
+
+  const existingAttachmentColumns = new Set(
+    (db.prepare("PRAGMA table_info(support_ticket_attachments)").all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  const attachmentMigrations = [
+    ["source_type", "ALTER TABLE support_ticket_attachments ADD COLUMN source_type TEXT NOT NULL DEFAULT 'submission'"],
+    ["source_message_id", "ALTER TABLE support_ticket_attachments ADD COLUMN source_message_id TEXT"],
+    ["source_attachment_id", "ALTER TABLE support_ticket_attachments ADD COLUMN source_attachment_id TEXT"],
+  ] as const;
+  for (const [column, statement] of attachmentMigrations) {
+    if (!existingAttachmentColumns.has(column)) {
+      db.exec(statement);
+    }
+  }
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_support_ticket_attachments_email_source
+      ON support_ticket_attachments(ticket_id, source_message_id, source_attachment_id)
+      WHERE source_message_id IS NOT NULL AND source_attachment_id IS NOT NULL;
+  `);
   schemaReady = true;
 }
 
@@ -290,6 +323,9 @@ function mapAttachmentRow(row: AttachmentRow): SupportTicketAttachmentRecord {
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes,
     storagePath: row.storage_path,
+    sourceType: row.source_type,
+    sourceMessageId: row.source_message_id,
+    sourceAttachmentId: row.source_attachment_id,
     createdAt: row.created_at,
   };
 }
@@ -376,6 +412,9 @@ export function createSupportTicket(input: {
           mimeType,
           sizeBytes: attachment.data.byteLength,
           storagePath,
+          sourceType: "submission",
+          sourceMessageId: null,
+          sourceAttachmentId: null,
           createdAt: now,
         });
       }
@@ -467,12 +506,110 @@ export function createSupportTicket(input: {
 export function listSupportTicketAttachments(ticketId: string): SupportTicketAttachmentRecord[] {
   ensureSupportTicketSchema();
   const rows = getReadModelDb().prepare(`
-    SELECT id, ticket_id, file_name, mime_type, size_bytes, storage_path, created_at
+    SELECT id, ticket_id, file_name, mime_type, size_bytes, storage_path,
+      source_type, source_message_id, source_attachment_id, created_at
     FROM support_ticket_attachments
     WHERE ticket_id = ?
     ORDER BY created_at ASC, id ASC
   `).all(ticketId) as AttachmentRow[];
   return rows.map(mapAttachmentRow);
+}
+
+export function readSupportTicketAttachmentById(
+  ticketId: string,
+  attachmentId: string,
+): SupportTicketAttachmentRecord | null {
+  ensureSupportTicketSchema();
+  const row = getReadModelDb().prepare(`
+    SELECT id, ticket_id, file_name, mime_type, size_bytes, storage_path,
+      source_type, source_message_id, source_attachment_id, created_at
+    FROM support_ticket_attachments
+    WHERE ticket_id = ? AND id = ?
+  `).get(ticketId, attachmentId) as AttachmentRow | undefined;
+  return row ? mapAttachmentRow(row) : null;
+}
+
+export function storeSupportTicketReplyAttachments(
+  ticketId: string,
+  inputs: SupportTicketReplyAttachmentInput[],
+): SupportTicketAttachmentRecord[] {
+  ensureSupportTicketSchema();
+  const db = getReadModelDb();
+  const attachmentDirectory = path.join(resolveAttachmentRoot(), ticketId);
+  const stored: SupportTicketAttachmentRecord[] = [];
+  if (inputs.length === 0) {
+    return stored;
+  }
+  mkdirSync(attachmentDirectory, { recursive: true });
+
+  for (const input of inputs) {
+    const sourceMessageId = input.sourceMessageId.trim();
+    const sourceAttachmentId = input.sourceAttachmentId.trim();
+    if (!sourceMessageId || !sourceAttachmentId || input.data.byteLength === 0) {
+      continue;
+    }
+    const existing = db.prepare(`
+      SELECT id, ticket_id, file_name, mime_type, size_bytes, storage_path,
+        source_type, source_message_id, source_attachment_id, created_at
+      FROM support_ticket_attachments
+      WHERE ticket_id = ? AND source_message_id = ? AND source_attachment_id = ?
+    `).get(ticketId, sourceMessageId, sourceAttachmentId) as AttachmentRow | undefined;
+    if (existing) {
+      continue;
+    }
+
+    const id = crypto.randomUUID();
+    const fileName = safeAttachmentName(input.fileName);
+    const mimeType = normalizeSupportAttachmentMimeType(fileName, input.mimeType);
+    const storagePath = path.join(
+      attachmentDirectory,
+      `${id}${supportAttachmentStorageExtension(fileName, mimeType)}`,
+    );
+    const createdAt = new Date().toISOString();
+    writeFileSync(storagePath, input.data, { flag: "wx" });
+    try {
+      const result = db.prepare(`
+        INSERT OR IGNORE INTO support_ticket_attachments (
+          id, ticket_id, file_name, mime_type, size_bytes, storage_path,
+          source_type, source_message_id, source_attachment_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'email_reply', ?, ?, ?)
+      `).run(
+        id,
+        ticketId,
+        fileName,
+        mimeType,
+        input.data.byteLength,
+        storagePath,
+        sourceMessageId,
+        sourceAttachmentId,
+        createdAt,
+      );
+      if (result.changes !== 1) {
+        unlinkSync(storagePath);
+        continue;
+      }
+      stored.push({
+        id,
+        ticketId,
+        fileName,
+        mimeType,
+        sizeBytes: input.data.byteLength,
+        storagePath,
+        sourceType: "email_reply",
+        sourceMessageId,
+        sourceAttachmentId,
+        createdAt,
+      });
+    } catch (error) {
+      try {
+        unlinkSync(storagePath);
+      } catch {
+        // Best-effort cleanup after a failed attachment insert.
+      }
+      throw error;
+    }
+  }
+  return stored;
 }
 
 export function readSupportTicketAttachment(attachment: SupportTicketAttachmentRecord): Buffer {
@@ -508,6 +645,16 @@ export function listSupportTicketsForLogin(loginName: string, limit = 20): Suppo
     ORDER BY t.created_at DESC
     LIMIT ?
   `).all(loginName.trim().toLowerCase(), Math.max(1, Math.min(limit, 100))) as TicketRow[];
+  return rows.map(mapTicketRow);
+}
+
+export function listSupportTickets(limit = 50): SupportTicketRecord[] {
+  ensureSupportTicketSchema();
+  const rows = getReadModelDb().prepare(`
+    ${TICKET_SELECT}
+    ORDER BY t.created_at DESC
+    LIMIT ?
+  `).all(Math.max(1, Math.min(limit, 100))) as TicketRow[];
   return rows.map(mapTicketRow);
 }
 

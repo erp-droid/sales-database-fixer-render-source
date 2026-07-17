@@ -128,6 +128,7 @@ export function SupportTicketClient() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [tickets, setTickets] = useState<SupportTicketDetail[]>([]);
+  const [ticketScope, setTicketScope] = useState<"mine" | "all">("mine");
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -152,6 +153,7 @@ export function SupportTicketClient() {
         if (!cancelled) {
           setSession(nextSession);
           setTickets(Array.isArray(ticketPayload.items) ? ticketPayload.items : []);
+          setTicketScope(ticketPayload.scope === "all" ? "all" : "mine");
         }
       } catch (loadError) {
         if (!cancelled) {
@@ -374,19 +376,23 @@ export function SupportTicketClient() {
 
           <section className={styles.recentCard}>
             <div className={styles.recentHeading}>
-              <div><span className={styles.eyebrow}>RECENT TICKETS</span><h3>Your requests</h3></div>
+              <div>
+                <span className={styles.eyebrow}>{ticketScope === "all" ? "SUPPORT OWNER" : "RECENT TICKETS"}</span>
+                <h3>{ticketScope === "all" ? "All support tickets" : "Your requests"}</h3>
+              </div>
               <span className={styles.ticketCount}>{tickets.length}</span>
             </div>
             {isLoading ? <p className={styles.emptyState}>Loading tickets…</p> : null}
-            {!isLoading && tickets.length === 0 ? <p className={styles.emptyState}>No tickets submitted from this sign-in yet.</p> : null}
+            {!isLoading && tickets.length === 0 ? <p className={styles.emptyState}>{ticketScope === "all" ? "No support tickets yet." : "No tickets submitted from this sign-in yet."}</p> : null}
             <div className={styles.ticketList}>
-              {tickets.slice(0, 5).map((ticket) => (
+              {tickets.slice(0, ticketScope === "all" ? 100 : 5).map((ticket) => (
                 <article className={styles.ticketItem} key={ticket.id}>
                   <div className={styles.ticketMeta}>
                     <strong>{formatTicketNumber(ticket.ticketNumber)}</strong>
                     <span className={`${styles.statusPill} ${styles[`status_${ticket.status}`]}`}>{STATUS_LABELS[ticket.status]}</span>
                   </div>
                   <h4>{ticket.title}</h4>
+                  {ticketScope === "all" ? <p className={styles.requester}>{ticket.employeeName} · {ticket.employeeEmail}</p> : null}
                   <p>{ticket.attachmentCount > 0 ? `↳ ${ticket.attachmentCount} attachment${ticket.attachmentCount === 1 ? "" : "s"} · ` : ""}{ticket.latestUpdate || `Submitted ${formatDate(ticket.createdAt)}`}</p>
                   <details className={styles.ticketDetails}>
                     <summary>View original report and progress</summary>
@@ -402,8 +408,23 @@ export function SupportTicketClient() {
                           <div><dt>Impact</dt><dd>{IMPACT_OPTIONS.find(([value]) => value === ticket.impact)?.[1] ?? ticket.impact}</dd></div>
                           {ticket.attachments.length > 0 ? (
                             <div>
-                              <dt>Files submitted</dt>
-                              <dd>{ticket.attachments.map((attachment) => `${attachment.fileName} (${formatSupportAttachmentBytes(attachment.sizeBytes)})`).join("\n")}</dd>
+                              <dt>Ticket evidence</dt>
+                              <dd className={styles.evidenceList}>
+                                {ticket.attachments.map((attachment) => {
+                                  const source = `/api/support/tickets/${encodeURIComponent(ticket.id)}/attachments/${encodeURIComponent(attachment.id)}`;
+                                  return (
+                                    <a href={source} key={attachment.id} rel="noreferrer" target="_blank">
+                                      {attachment.mimeType.startsWith("image/") ? (
+                                        <Image alt={attachment.fileName} height={72} src={source} unoptimized width={108} />
+                                      ) : <span className={styles.evidenceFileType}>{attachment.fileName.split(".").pop()?.slice(0, 4).toUpperCase() || "FILE"}</span>}
+                                      <span>
+                                        <strong>{attachment.fileName}</strong>
+                                        <small>{attachment.source === "email_reply" ? "Attached to an email reply" : "Submitted with ticket"} · {formatSupportAttachmentBytes(attachment.sizeBytes)}</small>
+                                      </span>
+                                    </a>
+                                  );
+                                })}
+                              </dd>
                             </div>
                           ) : null}
                         </dl>

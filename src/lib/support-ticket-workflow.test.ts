@@ -50,5 +50,6 @@ describe("CRM ticket repair workflow authentication", () => {
     const blueprint = readFileSync(path.join(process.cwd(), "render.yaml"), "utf8");
 
     expect(blueprint).toMatch(/- key: TICKET_REPAIR_ENABLED\s+value: "true"/);
+    expect(blueprint).toMatch(/- key: TICKET_SUPPORT_OWNER_LOGINS\s+value: jserrano/);
   });
 });

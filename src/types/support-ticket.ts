@@ -62,9 +62,11 @@ export type SupportTicketDetail = SupportTicketSummary & {
   diagnosis: string | null;
   resolution: string | null;
   attachments: Array<{
+    id: string;
     fileName: string;
     mimeType: string;
     sizeBytes: number;
+    source: "submission" | "email_reply";
   }>;
   history: Array<{
     type: string;
@@ -76,6 +78,7 @@ export type SupportTicketDetail = SupportTicketSummary & {
 
 export type SupportTicketListResponse = {
   items: SupportTicketDetail[];
+  scope: "mine" | "all";
 };
 
 export type SupportTicketCreateResponse = {
