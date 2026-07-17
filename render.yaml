@@ -137,7 +137,7 @@ services:
       - key: TICKET_AGENT_SECRET
         generateValue: true
       - key: TICKET_REPAIR_ENABLED
-        value: "false"
+        value: "true"
       - key: TICKET_REPAIR_GITHUB_OWNER
         value: erp-droid
       - key: TICKET_REPAIR_GITHUB_REPO

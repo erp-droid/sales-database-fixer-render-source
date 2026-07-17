@@ -16,13 +16,15 @@ import { resolveSupportTicketRequester } from "@/lib/support-ticket-requester";
 import {
   countRecentSupportTicketsForLogin,
   createSupportTicket,
+  listSupportTicketAttachments,
+  listSupportTicketEvents,
   listSupportTicketsForLogin,
   type SupportTicketRecord,
 } from "@/lib/support-ticket-store";
 import {
   SUPPORT_TICKET_CATEGORIES,
   SUPPORT_TICKET_IMPACTS,
-  type SupportTicketSummary,
+  type SupportTicketDetail,
 } from "@/types/support-ticket";
 
 const ticketSchema = z.object({
@@ -44,7 +46,7 @@ function requireLoginName(request: NextRequest): string {
   return loginName;
 }
 
-function toSummary(ticket: SupportTicketRecord): SupportTicketSummary {
+function toDetail(ticket: SupportTicketRecord): SupportTicketDetail {
   return {
     id: ticket.id,
     ticketNumber: ticket.ticketNumber,
@@ -58,6 +60,31 @@ function toSummary(ticket: SupportTicketRecord): SupportTicketSummary {
     updatedAt: ticket.updatedAt,
     latestUpdate: ticket.latestUpdate,
     attachmentCount: ticket.attachmentCount,
+    clarificationRounds: ticket.clarificationRounds,
+    remediationAttempts: ticket.remediationAttempts,
+    nextAction: ticket.nextAction,
+    understanding: ticket.understanding,
+    description: ticket.description,
+    expectedBehavior: ticket.expectedBehavior,
+    stepsToReproduce: ticket.stepsToReproduce,
+    pageUrl: ticket.pageUrl,
+    diagnosis: ticket.diagnosis,
+    resolution: ticket.resolution,
+    attachments: listSupportTicketAttachments(ticket.id).map((attachment) => ({
+      fileName: attachment.fileName,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+    })),
+    history: listSupportTicketEvents(ticket.id, 500).slice(-30).map((event) => ({
+      type: event.eventType,
+      message: event.message,
+      details: event.eventType === "clarification_questions_sent" && Array.isArray(event.details?.questions)
+        ? event.details.questions.filter((value): value is string => typeof value === "string")
+        : event.eventType === "employee_reply_received" && typeof event.details?.text === "string"
+          ? [event.details.text]
+          : [],
+      createdAt: event.createdAt,
+    })),
   };
 }
 
@@ -133,7 +160,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const loginName = requireLoginName(request);
     return NextResponse.json({
-      items: listSupportTicketsForLogin(loginName, 20).map(toSummary),
+      items: listSupportTicketsForLogin(loginName, 20).map(toDetail),
     });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
@@ -164,7 +191,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       attachments: submission.attachments,
     });
     scheduleTicket(ticket.id);
-    return NextResponse.json({ ticket: toSummary(ticket) }, { status: 201 });
+    return NextResponse.json({ ticket: toDetail(ticket) }, { status: 201 });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;
     return NextResponse.json({ error: getErrorMessage(error) }, { status });

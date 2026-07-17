@@ -31,6 +31,24 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const events = listSupportTicketEvents(ticketId, 500);
     const latestDiagnostics = events.filter((event) => event.eventType === "diagnostics_completed").at(-1);
     const latestEmployeeReply = events.filter((event) => event.eventType === "employee_reply_received").at(-1);
+    const evidence = events
+      .filter((event) => [
+        "clarification_questions_sent",
+        "employee_reply_received",
+        "autonomous_decision_made",
+        "diagnostics_completed",
+        "investigation_update_sent",
+        "read_model_refresh_started",
+        "read_model_refresh_failed",
+        "code_repair_failed",
+      ].includes(event.eventType))
+      .slice(-40)
+      .map((event) => ({
+        type: event.eventType,
+        message: event.message,
+        details: event.details,
+        at: event.createdAt,
+      }));
     const attachments = listSupportTicketAttachments(ticketId).map((attachment) => ({
       id: attachment.id,
       fileName: attachment.fileName,
@@ -50,9 +68,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         expectedBehavior: ticket.expectedBehavior,
         stepsToReproduce: ticket.stepsToReproduce,
         pageUrl: ticket.pageUrl,
+        understanding: ticket.understanding,
+        clarificationRounds: ticket.clarificationRounds,
+        remediationAttempts: ticket.remediationAttempts,
+        lastActionKey: ticket.lastActionKey,
       },
       latestEmployeeReply: latestEmployeeReply?.details?.text ?? null,
       diagnostics: latestDiagnostics?.details?.diagnostics ?? null,
+      evidence,
       attachments,
     });
   } catch (error) {

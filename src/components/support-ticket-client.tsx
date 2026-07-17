@@ -20,8 +20,8 @@ import {
 } from "@/lib/support-ticket-attachment-policy";
 import type {
   SupportTicketCreateResponse,
+  SupportTicketDetail,
   SupportTicketListResponse,
-  SupportTicketSummary,
 } from "@/types/support-ticket";
 
 import styles from "./support-ticket-client.module.css";
@@ -70,12 +70,14 @@ const IMPACT_OPTIONS = [
   ["question", "Question"],
 ] as const;
 
-const STATUS_LABELS: Record<SupportTicketSummary["status"], string> = {
+const STATUS_LABELS: Record<SupportTicketDetail["status"], string> = {
   queued: "Queued",
   investigating: "Investigating",
+  waiting_for_details: "Waiting for answers",
   repairing: "Repairing & validating",
   waiting_for_employee: "Waiting for confirmation",
-  escalated: "Needs human review",
+  monitoring: "Checking automatically",
+  escalated: "Automatic follow-up",
   resolved: "Resolved",
   closed: "Closed",
 };
@@ -125,12 +127,12 @@ export function SupportTicketClient() {
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [attachments, setAttachments] = useState<File[]>([]);
-  const [tickets, setTickets] = useState<SupportTicketSummary[]>([]);
+  const [tickets, setTickets] = useState<SupportTicketDetail[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [successTicket, setSuccessTicket] = useState<SupportTicketSummary | null>(null);
+  const [successTicket, setSuccessTicket] = useState<SupportTicketDetail | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -366,8 +368,8 @@ export function SupportTicketClient() {
           <section className={styles.processCard}>
             <span className={styles.eyebrow}>WHAT HAPPENS NEXT</span>
             <h3>One ticket. One email chain.</h3>
-            <p>The robot investigates immediately, replies with what it found, and keeps the ticket open until the employee confirms the result.</p>
-            <div className={styles.policyLine}><span aria-hidden="true">✓</span> Safe fixes only; anything else is escalated.</div>
+            <p>The robot investigates immediately. If anything important is unclear, it asks short questions before choosing and testing the next action.</p>
+            <div className={styles.policyLine}><span aria-hidden="true">✓</span> No staff handoff. Every open ticket keeps an automatic next step.</div>
           </section>
 
           <section className={styles.recentCard}>
@@ -386,6 +388,75 @@ export function SupportTicketClient() {
                   </div>
                   <h4>{ticket.title}</h4>
                   <p>{ticket.attachmentCount > 0 ? `↳ ${ticket.attachmentCount} attachment${ticket.attachmentCount === 1 ? "" : "s"} · ` : ""}{ticket.latestUpdate || `Submitted ${formatDate(ticket.createdAt)}`}</p>
+                  <details className={styles.ticketDetails}>
+                    <summary>View original report and progress</summary>
+                    <div className={styles.ticketDetailContent}>
+                      <section>
+                        <strong>Original report</strong>
+                        <dl className={styles.ticketDetailGrid}>
+                          <div><dt>What happened</dt><dd>{ticket.description}</dd></div>
+                          {ticket.expectedBehavior ? <div><dt>What was expected</dt><dd>{ticket.expectedBehavior}</dd></div> : null}
+                          {ticket.stepsToReproduce ? <div><dt>Steps submitted</dt><dd>{ticket.stepsToReproduce}</dd></div> : null}
+                          {ticket.pageUrl ? <div><dt>Page submitted</dt><dd className={styles.breakText}>{ticket.pageUrl}</dd></div> : null}
+                          <div><dt>CRM area</dt><dd>{CATEGORY_OPTIONS.find(([value]) => value === ticket.category)?.[1] ?? ticket.category}</dd></div>
+                          <div><dt>Impact</dt><dd>{IMPACT_OPTIONS.find(([value]) => value === ticket.impact)?.[1] ?? ticket.impact}</dd></div>
+                          {ticket.attachments.length > 0 ? (
+                            <div>
+                              <dt>Files submitted</dt>
+                              <dd>{ticket.attachments.map((attachment) => `${attachment.fileName} (${formatSupportAttachmentBytes(attachment.sizeBytes)})`).join("\n")}</dd>
+                            </div>
+                          ) : null}
+                        </dl>
+                      </section>
+
+                      <section>
+                        <strong>Current understanding</strong>
+                        {ticket.understanding ? (
+                          <div className={styles.understanding}>
+                            <p>{ticket.understanding.summary}</p>
+                            <span>Confidence: {ticket.understanding.confidence}</span>
+                            {ticket.understanding.assumptions.length > 0 ? (
+                              <div><b>Assumptions</b><ul>{ticket.understanding.assumptions.map((item) => <li key={item}>{item}</li>)}</ul></div>
+                            ) : null}
+                            {ticket.understanding.unknowns.length > 0 ? (
+                              <div><b>Still unknown</b><ul>{ticket.understanding.unknowns.map((item) => <li key={item}>{item}</li>)}</ul></div>
+                            ) : null}
+                          </div>
+                        ) : <p>The first investigation has not finished yet.</p>}
+                      </section>
+
+                      <section>
+                        <strong>Automatic next step</strong>
+                        <p>{ticket.nextAction || (ticket.status === "resolved" || ticket.status === "closed" ? "No further action is needed." : "Begin the first investigation.")}</p>
+                        <span className={styles.attemptSummary}>Question emails: {ticket.clarificationRounds}/2 · Actions tried: {ticket.remediationAttempts}</span>
+                      </section>
+
+                      {ticket.diagnosis || ticket.resolution ? (
+                        <section>
+                          <strong>Result so far</strong>
+                          {ticket.diagnosis ? <p>{ticket.diagnosis}</p> : null}
+                          {ticket.resolution ? <p>{ticket.resolution}</p> : null}
+                        </section>
+                      ) : null}
+
+                      {ticket.history.length > 0 ? (
+                        <section>
+                          <strong>Ticket history</strong>
+                          <ol className={styles.ticketHistory}>
+                            {ticket.history.map((event, index) => (
+                              <li key={`${event.createdAt}-${event.type}-${index}`}>
+                                <span>{formatDate(event.createdAt)}</span>
+                                {event.message}
+                                {event.details.map((detail, detailIndex) => (
+                                  <blockquote key={`${detailIndex}-${detail.slice(0, 24)}`}>{detail}</blockquote>
+                                ))}
+                              </li>
+                            ))}
+                          </ol>
+                        </section>
+                      ) : null}
+                    </div>
+                  </details>
                 </article>
               ))}
             </div>
