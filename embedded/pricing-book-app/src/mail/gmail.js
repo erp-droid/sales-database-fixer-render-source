@@ -11,7 +11,6 @@ import {
   upsertMailThread
 } from "./store.js";
 import {
-  chunk,
   cleanString,
   dedupeBy,
   normalizeComparable,
@@ -101,6 +100,26 @@ function flattenParts(payload) {
     }
   }
   return items;
+}
+
+function attachmentFileName(part, index) {
+  const named = cleanString(part?.filename);
+  if (named) return named;
+  const mimeType = cleanString(part?.mimeType).toLowerCase();
+  const extension = mimeType === "image/png"
+    ? "png"
+    : mimeType === "image/jpeg"
+      ? "jpg"
+      : mimeType === "image/gif"
+        ? "gif"
+        : mimeType === "image/webp"
+          ? "webp"
+          : "bin";
+  return `email-image-${index + 1}.${extension}`;
+}
+
+function attachmentDisposition(part) {
+  return cleanString(readHeader(part?.headers, "Content-Disposition")).toLowerCase();
 }
 
 function extractBodies(payload) {
@@ -473,6 +492,65 @@ async function fetchThread(connection, threadId) {
     format: "full"
   });
   return response.data;
+}
+
+export async function readMessageAttachments(connection, { threadId, messageId }) {
+  const { gmail } = buildAuthorizedClients(connection);
+  const response = await gmail.users.messages.get({
+    userId: "me",
+    id: cleanString(messageId),
+    format: "full"
+  });
+  const message = response.data;
+  if (cleanString(message?.threadId) !== cleanString(threadId)) {
+    throw new Error("The requested message does not belong to this mail thread.");
+  }
+
+  const candidates = flattenParts(message?.payload || {}).filter((part) => {
+    const mimeType = cleanString(part?.mimeType).toLowerCase();
+    const fileName = cleanString(part?.filename);
+    const disposition = attachmentDisposition(part);
+    const hasBody = Boolean(cleanString(part?.body?.attachmentId) || cleanString(part?.body?.data));
+    return hasBody && (
+      fileName ||
+      disposition.includes("attachment") ||
+      (disposition.includes("inline") && mimeType.startsWith("image/"))
+    );
+  });
+
+  const items = [];
+  let totalBytes = 0;
+  for (const [index, part] of candidates.entries()) {
+    if (items.length >= 5) break;
+    const declaredSize = Number(part?.body?.size || 0);
+    if (Number.isFinite(declaredSize) && declaredSize > 6 * 1024 * 1024) continue;
+
+    const gmailAttachmentId = cleanString(part?.body?.attachmentId);
+    const bodyResponse = gmailAttachmentId
+      ? await gmail.users.messages.attachments.get({
+          userId: "me",
+          messageId: cleanString(messageId),
+          id: gmailAttachmentId
+        })
+      : null;
+    const encodedData = cleanString(bodyResponse?.data?.data || part?.body?.data);
+    if (!encodedData) continue;
+    const data = Buffer.from(encodedData, "base64url");
+    if (data.byteLength === 0 || data.byteLength > 6 * 1024 * 1024) continue;
+    if (totalBytes + data.byteLength > 12 * 1024 * 1024) break;
+
+    const sourceAttachmentId = gmailAttachmentId || cleanString(part?.partId) || `part-${index}`;
+    items.push({
+      id: sourceAttachmentId,
+      fileName: attachmentFileName(part, index),
+      mimeType: cleanString(part?.mimeType) || "application/octet-stream",
+      sizeBytes: data.byteLength,
+      base64Data: data.toString("base64")
+    });
+    totalBytes += data.byteLength;
+  }
+
+  return { items };
 }
 
 async function persistThread(connection, gmailThread, overrides = {}) {

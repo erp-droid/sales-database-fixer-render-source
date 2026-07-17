@@ -5,7 +5,7 @@ import {
   type SupportTicketRecord,
 } from "@/lib/support-ticket-store";
 import type { MailAttachmentInput, MailComposePayload, MailSendResponse } from "@/types/mail-compose";
-import type { MailThreadResponse } from "@/types/mail-thread";
+import type { MailMessageAttachmentsResponse, MailThreadResponse } from "@/types/mail-thread";
 
 const REQUEST_TIMEOUT_MS = 20_000;
 
@@ -38,13 +38,13 @@ function buildMailServiceBaseUrl(): string {
 
 async function requestMailService<T>(
   path: string,
-  options?: { method?: string; body?: unknown },
+  options?: { method?: string; body?: unknown; baseUrl?: string },
 ): Promise<T> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const assertion = buildMailProxyAssertion(getTicketSender());
   try {
-    const response = await fetch(`${buildMailServiceBaseUrl()}${path}`, {
+    const response = await fetch(`${options?.baseUrl ?? buildMailServiceBaseUrl()}${path}`, {
       method: options?.method ?? "GET",
       headers: {
         Accept: "application/json",
@@ -212,6 +212,30 @@ export async function readTicketEmailThread(ticket: SupportTicketRecord): Promis
   );
   if (!payload || !payload.thread || !Array.isArray(payload.messages)) {
     throw new Error("Mail service did not return a valid ticket thread.");
+  }
+  return payload;
+}
+
+export async function readTicketEmailAttachments(
+  ticket: SupportTicketRecord,
+  messageId: string,
+): Promise<MailMessageAttachmentsResponse> {
+  if (!ticket.emailThreadId) {
+    throw new Error("Ticket email thread is unavailable.");
+  }
+  const path = `/api/mail/threads/${encodeURIComponent(ticket.emailThreadId)}/messages/${encodeURIComponent(messageId)}/attachments`;
+  const port = cleanText(process.env.PORT) || "3000";
+  const mountPath = normalizeMountPath(process.env.MBQ_BASE_PATH, "/quotes");
+  let payload: MailMessageAttachmentsResponse;
+  try {
+    payload = await requestMailService<MailMessageAttachmentsResponse>(path, {
+      baseUrl: `http://127.0.0.1:${port}${mountPath}`,
+    });
+  } catch {
+    payload = await requestMailService<MailMessageAttachmentsResponse>(path);
+  }
+  if (!payload || !Array.isArray(payload.items)) {
+    throw new Error("Mail service did not return valid email attachments.");
   }
   return payload;
 }

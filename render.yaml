@@ -134,6 +134,8 @@ services:
         value: jserrano@meadowb.com
       - key: TICKET_AGENT_SENDER_NAME
         value: MeadowBrook CRM Support
+      - key: TICKET_SUPPORT_OWNER_LOGINS
+        value: jserrano
       - key: TICKET_AGENT_SECRET
         generateValue: true
       - key: TICKET_REPAIR_ENABLED

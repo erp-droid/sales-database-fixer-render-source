@@ -13,11 +13,13 @@ import {
   SUPPORT_ATTACHMENT_MAX_TOTAL_BYTES,
 } from "@/lib/support-ticket-attachment-policy";
 import { resolveSupportTicketRequester } from "@/lib/support-ticket-requester";
+import { isSupportOwner } from "@/lib/support-ticket-access";
 import {
   countRecentSupportTicketsForLogin,
   createSupportTicket,
   listSupportTicketAttachments,
   listSupportTicketEvents,
+  listSupportTickets,
   listSupportTicketsForLogin,
   type SupportTicketRecord,
 } from "@/lib/support-ticket-store";
@@ -71,9 +73,11 @@ function toDetail(ticket: SupportTicketRecord): SupportTicketDetail {
     diagnosis: ticket.diagnosis,
     resolution: ticket.resolution,
     attachments: listSupportTicketAttachments(ticket.id).map((attachment) => ({
+      id: attachment.id,
       fileName: attachment.fileName,
       mimeType: attachment.mimeType,
       sizeBytes: attachment.sizeBytes,
+      source: attachment.sourceType,
     })),
     history: listSupportTicketEvents(ticket.id, 500).slice(-30).map((event) => ({
       type: event.eventType,
@@ -82,6 +86,8 @@ function toDetail(ticket: SupportTicketRecord): SupportTicketDetail {
         ? event.details.questions.filter((value): value is string => typeof value === "string")
         : event.eventType === "employee_reply_received" && typeof event.details?.text === "string"
           ? [event.details.text]
+          : event.eventType === "email_attachments_stored" && Array.isArray(event.details?.fileNames)
+            ? event.details.fileNames.filter((value): value is string => typeof value === "string")
           : [],
       createdAt: event.createdAt,
     })),
@@ -159,8 +165,10 @@ function scheduleTicket(ticketId: string): void {
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const loginName = requireLoginName(request);
+    const owner = isSupportOwner(loginName);
     return NextResponse.json({
-      items: listSupportTicketsForLogin(loginName, 20).map(toDetail),
+      items: (owner ? listSupportTickets(100) : listSupportTicketsForLogin(loginName, 20)).map(toDetail),
+      scope: owner ? "all" : "mine",
     });
   } catch (error) {
     const status = error instanceof HttpError ? error.status : 500;

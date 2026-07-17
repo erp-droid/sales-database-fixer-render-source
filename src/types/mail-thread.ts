@@ -38,6 +38,18 @@ export type MailThreadResponse = {
   messages: MailMessage[];
 };
 
+export type MailMessageAttachment = {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  base64Data: string;
+};
+
+export type MailMessageAttachmentsResponse = {
+  items: MailMessageAttachment[];
+};
+
 export type MailThreadListResponse = {
   items: MailThreadSummary[];
   nextCursor: string | null;

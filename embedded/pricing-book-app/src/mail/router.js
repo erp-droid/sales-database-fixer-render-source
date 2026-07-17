@@ -20,6 +20,7 @@ import {
   exchangeGoogleCode,
   hasOauthConfig,
   readMailboxSignature,
+  readMessageAttachments,
   saveDraft,
   sendDraft,
   sendMessage,
@@ -1063,6 +1064,20 @@ router.get("/threads/:threadId", async (req, res, next) => {
   }
 });
 
+router.get("/threads/:threadId/messages/:messageId/attachments", async (req, res, next) => {
+  try {
+    const auth = requireMailAssertion(req);
+    const connection = await ensureConnectedMailbox(auth);
+    const response = await readMessageAttachments(connection, {
+      threadId: cleanString(req.params.threadId),
+      messageId: cleanString(req.params.messageId)
+    });
+    res.json(response);
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/messages/send", async (req, res, next) => {
   try {
     const auth = requireMailAssertion(req);
@@ -1253,7 +1268,7 @@ router.post("/sync/reconcile", async (req, res, next) => {
       if (connection) {
         connections = [connection];
       }
-    } catch (_error) {
+    } catch {
       connections = await listMailConnections();
     }
 
@@ -1295,7 +1310,7 @@ router.post("/sync/watch/renew", async (req, res, next) => {
       if (connection) {
         connections = [connection];
       }
-    } catch (_error) {
+    } catch {
       connections = await listMailConnections();
     }
 
@@ -1329,6 +1344,7 @@ router.post("/sync/watch/renew", async (req, res, next) => {
 });
 
 router.use((error, _req, res, _next) => {
+  void _next;
   const status = error instanceof MailAuthError ? error.status : 500;
   res.status(status).json({
     error: error instanceof Error ? error.message : "Mail request failed."
