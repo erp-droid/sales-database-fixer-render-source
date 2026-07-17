@@ -304,13 +304,6 @@ function formatBookingRowMeta(
   } • ${formatPercent(shareOfTotal)}`;
 }
 
-function formatBookingPillValue(employee: DashboardSnapshotResponse["meetingLeaderboard"][number]): string {
-  if (employee.totalAttendees > 0) {
-    return employee.totalAttendees.toLocaleString();
-  }
-  return employee.totalMeetings.toLocaleString();
-}
-
 function formatNameList(names: string[]): string {
   if (names.length <= 2) {
     return names.join(" and ");
@@ -1015,7 +1008,6 @@ export function DashboardOverviewClient({ defaultNowIso }: DashboardOverviewClie
                       <strong>{item.displayName}</strong>
                       <span>{formatBookingRowMeta(item, input.stats.totalMeetings, input.category)}</span>
                     </span>
-                    <span className={styles.bookingPill}>{formatBookingPillValue(item)}</span>
                     <span aria-hidden="true" className={styles.bookingSparkline}>
                       {sparklineValues.map((value, barIndex) => (
                         <span

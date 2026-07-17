@@ -1205,7 +1205,7 @@
   width: 100%;
   min-height: 62px;
   display: grid;
-  grid-template-columns: 24px 42px minmax(0, 1fr) auto minmax(92px, 138px);
+  grid-template-columns: 24px 42px minmax(0, 1fr) minmax(92px, 138px);
   gap: 12px;
   align-items: center;
   border: 1px solid var(--border);
@@ -1268,19 +1268,6 @@
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.bookingPill {
-  min-width: 32px;
-  min-height: 32px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #d8f2df;
-  color: var(--app-green);
-  font-size: 13px;
-  font-weight: 850;
 }
 
 .bookingSparkline {
@@ -1744,7 +1731,7 @@
   }
 
   .bookingRow {
-    grid-template-columns: 24px 42px minmax(0, 1fr) auto;
+    grid-template-columns: 24px 42px minmax(0, 1fr);
   }
 
   .bookingSparkline {
@@ -1803,13 +1790,6 @@
 
   .bookingRow {
     grid-template-columns: 22px 38px minmax(0, 1fr);
-  }
-
-  .bookingPill {
-    grid-column: 2 / 4;
-    justify-self: start;
-    min-height: 28px;
-    padding: 0 10px;
   }
 
   .trendColumn {

@@ -571,7 +571,6 @@ export default async function TvDashboardPage({ searchParams }: TvDashboardPageP
                     <strong>{index + 1}. {item.displayName}</strong>
                     <span>{item.totalMeetings.toLocaleString()} meetings</span>
                   </div>
-                  <span className={styles.softBadge}>{item.totalAttendees.toLocaleString()}</span>
                 </li>
               ))}
             </ul>
@@ -596,7 +595,6 @@ export default async function TvDashboardPage({ searchParams }: TvDashboardPageP
                     <strong>{index + 1}. {item.displayName}</strong>
                     <span>{item.totalMeetings.toLocaleString()} drop-offs</span>
                   </div>
-                  <span className={styles.softBadge}>{item.totalAttendees.toLocaleString()}</span>
                 </li>
               ))}
             </ul>
