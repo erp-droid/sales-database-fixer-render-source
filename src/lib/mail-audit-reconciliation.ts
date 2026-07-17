@@ -1,6 +1,8 @@
+import { NextRequest } from "next/server";
+
 import { logMailSendAudit } from "@/lib/audit-log-store";
 import { readCallEmployeeDirectory } from "@/lib/call-analytics/employee-directory";
-import { buildMailProxyAssertion } from "@/lib/mail-auth";
+import { requestMailService } from "@/lib/mail-proxy";
 import { getReadModelDb } from "@/lib/read-model/db";
 import type { MailLinkedContact } from "@/types/mail";
 import type { MailMatchedContact, MailRecipient } from "@/types/mail-compose";
@@ -13,6 +15,12 @@ const DASHBOARD_SALES_REPS = new Set([
   "smesshah",
   "smessih",
   "stita",
+]);
+
+// Verified against the authenticated mailbox and the original ticket time.
+// Current sends carry an app-generated Message-ID and do not need this list.
+const VERIFIED_LEGACY_SEND_IDS = new Map<string, string[]>([
+  ["kpareek", ["19f708100545160b"]],
 ]);
 
 type StoredMailboxMessage = {
@@ -77,49 +85,30 @@ function isMailboxMessageResponse(value: unknown): value is StoredMailboxMessage
   );
 }
 
-function buildLocalMailServiceUrl(query: URLSearchParams): string {
-  const port = clean(process.env.PORT) || "10000";
-  const rawMountPath = clean(process.env.MBQ_BASE_PATH) || "/quotes";
-  const mountPath = `/${rawMountPath.replace(/^\/+|\/+$/g, "")}`;
-  return `http://127.0.0.1:${port}${mountPath}/api/mail/sent-app-messages?${query.toString()}`;
-}
-
-async function requestLocalMailboxMessages(employee: {
-  loginName: string;
-  displayName: string;
-  email: string;
-}): Promise<Response> {
-  const assertion = buildMailProxyAssertion({
-    loginName: employee.loginName,
-    displayName: employee.displayName,
-    senderEmail: employee.email,
-  });
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15_000);
-
-  try {
-    return await fetch(
-      buildLocalMailServiceUrl(new URLSearchParams({ limit: "500" })),
-      {
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${assertion}`,
-        },
-        cache: "no-store",
-        signal: controller.signal,
-      },
-    );
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
 async function reconcileEmployeeMailbox(employee: {
   loginName: string;
   displayName: string;
   email: string;
 }): Promise<Omit<MailboxAuditReconciliationResult, "mailboxesChecked">> {
-  const response = await requestLocalMailboxMessages(employee);
+  const normalizedLoginName = employee.loginName.trim().toLowerCase();
+  const query = new URLSearchParams({ limit: "500" });
+  for (const messageId of VERIFIED_LEGACY_SEND_IDS.get(normalizedLoginName) ?? []) {
+    query.append("includeMessageId", messageId);
+  }
+  const response = await requestMailService(
+    new NextRequest("http://127.0.0.1/internal/mail-audit-reconciliation"),
+    {
+      path: "/api/mail/sent-app-messages",
+      query,
+      resolvedSender: {
+        loginName: employee.loginName,
+        displayName: employee.displayName,
+        senderEmail: employee.email,
+      },
+      timeoutMs: 15_000,
+      timeoutMessage: `Timed out reading ${employee.loginName}'s sent mail.`,
+    },
+  );
 
   if (!response.ok) {
     return { mailboxesFailed: 1, messagesChecked: 0, recovered: 0, reattributed: 0 };
@@ -133,8 +122,6 @@ async function reconcileEmployeeMailbox(employee: {
   let recovered = 0;
   let reattributed = 0;
   let messagesChecked = 0;
-  const normalizedLoginName = employee.loginName.trim().toLowerCase();
-
   for (const message of payload.items) {
     const messageId = clean(message.messageId);
     const threadId = clean(message.threadId);

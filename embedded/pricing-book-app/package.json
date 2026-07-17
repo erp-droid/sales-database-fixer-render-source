@@ -6,7 +6,7 @@
   "main": "src/index.js",
   "scripts": {
     "dev": "node src/index.js",
-    "start": "node src/index.js",
+    "start": "node src/server.js",
     "estimate-library:backfill": "node scripts/estimate-library-backfill.mjs",
     "pricing-book:repro": "node scripts/pricing-book-repro.mjs",
     "test": "node --test test/*.test.js"
