@@ -367,6 +367,10 @@ export function GmailComposeModal({
   const [composeError, setComposeError] = useState<string | null>(null);
   const [composeNotice, setComposeNotice] = useState<string | null>(null);
   const [isMobileComposer, setIsMobileComposer] = useState(false);
+  const [refreshedGmailSignatureHtml, setRefreshedGmailSignatureHtml] = useState<
+    string | null
+  >(null);
+  const signatureRefreshAttemptRef = useRef("");
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 680px)");
@@ -394,6 +398,8 @@ export function GmailComposeModal({
     setComposeNotice(null);
     lastAutosaveSignatureRef.current = "";
     appliedGmailSignatureRef.current = "";
+    signatureRefreshAttemptRef.current = "";
+    setRefreshedGmailSignatureHtml(null);
     if (autosaveTimeoutRef.current) {
       window.clearTimeout(autosaveTimeoutRef.current);
       autosaveTimeoutRef.current = null;
@@ -407,6 +413,8 @@ export function GmailComposeModal({
 
     const nextDraft = buildEmptyDraft(initialState);
     appliedGmailSignatureRef.current = "";
+    signatureRefreshAttemptRef.current = "";
+    setRefreshedGmailSignatureHtml(null);
     setDraft(nextDraft);
     setShowCc(Boolean(nextDraft.cc.length));
     setShowBcc(Boolean(nextDraft.bcc.length));
@@ -416,7 +424,66 @@ export function GmailComposeModal({
   }, [initialState, isOpen]);
 
   useEffect(() => {
-    const rawSignature = cleanText(session?.senderSignatureHtml);
+    const sessionSignature = cleanText(session?.senderSignatureHtml);
+    if (
+      !isOpen ||
+      sendMode !== "compose" ||
+      initialState?.draftId ||
+      session?.status !== "connected" ||
+      sessionSignature
+    ) {
+      return;
+    }
+
+    const mailboxKey = cleanText(session.connectedGoogleEmail || session.senderEmail);
+    if (!mailboxKey || signatureRefreshAttemptRef.current === mailboxKey) {
+      return;
+    }
+    signatureRefreshAttemptRef.current = mailboxKey;
+
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch("/api/mail/session?refreshSignature=1", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = (await response.json().catch(() => null)) as
+          | MailSessionResponse
+          | null;
+        if (!response.ok || !payload) {
+          return;
+        }
+
+        const refreshedSignature = cleanText(payload.senderSignatureHtml);
+        if (refreshedSignature) {
+          setRefreshedGmailSignatureHtml(refreshedSignature);
+        }
+      } catch {
+        // Signature refresh is best-effort; composing must remain available.
+      }
+    })();
+
+    return () => {
+      controller.abort();
+      if (signatureRefreshAttemptRef.current === mailboxKey) {
+        signatureRefreshAttemptRef.current = "";
+      }
+    };
+  }, [
+    initialState?.draftId,
+    isOpen,
+    sendMode,
+    session?.connectedGoogleEmail,
+    session?.senderEmail,
+    session?.senderSignatureHtml,
+    session?.status,
+  ]);
+
+  useEffect(() => {
+    const rawSignature =
+      cleanText(session?.senderSignatureHtml) ||
+      cleanText(refreshedGmailSignatureHtml);
     if (
       !isOpen ||
       sendMode !== "compose" ||
@@ -455,6 +522,7 @@ export function GmailComposeModal({
     initialState?.draftId,
     isOpen,
     sendMode,
+    refreshedGmailSignatureHtml,
     session?.connectedGoogleEmail,
     session?.senderSignatureHtml,
   ]);

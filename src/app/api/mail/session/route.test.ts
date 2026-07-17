@@ -134,6 +134,32 @@ describe("GET /api/mail/session", () => {
     expect(options?.query?.toString()).toBe("refresh=1");
   });
 
+  it("forwards a signature-only refresh to the mail service", async () => {
+    requestMailService.mockResolvedValue(
+      Response.json({
+        status: "connected",
+        senderEmail: "jserrano@meadowb.com",
+        senderDisplayName: "Jorge Serrano",
+        senderSignatureHtml: "<div>Regards,<br>Jorge Serrano</div>",
+        expectedGoogleEmail: "jserrano@meadowb.com",
+        connectedGoogleEmail: "jserrano@meadowb.com",
+        connectionError: null,
+        folders: ["inbox", "sent", "drafts", "starred"],
+      } satisfies MailSessionResponse),
+    );
+
+    const { GET } = await import("@/app/api/mail/session/route");
+    await GET(
+      new NextRequest("http://localhost/api/mail/session?refreshSignature=1"),
+    );
+
+    expect(requestMailService).toHaveBeenCalledOnce();
+    const options = requestMailService.mock.calls[0]?.[1] as
+      | { query?: URLSearchParams }
+      | undefined;
+    expect(options?.query?.toString()).toBe("refreshSignature=1");
+  });
+
   it("returns a disconnected mailbox state with sender info when the mail service hangs", async () => {
     const { HttpError } = await import("@/lib/errors");
     requestMailService.mockRejectedValue(

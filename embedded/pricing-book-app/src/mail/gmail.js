@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { google } from "googleapis";
 
 import { config } from "../config.js";
+import { selectSignatureFromSendAsAliases } from "./gmail-signature.js";
 import {
   getMailThread,
   listMailMessages,
@@ -403,7 +404,7 @@ export async function exchangeGoogleCode(code) {
   try {
     const gmail = google.gmail({ version: "v1", auth: oauth });
     const sendAsResponse = await gmail.users.settings.sendAs.list({ userId: "me" });
-    senderSignatureHtml = readSignatureFromSendAsAliases(
+    senderSignatureHtml = selectSignatureFromSendAsAliases(
       sendAsResponse.data?.sendAs,
       googleEmail
     );
@@ -419,19 +420,6 @@ export async function exchangeGoogleCode(code) {
     senderSignatureHtml,
     senderSignatureRead
   };
-}
-
-function readSignatureFromSendAsAliases(sendAsAliases, expectedEmail) {
-  const aliases = Array.isArray(sendAsAliases) ? sendAsAliases : [];
-  const preferredAlias =
-    aliases.find(
-      (alias) => cleanEmailAddress(alias?.sendAsEmail) === cleanEmailAddress(expectedEmail)
-    ) ||
-    aliases.find((alias) => alias?.isPrimary) ||
-    aliases.find((alias) => alias?.isDefault) ||
-    aliases[0] ||
-    null;
-  return cleanString(preferredAlias?.signature) || null;
 }
 
 function buildAuthorizedClients(connection) {
@@ -450,7 +438,7 @@ function buildAuthorizedClients(connection) {
 export async function readMailboxSignature(connection) {
   const { gmail } = buildAuthorizedClients(connection);
   const response = await gmail.users.settings.sendAs.list({ userId: "me" });
-  return readSignatureFromSendAsAliases(
+  return selectSignatureFromSendAsAliases(
     response.data?.sendAs,
     connection.googleEmail || connection.connectedGoogleEmail || connection.senderEmail
   );
