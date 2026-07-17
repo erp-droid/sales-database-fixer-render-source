@@ -176,6 +176,10 @@
   min-height: calc(100vh - 72px);
 }
 
+.shellBodyWithoutNavigation {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sidebar {
   position: sticky;
   top: 72px;

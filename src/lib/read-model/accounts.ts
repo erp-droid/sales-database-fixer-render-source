@@ -4,6 +4,7 @@ import {
   removeContactlessPrimaryContactDuplicateRows,
   resolveCompanyPhone,
 } from "@/lib/business-accounts";
+import { filterAccountRowsForDirectoryUser } from "@/lib/account-directory-access";
 import { resolveLastCalledAtForBusinessAccountRow } from "@/lib/business-account-call-history";
 import { applyDeferredActionsToRows } from "@/lib/deferred-actions-store";
 import { extractNormalizedPhoneDigits } from "@/lib/phone";
@@ -1106,7 +1107,11 @@ export function removeReadModelRowsByAccount(
 
 export function queryReadModelBusinessAccounts(
   params: ReadModelListQuery,
+  loginName?: string | null,
 ): BusinessAccountsResponse {
-  const rows = readAllAccountRowsFromReadModel();
+  const rows = filterAccountRowsForDirectoryUser(
+    readAllAccountRowsFromReadModel(),
+    loginName,
+  );
   return queryBusinessAccounts(rows, params);
 }

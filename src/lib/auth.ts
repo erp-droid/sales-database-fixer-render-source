@@ -7,10 +7,10 @@ import {
   getLocalDevLoginName,
   isLocalDevAuthBypassEnabled,
 } from "@/lib/env";
+import { LOGIN_NAME_COOKIE } from "@/lib/account-directory-access";
 
 const COMMA_SPLIT_REGEX = /,\s*(?=[^;]+=[^;]+)/g;
 const COOKIE_JAR_PREFIX = "v1.";
-const LOGIN_NAME_COOKIE = "mb_login_name";
 const LOCAL_DEV_AUTH_COOKIE_VALUE = "local-dev-auth-bypass";
 
 type CookieJar = Record<string, string>;

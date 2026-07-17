@@ -42,6 +42,10 @@ import {
   resolveCompanyPhone,
 } from "@/lib/business-accounts";
 import {
+  filterAccountRowsForDirectoryUser,
+  isJefferyDirectoryUser,
+} from "@/lib/account-directory-access";
+import {
   buildBusinessAccountConcurrencySnapshot,
   collectUpdatedConcurrencyFields,
 } from "@/lib/business-account-concurrency";
@@ -1036,6 +1040,27 @@ const COLUMN_MIN_WIDTHS: Partial<Record<SortBy, number>> = {
 
 const DEFAULT_VISIBLE_COLUMNS: SortBy[] = [...DEFAULT_ACCOUNT_VISIBLE_COLUMNS];
 const DEFAULT_COLUMN_ORDER: SortBy[] = [...DEFAULT_ACCOUNT_COLUMN_ORDER];
+const JEFFERY_DIRECTORY_VISIBLE_COLUMNS: SortBy[] = [
+  "companyName",
+  "address",
+  "salesRepName",
+  ...DEFAULT_VISIBLE_COLUMNS.filter(
+    (columnId) =>
+      ![
+        "companyName",
+        "address",
+        "salesRepName",
+        "accountType",
+        "opportunityCount",
+      ].includes(columnId),
+  ),
+];
+const JEFFERY_DIRECTORY_COLUMN_ORDER: SortBy[] = [
+  ...JEFFERY_DIRECTORY_VISIBLE_COLUMNS,
+  ...DEFAULT_COLUMN_ORDER.filter(
+    (columnId) => !JEFFERY_DIRECTORY_VISIBLE_COLUMNS.includes(columnId),
+  ),
+];
 
 const CATEGORY_OPTIONS: AttributeOption[] = [
   { value: "A", label: "A - Type Customers", aliases: ["A - Type Clients"] },
@@ -3693,17 +3718,21 @@ function buildPaginationNumbers(
 export function AccountsClient({
   acumaticaBaseUrl,
   acumaticaCompanyId,
+  initialLoginName,
   openAiAttributeSuggestEnabled,
   rocketReachEnabled,
 }: {
   acumaticaBaseUrl: string;
   acumaticaCompanyId: string;
+  initialLoginName: string | null;
   openAiAttributeSuggestEnabled: boolean;
   rocketReachEnabled: boolean;
 }) {
   const router = useRouter();
 
   const [session, setSession] = useState<SessionResponse | null>(null);
+  const effectiveLoginName = initialLoginName ?? session?.user?.id ?? null;
+  const isDirectoryOnlyUser = isJefferyDirectoryUser(effectiveLoginName);
   const [callHistory, setCallHistory] = useState<BusinessAccountCallHistoryItem[]>([]);
   const [callHistoryLoading, setCallHistoryLoading] = useState(false);
   const [callHistoryError, setCallHistoryError] = useState<string | null>(null);
@@ -3909,9 +3938,13 @@ export function AccountsClient({
     [currentCompanyAttributeSuggestionRequest],
   );
 
+  const accessibleRows = useMemo(
+    () => filterAccountRowsForDirectoryUser(allRows, effectiveLoginName),
+    [allRows, effectiveLoginName],
+  );
   const displayRows = useMemo(
     () =>
-      allRows.map((row) => {
+      accessibleRows.map((row) => {
         const recordKey = buildLastEmailedLookupKey(
           "record",
           resolveRowBusinessAccountRecordId(row),
@@ -3926,11 +3959,11 @@ export function AccountsClient({
             null,
         };
       }),
-    [allRows, lastEmailedByAccountKey],
+    [accessibleRows, lastEmailedByAccountKey],
   );
   const lastEmailedLookupSignature = useMemo(
-    () => JSON.stringify(buildLastEmailedLookupAccounts(allRows)),
-    [allRows],
+    () => JSON.stringify(buildLastEmailedLookupAccounts(accessibleRows)),
+    [accessibleRows],
   );
   const lastEmailedLookupAccounts = useMemo(
     () => JSON.parse(lastEmailedLookupSignature) as MailLastEmailedLookupAccount[],
@@ -4158,9 +4191,9 @@ export function AccountsClient({
   }
 
   useEffect(() => {
-    allRowsRef.current = allRows;
-    allRowsCountRef.current = allRows.length;
-  }, [allRows]);
+    allRowsRef.current = accessibleRows;
+    allRowsCountRef.current = accessibleRows.length;
+  }, [accessibleRows]);
 
   const accountDeepLinkHandledRef = useRef(false);
 
@@ -4199,11 +4232,11 @@ export function AccountsClient({
   });
 
   useEffect(() => {
-    if (accountDeepLinkHandledRef.current || allRows.length === 0) {
+    if (accountDeepLinkHandledRef.current || accessibleRows.length === 0) {
       return;
     }
-    openAccountFromDeepLink(allRows);
-  }, [allRows]);
+    openAccountFromDeepLink(accessibleRows);
+  }, [accessibleRows]);
 
   useEffect(() => {
     selectedRef.current = selected;
@@ -4342,12 +4375,14 @@ export function AccountsClient({
   useEffect(() => {
     setSelectedContactRowKeys((current) => {
       const validRowKeys = new Set(
-        allRows.filter((row) => isContactSelectableRow(row)).map((row) => getRowKey(row)),
+        accessibleRows
+          .filter((row) => isContactSelectableRow(row))
+          .map((row) => getRowKey(row)),
       );
       const next = current.filter((rowKey) => validRowKeys.has(rowKey));
       return next.length === current.length ? current : next;
     });
-  }, [allRows]);
+  }, [accessibleRows]);
 
   const deferredDisplayRows = useDeferredValue(displayRows);
   const viewFilteredRows = useMemo(
@@ -4595,9 +4630,18 @@ export function AccountsClient({
     [session.user?.id, session.user?.name].some(
       (value) => value?.trim().toLowerCase() === "jserrano",
     );
+  const effectiveColumnOrder = isDirectoryOnlyUser
+    ? JEFFERY_DIRECTORY_COLUMN_ORDER
+    : columnOrder;
+  const effectiveVisibleColumns = isDirectoryOnlyUser
+    ? JEFFERY_DIRECTORY_VISIBLE_COLUMNS
+    : visibleColumns;
   const visibleColumnOrder = useMemo(
-    () => columnOrder.filter((columnId) => visibleColumns.includes(columnId)),
-    [columnOrder, visibleColumns],
+    () =>
+      effectiveColumnOrder.filter((columnId) =>
+        effectiveVisibleColumns.includes(columnId),
+      ),
+    [effectiveColumnOrder, effectiveVisibleColumns],
   );
   const accountsCsvExportHref = useMemo(
     () =>
@@ -4665,11 +4709,11 @@ export function AccountsClient({
 
   const visibleColumnConfigs = useMemo(
     () =>
-      columnOrder.map((columnId) => ({
+      effectiveColumnOrder.map((columnId) => ({
         ...getColumnConfig(columnId),
-        isVisible: visibleColumns.includes(columnId),
+        isVisible: effectiveVisibleColumns.includes(columnId),
       })),
-    [columnOrder, visibleColumns],
+    [effectiveColumnOrder, effectiveVisibleColumns],
   );
   const activeFilterCount = useMemo(
     () =>
@@ -4746,14 +4790,14 @@ export function AccountsClient({
     selectedWeekFilters,
   ]);
   const syncUpdatedLabel = useMemo(() => formatRelativeTime(lastSyncedAt), [lastSyncedAt]);
-  const hasSnapshot = Boolean(lastSyncedAt) || allRows.length > 0;
+  const hasSnapshot = Boolean(lastSyncedAt) || accessibleRows.length > 0;
   const companyRegionOptions = useMemo(() => {
     const byValue = new Map<string, AttributeOption>();
     COMPANY_REGION_DEFAULT_OPTIONS.forEach((option) => {
       byValue.set(normalizeOptionComparable(option.value), option);
     });
 
-    allRows.forEach((row) => {
+    accessibleRows.forEach((row) => {
       const normalized = normalizeRegionValue(row.companyRegion);
       if (!normalized) {
         return;
@@ -4774,7 +4818,7 @@ export function AccountsClient({
     }
 
     return [...byValue.values()];
-  }, [allRows, draft?.companyRegion]);
+  }, [accessibleRows, draft?.companyRegion]);
   const industryTypeOptions = useMemo(
     () => withCurrentOption(INDUSTRY_TYPE_OPTIONS, draft?.industryType),
     [draft?.industryType],
@@ -4806,7 +4850,7 @@ export function AccountsClient({
     return [...byValue.values()].sort(compareWeekFilterValues);
   }, [displayRows]);
   const sortedEmployeeOptions = useMemo(() => {
-    const fromRows = collectEmployeeOptionsFromRows(allRows);
+    const fromRows = collectEmployeeOptionsFromRows(accessibleRows);
     const merged = mergeEmployeeOptions(employeeOptions, fromRows);
     return merged.sort((left, right) =>
       left.name.localeCompare(right.name, undefined, {
@@ -4814,21 +4858,21 @@ export function AccountsClient({
         numeric: true,
       }),
     );
-  }, [allRows, employeeOptions]);
+  }, [accessibleRows, employeeOptions]);
   const createContactAccountOptions = useMemo(
-    () => buildCreateContactAccountOptions(allRows),
-    [allRows],
+    () => buildCreateContactAccountOptions(accessibleRows),
+    [accessibleRows],
   );
   const fallbackMeetingOptions = useMemo(
     () =>
-      allRows.length > 0
-        ? buildMeetingCreateOptionsFromRows(allRows, DEFAULT_MEETING_TIME_ZONE)
+      accessibleRows.length > 0
+        ? buildMeetingCreateOptionsFromRows(accessibleRows, DEFAULT_MEETING_TIME_ZONE)
         : null,
-    [allRows],
+    [accessibleRows],
   );
   const mailContactSuggestions = useMemo<MailContactSuggestion[]>(
-    () => buildMailContactSuggestions(allRows),
-    [allRows],
+    () => buildMailContactSuggestions(accessibleRows),
+    [accessibleRows],
   );
   const selectedDrawerCompanyOption = useMemo(
     () => findCreateContactAccountOption(createContactAccountOptions, draft),
@@ -5273,6 +5317,17 @@ export function AccountsClient({
   ]);
 
   useEffect(() => {
+    if (isDirectoryOnlyUser) {
+      setActiveFilterView("allCompanies");
+      setSelectedCategoryFilters([]);
+      setSelectedWeekFilters([]);
+      setSelectedSalesRepFilters([]);
+      setQ("");
+      setHeaderFilters(DEFAULT_HEADER_FILTERS);
+      setFilterPrefsHydrated(true);
+      return;
+    }
+
     try {
       const storedFilterPreferences = window.localStorage.getItem(FILTER_PREFERENCES_STORAGE_KEY);
       if (storedFilterPreferences) {
@@ -5291,10 +5346,10 @@ export function AccountsClient({
     }
 
     setFilterPrefsHydrated(true);
-  }, []);
+  }, [isDirectoryOnlyUser]);
 
   useEffect(() => {
-    if (!filterPrefsHydrated) {
+    if (isDirectoryOnlyUser || !filterPrefsHydrated) {
       return;
     }
 
@@ -5313,6 +5368,7 @@ export function AccountsClient({
     activeFilterView,
     filterPrefsHydrated,
     headerFilters,
+    isDirectoryOnlyUser,
     q,
     selectedCategoryFilters,
     selectedWeekFilters,
@@ -5329,7 +5385,7 @@ export function AccountsClient({
   }, []);
 
   useEffect(() => {
-    if (!cacheHydrated || !serverSnapshotHydrated) {
+    if (isDirectoryOnlyUser || !cacheHydrated || !serverSnapshotHydrated) {
       return;
     }
 
@@ -5350,6 +5406,7 @@ export function AccountsClient({
     cacheHydrated,
     deferredVisibilityVersion,
     isSyncing,
+    isDirectoryOnlyUser,
     lastSyncedAt,
     serverSnapshotHydrated,
     snapshotVersion,
@@ -9368,7 +9425,9 @@ export function AccountsClient({
           linkedCompanyName: row.companyName,
           linkedContactName: row.primaryContactName,
         },
-        visibleColumns.includes("primaryContactExtension") ? null : row.primaryContactExtension,
+        effectiveVisibleColumns.includes("primaryContactExtension")
+          ? null
+          : row.primaryContactExtension,
       );
     }
 
@@ -9494,9 +9553,14 @@ export function AccountsClient({
     <AppChrome
       contentClassName={styles.pageContent}
       hidePageHeaderCopy
+      hideNavigation={isDirectoryOnlyUser}
       topBarSearch={
         <>
-          <label className={`${styles.searchField} ${styles.desktopTopBarSearch}`}>
+          <label
+            className={`${styles.searchField} ${styles.desktopTopBarSearch} ${
+              isDirectoryOnlyUser ? styles.restrictedSearchField : ""
+            }`.trim()}
+          >
             <SearchIcon />
             <input
               aria-label="Global search"
@@ -9505,11 +9569,19 @@ export function AccountsClient({
                 setPage(1);
                 setQ(event.target.value);
               }}
-              placeholder="Search companies, contacts, sales reps, addresses, emails, or notes"
+              placeholder={
+                isDirectoryOnlyUser
+                  ? "Search your A & B accounts"
+                  : "Search companies, contacts, sales reps, addresses, emails, or notes"
+              }
               value={q}
             />
           </label>
-          <label className={`${styles.searchField} ${styles.mobileTopBarSearch}`}>
+          <label
+            className={`${styles.searchField} ${styles.mobileTopBarSearch} ${
+              isDirectoryOnlyUser ? styles.restrictedSearchField : ""
+            }`.trim()}
+          >
             <SearchIcon />
             <input
               aria-label="Search accounts"
@@ -9518,7 +9590,9 @@ export function AccountsClient({
                 setPage(1);
                 setQ(event.target.value);
               }}
-              placeholder="Search accounts"
+              placeholder={
+                isDirectoryOnlyUser ? "Search your A & B accounts" : "Search accounts"
+              }
               value={q}
             />
           </label>
@@ -9548,7 +9622,12 @@ export function AccountsClient({
       title="Sales MeadowBrook"
       userName={session?.user?.name ?? "Signed in"}
     >
-      <section aria-label="Current view metrics" className={styles.viewMetricsGrid}>
+      <section
+        aria-label="Current view metrics"
+        className={`${styles.viewMetricsGrid} ${
+          isDirectoryOnlyUser ? styles.directoryOnlyHidden : ""
+        }`.trim()}
+      >
         {accountViewMetrics.map((metric) => (
           <article className={styles.viewMetricCard} key={metric.id}>
             <span
@@ -9576,7 +9655,11 @@ export function AccountsClient({
         ))}
       </section>
 
-      <section className={`${styles.toolbar} ${styles.tableControlsToolbar}`}>
+      <section
+        className={`${styles.toolbar} ${styles.tableControlsToolbar} ${
+          isDirectoryOnlyUser ? styles.directoryOnlyHidden : ""
+        }`.trim()}
+      >
         <div className={styles.toolbarFilterControls}>
           <div className={`${styles.filterRailGroup} ${styles.filterRailGroupViews}`}>
             <span className={styles.filterRailLabel}>Filter views</span>
@@ -9884,7 +9967,12 @@ export function AccountsClient({
         </div>
       </section>
 
-      <section aria-label="Saved account lists" className={styles.accountListsRail}>
+      <section
+        aria-label="Saved account lists"
+        className={`${styles.accountListsRail} ${
+          isDirectoryOnlyUser ? styles.directoryOnlyHidden : ""
+        }`.trim()}
+      >
         <div className={styles.accountListsHeader}>
           <span className={styles.filterRailLabel}>Lists</span>
           {accountListsError ? (
@@ -9959,7 +10047,11 @@ export function AccountsClient({
         </div>
       </section>
 
-      <section className={styles.tableActionBar}>
+      <section
+        className={`${styles.tableActionBar} ${
+          isDirectoryOnlyUser ? styles.directoryOnlyHidden : ""
+        }`.trim()}
+      >
         <div className={styles.tableActionBarLeft}>
           <label className={styles.tableSelectionStatus}>
             <input
@@ -10146,7 +10238,11 @@ export function AccountsClient({
       </section>
 
       <section aria-label="Accounts mobile view" className={styles.mobileAccountsExperience}>
-        <section className={styles.mobileAccountsCommandBar}>
+        <section
+          className={`${styles.mobileAccountsCommandBar} ${
+            isDirectoryOnlyUser ? styles.directoryOnlyHidden : ""
+          }`.trim()}
+        >
           <header className={styles.mobileAccountsHeader}>
             <div>
               <span className={styles.mobileEyebrow}>Account management</span>
@@ -10198,7 +10294,7 @@ export function AccountsClient({
           </div>
         </section>
 
-        {activeFilterSummaryItems.length > 0 ? (
+        {!isDirectoryOnlyUser && activeFilterSummaryItems.length > 0 ? (
           <div className={styles.mobileActiveFilters}>
             {activeFilterSummaryItems.map((item) => (
               <span key={item.key}>
@@ -10626,7 +10722,7 @@ export function AccountsClient({
           <table className={styles.table}>
             <thead>
               <tr className={styles.tableHeaderRow}>
-                <th className={styles.columnSelectorHeaderCell}>
+                {!isDirectoryOnlyUser ? <th className={styles.columnSelectorHeaderCell}>
                   <div className={styles.columnSelectorMenu} data-transient-menu="true">
                     <button
                       aria-expanded={isFiltersOpen}
@@ -10646,8 +10742,8 @@ export function AccountsClient({
                       +
                     </button>
                   </div>
-                </th>
-                <th className={styles.selectionCheckboxCell}>
+                </th> : null}
+                {!isDirectoryOnlyUser ? <th className={styles.selectionCheckboxCell}>
                   <input
                     aria-label="Select current page"
                     checked={allCurrentPageSelected}
@@ -10657,7 +10753,7 @@ export function AccountsClient({
                     }}
                     type="checkbox"
                   />
-                </th>
+                </th> : null}
                 <th className={styles.actionsHeader}>Actions</th>
                 {visibleColumnOrder.map((columnId) => {
                   const column = getColumnConfig(columnId);
@@ -10683,24 +10779,32 @@ export function AccountsClient({
                       onDragOver={(event) => handleColumnDragOver(event, columnId)}
                       onDrop={(event) => handleColumnDrop(event, columnId)}
                       style={{ minWidth: COLUMN_MIN_WIDTHS[columnId] }}
-                      title={`${column.label}. Click label to sort; drag handle to reorder.`}
+                      title={
+                        isDirectoryOnlyUser
+                          ? `${column.label}. Click label to sort.`
+                          : `${column.label}. Click label to sort; drag handle to reorder.`
+                      }
                     >
                       <div className={styles.tableHeaderCell}>
                         <div className={styles.tableHeaderTop}>
-                          <button
-                            aria-label={`Drag to reorder ${column.label}`}
-                            className={styles.tableHeaderDragHandle}
-                            draggable
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                            }}
-                            onDragEnd={handleColumnDragEnd}
-                            onDragStart={(event) => handleColumnDragStart(event, columnId)}
-                            type="button"
-                          >
-                            <DragHandleIcon />
-                          </button>
+                          {!isDirectoryOnlyUser ? (
+                            <button
+                              aria-label={`Drag to reorder ${column.label}`}
+                              className={styles.tableHeaderDragHandle}
+                              draggable
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                              }}
+                              onDragEnd={handleColumnDragEnd}
+                              onDragStart={(event) =>
+                                handleColumnDragStart(event, columnId)
+                              }
+                              type="button"
+                            >
+                              <DragHandleIcon />
+                            </button>
+                          ) : null}
                           <button
                             aria-label={`${column.label}: sort ${
                               isSortedColumn && sortDir === "asc" ? "descending" : "ascending"
@@ -10716,24 +10820,30 @@ export function AccountsClient({
                               <HeaderSortIcon active={isSortedColumn} direction={sortDir} />
                             </span>
                           </button>
-                          <button
-                            aria-label={`Filter ${column.label}`}
-                            aria-pressed={isColumnFilterActive}
-                            className={`${styles.tableHeaderFilterButton} ${
-                              isColumnFilterActive ? styles.tableHeaderFilterButtonActive : ""
-                            }`.trim()}
-                            data-transient-menu="true"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              openHeaderFilterMenu(columnId, event.currentTarget);
-                            }}
-                            type="button"
-                          >
-                            <FilterIcon />
-                          </button>
+                          {!isDirectoryOnlyUser ? (
+                            <button
+                              aria-label={`Filter ${column.label}`}
+                              aria-pressed={isColumnFilterActive}
+                              className={`${styles.tableHeaderFilterButton} ${
+                                isColumnFilterActive
+                                  ? styles.tableHeaderFilterButtonActive
+                                  : ""
+                              }`.trim()}
+                              data-transient-menu="true"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openHeaderFilterMenu(columnId, event.currentTarget);
+                              }}
+                              type="button"
+                            >
+                              <FilterIcon />
+                            </button>
+                          ) : null}
                         </div>
                       </div>
-                      {headerFilterMenuColumn === columnId && headerFilterMenuPosition ? (
+                      {!isDirectoryOnlyUser &&
+                      headerFilterMenuColumn === columnId &&
+                      headerFilterMenuPosition ? (
                         <div
                           aria-label={`Filter ${column.label}`}
                           className={styles.headerFilterPopover}
@@ -10765,13 +10875,19 @@ export function AccountsClient({
             <tbody>
               {loading ? (
                 <tr>
-                  <td className={styles.loadingCell} colSpan={visibleColumnOrder.length + 3}>
+                  <td
+                    className={styles.loadingCell}
+                    colSpan={visibleColumnOrder.length + (isDirectoryOnlyUser ? 1 : 3)}
+                  >
                     Loading contacts...
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td className={styles.loadingCell} colSpan={visibleColumnOrder.length + 3}>
+                  <td
+                    className={styles.loadingCell}
+                    colSpan={visibleColumnOrder.length + (isDirectoryOnlyUser ? 1 : 3)}
+                  >
                     No contacts found.
                   </td>
                 </tr>
@@ -10801,8 +10917,8 @@ export function AccountsClient({
                         void openDrawer(row);
                       }}
                     >
-                      <td className={styles.columnSelectorBodyCell} />
-                      <td
+                      {!isDirectoryOnlyUser ? <td className={styles.columnSelectorBodyCell} /> : null}
+                      {!isDirectoryOnlyUser ? <td
                         className={styles.selectionCheckboxCell}
                         onClick={(event) => {
                           event.stopPropagation();
@@ -10817,7 +10933,7 @@ export function AccountsClient({
                             type="checkbox"
                           />
                         ) : null}
-                      </td>
+                      </td> : null}
                       <td
                         className={styles.rowActionsCell}
                         onClick={(event) => event.stopPropagation()}
@@ -10950,7 +11066,7 @@ export function AccountsClient({
         <footer className={styles.pagination}>
           <span className={styles.paginationSummary}>
             {serverSnapshotHydrated
-              ? `Page ${page} of ${totalPages} • ${total.toLocaleString()} matching • ${allRows.length.toLocaleString()} loaded`
+              ? `Page ${page} of ${totalPages} • ${total.toLocaleString()} matching • ${accessibleRows.length.toLocaleString()} loaded`
               : "Loading current account data..."}
             {serverSnapshotHydrated && lastSyncedAt
               ? ` • Last sync ${new Date(lastSyncedAt).toLocaleTimeString()}`
@@ -11028,7 +11144,7 @@ export function AccountsClient({
       <CreateOpportunityDrawer
         accountOptions={createContactAccountOptions}
         employeeOptions={sortedEmployeeOptions}
-        fallbackRows={allRows}
+        fallbackRows={accessibleRows}
         initialAccountRecordId={opportunityDrawerContext.initialAccountRecordId}
         initialContactId={opportunityDrawerContext.initialContactId}
         initialOwnerId={opportunityDrawerContext.initialOwnerId}
@@ -12596,7 +12712,7 @@ export function AccountsClient({
               <div>
                 <h2>Table Columns</h2>
                 <span>
-                  {visibleColumns.length.toLocaleString()} of{" "}
+                  {effectiveVisibleColumns.length.toLocaleString()} of{" "}
                   {visibleColumnConfigs.length.toLocaleString()} shown
                 </span>
               </div>
@@ -12667,7 +12783,9 @@ export function AccountsClient({
                   <label className={styles.columnsModalToggle}>
                     <input
                       checked={column.isVisible}
-                      disabled={visibleColumns.length <= 1 && column.isVisible}
+                      disabled={
+                        effectiveVisibleColumns.length <= 1 && column.isVisible
+                      }
                       onChange={() => handleToggleColumn(column.id)}
                       type="checkbox"
                     />

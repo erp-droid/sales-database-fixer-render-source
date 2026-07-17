@@ -34,6 +34,7 @@ export function AppChrome({
   statusLine,
   headerActions,
   hidePageHeaderCopy = false,
+  hideNavigation = false,
   topBarSearch,
   children,
   userName,
@@ -45,6 +46,7 @@ export function AppChrome({
   statusLine?: ReactNode;
   headerActions?: ReactNode;
   hidePageHeaderCopy?: boolean;
+  hideNavigation?: boolean;
   topBarSearch?: ReactNode;
   children: ReactNode;
   userName?: string | null;
@@ -160,17 +162,23 @@ export function AppChrome({
         </div>
       </header>
 
-      <div className={styles.shellBody}>
-        <aside className={styles.sidebar}>
-        <nav aria-label="Primary" className={styles.appNav}>
-          <span className={styles.appNavSectionLabel}>Overview</span>
-          <AppPageNav
-            activeClassName={styles.appNavLinkActive}
-            iconClassName={styles.appNavIcon}
-            linkClassName={styles.appNavLink}
-          />
-        </nav>
-        </aside>
+      <div
+        className={`${styles.shellBody} ${
+          hideNavigation ? styles.shellBodyWithoutNavigation : ""
+        }`.trim()}
+      >
+        {!hideNavigation ? (
+          <aside className={styles.sidebar}>
+            <nav aria-label="Primary" className={styles.appNav}>
+              <span className={styles.appNavSectionLabel}>Overview</span>
+              <AppPageNav
+                activeClassName={styles.appNavLinkActive}
+                iconClassName={styles.appNavIcon}
+                linkClassName={styles.appNavLink}
+              />
+            </nav>
+          </aside>
+        ) : null}
 
         <div className={styles.mainPane}>
         {!hidePageHeaderCopy || headerActions ? (
