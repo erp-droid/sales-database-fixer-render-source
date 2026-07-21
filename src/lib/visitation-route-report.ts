@@ -1,8 +1,14 @@
 import { buildAddressKeyFromRow } from "@/lib/read-model/geocodes";
+import {
+  findAuthoritativeVisitationRouteSchedule,
+  matchAccountsToAuthoritativeSchedule,
+  type AuthoritativeVisitationRouteSchedule,
+} from "@/lib/visitation-route-schedule";
 import type { BusinessAccountRow } from "@/types/business-account";
 
 export const VISITATION_ROUTE_WEEK_COUNT = 12;
 export const VISITATION_ROUTE_DAY_COUNT = 5;
+export const VISITATION_ROUTE_MIN_ACCOUNTS_PER_DAY = 10;
 
 export type VisitationRouteGeocode = {
   latitude: number;
@@ -29,6 +35,7 @@ export type VisitationRouteAccount = {
   category: "A" | "B";
   salesRepId: string;
   salesRepName: string;
+  assignedWeek: number | null;
   latitude: number | null;
   longitude: number | null;
 };
@@ -49,6 +56,16 @@ export type VisitationRoutePlan = {
   unmappedAccountTotal: number;
   estimatedDistanceKm: number;
   days: VisitationRouteDay[];
+  scheduleDiagnostics: VisitationRouteScheduleDiagnostics | null;
+};
+
+export type VisitationRouteScheduleDiagnostics = {
+  scheduleId: string;
+  scheduleVersion: string;
+  referenceAccountTotal: number;
+  matchedScheduledAccountTotal: number;
+  missingReferenceAccountTotal: number;
+  newlyPlacedAccountTotal: number;
 };
 
 export type VisitationRouteSalesRepOption = {
@@ -101,6 +118,28 @@ function mostCommonValue(values: Array<string | null | undefined>): string {
 function categoryForRows(rows: BusinessAccountRow[]): "A" | "B" | null {
   const category = mostCommonValue(rows.map((row) => row.category)).toUpperCase();
   return category === "A" || category === "B" ? category : null;
+}
+
+function parseAssignedWeek(value: string | null | undefined): number | null {
+  const match = normalizeText(value).match(/^week\s*(\d+)$/i);
+  if (!match) {
+    return null;
+  }
+  const week = Number.parseInt(match[1] ?? "", 10);
+  return Number.isInteger(week) && week >= 1 && week <= VISITATION_ROUTE_WEEK_COUNT
+    ? week
+    : null;
+}
+
+function assignedWeekForRows(rows: BusinessAccountRow[]): number | null {
+  const weeks = new Set<number>();
+  for (const row of rows) {
+    const week = parseAssignedWeek(row.week);
+    if (week !== null) {
+      weeks.add(week);
+    }
+  }
+  return weeks.size === 1 ? [...weeks][0] ?? null : null;
 }
 
 function contactCompleteness(row: BusinessAccountRow): number {
@@ -216,6 +255,7 @@ function toRouteAccount(
     category,
     salesRepId: mostCommonValue(rows.map((row) => row.salesRepId)),
     salesRepName: mostCommonValue(rows.map((row) => row.salesRepName)),
+    assignedWeek: assignedWeekForRows(rows),
     latitude: geocode?.latitude ?? null,
     longitude: geocode?.longitude ?? null,
   };
@@ -475,6 +515,72 @@ function distributeAccounts(
   return groups;
 }
 
+function nearestMappedDistanceKm(
+  account: VisitationRouteAccount,
+  group: VisitationRouteAccount[],
+): number {
+  if (!hasCoordinates(account)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const distances = group
+    .filter(hasCoordinates)
+    .map((candidate) => haversineDistanceKm(account, candidate));
+  return distances.length > 0 ? Math.min(...distances) : Number.POSITIVE_INFINITY;
+}
+
+function groupAccountsByAssignedWeek(
+  accounts: VisitationRouteAccount[],
+): VisitationRouteAccount[][] {
+  const weeks = Array.from(
+    { length: VISITATION_ROUTE_WEEK_COUNT },
+    () => [] as VisitationRouteAccount[],
+  );
+  const unassigned: VisitationRouteAccount[] = [];
+
+  for (const account of accounts) {
+    if (account.assignedWeek === null) {
+      unassigned.push(account);
+    } else {
+      weeks[account.assignedWeek - 1].push(account);
+    }
+  }
+
+  if (unassigned.length === accounts.length) {
+    return distributeAccounts(accounts, VISITATION_ROUTE_WEEK_COUNT);
+  }
+
+  for (const account of [...unassigned].sort(compareAccountIdentity)) {
+    const minimumSize = Math.min(...weeks.map((weekAccounts) => weekAccounts.length));
+    const destination = weeks
+      .map((weekAccounts, index) => ({ index, accounts: weekAccounts }))
+      .filter((week) => week.accounts.length === minimumSize)
+      .map((candidate) => ({
+        ...candidate,
+        cityMatches: candidate.accounts.filter(
+          (item) => normalizeComparable(item.city) === normalizeComparable(account.city),
+        ).length,
+        distanceKm: nearestMappedDistanceKm(account, candidate.accounts),
+      }))
+      .sort((left, right) => {
+        if (hasCoordinates(account)) {
+          return (
+            left.distanceKm - right.distanceKm ||
+            right.cityMatches - left.cityMatches ||
+            left.index - right.index
+          );
+        }
+        return (
+          right.cityMatches - left.cityMatches ||
+          left.accounts.length - right.accounts.length ||
+          left.index - right.index
+        );
+      })[0];
+    weeks[destination?.index ?? 0].push(account);
+  }
+
+  return weeks;
+}
+
 function haversineDistanceKm(
   left: VisitationRouteAccount,
   right: VisitationRouteAccount,
@@ -575,18 +681,124 @@ function orderDailyRoute(accounts: VisitationRouteAccount[]): VisitationRouteAcc
   return route;
 }
 
+function chooseAuthoritativeScheduleDay(
+  account: VisitationRouteAccount,
+  days: Array<{ week: number; day: number; accounts: VisitationRouteAccount[] }>,
+): { week: number; day: number; accounts: VisitationRouteAccount[] } {
+  const shortDays = days.filter(
+    (day) => day.accounts.length < VISITATION_ROUTE_MIN_ACCOUNTS_PER_DAY,
+  );
+  let candidates = shortDays.length > 0 ? shortDays : days;
+  if (account.assignedWeek !== null) {
+    const assignedWeekCandidates = candidates.filter(
+      (day) => day.week === account.assignedWeek,
+    );
+    if (assignedWeekCandidates.length > 0) {
+      candidates = assignedWeekCandidates;
+    }
+  }
+
+  return [...candidates]
+    .map((day) => ({
+      day,
+      cityMatches: day.accounts.filter(
+        (candidate) =>
+          normalizeComparable(candidate.city) === normalizeComparable(account.city),
+      ).length,
+      distanceKm: nearestMappedDistanceKm(account, day.accounts),
+    }))
+    .sort((left, right) => {
+      if (hasCoordinates(account)) {
+        return (
+          left.distanceKm - right.distanceKm ||
+          right.cityMatches - left.cityMatches ||
+          left.day.accounts.length - right.day.accounts.length ||
+          left.day.week - right.day.week ||
+          left.day.day - right.day.day
+        );
+      }
+      return (
+        right.cityMatches - left.cityMatches ||
+        left.day.accounts.length - right.day.accounts.length ||
+        left.day.week - right.day.week ||
+        left.day.day - right.day.day
+      );
+    })[0]?.day ?? days[0];
+}
+
+function buildDaysFromAuthoritativeSchedule(
+  accounts: VisitationRouteAccount[],
+  salesRepName: string,
+  authoritativeSchedule?: AuthoritativeVisitationRouteSchedule | null,
+): {
+  days: VisitationRouteDay[];
+  diagnostics: VisitationRouteScheduleDiagnostics;
+} | null {
+  const schedule = authoritativeSchedule === undefined
+    ? findAuthoritativeVisitationRouteSchedule(salesRepName)
+    : authoritativeSchedule;
+  if (!schedule) {
+    return null;
+  }
+
+  const matched = matchAccountsToAuthoritativeSchedule(accounts, schedule);
+  const allocatedDays = matched.days.map((day) => ({
+    ...day,
+    accounts: [...day.accounts],
+  }));
+  for (const account of [...matched.unmatchedAccounts].sort(compareAccountIdentity)) {
+    const destination = chooseAuthoritativeScheduleDay(account, allocatedDays);
+    destination.accounts.push(account);
+  }
+
+  const shortfalls = allocatedDays.filter(
+    (day) => day.accounts.length < VISITATION_ROUTE_MIN_ACCOUNTS_PER_DAY,
+  );
+  if (shortfalls.length > 0) {
+    const details = shortfalls
+      .map((day) => `W${day.week} D${day.day} (${day.accounts.length})`)
+      .join(", ");
+    throw new Error(
+      `The saved visitation schedule cannot provide at least ${VISITATION_ROUTE_MIN_ACCOUNTS_PER_DAY} accounts on every day. Short days: ${details}.`,
+    );
+  }
+
+  const days = allocatedDays.map((day) => {
+    const orderedAccounts = orderDailyRoute(day.accounts);
+    return {
+      week: day.week,
+      day: day.day,
+      accounts: orderedAccounts,
+      estimatedDistanceKm: routeDistance(orderedAccounts),
+    };
+  });
+  return {
+    days,
+    diagnostics: {
+      scheduleId: schedule.id,
+      scheduleVersion: schedule.version,
+      referenceAccountTotal: schedule.referenceAccountTotal,
+      matchedScheduledAccountTotal: matched.matchedAccountTotal,
+      missingReferenceAccountTotal: matched.missingReferenceAccountTotal,
+      newlyPlacedAccountTotal: matched.unmatchedAccounts.length,
+    },
+  };
+}
+
 export function buildVisitationRoutePlan({
   rows,
   geocodes,
   salesRepId,
   salesRepName,
   generatedAt = new Date(),
+  authoritativeSchedule,
 }: {
   rows: BusinessAccountRow[];
   geocodes: ReadonlyMap<string, VisitationRouteGeocode>;
   salesRepId?: string | null;
   salesRepName?: string | null;
   generatedAt?: Date;
+  authoritativeSchedule?: AuthoritativeVisitationRouteSchedule | null;
 }): VisitationRoutePlan {
   const targetId = normalizeComparable(salesRepId);
   const targetName = normalizeComparable(salesRepName);
@@ -606,18 +818,25 @@ export function buildVisitationRoutePlan({
     normalizeText(salesRepId);
   const resolvedSalesRepId =
     mostCommonValue(accounts.map((account) => account.salesRepId)) || normalizeText(salesRepId);
-  const weeks = distributeAccounts(accounts, VISITATION_ROUTE_WEEK_COUNT);
-  const days = weeks.flatMap((weekAccounts, weekIndex) =>
-    distributeAccounts(weekAccounts, VISITATION_ROUTE_DAY_COUNT).map((dayAccounts, dayIndex) => {
-      const orderedAccounts = orderDailyRoute(dayAccounts);
-      return {
-        week: weekIndex + 1,
-        day: dayIndex + 1,
-        accounts: orderedAccounts,
-        estimatedDistanceKm: routeDistance(orderedAccounts),
-      };
-    }),
+  const authoritativeRoute = buildDaysFromAuthoritativeSchedule(
+    accounts,
+    resolvedSalesRepName,
+    authoritativeSchedule,
   );
+  const days = authoritativeRoute?.days ??
+    groupAccountsByAssignedWeek(accounts).flatMap((weekAccounts, weekIndex) =>
+      distributeAccounts(weekAccounts, VISITATION_ROUTE_DAY_COUNT).map(
+        (dayAccounts, dayIndex) => {
+          const orderedAccounts = orderDailyRoute(dayAccounts);
+          return {
+            week: weekIndex + 1,
+            day: dayIndex + 1,
+            accounts: orderedAccounts,
+            estimatedDistanceKm: routeDistance(orderedAccounts),
+          };
+        },
+      ),
+    );
 
   const mappedAccountTotal = accounts.filter(hasCoordinates).length;
   return {
@@ -629,5 +848,6 @@ export function buildVisitationRoutePlan({
     unmappedAccountTotal: accounts.length - mappedAccountTotal,
     estimatedDistanceKm: days.reduce((sum, day) => sum + day.estimatedDistanceKm, 0),
     days,
+    scheduleDiagnostics: authoritativeRoute?.diagnostics ?? null,
   };
 }
