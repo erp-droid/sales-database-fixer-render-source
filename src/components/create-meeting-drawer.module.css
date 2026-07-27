@@ -1,7 +1,7 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  z-index: 41;
+  z-index: 1101;
   border: 0;
   background: rgba(23, 32, 51, 0.28);
 }
@@ -17,7 +17,7 @@
   border: 1px solid #d8e3f1;
   border-radius: 18px;
   box-shadow: 0 24px 70px rgba(23, 32, 51, 0.2);
-  z-index: 42;
+  z-index: 1102;
   transform: translate(-50%, -50%) scale(0.98);
   opacity: 0;
   transition: transform 0.18s ease, opacity 0.18s ease;
