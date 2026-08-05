@@ -1922,6 +1922,50 @@
   flex-wrap: wrap;
 }
 
+.inlinePhoneCallButton {
+  min-height: 0 !important;
+  justify-content: flex-start !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  font: inherit !important;
+  line-height: inherit !important;
+  text-decoration: underline;
+  text-decoration-color: rgba(24, 139, 83, 0.34);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.inlinePhoneCallButton:hover {
+  color: #16824f !important;
+  text-decoration-color: currentColor;
+}
+
+.editPhoneCallButton {
+  width: fit-content;
+  min-height: 30px;
+  justify-self: start;
+  border-color: #cbe7d8 !important;
+  background: #eef9f3 !important;
+  color: #147b4a !important;
+  font-size: 11px !important;
+}
+
+.callHistoryMetaLine {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  color: var(--accounts-text-secondary);
+  font-size: 13px;
+}
+
+.callHistoryMetaLine > span {
+  display: inline-flex;
+  align-items: baseline;
+}
+
 .primaryBadge {
   display: inline-flex;
   align-items: center;
@@ -2047,15 +2091,15 @@
 
 .drawer {
   position: fixed;
-  inset: 0 0 0 auto;
-  width: min(560px, 100%);
-  height: 100vh;
+  inset: 74px 0 0 auto;
+  width: min(600px, 100%);
+  height: calc(100vh - 74px);
   transform: translateX(100%);
-  border-left: 1px solid var(--accounts-border);
-  background: var(--accounts-surface);
-  box-shadow: -24px 0 48px rgba(23, 32, 51, 0.18);
+  border-left: 1px solid #e3e8ef;
+  background: #f7f9fc;
+  box-shadow: -24px 0 64px rgba(18, 32, 51, 0.13);
   z-index: 40;
-  transition: transform 0.22s ease;
+  transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
   display: flex;
   flex-direction: column;
 }
@@ -2066,55 +2110,511 @@
 
 .drawerHeader {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 14px;
-  padding: 20px 20px 14px;
-  border-bottom: 1px solid var(--accounts-border);
+  gap: 18px;
+  padding: 24px 22px 20px;
+  border-bottom: 1px solid #e5eaf1;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(18px);
 }
 
 .drawerHeaderContent {
+  min-width: 0;
   display: grid;
-  gap: 6px;
+  gap: 5px;
+}
+
+.drawerHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.drawerEditButton {
+  min-height: 36px;
+  padding: 0 15px;
+  border: 1px solid #dfe6ed;
+  border-radius: 999px;
+  background: #fff;
+  color: #26364d;
+  font-size: 12px;
+  font-weight: 750;
+  box-shadow: 0 5px 16px rgba(17, 32, 51, 0.045);
+}
+
+.drawerEditButton:hover {
+  border-color: #a8d4bd;
+  color: #14794a;
 }
 
 .drawerHeader h2 {
   margin: 0;
-  font-size: 24px;
+  overflow: hidden;
+  color: #18253a;
+  font-size: 23px;
+  font-weight: 760;
+  letter-spacing: -0.025em;
+  line-height: 1.18;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawerHeaderContent p {
+  margin: 0;
+  color: #7b8798;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.drawerEyebrow {
+  color: #1b8f59;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
 }
 
 .closeButton {
-  min-height: 40px;
-  padding: 0 12px;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid #e4e9ef;
+  border-radius: 999px;
+  background: #fff;
+  color: #445268;
+  box-shadow: 0 5px 16px rgba(17, 32, 51, 0.06);
+}
+
+.closeButton span {
+  margin-top: -2px;
+  font-size: 24px;
+  font-weight: 300;
+  line-height: 1;
+}
+
+.closeButton:hover {
+  border-color: #cdd6e1;
+  background: #f8fafc;
 }
 
 .drawerBody {
+  min-height: 0;
+  flex: 1 1 auto;
   overflow-y: auto;
-  padding: 18px 20px 28px;
+  padding: 16px 18px 24px;
   display: grid;
+  align-content: start;
+  gap: 14px;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+}
+
+.drawerOverview {
+  display: grid;
+  gap: 16px;
+  padding-bottom: 70px;
+}
+
+.drawerOverviewStack {
+  display: grid;
+  gap: 16px;
+}
+
+.drawerOverviewSupportingText {
+  margin: -5px 0 0;
+  color: #7a8799;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.drawerOverviewNoteComposer {
+  display: grid;
+  gap: 9px;
+}
+
+.drawerOverviewNoteComposer textarea {
+  min-height: 82px;
+  background: #f8fafc;
+}
+
+.drawerOverviewNoteComposer button {
+  width: fit-content;
+}
+
+.drawerOverviewNoteList {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.drawerOverviewQuickGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid #dfe6ed;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(22, 36, 55, 0.035);
+}
+
+.drawerOverviewQuickItem {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  min-height: 108px;
+  padding: 18px 20px;
+}
+
+.drawerOverviewQuickItem + .drawerOverviewQuickItem {
+  border-left: 1px solid #e5eaf0;
+}
+
+.drawerOverviewQuickItem > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #7c899b;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.drawerOverviewQuickItem svg {
+  width: 16px;
+  height: 16px;
+  color: #1b9259;
+}
+
+.drawerOverviewQuickItem strong {
+  overflow: hidden;
+  color: #1d2b40;
+  font-size: 17px;
+  font-weight: 740;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawerOverviewQuickItem small {
+  color: #8a95a5;
+  font-size: 11px;
+}
+
+.drawerOverviewColumns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+
+.drawerOverviewColumn {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.drawerOverviewCard {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid #dfe6ed;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(22, 36, 55, 0.035);
+}
+
+.drawerOverviewCardHeader {
+  min-height: 25px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.drawerOverviewCardHeader > span:first-child {
+  color: #526076;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.drawerOverviewDescription {
+  margin: 0;
+  color: #344359;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.drawerOverviewStatus {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  min-height: 27px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f2f4f7;
+  color: #667386;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.drawerOverviewStatus[data-active="true"] {
+  background: #eaf8f0;
+  color: #147b4a;
+}
+
+.drawerOverviewDefinitionGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 22px;
+  margin: 0;
+}
+
+.drawerOverviewDefinitionGrid > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 13px 0;
+  border-top: 1px solid #edf0f4;
+}
+
+.drawerOverviewDefinitionGrid > div:nth-child(-n + 2) {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.drawerOverviewDefinitionGrid dt {
+  color: #8a95a5;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.drawerOverviewDefinitionGrid dd {
+  margin: 0;
+  overflow: hidden;
+  color: #26354b;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+}
+
+.drawerOverviewWideValue {
+  grid-column: 1 / -1;
+}
+
+.drawerContactIdentity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px;
+  border-radius: 14px;
+  background: #f7f9fb;
+}
+
+.drawerContactIdentity > span {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #eaf8f0;
+  color: #16824f;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.drawerContactIdentity > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.drawerContactIdentity strong {
+  overflow: hidden;
+  color: #1d2b40;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawerContactIdentity small,
+.drawerOverviewUpdated {
+  color: #8490a2;
+  font-size: 10px;
+}
+
+.drawerOverviewActions {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  width: min(600px, 100vw);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+  padding: 14px 18px 18px;
+  border-top: 1px solid #e2e8ef;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 -14px 30px rgba(23, 36, 54, 0.06);
+  backdrop-filter: blur(18px);
+}
+
+.drawerOverviewAction {
+  min-width: 0;
+  min-height: 43px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid #dfe5ec;
+  border-radius: 12px;
+  background: #fff;
+  color: #29384e;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.drawerOverviewAction svg {
+  width: 14px;
+  height: 14px;
+}
+
+.drawerOverviewEditAction {
+  border-color: #168d55;
+  background: #168d55;
+  color: #fff;
+  box-shadow: 0 9px 20px rgba(22, 141, 85, 0.17);
+}
+
+.drawerRefreshNotice {
+  padding: 9px 12px;
+  border: 1px solid #cfe9dc;
+  border-radius: 12px;
+  background: #eef9f3;
+  color: #167548;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.drawerCard {
+  display: grid;
+  gap: 14px;
+  padding: 17px;
+  border: 1px solid #e1e7ee;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(22, 36, 55, 0.035);
+}
+
+.drawerSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
 
+.drawerSectionHeader > div {
+  display: grid;
+  gap: 3px;
+}
+
+.drawerSectionHeader > div > span {
+  color: #8490a2;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.drawerSectionHeader h3,
 .drawerBody h3 {
-  margin: 10px 0 0;
-  font-size: 15px;
+  margin: 0;
+  color: #1c2a40;
+  font-size: 14px;
+  font-weight: 760;
+  letter-spacing: -0.01em;
+}
+
+.drawerSectionHeader > svg {
+  width: 18px;
+  height: 18px;
+  color: #21915c;
+}
+
+.drawerSectionPill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #edf8f2;
+  color: #16824f;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.drawerFieldGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.drawerFieldWide {
+  grid-column: 1 / -1;
 }
 
 .drawerBody label {
   display: grid;
   gap: 6px;
-  font-size: 14px;
-  color: var(--accounts-text);
+  min-width: 0;
+  color: #5f6d81;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .drawerBody input,
 .drawerBody select,
 .drawerBody textarea {
-  min-height: 42px;
-  padding: 10px 12px;
+  min-height: 40px;
+  padding: 9px 11px;
+  border-color: #dfe5ec;
+  border-radius: 10px;
+  background: #fbfcfe;
+  color: #1f2d43;
+  font-size: 13px;
+  font-weight: 520;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+}
+
+.drawerBody input:focus,
+.drawerBody select:focus,
+.drawerBody textarea:focus {
+  outline: 0;
+  border-color: #7dc7a2;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(31, 148, 91, 0.11);
 }
 
 .drawerBody textarea {
-  min-height: 120px;
+  min-height: 96px;
   resize: vertical;
 }
 
@@ -2122,6 +2622,9 @@
   display: flex !important;
   align-items: center;
   gap: 8px;
+  width: fit-content;
+  color: #435167 !important;
+  font-size: 12px !important;
 }
 
 .inlineCheckbox input[type="checkbox"],
@@ -2181,10 +2684,10 @@
 .contactEnhanceSection {
   display: grid;
   gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--accounts-border);
-  border-radius: 14px;
-  background: #f7fafc;
+  padding: 12px;
+  border: 1px solid #e5eaf0;
+  border-radius: 13px;
+  background: #f8fafc;
 }
 
 .contactEnhanceActions {
@@ -2225,10 +2728,10 @@
 .companyAttributeSuggestionSection {
   display: grid;
   gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--accounts-border);
-  border-radius: 14px;
-  background: #f7fafc;
+  padding: 12px;
+  border: 1px solid #e5eaf0;
+  border-radius: 13px;
+  background: #f8fafc;
 }
 
 .companyAttributeSuggestionActions {
@@ -2304,22 +2807,95 @@
 }
 
 .drawerActions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 6px;
+  position: sticky;
+  bottom: -24px;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin: 4px -18px -24px;
+  padding: 14px 18px 18px;
+  border-top: 1px solid #e2e8ef;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 -14px 30px rgba(23, 36, 54, 0.07);
+  backdrop-filter: blur(18px);
+}
+
+.drawerActions .saveButton {
+  grid-column: 1 / -1;
+  min-height: 44px;
+  border-radius: 12px;
+  box-shadow: 0 9px 20px rgba(22, 143, 84, 0.18);
+}
+
+.drawerActions .secondaryButton,
+.drawerActions .deleteContactButton {
+  min-height: 39px;
+  padding: 0 10px;
+  border-radius: 11px;
+  font-size: 11px;
+}
+
+.drawerActions .secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.drawerActions .secondaryButton svg {
+  width: 14px;
+  height: 14px;
+}
+
+.drawerActions .deleteContactButton:last-child {
+  grid-column: 1 / -1;
 }
 
 .auditHistorySection {
   display: grid;
   gap: 12px;
-  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid #edf0f4;
 }
 
 .callHistorySection {
   display: grid;
   gap: 12px;
-  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid #edf0f4;
+}
+
+.drawerActivityCard {
+  gap: 13px;
+}
+
+.drawerActivityTabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: #f1f4f7;
+}
+
+.drawerActivityTab {
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #788497;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.drawerActivityTabActive {
+  background: #fff;
+  color: #1d2b41;
+  box-shadow: 0 3px 10px rgba(21, 35, 54, 0.08);
 }
 
 .callHistoryHeader {
@@ -2349,9 +2925,9 @@
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 1px solid var(--accounts-border);
-  border-radius: 14px;
-  background: #fbfcfe;
+  border: 1px solid #e4e9ef;
+  border-radius: 13px;
+  background: #f9fbfd;
 }
 
 .callHistoryItemHeader {
@@ -2779,7 +3355,8 @@
   inset: 0;
   z-index: 30;
   border: 0;
-  background: rgba(23, 32, 51, 0.18);
+  background: transparent;
+  backdrop-filter: none;
 }
 
 @keyframes sync-progress-indeterminate {

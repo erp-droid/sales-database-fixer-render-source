@@ -1,6 +1,6 @@
 "use client";
 
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 
 import { useTwilioCall } from "@/components/twilio-call-provider";
 
@@ -10,6 +10,7 @@ type CallPhoneButtonProps = {
   phone: string | null | undefined;
   label?: string;
   className?: string;
+  children?: ReactNode;
   context?: {
     sourcePage?: "accounts" | "map" | "tasks" | "quality" | "calendar";
     linkedBusinessAccountId?: string | null;
@@ -24,6 +25,7 @@ export function CallPhoneButton({
   phone,
   label,
   className,
+  children,
   context,
 }: CallPhoneButtonProps) {
   const { startCall, isInitializing, activeLabel } = useTwilioCall();
@@ -52,7 +54,7 @@ export function CallPhoneButton({
       }}
       type="button"
     >
-      {isActive ? "Calling..." : "Call"}
+      {isActive ? "Calling..." : children ?? "Call"}
     </button>
   );
 }

@@ -766,14 +766,17 @@ export function updateSupportTicket(
 
   const now = new Date().toISOString();
   const assignments = entries.map(([key]) => `${fieldMap[key]} = ?`);
+  const allowClosedUpdate = patch.status === "closed" ? 1 : 0;
   getReadModelDb().prepare(`
     UPDATE support_tickets
     SET ${assignments.join(", ")}, updated_at = ?
     WHERE id = ?
+      AND (status <> 'closed' OR ? = 1)
   `).run(
     ...entries.map(([key, value]) => key === "understanding" && value !== null ? JSON.stringify(value) : value),
     now,
     id,
+    allowClosedUpdate,
   );
   return readSupportTicket(id);
 }

@@ -26,7 +26,7 @@ const APP_NAV_ITEMS: Array<{
   { href: "/mail", label: "Mail", icon: "mail" },
   { href: "/reports", label: "Reports", icon: "reports" },
   { href: "/quality", label: "Data quality", icon: "quality" },
-  { href: "/support", label: "CRM support", icon: "support" },
+  { href: "/support", label: "Support tickets", icon: "support" },
   { href: "/audit", label: "Audit", icon: "audit" },
   { href: "/deletions", label: "Deletion queue", icon: "deletions" },
 ] as const;

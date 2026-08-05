@@ -78,4 +78,35 @@ describe("support ticket storage", () => {
 
     expect(listSupportTickets()).toHaveLength(105);
   });
+
+  it("keeps a manually closed ticket closed when background work finishes later", async () => {
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const { createSupportTicket, updateSupportTicket } = await import("@/lib/support-ticket-store");
+    closeDb = () => getReadModelDb().close();
+
+    const ticket = createSupportTicket({
+      title: "Close this support request",
+      category: "other",
+      impact: "minor",
+      employeeName: "CRM Employee",
+      employeeEmail: "employee@meadowb.com",
+      description: "The employee confirmed that no more work is required.",
+      submittedByLogin: "employee",
+    });
+
+    expect(updateSupportTicket(ticket.id, {
+      status: "closed",
+      nextAction: null,
+      processingStartedAt: null,
+      nextCheckAt: null,
+    })?.status).toBe("closed");
+
+    const afterLateWorker = updateSupportTicket(ticket.id, {
+      status: "waiting_for_employee",
+      nextAction: "Ask the employee another question.",
+    });
+
+    expect(afterLateWorker?.status).toBe("closed");
+    expect(afterLateWorker?.nextAction).toBeNull();
+  });
 });

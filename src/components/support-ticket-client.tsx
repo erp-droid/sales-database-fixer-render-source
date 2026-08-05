@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import { AppChrome } from "@/components/app-chrome";
+import { SupportOwnerWorkspace } from "@/components/support-owner-workspace";
 import {
   formatSupportAttachmentBytes,
   isAllowedSupportAttachment,
@@ -20,9 +21,13 @@ import {
 } from "@/lib/support-ticket-attachment-policy";
 import type {
   SupportTicketConversationResponse,
+  SupportTicketCloseResponse,
   SupportTicketCreateResponse,
   SupportTicketDetail,
   SupportTicketListResponse,
+  SupportTicketReplyResponse,
+  SupportTicketStatus,
+  SupportTicketStatusUpdateResponse,
 } from "@/types/support-ticket";
 
 import styles from "./support-ticket-client.module.css";
@@ -143,6 +148,9 @@ export function SupportTicketClient() {
   const [error, setError] = useState<string | null>(null);
   const [successTicket, setSuccessTicket] = useState<SupportTicketDetail | null>(null);
   const [conversations, setConversations] = useState<Record<string, TicketConversationState>>({});
+  const [closingTicketId, setClosingTicketId] = useState<string | null>(null);
+  const [movingTicketId, setMovingTicketId] = useState<string | null>(null);
+  const [ticketActionErrors, setTicketActionErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -230,6 +238,148 @@ export function SupportTicketClient() {
     }
   }
 
+  async function closeTicket(ticket: SupportTicketDetail) {
+    const confirmed = window.confirm(
+      `Close ${formatTicketNumber(ticket.ticketNumber)}? The ticket and its full conversation will remain available, but automated work will stop.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setClosingTicketId(ticket.id);
+    setTicketActionErrors((current) => {
+      const next = { ...current };
+      delete next[ticket.id];
+      return next;
+    });
+
+    try {
+      const response = await fetch(
+        `/api/support/tickets/${encodeURIComponent(ticket.id)}/close`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload = (await response.json()) as SupportTicketCloseResponse;
+      setTickets((current) => current.map((item) => {
+        if (item.id !== ticket.id) {
+          return item;
+        }
+        return {
+          ...item,
+          ...payload.ticket,
+          history: payload.event && !item.history.some(
+            (event) => event.type === payload.event?.type && event.createdAt === payload.event.createdAt,
+          )
+            ? [...item.history, payload.event]
+            : item.history,
+        };
+      }));
+    } catch (closeError) {
+      setTicketActionErrors((current) => ({
+        ...current,
+        [ticket.id]: closeError instanceof Error
+          ? closeError.message
+          : "Unable to close this ticket.",
+      }));
+    } finally {
+      setClosingTicketId(null);
+    }
+  }
+
+  async function refreshTickets() {
+    const response = await fetch("/api/support/tickets", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response));
+    }
+    const payload = (await response.json()) as SupportTicketListResponse;
+    setTickets(Array.isArray(payload.items) ? payload.items : []);
+    setTicketScope(payload.scope === "all" ? "all" : "mine");
+  }
+
+  async function moveTicket(ticket: SupportTicketDetail, status: SupportTicketStatus) {
+    if (status === "closed") {
+      await closeTicket(ticket);
+      return;
+    }
+
+    setMovingTicketId(ticket.id);
+    setTicketActionErrors((current) => {
+      const next = { ...current };
+      delete next[ticket.id];
+      return next;
+    });
+
+    try {
+      const response = await fetch(
+        `/api/support/tickets/${encodeURIComponent(ticket.id)}/status`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ status }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload = (await response.json()) as SupportTicketStatusUpdateResponse;
+      setTickets((current) => current.map((item) => {
+        if (item.id !== ticket.id) {
+          return item;
+        }
+        return {
+          ...item,
+          ...payload.ticket,
+          history: payload.event && !item.history.some(
+            (event) => event.type === payload.event?.type && event.createdAt === payload.event.createdAt,
+          )
+            ? [...item.history, payload.event]
+            : item.history,
+        };
+      }));
+    } catch (moveError) {
+      setTicketActionErrors((current) => ({
+        ...current,
+        [ticket.id]: moveError instanceof Error
+          ? moveError.message
+          : "Unable to move this ticket.",
+      }));
+    } finally {
+      setMovingTicketId(null);
+    }
+  }
+
+  async function replyToTicket(ticket: SupportTicketDetail, message: string) {
+    const response = await fetch(
+      `/api/support/tickets/${encodeURIComponent(ticket.id)}/reply`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message }),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response));
+    }
+
+    const payload = (await response.json()) as SupportTicketReplyResponse;
+    setTickets((current) => current.map((item) => item.id === ticket.id
+      ? {
+          ...item,
+          ...payload.ticket,
+          history: item.history.some(
+            (event) => event.type === payload.event.type && event.createdAt === payload.event.createdAt,
+          )
+            ? item.history
+            : [...item.history, payload.event],
+        }
+      : item));
+    await loadTicketConversation(ticket.id, true);
+  }
+
   function addAttachments(files: File[]) {
     setError(null);
     let next = [...attachments];
@@ -292,13 +442,43 @@ export function SupportTicketClient() {
     }
   }
 
+  if (isLoading) {
+    return (
+      <AppChrome
+        title="CRM support"
+        subtitle="Loading support tickets and responses."
+        userName={session?.user?.name}
+      >
+        <div className={styles.ownerLoading}>Loading support workspace…</div>
+      </AppChrome>
+    );
+  }
+
+  if (ticketScope === "all") {
+    return (
+      <SupportOwnerWorkspace
+        closingTicketId={closingTicketId}
+        conversations={conversations}
+        onCloseTicket={closeTicket}
+        onLoadConversation={loadTicketConversation}
+        onMoveTicket={moveTicket}
+        onRefresh={refreshTickets}
+        onReply={replyToTicket}
+        movingTicketId={movingTicketId}
+        ticketActionErrors={ticketActionErrors}
+        tickets={tickets}
+        userName={session?.user?.name}
+      />
+    );
+  }
+
   return (
     <AppChrome
       title="CRM support"
       subtitle="Report a problem and attach anything that helps us see it."
       userName={session?.user?.name}
     >
-      <div className={`${styles.layout} ${ticketScope === "all" ? styles.ownerLayout : ""}`}>
+      <div className={styles.layout}>
         <section className={styles.formCard}>
           <div className={styles.cardHeading}>
             <h2>Report a CRM issue</h2>
@@ -433,13 +613,13 @@ export function SupportTicketClient() {
           <section className={styles.recentCard}>
             <div className={styles.recentHeading}>
               <div>
-                <span className={styles.eyebrow}>{ticketScope === "all" ? "SUPPORT OWNER" : "RECENT TICKETS"}</span>
-                <h3>{ticketScope === "all" ? "All support tickets" : "Your requests"}</h3>
+                <span className={styles.eyebrow}>RECENT TICKETS</span>
+                <h3>Your requests</h3>
               </div>
               <span className={styles.ticketCount}>{tickets.length}</span>
             </div>
             {isLoading ? <p className={styles.emptyState}>Loading tickets…</p> : null}
-            {!isLoading && tickets.length === 0 ? <p className={styles.emptyState}>{ticketScope === "all" ? "No support tickets yet." : "No tickets submitted from this sign-in yet."}</p> : null}
+            {tickets.length === 0 ? <p className={styles.emptyState}>No tickets submitted from this sign-in yet.</p> : null}
             <div className={styles.ticketList}>
               {tickets.map((ticket) => {
                 const conversation = conversations[ticket.id];
@@ -447,10 +627,14 @@ export function SupportTicketClient() {
                 <article className={styles.ticketItem} key={ticket.id}>
                   <div className={styles.ticketMeta}>
                     <strong>{formatTicketNumber(ticket.ticketNumber)}</strong>
-                    <span className={`${styles.statusPill} ${styles[`status_${ticket.status}`]}`}>{STATUS_LABELS[ticket.status]}</span>
+                    <div className={styles.ticketMetaActions}>
+                      <span className={`${styles.statusPill} ${styles[`status_${ticket.status}`]}`}>{STATUS_LABELS[ticket.status]}</span>
+                    </div>
                   </div>
+                  {ticketActionErrors[ticket.id] ? (
+                    <p className={styles.ticketActionError} role="alert">{ticketActionErrors[ticket.id]}</p>
+                  ) : null}
                   <h4>{ticket.title}</h4>
-                  {ticketScope === "all" ? <p className={styles.requester}>{ticket.employeeName} · {ticket.employeeEmail}</p> : null}
                   <p>{ticket.attachmentCount > 0 ? `↳ ${ticket.attachmentCount} attachment${ticket.attachmentCount === 1 ? "" : "s"} · ` : ""}{ticket.latestUpdate || `Submitted ${formatDate(ticket.createdAt)}`}</p>
                   <details
                     className={styles.ticketDetails}
