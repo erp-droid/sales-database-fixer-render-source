@@ -19,6 +19,7 @@ import {
   SUPPORT_ATTACHMENT_MAX_TOTAL_BYTES,
 } from "@/lib/support-ticket-attachment-policy";
 import type {
+  SupportTicketConversationResponse,
   SupportTicketCreateResponse,
   SupportTicketDetail,
   SupportTicketListResponse,
@@ -82,6 +83,12 @@ const STATUS_LABELS: Record<SupportTicketDetail["status"], string> = {
   closed: "Closed",
 };
 
+type TicketConversationState = {
+  loading: boolean;
+  data: SupportTicketConversationResponse | null;
+  error: string | null;
+};
+
 function formatTicketNumber(ticketNumber: number): string {
   return `CRM-${String(ticketNumber).padStart(4, "0")}`;
 }
@@ -124,6 +131,7 @@ function AttachmentThumbnail({ file }: { file: File }) {
 
 export function SupportTicketClient() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const conversationRequestsRef = useRef(new Set<string>());
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [attachments, setAttachments] = useState<File[]>([]);
@@ -134,6 +142,7 @@ export function SupportTicketClient() {
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successTicket, setSuccessTicket] = useState<SupportTicketDetail | null>(null);
+  const [conversations, setConversations] = useState<Record<string, TicketConversationState>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -172,6 +181,53 @@ export function SupportTicketClient() {
 
   function updateField<Key extends keyof FormState>(key: Key, value: FormState[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function loadTicketConversation(ticketId: string, force = false) {
+    if (conversationRequestsRef.current.has(ticketId)) {
+      return;
+    }
+    if (!force && conversations[ticketId]?.data) {
+      return;
+    }
+
+    conversationRequestsRef.current.add(ticketId);
+    setConversations((current) => ({
+      ...current,
+      [ticketId]: {
+        loading: true,
+        data: current[ticketId]?.data ?? null,
+        error: null,
+      },
+    }));
+
+    try {
+      const response = await fetch(
+        `/api/support/tickets/${encodeURIComponent(ticketId)}/conversation`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const data = (await response.json()) as SupportTicketConversationResponse;
+      setConversations((current) => ({
+        ...current,
+        [ticketId]: { loading: false, data, error: null },
+      }));
+    } catch (conversationError) {
+      setConversations((current) => ({
+        ...current,
+        [ticketId]: {
+          loading: false,
+          data: current[ticketId]?.data ?? null,
+          error: conversationError instanceof Error
+            ? conversationError.message
+            : "Unable to load the ticket conversation.",
+        },
+      }));
+    } finally {
+      conversationRequestsRef.current.delete(ticketId);
+    }
   }
 
   function addAttachments(files: File[]) {
@@ -242,7 +298,7 @@ export function SupportTicketClient() {
       subtitle="Report a problem and attach anything that helps us see it."
       userName={session?.user?.name}
     >
-      <div className={styles.layout}>
+      <div className={`${styles.layout} ${ticketScope === "all" ? styles.ownerLayout : ""}`}>
         <section className={styles.formCard}>
           <div className={styles.cardHeading}>
             <h2>Report a CRM issue</h2>
@@ -385,7 +441,9 @@ export function SupportTicketClient() {
             {isLoading ? <p className={styles.emptyState}>Loading tickets…</p> : null}
             {!isLoading && tickets.length === 0 ? <p className={styles.emptyState}>{ticketScope === "all" ? "No support tickets yet." : "No tickets submitted from this sign-in yet."}</p> : null}
             <div className={styles.ticketList}>
-              {tickets.slice(0, ticketScope === "all" ? 100 : 5).map((ticket) => (
+              {tickets.map((ticket) => {
+                const conversation = conversations[ticket.id];
+                return (
                 <article className={styles.ticketItem} key={ticket.id}>
                   <div className={styles.ticketMeta}>
                     <strong>{formatTicketNumber(ticket.ticketNumber)}</strong>
@@ -394,9 +452,72 @@ export function SupportTicketClient() {
                   <h4>{ticket.title}</h4>
                   {ticketScope === "all" ? <p className={styles.requester}>{ticket.employeeName} · {ticket.employeeEmail}</p> : null}
                   <p>{ticket.attachmentCount > 0 ? `↳ ${ticket.attachmentCount} attachment${ticket.attachmentCount === 1 ? "" : "s"} · ` : ""}{ticket.latestUpdate || `Submitted ${formatDate(ticket.createdAt)}`}</p>
-                  <details className={styles.ticketDetails}>
-                    <summary>View original report and progress</summary>
+                  <details
+                    className={styles.ticketDetails}
+                    onToggle={(event) => {
+                      if (event.currentTarget.open) {
+                        void loadTicketConversation(ticket.id);
+                      }
+                    }}
+                  >
+                    <summary>View report, every response, and progress</summary>
                     <div className={styles.ticketDetailContent}>
+                      <section className={styles.conversationSection}>
+                        <div className={styles.conversationHeading}>
+                          <strong>Email conversation</strong>
+                          {conversation?.data ? (
+                            <button
+                              disabled={conversation.loading}
+                              onClick={() => void loadTicketConversation(ticket.id, true)}
+                              type="button"
+                            >
+                              {conversation.loading ? "Refreshing…" : "Refresh responses"}
+                            </button>
+                          ) : null}
+                        </div>
+                        {conversation?.loading && !conversation.data ? (
+                          <p className={styles.conversationStatus}>Loading every email response…</p>
+                        ) : null}
+                        {conversation?.error ? (
+                          <div className={styles.conversationError} role="alert">
+                            <span>{conversation.error}</span>
+                            <button onClick={() => void loadTicketConversation(ticket.id, true)} type="button">Try again</button>
+                          </div>
+                        ) : null}
+                        {conversation?.data && !conversation.data.available ? (
+                          <p className={styles.conversationStatus}>The ticket email chain has not started yet.</p>
+                        ) : null}
+                        {conversation?.data?.available && conversation.data.items.length === 0 ? (
+                          <p className={styles.conversationStatus}>No email messages were returned for this ticket.</p>
+                        ) : null}
+                        {conversation?.data?.available && conversation.data.items.length > 0 ? (
+                          <div className={styles.conversationList}>
+                            {conversation.data.items.map((message) => {
+                              const sender = message.from?.name || message.from?.email || "Unknown sender";
+                              return (
+                                <article
+                                  className={`${styles.conversationMessage} ${message.direction === "outgoing" ? styles.conversationOutgoing : styles.conversationIncoming}`}
+                                  key={message.id}
+                                >
+                                  <header>
+                                    <div>
+                                      <strong>{message.direction === "outgoing" ? "Support response" : "Employee response"}</strong>
+                                      <span>{sender}</span>
+                                    </div>
+                                    <time dateTime={message.timestamp ?? undefined}>
+                                      {message.timestamp ? formatDate(message.timestamp) : "Time unavailable"}
+                                    </time>
+                                  </header>
+                                  {message.subject ? <p className={styles.conversationSubject}>{message.subject}</p> : null}
+                                  <p className={styles.conversationBody}>{message.body || "No message body."}</p>
+                                  {message.hasAttachments ? <span className={styles.conversationAttachment}>Attachment included</span> : null}
+                                </article>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </section>
+
                       <section>
                         <strong>Original report</strong>
                         <dl className={styles.ticketDetailGrid}>
@@ -479,7 +600,8 @@ export function SupportTicketClient() {
                     </div>
                   </details>
                 </article>
-              ))}
+                );
+              })}
             </div>
           </section>
         </aside>

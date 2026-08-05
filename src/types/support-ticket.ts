@@ -84,3 +84,25 @@ export type SupportTicketListResponse = {
 export type SupportTicketCreateResponse = {
   ticket: SupportTicketDetail;
 };
+
+export type SupportTicketConversationParticipant = {
+  name: string | null;
+  email: string;
+};
+
+export type SupportTicketConversationMessage = {
+  id: string;
+  direction: "incoming" | "outgoing";
+  from: SupportTicketConversationParticipant | null;
+  to: SupportTicketConversationParticipant[];
+  subject: string;
+  body: string;
+  timestamp: string | null;
+  hasAttachments: boolean;
+};
+
+export type SupportTicketConversationResponse = {
+  available: boolean;
+  subject: string | null;
+  items: SupportTicketConversationMessage[];
+};

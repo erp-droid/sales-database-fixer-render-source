@@ -4,6 +4,7 @@
   gap: 22px;
   align-items: start;
 }
+.ownerLayout { grid-template-columns: minmax(360px, .75fr) minmax(520px, 1.25fr); }
 
 .formCard,
 .processCard,
@@ -150,6 +151,30 @@
 .ticketHistory { display: grid; gap: 7px; margin: 0; padding-left: 18px; color: #59677a; font-size: 9px; line-height: 1.45; }
 .ticketHistory li span { display: block; color: #8b95a4; }
 .ticketHistory blockquote { margin: 4px 0 0; padding: 5px 7px; border-left: 2px solid #c8ded4; background: #f6faf8; color: #536277; white-space: pre-wrap; }
+
+.conversationSection { gap: 10px !important; }
+.conversationHeading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.conversationHeading > strong { color: #314057; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.conversationHeading button,
+.conversationError button { border: 1px solid #cbded5; border-radius: 7px; background: #f3faf6; color: #276c50; font-size: 9px; font-weight: 750; cursor: pointer; }
+.conversationHeading button { padding: 5px 8px; }
+.conversationHeading button:disabled { cursor: wait; opacity: .65; }
+.conversationStatus { color: #718093 !important; }
+.conversationError { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px; border: 1px solid #efd0cc; border-radius: 8px; background: #fff6f4; color: #9b3c34; font-size: 9px; }
+.conversationError button { flex: 0 0 auto; border-color: #e6bbb6; padding: 4px 7px; background: #fff; color: #8d332b; }
+.conversationList { display: grid; gap: 8px; }
+.conversationMessage { display: grid; gap: 7px; padding: 10px; border: 1px solid #dfe6ed; border-radius: 9px; background: #fbfcfe; }
+.conversationOutgoing { border-color: #c9dfd5; background: #f3faf6; }
+.conversationIncoming { border-color: #d9e2ed; background: #f6f9fc; }
+.conversationMessage header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.conversationMessage header div { min-width: 0; display: grid; gap: 2px; }
+.conversationMessage header strong { color: #344256; font-size: 9px; }
+.conversationMessage header span,
+.conversationMessage time { color: #7d8999; font-size: 8px; }
+.conversationMessage time { flex: 0 0 auto; }
+.conversationSubject { color: #5f6e80 !important; font-size: 9px !important; font-weight: 750; }
+.conversationBody { color: #435166 !important; font-size: 11px !important; line-height: 1.55 !important; white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversationAttachment { width: fit-content; padding: 3px 6px; border-radius: 999px; background: #e8eef5; color: #647286; font-size: 8px; font-weight: 700; }
 
 @media (max-width: 1080px) {
   .layout { grid-template-columns: 1fr; }
