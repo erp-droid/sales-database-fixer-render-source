@@ -47,6 +47,9 @@ export type WatchdogReport = {
 /** If a job has been in "queued" with a waiting_for_recording error for longer than this, act on it. */
 const STUCK_RECORDING_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 
+/** Reclaim a processing claim only when it is old enough that its worker is no longer running. */
+const STUCK_PROCESSING_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+
 /** Max age for a failed job before we skip it permanently (stale). */
 const STALE_FAILURE_THRESHOLD_MS = 48 * 60 * 60 * 1000; // 48 hours
 
@@ -307,9 +310,18 @@ function listAllTroubleSyncJobs(): Array<{
         updated_at,
         recording_sid
       FROM call_activity_sync
-      WHERE status IN ('queued', 'failed', 'transcribed')
-        AND (COALESCE(transcript_text, '') = '' OR COALESCE(summary_text, '') = '')
-      ORDER BY updated_at ASC
+      WHERE (
+          status IN ('queued', 'failed', 'transcribed')
+          AND (COALESCE(transcript_text, '') = '' OR COALESCE(summary_text, '') = '')
+        )
+        OR (
+          status = 'processing'
+          AND COALESCE(transcript_text, '') = ''
+          AND COALESCE(summary_text, '') = ''
+        )
+      ORDER BY
+        CASE WHEN status = 'processing' THEN 0 ELSE 1 END,
+        updated_at ASC
       LIMIT 100
       `,
     )
@@ -344,6 +356,28 @@ async function diagnoseAndRepairJob(job: {
 }): Promise<WatchdogAction | null> {
   const { sessionId, status, attempts, error, updatedAt } = job;
   const age = ageMs(updatedAt);
+
+  // A process restart can strand a claimed job in "processing" forever. The
+  // query only includes processing rows with no transcript or summary, so the
+  // job cannot have reached source-system activity creation and is safe to
+  // requeue without duplicating an activity.
+  if (status === "processing") {
+    if (age <= STUCK_PROCESSING_THRESHOLD_MS) {
+      return null;
+    }
+
+    requeueCallActivitySyncJob(
+      sessionId,
+      "Watchdog: requeued an orphaned processing claim after its worker stopped.",
+    );
+    return {
+      sessionId,
+      issue: "orphaned_processing_claim",
+      action: "requeue",
+      result: "requeued",
+      detail: `Processing claim was idle for ${Math.round(age / 60000)} minutes and had no transcript or summary. Requeued safely.`,
+    };
+  }
 
   // ── 1. Permanently stale jobs: skip them ─────────────────────────
   if (age > STALE_FAILURE_THRESHOLD_MS && status === "failed") {
@@ -650,7 +684,6 @@ async function runWatchdogCycle(): Promise<WatchdogReport> {
   }
 
   const durationMs = Date.now() - startMs;
-  const fixed = actions.filter((a) => a.result === "fixed").length;
   const failed = actions.filter((a) => a.result === "failed").length;
 
   const report: WatchdogReport = {
