@@ -17,6 +17,17 @@ describe("scheduled-jobs", () => {
     expect(result).toBe("2026-04-08");
   });
 
+  it("treats local midnight as before the call-sync schedule window", () => {
+    const result = resolveScheduledCallActivityTargetDate(
+      new Date("2026-08-04T04:00:00.000Z"),
+      "America/Toronto",
+      17,
+      0,
+    );
+
+    expect(result).toBe("2026-08-03");
+  });
+
   it("targets the current local day once the call-sync schedule window opens", () => {
     const result = resolveScheduledCallActivityTargetDate(
       new Date("2026-04-09T21:30:00.000Z"),
