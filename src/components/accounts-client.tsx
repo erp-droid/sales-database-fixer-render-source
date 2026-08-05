@@ -1326,8 +1326,11 @@ function truncateLongText(value: string | null | undefined, maxChars: number): s
   return `${text.slice(0, maxChars).trimEnd()}...`;
 }
 
-function buildCallHistoryMeta(item: BusinessAccountCallHistoryItem): string {
-  const parts = [formatLastCalled(item.startedAt)];
+function renderCallHistoryMeta(
+  item: BusinessAccountCallHistoryItem,
+  context: NonNullable<ComponentProps<typeof CallPhoneButton>["context"]>,
+): ReactNode {
+  const parts: ReactNode[] = [formatLastCalled(item.startedAt)];
 
   if (item.employeeDisplayName) {
     parts.push(item.employeeDisplayName);
@@ -1335,7 +1338,17 @@ function buildCallHistoryMeta(item: BusinessAccountCallHistoryItem): string {
 
   const phoneNumber = item.phoneNumber?.trim();
   if (phoneNumber) {
-    parts.push(phoneNumber);
+    parts.push(
+      <CallPhoneButton
+        className={styles.inlinePhoneCallButton}
+        context={context}
+        key={`call-phone-${item.sessionId}`}
+        label={`${context.linkedContactName ?? context.linkedCompanyName ?? "Account"} phone`}
+        phone={phoneNumber}
+      >
+        {phoneNumber}
+      </CallPhoneButton>,
+    );
   }
 
   const callDuration = formatCallDuration(item.talkDurationSeconds);
@@ -1343,7 +1356,16 @@ function buildCallHistoryMeta(item: BusinessAccountCallHistoryItem): string {
     parts.push(callDuration);
   }
 
-  return parts.filter(Boolean).join(" • ");
+  return (
+    <span className={styles.callHistoryMetaLine}>
+      {parts.filter(Boolean).map((part, index) => (
+        <span key={`${item.sessionId}-meta-${index}`}>
+          {index > 0 ? " • " : null}
+          {part}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 function formatRelativeTime(value: string | null): string | null {
@@ -3801,6 +3823,7 @@ export function AccountsClient({
 
   const [selected, setSelected] = useState<BusinessAccountRow | null>(null);
   const selectedRef = useRef<BusinessAccountRow | null>(null);
+  const [isDesktopDrawerEditing, setIsDesktopDrawerEditing] = useState(false);
   const [selectedContactRowKeys, setSelectedContactRowKeys] = useState<string[]>([]);
   const [isSelectionMergeOpen, setIsSelectionMergeOpen] = useState(false);
   const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false);
@@ -4233,6 +4256,22 @@ export function AccountsClient({
 
   useEffect(() => {
     selectedRef.current = selected;
+  }, [selected]);
+
+  useEffect(() => {
+    if (!selected) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    const previousOverscrollBehavior = document.body.style.overscrollBehavior;
+    document.body.style.overflow = "hidden";
+    document.body.style.overscrollBehavior = "none";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.body.style.overscrollBehavior = previousOverscrollBehavior;
+    };
   }, [selected]);
 
   useEffect(() => {
@@ -7712,6 +7751,7 @@ export function AccountsClient({
     setIsDrawerHydrating(false);
     setSelected(null);
     setDraft(null);
+    setIsDesktopDrawerEditing(false);
     setMobileDetailTab("overview");
     setDrawerFocusTarget(null);
     setSaveError(null);
@@ -7781,6 +7821,7 @@ export function AccountsClient({
     setIsCreateMeetingDrawerOpen(false);
     setMeetingSource(null);
     setDrawerFocusTarget(options?.focusTarget ?? null);
+    setIsDesktopDrawerEditing(false);
     const initialDraft = buildDraft(row);
     setSelected(row);
     setDraft(initialDraft);
@@ -9269,11 +9310,17 @@ export function AccountsClient({
 
     return (
       <div className={styles.phoneValue}>
-        <span>{text}</span>
+        <CallPhoneButton
+          className={styles.inlinePhoneCallButton}
+          context={context}
+          label={label}
+          phone={text}
+        >
+          {text}
+        </CallPhoneButton>
         {extensionValue ? (
           <span className={styles.secondaryCellText}>Ext. {extensionValue}</span>
         ) : null}
-        <CallPhoneButton className={styles.tableCallButton} context={context} label={label} phone={text} />
       </div>
     );
   }
@@ -11331,6 +11378,21 @@ export function AccountsClient({
                         onChange={(event) => setDraft((current) => current ? { ...current, companyPhone: event.target.value } : current)}
                         value={draft.companyPhone ?? ""}
                       />
+                      <CallPhoneButton
+                        className={styles.editPhoneCallButton}
+                        context={{
+                          sourcePage: "accounts",
+                          linkedBusinessAccountId: selected.businessAccountId,
+                          linkedAccountRowKey: selected.rowKey ?? selected.id,
+                          linkedContactId: null,
+                          linkedCompanyName: selected.companyName,
+                          linkedContactName: null,
+                        }}
+                        label={`${selected.companyName} company phone`}
+                        phone={draft.companyPhone}
+                      >
+                        Call company phone
+                      </CallPhoneButton>
                     </label>
                     <label>
                       <span>Company description</span>
@@ -11410,7 +11472,30 @@ export function AccountsClient({
                     {!selected.contactId || !selectedIsPrimaryContact ? <p className={styles.mobileInlineNotice}>This account does not have an editable primary contact ID yet.</p> : null}
                     <label><span>Name</span><input disabled={!selected.contactId || !selectedIsPrimaryContact} onChange={(event) => setDraft((current) => current ? { ...current, primaryContactName: event.target.value } : current)} value={selectedIsPrimaryContact ? draft.primaryContactName ?? "" : ""} /></label>
                     <label><span>Job title</span><input disabled={!selected.contactId || !selectedIsPrimaryContact} onChange={(event) => setDraft((current) => current ? { ...current, primaryContactJobTitle: event.target.value } : current)} value={selectedIsPrimaryContact ? draft.primaryContactJobTitle ?? "" : ""} /></label>
-                    <label><span>Phone</span><input disabled={!selected.contactId || !selectedIsPrimaryContact} inputMode="tel" onChange={(event) => setDraft((current) => current ? { ...current, primaryContactPhone: formatPhoneDraftValue(event.target.value) } : current)} value={selectedIsPrimaryContact ? draft.primaryContactPhone ?? "" : ""} /></label>
+                    <label>
+                      <span>Phone</span>
+                      <input
+                        disabled={!selected.contactId || !selectedIsPrimaryContact}
+                        inputMode="tel"
+                        onChange={(event) => setDraft((current) => current ? { ...current, primaryContactPhone: formatPhoneDraftValue(event.target.value) } : current)}
+                        value={selectedIsPrimaryContact ? draft.primaryContactPhone ?? "" : ""}
+                      />
+                      <CallPhoneButton
+                        className={styles.editPhoneCallButton}
+                        context={{
+                          sourcePage: "accounts",
+                          linkedBusinessAccountId: selected.businessAccountId,
+                          linkedAccountRowKey: selected.rowKey ?? selected.id,
+                          linkedContactId: resolveRowContactId(selected),
+                          linkedCompanyName: selected.companyName,
+                          linkedContactName: selected.primaryContactName,
+                        }}
+                        label={`${selected.primaryContactName ?? selected.companyName} phone`}
+                        phone={selectedIsPrimaryContact ? draft.primaryContactPhone : null}
+                      >
+                        Call contact
+                      </CallPhoneButton>
+                    </label>
                     <label><span>Extension</span><input disabled={!selected.contactId || !selectedIsPrimaryContact} inputMode="numeric" onChange={(event) => setDraft((current) => current ? { ...current, primaryContactExtension: event.target.value } : current)} value={selectedIsPrimaryContact ? draft.primaryContactExtension ?? "" : ""} /></label>
                     <label><span>Email</span><input disabled={!selected.contactId || !selectedIsPrimaryContact} inputMode="email" onChange={(event) => setDraft((current) => current ? { ...current, primaryContactEmail: event.target.value } : current)} value={selectedIsPrimaryContact ? draft.primaryContactEmail ?? "" : ""} /></label>
                   </section>
@@ -11471,7 +11556,17 @@ export function AccountsClient({
                       <div className={styles.mobileCallList}>
                         {callHistory.map((item) => (
                           <article key={`mobile-call-${item.sessionId}`}>
-                            <div><strong>{item.direction === "inbound" ? "Inbound call" : "Outbound call"}</strong><span>{buildCallHistoryMeta(item)}</span></div>
+                            <div>
+                              <strong>{item.direction === "inbound" ? "Inbound call" : "Outbound call"}</strong>
+                              {renderCallHistoryMeta(item, {
+                                sourcePage: "accounts",
+                                linkedBusinessAccountId: selected.businessAccountId,
+                                linkedAccountRowKey: selected.rowKey ?? selected.id,
+                                linkedContactId: resolveRowContactId(selected),
+                                linkedCompanyName: selected.companyName,
+                                linkedContactName: selected.primaryContactName,
+                              })}
+                            </div>
                             <small>{item.outcome.replace(/_/g, " ")}</small>
                             {item.summaryText ? <p>{truncateLongText(item.summaryText, 320)}</p> : null}
                           </article>
@@ -11490,21 +11585,59 @@ export function AccountsClient({
 
         <div className={`${styles.drawerHeader} ${styles.desktopDrawerOnly}`}>
           <div className={styles.drawerHeaderContent}>
+            <span className={styles.drawerEyebrow}>Account profile</span>
             <h2>{selected ? selected.companyName : "Account details"}</h2>
+            {selected ? (
+              <p>
+                {selected.accountType?.trim() || "Business account"}
+                {selected.businessAccountId?.trim()
+                  ? ` · ${selected.businessAccountId}`
+                  : ""}
+              </p>
+            ) : null}
           </div>
-          <button
-            className={styles.closeButton}
-            onClick={() => {
-              closeDrawer();
-            }}
-            type="button"
-          >
-            Close
-          </button>
+          <div className={styles.drawerHeaderActions}>
+            {selected ? (
+              <button
+                className={styles.drawerEditButton}
+                onClick={() => setIsDesktopDrawerEditing((current) => !current)}
+                type="button"
+              >
+                {isDesktopDrawerEditing ? "View" : "Edit"}
+              </button>
+            ) : null}
+            <button
+              aria-label="Close account details"
+              className={styles.closeButton}
+              onClick={() => {
+                closeDrawer();
+              }}
+              type="button"
+            >
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
         </div>
 
         {selected && draft ? (
           <div className={`${styles.drawerBody} ${styles.desktopDrawerOnly}`}>
+            {isDesktopDrawerEditing ? (
+              <>
+            {isDrawerHydrating ? (
+              <div className={styles.drawerRefreshNotice}>Refreshing account details…</div>
+            ) : null}
+
+            <section className={styles.drawerCard}>
+              <div className={styles.drawerSectionHeader}>
+                <div>
+                  <span>About</span>
+                  <h3>Company information</h3>
+                </div>
+                <span className={styles.drawerSectionPill}>
+                  {draft.category || "Uncategorized"}
+                </span>
+              </div>
+              <div className={styles.drawerFieldGrid}>
             <label>
               Company Name
               {drawerNeedsCompanyAssignment ? (
@@ -11591,12 +11724,28 @@ export function AccountsClient({
                 type="tel"
                 value={draft.companyPhone ?? ""}
               />
+              <CallPhoneButton
+                className={styles.editPhoneCallButton}
+                context={{
+                  sourcePage: "accounts",
+                  linkedBusinessAccountId: selected.businessAccountId,
+                  linkedAccountRowKey: selected.rowKey ?? selected.id,
+                  linkedContactId: null,
+                  linkedCompanyName: selected.companyName,
+                  linkedContactName: null,
+                }}
+                label={`${selected.companyName} company phone`}
+                phone={draft.companyPhone}
+              >
+                Call company phone
+              </CallPhoneButton>
               <span className={styles.lookupHint}>
                 Save updates the local app database.
               </span>
             </label>
+              </div>
 
-            <label>
+            <label className={styles.drawerFieldWide}>
               Company Description
               <textarea
                 onChange={(event) =>
@@ -11631,9 +11780,17 @@ export function AccountsClient({
               />
               Marketing Eligible
             </label>
+            </section>
 
-            <h3>Sales Rep</h3>
-            <label>
+            <section className={styles.drawerCard}>
+              <div className={styles.drawerSectionHeader}>
+                <div>
+                  <span>Ownership</span>
+                  <h3>Assigned sales rep</h3>
+                </div>
+                <ContactPersonIcon />
+              </div>
+            <label className={styles.drawerFieldWide}>
               Sales Rep
               <select
                 onChange={(event) =>
@@ -11681,9 +11838,17 @@ export function AccountsClient({
                 </span>
               ) : null}
             </label>
+            </section>
 
-            <h3>Address</h3>
-            <label>
+            <section className={styles.drawerCard}>
+              <div className={styles.drawerSectionHeader}>
+                <div>
+                  <span>Location</span>
+                  <h3>Address</h3>
+                </div>
+              </div>
+              <div className={styles.drawerFieldGrid}>
+            <label className={styles.drawerFieldWide}>
               Address Line 1
               <input
                 onChange={(event) => {
@@ -11767,12 +11932,23 @@ export function AccountsClient({
                 value={draft.postalCode}
               />
             </label>
-            <h3>Contact</h3>
+              </div>
+            </section>
+
+            <section className={styles.drawerCard}>
+              <div className={styles.drawerSectionHeader}>
+                <div>
+                  <span>Primary contact</span>
+                  <h3>Contact information</h3>
+                </div>
+                <PhoneIcon />
+              </div>
             {!selected.contactId ? (
               <p className={styles.readOnlyNotice}>
                 This row is not linked to a contact ID yet, so contact fields cannot be saved.
               </p>
             ) : null}
+            <div className={styles.drawerFieldGrid}>
             <label>
               Name
               <input
@@ -11821,6 +11997,21 @@ export function AccountsClient({
                 title="Phone number must use the format ###-###-####."
                 value={draft.primaryContactPhone ?? ""}
               />
+              <CallPhoneButton
+                className={styles.editPhoneCallButton}
+                context={{
+                  sourcePage: "accounts",
+                  linkedBusinessAccountId: selected.businessAccountId,
+                  linkedAccountRowKey: selected.rowKey ?? selected.id,
+                  linkedContactId: resolveRowContactId(selected),
+                  linkedCompanyName: selected.companyName,
+                  linkedContactName: selected.primaryContactName,
+                }}
+                label={`${selected.primaryContactName ?? selected.companyName} phone`}
+                phone={draft.primaryContactPhone}
+              >
+                Call contact
+              </CallPhoneButton>
             </label>
             <label>
               Extension
@@ -11856,6 +12047,7 @@ export function AccountsClient({
                 value={draft.primaryContactEmail ?? ""}
               />
             </label>
+            </div>
             <div className={styles.contactEnhanceSection}>
               <div className={styles.contactEnhanceActions}>
                 <button
@@ -11955,8 +12147,16 @@ export function AccountsClient({
                 ? "This contact is currently the primary contact."
                 : "Set this contact as primary contact"}
             </label>
+            </section>
 
-            <h3>Attributes</h3>
+            <section className={styles.drawerCard}>
+              <div className={styles.drawerSectionHeader}>
+                <div>
+                  <span>Classification</span>
+                  <h3>Company attributes</h3>
+                </div>
+              </div>
+              <div className={styles.drawerFieldGrid}>
             <label
               className={saveFieldErrors.industryType ? styles.fieldErrorLabel : undefined}
             >
@@ -12092,6 +12292,7 @@ export function AccountsClient({
                 <span className={styles.fieldErrorText}>{saveFieldErrors.companyRegion}</span>
               ) : null}
             </label>
+              </div>
 
             <div className={styles.companyAttributeSuggestionSection}>
               <div className={styles.companyAttributeSuggestionActions}>
@@ -12167,7 +12368,15 @@ export function AccountsClient({
                 </div>
               ) : null}
             </div>
+            </section>
 
+            <section className={styles.drawerCard}>
+              <div className={styles.drawerSectionHeader}>
+                <div>
+                  <span>Planning</span>
+                  <h3>Follow-up details</h3>
+                </div>
+              </div>
             <label
               className={saveFieldErrors.week ? styles.fieldErrorLabel : undefined}
             >
@@ -12202,7 +12411,7 @@ export function AccountsClient({
               ) : null}
             </label>
 
-            <label>
+            <label className={styles.drawerFieldWide}>
               Pinned Contact Note
               <textarea
                 aria-busy={isDrawerHydrating}
@@ -12230,15 +12439,19 @@ export function AccountsClient({
             </label>
 
             <p className={styles.lastModified}>Last modified: {formatLastModified(selected.lastModifiedIso)}</p>
+            </section>
 
-            <div
-              style={{
-                display: "flex",
-                gap: "0.5rem",
-                flexWrap: "wrap",
-                margin: "0.75rem 0 0.5rem",
-              }}
-            >
+            <section className={`${styles.drawerCard} ${styles.drawerActivityCard}`}>
+              <div className={styles.drawerSectionHeader}>
+                <div>
+                  <span>Timeline</span>
+                  <h3>Notes &amp; activity</h3>
+                </div>
+                <span className={styles.drawerSectionPill}>
+                  {companyNotes.length + contactNotes.length + callHistory.length + auditHistory.length}
+                </span>
+              </div>
+            <div className={styles.drawerActivityTabs}>
               {(
                 [
                   { key: "all", label: "All" },
@@ -12250,13 +12463,10 @@ export function AccountsClient({
                 const isActive = activityFilter === tab.key;
                 return (
                   <button
-                    className={styles.tableActionButton}
+                    aria-pressed={isActive}
+                    className={`${styles.drawerActivityTab} ${isActive ? styles.drawerActivityTabActive : ""}`}
                     key={tab.key}
                     onClick={() => setActivityFilter(tab.key)}
-                    style={{
-                      fontWeight: isActive ? 700 : 400,
-                      opacity: isActive ? 1 : 0.55,
-                    }}
                     type="button"
                   >
                     {tab.label}
@@ -12442,9 +12652,14 @@ export function AccountsClient({
                       <article className={styles.callHistoryItem} key={item.sessionId}>
                         <div className={styles.callHistoryItemHeader}>
                           <strong>{callLabel}</strong>
-                          <span className={styles.callHistoryMeta}>
-                            {buildCallHistoryMeta(item)}
-                          </span>
+                          {renderCallHistoryMeta(item, {
+                            sourcePage: "accounts",
+                            linkedBusinessAccountId: selected.businessAccountId,
+                            linkedAccountRowKey: selected.rowKey ?? selected.id,
+                            linkedContactId: resolveRowContactId(selected),
+                            linkedCompanyName: selected.companyName,
+                            linkedContactName: selected.primaryContactName,
+                          })}
                         </div>
                         <div className={styles.callHistoryBadges}>
                           <span className={styles.callHistoryBadge}>{outcomeLabel}</span>
@@ -12518,6 +12733,7 @@ export function AccountsClient({
                 </div>
               )}
             </section>
+            </section>
 
             {saveError ? <p className={styles.saveError}>{saveError}</p> : null}
             {saveNotice ? <p className={styles.saveNotice}>{saveNotice}</p> : null}
@@ -12530,6 +12746,16 @@ export function AccountsClient({
                 type="button"
               >
                 {isSaving ? "Saving..." : "Save changes"}
+              </button>
+              <button
+                className={styles.secondaryButton}
+                disabled={isSaving || isDeletingContact || !hasRowContactEmail(selected)}
+                onClick={() => openEmailComposerFromRow(selected)}
+                title={hasRowContactEmail(selected) ? "Email the primary contact" : "No contact email is available"}
+                type="button"
+              >
+                <EmailIcon />
+                Send email
               </button>
               <button
                 className={styles.secondaryButton}
@@ -12576,6 +12802,362 @@ export function AccountsClient({
                 {isDeletingBusinessAccount ? "Deleting..." : "Delete company (with contacts)"}
               </button>
             </div>
+              </>
+            ) : (
+              <div className={styles.drawerOverview}>
+                {isDrawerHydrating ? (
+                  <div className={styles.drawerRefreshNotice}>Refreshing account details…</div>
+                ) : null}
+
+                <section className={styles.drawerOverviewQuickGrid}>
+                  <div className={styles.drawerOverviewQuickItem}>
+                    <span><PhoneIcon /> Company phone</span>
+                    <strong>
+                      {draft.companyPhone?.trim() ? (
+                        <CallPhoneButton
+                          className={styles.inlinePhoneCallButton}
+                          context={{
+                            sourcePage: "accounts",
+                            linkedBusinessAccountId: selected.businessAccountId,
+                            linkedAccountRowKey: selected.rowKey ?? selected.id,
+                            linkedContactId: null,
+                            linkedCompanyName: selected.companyName,
+                            linkedContactName: null,
+                          }}
+                          label={`${selected.companyName} company phone`}
+                          phone={draft.companyPhone}
+                        >
+                          {draft.companyPhone.trim()}
+                        </CallPhoneButton>
+                      ) : "Not available"}
+                    </strong>
+                  </div>
+                  <div className={styles.drawerOverviewQuickItem}>
+                    <span><ContactPersonIcon /> Sales rep</span>
+                    <strong>{draft.salesRepName?.trim() || "Unassigned"}</strong>
+                  </div>
+                </section>
+
+                <div className={styles.drawerOverviewStack}>
+                  <section className={styles.drawerOverviewCard}>
+                    <div className={styles.drawerOverviewCardHeader}>
+                      <span>About</span>
+                      <span className={styles.drawerSectionPill}>{draft.category || "No category"}</span>
+                    </div>
+                    <p className={styles.drawerOverviewDescription}>
+                      {draft.companyDescription?.trim() || "No company description has been added yet."}
+                    </p>
+                    <span className={styles.drawerOverviewStatus} data-active={draft.marketingEligible !== false}>
+                      {draft.marketingEligible !== false ? "Marketing eligible" : "Not marketing eligible"}
+                    </span>
+                  </section>
+
+                  <section className={styles.drawerOverviewCard}>
+                    <div className={styles.drawerOverviewCardHeader}>
+                      <span>Primary contact</span>
+                    </div>
+                    <div className={styles.drawerContactIdentity}>
+                      <span>{buildCompanyInitials(draft.primaryContactName)}</span>
+                      <div>
+                        <strong>{draft.primaryContactName?.trim() || "No primary contact"}</strong>
+                        <small>{draft.primaryContactJobTitle?.trim() || "No job title"}</small>
+                      </div>
+                    </div>
+                    <dl className={styles.drawerOverviewDefinitionGrid}>
+                      <div>
+                        <dt>Phone</dt>
+                        <dd>
+                          {draft.primaryContactPhone?.trim() ? (
+                            <CallPhoneButton
+                              className={styles.inlinePhoneCallButton}
+                              context={{
+                                sourcePage: "accounts",
+                                linkedBusinessAccountId: selected.businessAccountId,
+                                linkedAccountRowKey: selected.rowKey ?? selected.id,
+                                linkedContactId: resolveRowContactId(selected),
+                                linkedCompanyName: selected.companyName,
+                                linkedContactName: selected.primaryContactName,
+                              }}
+                              label={`${selected.primaryContactName ?? selected.companyName} phone`}
+                              phone={draft.primaryContactPhone}
+                            >
+                              {draft.primaryContactPhone.trim()}
+                            </CallPhoneButton>
+                          ) : "—"}
+                        </dd>
+                      </div>
+                      <div><dt>Extension</dt><dd>{draft.primaryContactExtension?.trim() || "—"}</dd></div>
+                      <div className={styles.drawerOverviewWideValue}><dt>Email</dt><dd>{draft.primaryContactEmail?.trim() || "—"}</dd></div>
+                      {draft.notes?.trim() ? (
+                        <div className={styles.drawerOverviewWideValue}>
+                          <dt>Pinned contact note</dt>
+                          <dd>{draft.notes}</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                  </section>
+
+                  <section className={styles.drawerOverviewCard}>
+                    <div className={styles.drawerOverviewCardHeader}>
+                      <span>Address</span>
+                    </div>
+                    <dl className={styles.drawerOverviewDefinitionGrid}>
+                      <div className={styles.drawerOverviewWideValue}><dt>Address line 1</dt><dd>{draft.addressLine1 || "—"}</dd></div>
+                      <div><dt>Suite / Unit</dt><dd>{draft.addressLine2 || "—"}</dd></div>
+                      <div><dt>City</dt><dd>{draft.city || "—"}</dd></div>
+                      <div><dt>Province / State</dt><dd>{draft.state || "—"}</dd></div>
+                      <div><dt>Postal code</dt><dd>{draft.postalCode || "—"}</dd></div>
+                      <div><dt>Country</dt><dd>{draft.country || "—"}</dd></div>
+                    </dl>
+                  </section>
+
+                  <section className={styles.drawerOverviewCard}>
+                    <div className={styles.drawerOverviewCardHeader}>
+                      <span>More details</span>
+                    </div>
+                    <dl className={styles.drawerOverviewDefinitionGrid}>
+                      <div><dt>Account type</dt><dd>{selected.accountType || "—"}</dd></div>
+                      <div><dt>Opportunities</dt><dd>{selected.opportunityCount ?? 0}</dd></div>
+                      <div><dt>Industry</dt><dd>{draft.industryType || "—"}</dd></div>
+                      <div><dt>Sub-category</dt><dd>{draft.subCategory || "—"}</dd></div>
+                      <div><dt>Region</dt><dd>{draft.companyRegion || "—"}</dd></div>
+                      <div><dt>Week</dt><dd>{draft.week || "Unassigned"}</dd></div>
+                    </dl>
+                    <small className={styles.drawerOverviewUpdated}>
+                      Updated {formatLastModified(selected.lastModifiedIso)}
+                    </small>
+                  </section>
+
+                  <section className={styles.drawerOverviewCard}>
+                    <div className={styles.drawerOverviewCardHeader}>
+                      <span>Company notes</span>
+                      <span className={styles.drawerSectionPill}>
+                        {accountNotesLoading ? "Loading…" : companyNotes.length}
+                      </span>
+                    </div>
+                    <p className={styles.drawerOverviewSupportingText}>
+                      Shared across the whole company — everyone sees these.
+                    </p>
+                    <div className={styles.drawerOverviewNoteComposer}>
+                      <textarea
+                        onChange={(event) => setNewAccountNote(event.target.value)}
+                        placeholder="Add a timestamped company note."
+                        rows={3}
+                        value={newAccountNote}
+                      />
+                      <button
+                        className={styles.tableActionButton}
+                        disabled={isSavingAccountNote || newAccountNote.trim().length === 0}
+                        onClick={() => {
+                          void handleAddAccountNote("company");
+                        }}
+                        type="button"
+                      >
+                        {isSavingAccountNote ? "Saving…" : "Add company note"}
+                      </button>
+                    </div>
+                    {accountNotesError ? (
+                      <p className={styles.fieldErrorText}>{accountNotesError}</p>
+                    ) : null}
+                    {companyNotes.length > 0 ? (
+                      <ul className={styles.drawerOverviewNoteList}>
+                        {companyNotes.map((note) => renderAccountNote(note))}
+                      </ul>
+                    ) : !accountNotesLoading ? (
+                      <p className={styles.auditHistoryEmpty}>No company notes yet.</p>
+                    ) : null}
+                  </section>
+
+                  {selectedNotesContactId !== null ? (
+                    <section className={styles.drawerOverviewCard}>
+                      <div className={styles.drawerOverviewCardHeader}>
+                        <span>Contact notes</span>
+                        <span className={styles.drawerSectionPill}>
+                          {accountNotesLoading ? "Loading…" : contactNotes.length}
+                        </span>
+                      </div>
+                      <p className={styles.drawerOverviewSupportingText}>
+                        Notes for {selected.primaryContactName?.trim() || "this contact"}.
+                      </p>
+                      <div className={styles.drawerOverviewNoteComposer}>
+                        <textarea
+                          onChange={(event) => setNewContactNote(event.target.value)}
+                          placeholder="Add a timestamped contact note."
+                          rows={3}
+                          value={newContactNote}
+                        />
+                        <button
+                          className={styles.tableActionButton}
+                          disabled={isSavingContactNote || newContactNote.trim().length === 0}
+                          onClick={() => {
+                            void handleAddAccountNote("contact");
+                          }}
+                          type="button"
+                        >
+                          {isSavingContactNote ? "Saving…" : "Add contact note"}
+                        </button>
+                      </div>
+                      {contactNotes.length > 0 ? (
+                        <ul className={styles.drawerOverviewNoteList}>
+                          {contactNotes.map((note) => renderAccountNote(note))}
+                        </ul>
+                      ) : !accountNotesLoading ? (
+                        <p className={styles.auditHistoryEmpty}>No contact notes yet.</p>
+                      ) : null}
+                    </section>
+                  ) : null}
+
+                  <section className={styles.drawerOverviewCard}>
+                    <div className={styles.drawerOverviewCardHeader}>
+                      <span>Prior calls</span>
+                      <span className={styles.drawerSectionPill}>
+                        {callHistoryLoading ? "Loading…" : callHistory.length}
+                      </span>
+                    </div>
+                    {selected.lastCalledAt ?? callHistory[0]?.startedAt ? (
+                      <p className={styles.drawerOverviewSupportingText}>
+                        Last called {formatLastCalled(
+                          selected.lastCalledAt ?? callHistory[0]?.startedAt ?? null,
+                        )}
+                      </p>
+                    ) : null}
+                    {callHistoryLoading ? (
+                      <p className={styles.auditHistoryEmpty}>Loading prior calls...</p>
+                    ) : callHistoryError ? (
+                      <p className={styles.lookupError}>{callHistoryError}</p>
+                    ) : callHistory.length === 0 ? (
+                      <p className={styles.auditHistoryEmpty}>No prior calls are linked to this contact yet.</p>
+                    ) : (
+                      <div className={styles.callHistoryList}>
+                        {callHistory.map((item) => {
+                          const callLabel = item.direction === "inbound" ? "Inbound call" : "Outbound call";
+                          const outcomeLabel = item.outcome.replace(/_/g, " ");
+                          const summaryText = truncateLongText(item.summaryText, 480) ?? item.summaryText;
+                          const transcriptText = truncateLongText(item.transcriptText, 1800) ?? item.transcriptText;
+                          const recordingLabel = item.recordingSid
+                            ? `Recording ${item.recordingStatus ?? "captured"}`
+                            : null;
+                          const syncLabel = item.activitySyncStatus
+                            ? `Post-call ${item.activitySyncStatus.replace(/_/g, " ")}`
+                            : null;
+
+                          return (
+                            <article className={styles.callHistoryItem} key={item.sessionId}>
+                              <div className={styles.callHistoryItemHeader}>
+                                <strong>{callLabel}</strong>
+                                {renderCallHistoryMeta(item, {
+                                  sourcePage: "accounts",
+                                  linkedBusinessAccountId: selected.businessAccountId,
+                                  linkedAccountRowKey: selected.rowKey ?? selected.id,
+                                  linkedContactId: resolveRowContactId(selected),
+                                  linkedCompanyName: selected.companyName,
+                                  linkedContactName: selected.primaryContactName,
+                                })}
+                              </div>
+                              <div className={styles.callHistoryBadges}>
+                                <span className={styles.callHistoryBadge}>{outcomeLabel}</span>
+                                {recordingLabel ? <span className={styles.callHistoryBadge}>{recordingLabel}</span> : null}
+                                {syncLabel ? <span className={styles.callHistoryBadge}>{syncLabel}</span> : null}
+                              </div>
+                              {summaryText ? (
+                                <div className={styles.callHistoryTextBlock}>
+                                  <strong>AI summary</strong>
+                                  <p>{summaryText}</p>
+                                </div>
+                              ) : null}
+                              {transcriptText ? (
+                                <details className={styles.callHistoryTranscript}>
+                                  <summary>Transcript excerpt</summary>
+                                  <p>{transcriptText}</p>
+                                </details>
+                              ) : null}
+                              {!summaryText && !transcriptText ? (
+                                <p className={styles.auditHistoryEmpty}>
+                                  No ChatGPT summary or transcript has been stored for this call yet.
+                                </p>
+                              ) : null}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className={styles.drawerOverviewCard}>
+                    <div className={styles.drawerOverviewCardHeader}>
+                      <span>Audit history</span>
+                      <Link
+                        className={styles.recordLink}
+                        href={`/audit?${new URLSearchParams({
+                          businessAccountRecordId:
+                            selected.accountRecordId?.trim() || selected.id.trim(),
+                          ...(selected.contactId ? { contactId: String(selected.contactId) } : {}),
+                        }).toString()}`}
+                      >
+                        View full log
+                      </Link>
+                    </div>
+                    {auditHistoryLoading ? (
+                      <p className={styles.auditHistoryEmpty}>Loading audit history...</p>
+                    ) : auditHistoryError ? (
+                      <p className={styles.lookupError}>{auditHistoryError}</p>
+                    ) : auditHistory.length === 0 ? (
+                      <p className={styles.auditHistoryEmpty}>No audit events have been recorded for this record yet.</p>
+                    ) : (
+                      <div className={styles.auditHistoryList}>
+                        {auditHistory.map((item) => (
+                          <article className={styles.auditHistoryItem} key={item.id}>
+                            <strong>{item.summary}</strong>
+                            <span className={styles.auditHistoryMeta}>
+                              {item.actorName ?? item.actorLoginName ?? "Unknown"} • {formatLastModified(item.occurredAt)}
+                            </span>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                </div>
+
+                <section className={styles.drawerOverviewActions}>
+                  <CallPhoneButton
+                    className={styles.drawerOverviewAction}
+                    context={{
+                      sourcePage: "accounts",
+                      linkedBusinessAccountId: selected.businessAccountId,
+                      linkedAccountRowKey: selected.rowKey ?? selected.id,
+                      linkedContactId: resolveRowContactId(selected),
+                      linkedCompanyName: selected.companyName,
+                      linkedContactName: selected.primaryContactName,
+                    }}
+                    label={`${selected.primaryContactName ?? selected.companyName} phone`}
+                    phone={draft.primaryContactPhone ?? draft.companyPhone}
+                  />
+                  <button
+                    className={styles.drawerOverviewAction}
+                    disabled={!hasRowContactEmail(selected)}
+                    onClick={() => openEmailComposerFromRow(selected)}
+                    type="button"
+                  >
+                    <EmailIcon />
+                    Send email
+                  </button>
+                  <button
+                    className={styles.drawerOverviewAction}
+                    onClick={() => openCreateMeetingDrawerFromRow(selected, "Meeting")}
+                    type="button"
+                  >
+                    Schedule meeting
+                  </button>
+                  <button
+                    className={`${styles.drawerOverviewAction} ${styles.drawerOverviewEditAction}`}
+                    onClick={() => setIsDesktopDrawerEditing(true)}
+                    type="button"
+                  >
+                    Edit account
+                  </button>
+                </section>
+              </div>
+            )}
           </div>
         ) : (
           <div className={`${styles.drawerBody} ${styles.desktopDrawerOnly}`}>

@@ -85,6 +85,57 @@ export type SupportTicketCreateResponse = {
   ticket: SupportTicketDetail;
 };
 
+export type SupportTicketCloseResponse = {
+  ok: true;
+  alreadyClosed: boolean;
+  ticket: {
+    id: string;
+    status: "closed";
+    updatedAt: string;
+    latestUpdate: string | null;
+    nextAction: null;
+  };
+  event: {
+    type: "closed_by_support_owner";
+    message: string;
+    details: string[];
+    createdAt: string;
+  } | null;
+};
+
+export type SupportTicketReplyResponse = {
+  ok: true;
+  ticket: {
+    id: string;
+    updatedAt: string;
+    latestUpdate: string | null;
+  };
+  event: {
+    type: "support_owner_reply_sent";
+    message: string;
+    details: string[];
+    createdAt: string;
+  };
+};
+
+export type SupportTicketStatusUpdateResponse = {
+  ok: true;
+  changed: boolean;
+  ticket: {
+    id: string;
+    status: SupportTicketStatus;
+    updatedAt: string;
+    latestUpdate: string | null;
+    nextAction: string | null;
+  };
+  event: {
+    type: "status_changed_by_support_owner";
+    message: string;
+    details: string[];
+    createdAt: string;
+  } | null;
+};
+
 export type SupportTicketConversationParticipant = {
   name: string | null;
   email: string;

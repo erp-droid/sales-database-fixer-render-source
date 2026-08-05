@@ -5,6 +5,7 @@
   align-items: start;
 }
 .ownerLayout { grid-template-columns: minmax(360px, .75fr) minmax(520px, 1.25fr); }
+.ownerLoading { min-height: 280px; display: grid; place-items: center; border: 1px solid #e0e7ef; border-radius: 16px; background: #fff; color: #708095; font-size: 13px; }
 
 .formCard,
 .processCard,
@@ -103,6 +104,11 @@
 .ticketItem { padding: 12px 13px; border: 1px solid #e1e7ef; border-radius: 12px; background: #fbfcfe; }
 .ticketMeta { display: flex; justify-content: space-between; align-items: center; gap: 9px; }
 .ticketMeta > strong { color: #657287; font-family: var(--font-mono), monospace; font-size: 10px; }
+.ticketMetaActions { display: flex; align-items: center; gap: 7px; }
+.closeTicketButton { min-height: 25px; padding: 4px 8px; border: 1px solid #d9a9a5; border-radius: 7px; background: #fff; color: #9a3932; font-size: 9px; font-weight: 800; cursor: pointer; }
+.closeTicketButton:hover:not(:disabled) { border-color: #c7837d; background: #fff3f1; }
+.closeTicketButton:disabled { cursor: wait; opacity: .6; }
+.ticketActionError { margin-top: 7px !important; padding: 6px 7px; border: 1px solid #efd0cc; border-radius: 7px; background: #fff6f4; color: #9b3c34 !important; }
 .ticketItem h4 { margin: 8px 0 4px; color: #243248; font-size: 12px; line-height: 1.35; }
 .requester { margin-bottom: 3px !important; color: #426b5a !important; font-weight: 700; }
 .ticketItem p,
