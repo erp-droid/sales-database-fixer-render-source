@@ -37,7 +37,10 @@ function getLocalDatePartsFormatter(timeZone: string): Intl.DateTimeFormat {
       day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
-      hour12: false,
+      // Node 20's ICU can format midnight as 24:00 when hour12 is false.
+      // h23 guarantees 00:00 so the scheduler does not mistake midnight for
+      // the end-of-day processing window.
+      hourCycle: "h23",
     });
     localDatePartsFormatterCache.set(timeZone, formatter);
   }

@@ -121,19 +121,6 @@ function withinRange(session: CallSessionRecord, startMs: number, endMs: number)
   return Number.isFinite(targetMs) && targetMs >= startMs && targetMs <= endMs;
 }
 
-function hasPostedCallSummary(sessionId: string): boolean {
-  const sync = readCallActivitySyncBySessionId(sessionId);
-  return Boolean(sync?.transcriptText?.trim() && sync.summaryText?.trim());
-}
-
-function shouldExposeSessionInApp(session: CallSessionRecord): boolean {
-  if (!session.answered || !session.endedAt || session.outcome === "in_progress") {
-    return true;
-  }
-
-  return hasPostedCallSummary(session.sessionId);
-}
-
 export function filterCallSessions(
   sessions: CallSessionRecord[],
   filters: DashboardFilters,
@@ -143,7 +130,6 @@ export function filterCallSessions(
 
   return sessions.filter((session) => {
     return (
-      shouldExposeSessionInApp(session) &&
       withinRange(session, startMs, endMs) &&
       matchesEmployees(session, filters.employees) &&
       matchesDirection(session.direction, filters.direction) &&
@@ -373,7 +359,7 @@ export function buildDashboardCallList(
 
 export function buildDashboardCallDetail(sessionId: string): DashboardCallDetailResponse | null {
   const session = readCallSessionById(sessionId);
-  if (!session || !shouldExposeSessionInApp(session)) {
+  if (!session) {
     return null;
   }
 

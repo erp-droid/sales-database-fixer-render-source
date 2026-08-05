@@ -120,5 +120,30 @@ describe("buildDashboardCallDetail", () => {
       updatedAt: "2026-03-11T14:12:00.000Z",
     });
   });
-});
 
+  it("returns call details while post-call processing is still queued", async () => {
+    readCallSessionByIdMock.mockReturnValue(buildSession());
+    readCallLegsBySessionIdMock.mockReturnValue([]);
+    readCallActivitySyncBySessionIdMock.mockReturnValue({
+      sessionId: "call-1",
+      recordingSid: null,
+      recordingStatus: null,
+      recordingDurationSeconds: null,
+      status: "queued",
+      attempts: 0,
+      transcriptText: null,
+      summaryText: null,
+      activityId: null,
+      error: null,
+      recordingDeletedAt: null,
+      createdAt: "2026-03-11T14:11:00.000Z",
+      updatedAt: "2026-03-11T14:11:00.000Z",
+    });
+
+    const { buildDashboardCallDetail } = await import("@/lib/call-analytics/queries");
+    const detail = buildDashboardCallDetail("call-1");
+
+    expect(detail?.session.sessionId).toBe("call-1");
+    expect(detail?.activitySync.status).toBe("queued");
+  });
+});

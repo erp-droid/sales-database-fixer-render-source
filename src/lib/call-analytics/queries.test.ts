@@ -1,15 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { buildSummaryStats, filterCallSessions, parseDashboardFilters } from "@/lib/call-analytics/queries";
 import type { CallSessionRecord } from "@/lib/call-analytics/types";
-
-const { readCallActivitySyncBySessionIdMock } = vi.hoisted(() => ({
-  readCallActivitySyncBySessionIdMock: vi.fn(),
-}));
-
-vi.mock("@/lib/call-analytics/postcall-store", () => ({
-  readCallActivitySyncBySessionId: readCallActivitySyncBySessionIdMock,
-}));
 
 function buildSession(overrides: Partial<CallSessionRecord>): CallSessionRecord {
   return {
@@ -49,14 +41,6 @@ function buildSession(overrides: Partial<CallSessionRecord>): CallSessionRecord 
     updatedAt: overrides.updatedAt ?? "2026-03-08T14:05:00.000Z",
   };
 }
-
-beforeEach(() => {
-  readCallActivitySyncBySessionIdMock.mockReset();
-  readCallActivitySyncBySessionIdMock.mockReturnValue({
-    transcriptText: "Transcript ready.",
-    summaryText: "Summary ready.",
-  });
-});
 
 describe("parseDashboardFilters", () => {
   it("parses repeated employee filters and constrained enums", () => {
@@ -102,15 +86,6 @@ describe("parseDashboardFilters", () => {
 
 describe("filterCallSessions", () => {
   it("filters by employee, source, direction, date range, and unanswered outcome", () => {
-    readCallActivitySyncBySessionIdMock.mockImplementation((sessionId: string) =>
-      sessionId === "answered-app" || sessionId === "other-user"
-        ? {
-            transcriptText: "Transcript ready.",
-            summaryText: "Summary ready.",
-          }
-        : null,
-    );
-
     const sessions = [
       buildSession({
         sessionId: "answered-app",
@@ -149,16 +124,7 @@ describe("filterCallSessions", () => {
     expect(filtered.map((session) => session.sessionId)).toEqual(["missed-app"]);
   });
 
-  it("hides answered completed calls until transcript and summary are stored", () => {
-    readCallActivitySyncBySessionIdMock.mockImplementation((sessionId: string) =>
-      sessionId === "ready-call"
-        ? {
-            transcriptText: "Transcript ready.",
-            summaryText: "Summary ready.",
-          }
-        : null,
-    );
-
+  it("includes answered completed calls while post-call processing is pending", () => {
     const filtered = filterCallSessions(
       [
         buildSession({
@@ -191,6 +157,7 @@ describe("filterCallSessions", () => {
 
     expect(filtered.map((session) => session.sessionId)).toEqual([
       "ready-call",
+      "pending-call",
       "unanswered-call",
     ]);
   });
