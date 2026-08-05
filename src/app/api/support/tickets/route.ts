@@ -167,7 +167,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const loginName = requireLoginName(request);
     const owner = isSupportOwner(loginName);
     return NextResponse.json({
-      items: (owner ? listSupportTickets(100) : listSupportTicketsForLogin(loginName, 20)).map(toDetail),
+      items: (owner ? listSupportTickets() : listSupportTicketsForLogin(loginName, 20)).map(toDetail),
       scope: owner ? "all" : "mine",
     });
   } catch (error) {

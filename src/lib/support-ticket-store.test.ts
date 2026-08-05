@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("support ticket reply evidence", () => {
+describe("support ticket storage", () => {
   let tempDir = "";
   let closeDb: (() => void) | null = null;
 
@@ -57,5 +57,25 @@ describe("support ticket reply evidence", () => {
       { fileName: "dashboard.png", sourceType: "email_reply" },
     ]);
     expect(readSupportTicketAttachment(attachments[1]!)).toEqual(Buffer.from("reply-picture"));
+  });
+
+  it("returns every ticket to the support-owner listing", async () => {
+    const { getReadModelDb } = await import("@/lib/read-model/db");
+    const { createSupportTicket, listSupportTickets } = await import("@/lib/support-ticket-store");
+    closeDb = () => getReadModelDb().close();
+
+    for (let index = 0; index < 105; index += 1) {
+      createSupportTicket({
+        title: `Support request ${index}`,
+        category: "other",
+        impact: "minor",
+        employeeName: "CRM Employee",
+        employeeEmail: "employee@meadowb.com",
+        description: "The employee needs assistance with a CRM workflow.",
+        submittedByLogin: "employee",
+      });
+    }
+
+    expect(listSupportTickets()).toHaveLength(105);
   });
 });
