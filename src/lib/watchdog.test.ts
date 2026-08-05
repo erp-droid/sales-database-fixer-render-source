@@ -187,6 +187,53 @@ describe("watchdog", () => {
     expect(report.actions).toHaveLength(0);
   });
 
+  it("requeues an orphaned processing claim after its worker stops", async () => {
+    const staleTime = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+    mockDbAll.mockReturnValue([
+      {
+        session_id: "orphaned-processing",
+        status: "processing",
+        attempts: 1,
+        error_message: null,
+        updated_at: staleTime,
+        recording_sid: "RE123",
+      },
+    ]);
+
+    const report = await runWatchdog();
+
+    expect(report.actions).toHaveLength(1);
+    expect(report.actions[0]).toMatchObject({
+      issue: "orphaned_processing_claim",
+      action: "requeue",
+      result: "requeued",
+    });
+    expect(mockedRequeueJob).toHaveBeenCalledWith(
+      "orphaned-processing",
+      expect.stringContaining("orphaned processing claim"),
+    );
+  });
+
+  it("leaves a recent processing claim with its active worker", async () => {
+    const recentTime = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+    mockDbAll.mockReturnValue([
+      {
+        session_id: "active-processing",
+        status: "processing",
+        attempts: 1,
+        error_message: null,
+        updated_at: recentTime,
+        recording_sid: "RE456",
+      },
+    ]);
+
+    const report = await runWatchdog();
+
+    expect(report.checked).toBe(1);
+    expect(report.actions).toHaveLength(0);
+    expect(mockedRequeueJob).not.toHaveBeenCalled();
+  });
+
   it("skips stale failures older than 48 hours", async () => {
     const staleTime = new Date(Date.now() - 49 * 60 * 60 * 1000).toISOString();
     mockDbAll.mockReturnValue([
