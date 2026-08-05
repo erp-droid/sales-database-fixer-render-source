@@ -648,13 +648,12 @@ export function listSupportTicketsForLogin(loginName: string, limit = 20): Suppo
   return rows.map(mapTicketRow);
 }
 
-export function listSupportTickets(limit = 50): SupportTicketRecord[] {
+export function listSupportTickets(): SupportTicketRecord[] {
   ensureSupportTicketSchema();
   const rows = getReadModelDb().prepare(`
     ${TICKET_SELECT}
     ORDER BY t.created_at DESC
-    LIMIT ?
-  `).all(Math.max(1, Math.min(limit, 100))) as TicketRow[];
+  `).all() as TicketRow[];
   return rows.map(mapTicketRow);
 }
 
