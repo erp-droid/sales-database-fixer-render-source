@@ -2,9 +2,14 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const exportAppStateTransferSnapshot = vi.fn();
+const queryReadModelBusinessAccounts = vi.fn();
 
 vi.mock("@/lib/state-transfer", () => ({
   exportAppStateTransferSnapshot,
+}));
+
+vi.mock("@/lib/read-model/accounts", () => ({
+  queryReadModelBusinessAccounts,
 }));
 
 function makeRequest(headers?: HeadersInit): NextRequest {
@@ -23,6 +28,7 @@ describe("GET /api/system/state-transfer/export", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    queryReadModelBusinessAccounts.mockReset();
     process.env.STATE_TRANSFER_SYSTEM_KEY = "state-transfer-secret";
     delete process.env.CALL_ACTIVITY_SYNC_SECRET;
     delete process.env.DAILY_CALL_COACHING_SECRET;
@@ -38,6 +44,24 @@ describe("GET /api/system/state-transfer/export", () => {
       },
       dataQualityHistory: { checkedAt: "2026-06-16T12:00:00.000Z" },
     });
+    queryReadModelBusinessAccounts
+      .mockReturnValueOnce({ items: [], total: 1, page: 1, pageSize: 1 })
+      .mockReturnValue({
+        items: [
+          {
+            id: "account-1",
+            accountRecordId: "account-1",
+            rowKey: "account-1:contact:7",
+            businessAccountId: "C0001",
+            contactId: 7,
+            primaryContactId: 7,
+            lastModifiedIso: "2026-06-16T12:00:00.000Z",
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 1,
+      });
   });
 
   it("rejects requests without a system key", async () => {
@@ -81,6 +105,30 @@ describe("GET /api/system/state-transfer/export", () => {
       missing_table: [],
     });
     expect(payload.dataQualityHistory).toBeNull();
+  });
+
+  it("can replace stored account rows with the canonical Directory rows", async () => {
+    const { GET } = await import("@/app/api/system/state-transfer/export/route");
+    const response = await GET(
+      makeRequestWithQuery("tables=account_rows&canonicalDirectory=1&includeHistory=0", {
+        "x-system-key": "state-transfer-secret",
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.tables.account_rows).toHaveLength(1);
+    expect(payload.tables.account_rows[0]).toMatchObject({
+      row_key: "account-1:contact:7",
+      account_record_id: "account-1",
+      business_account_id: "C0001",
+      contact_id: 7,
+      primary_contact_id: 7,
+    });
+    expect(JSON.parse(payload.tables.account_rows[0].payload_json)).toMatchObject({
+      id: "account-1",
+      contactId: 7,
+    });
   });
 
   it("accepts the existing call sync secret as a deployment fallback", async () => {
