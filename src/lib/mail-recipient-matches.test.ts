@@ -55,34 +55,26 @@ describe("attachMatchedContactsToMailPayload", () => {
   });
 
   it("hydrates matched recipients and builds activity targets from To recipients only", async () => {
-    readAllAccountRowsFromReadModel.mockReturnValue([]);
-    findContactsByEmailSubstring.mockImplementation(async (_cookieValue, email: string) => {
-      if (email === "alex@alpha.com") {
-        return [
-          {
-            ContactID: { value: 101 },
-            DisplayName: { value: "Alex Alpha" },
-            CompanyName: { value: "Alpha Construction" },
-            BusinessAccountID: { value: "BA-1" },
-            Email: { value: "alex@alpha.com" },
-          },
-        ];
-      }
-
-      if (email === "bianca@bravo.com") {
-        return [
-          {
-            ContactID: { value: 202 },
-            DisplayName: { value: "Bianca Bravo" },
-            CompanyName: { value: "Bravo Mechanical" },
-            BusinessAccountID: { value: "BA-2" },
-            Email: { value: "bianca@bravo.com" },
-          },
-        ];
-      }
-
-      return [];
-    });
+    readAllAccountRowsFromReadModel.mockReturnValue([
+      {
+        accountRecordId: "BA-1",
+        id: "BA-1",
+        businessAccountId: "BA-1",
+        companyName: "Alpha Construction",
+        primaryContactName: "Alex Alpha",
+        primaryContactEmail: "alex@alpha.com",
+        contactId: 101,
+      },
+      {
+        accountRecordId: "BA-2",
+        id: "BA-2",
+        businessAccountId: "BA-2",
+        companyName: "Bravo Mechanical",
+        primaryContactName: "Bianca Bravo",
+        primaryContactEmail: "bianca@bravo.com",
+        contactId: 202,
+      },
+    ]);
     filterSuppressedBusinessAccountRows.mockImplementation((rows) => rows);
 
     const { attachMatchedContactsToMailPayload } = await import("@/lib/mail-recipient-matches");
@@ -126,14 +118,14 @@ describe("attachMatchedContactsToMailPayload", () => {
       sourceSurface: "mail",
     });
 
-    expect(findContactsByEmailSubstring).toHaveBeenCalledTimes(2);
+    expect(findContactsByEmailSubstring).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       to: [
         {
           email: "alex@alpha.com",
           name: "Alex Alpha",
           contactId: 101,
-          businessAccountRecordId: null,
+          businessAccountRecordId: "BA-1",
           businessAccountId: "BA-1",
         },
       ],
@@ -142,13 +134,13 @@ describe("attachMatchedContactsToMailPayload", () => {
           email: "bianca@bravo.com",
           name: "Bianca Bravo",
           contactId: 202,
-          businessAccountRecordId: null,
+          businessAccountRecordId: "BA-2",
           businessAccountId: "BA-2",
         },
       ],
       linkedContact: {
         contactId: 101,
-        businessAccountRecordId: null,
+        businessAccountRecordId: "BA-1",
         businessAccountId: "BA-1",
         contactName: "Alex Alpha",
         companyName: "Alpha Construction",
@@ -156,7 +148,7 @@ describe("attachMatchedContactsToMailPayload", () => {
       matchedContacts: [
         {
           contactId: 101,
-          businessAccountRecordId: null,
+          businessAccountRecordId: "BA-1",
           businessAccountId: "BA-1",
           contactName: "Alex Alpha",
           companyName: "Alpha Construction",
@@ -296,18 +288,9 @@ describe("attachMatchedContactsToMailPayload", () => {
     });
   });
 
-  it("uses a targeted live contact lookup instead of loading all accounts", async () => {
+  it("preserves unknown recipients without a live Acumatica lookup", async () => {
     readAllAccountRowsFromReadModel.mockReturnValue([]);
     filterSuppressedBusinessAccountRows.mockImplementation((rows) => rows);
-    findContactsByEmailSubstring.mockResolvedValue([
-      {
-        ContactID: { value: 909 },
-        DisplayName: { value: "Jordan Delta" },
-        CompanyName: { value: "Delta Roofing" },
-        BusinessAccountID: { value: "BA-909" },
-        Email: { value: "jordan@delta.com" },
-      },
-    ]);
 
     const { attachMatchedContactsToMailPayload } = await import("@/lib/mail-recipient-matches");
     const request = new NextRequest("http://localhost/api/mail/messages/send", {
@@ -342,29 +325,66 @@ describe("attachMatchedContactsToMailPayload", () => {
       sourceSurface: "mail",
     });
 
-    expect(findContactsByEmailSubstring).toHaveBeenCalledWith(
-      "session-cookie",
-      "jordan@delta.com",
-      undefined,
-    );
+    expect(findContactsByEmailSubstring).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       to: [
         {
           email: "jordan@delta.com",
-          name: "Jordan Delta",
-          contactId: 909,
-          businessAccountId: "BA-909",
+          name: null,
+          contactId: null,
+          businessAccountId: null,
         },
       ],
-      matchedContacts: [
+      matchedContacts: [],
+      linkedContact: {
+        contactId: null,
+      },
+    });
+  });
+
+  it("preserves recipients when the local read model is unavailable", async () => {
+    readAllAccountRowsFromReadModel.mockImplementation(() => {
+      throw new Error("read model unavailable");
+    });
+    filterSuppressedBusinessAccountRows.mockImplementation((rows) => rows);
+
+    const { attachMatchedContactsToMailPayload } = await import("@/lib/mail-recipient-matches");
+    const request = new NextRequest("http://localhost/api/mail/messages/send", {
+      headers: {
+        cookie: ".ASPXAUTH=expired-session-cookie",
+      },
+    });
+
+    const result = await attachMatchedContactsToMailPayload(request, {
+      subject: "Test",
+      htmlBody: "<p>Hello</p>",
+      textBody: "Hello",
+      to: [
         {
-          contactId: 909,
-          businessAccountId: "BA-909",
-          contactName: "Jordan Delta",
-          companyName: "Delta Roofing",
-          email: "jordan@delta.com",
+          email: "unknown@example.com",
+          name: null,
+          contactId: null,
+          businessAccountRecordId: null,
+          businessAccountId: null,
         },
       ],
+      cc: [],
+      bcc: [],
+      linkedContact: {
+        contactId: null,
+        businessAccountRecordId: null,
+        businessAccountId: null,
+        contactName: null,
+        companyName: null,
+      },
+      attachments: [],
+      sourceSurface: "mail",
+    });
+
+    expect(findContactsByEmailSubstring).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      to: [{ email: "unknown@example.com", contactId: null }],
+      matchedContacts: [],
     });
   });
 });

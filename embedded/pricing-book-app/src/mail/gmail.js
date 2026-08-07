@@ -275,9 +275,9 @@ function normalizeThreadRecord(mailbox, gmailThread, messages, existingThread = 
 function formatAddressHeader(recipients) {
   return (recipients || [])
     .map((recipient) => {
-      const email = cleanString(recipient?.email);
+      const email = cleanString(recipient?.email).replace(/[\r\n]+/g, " ");
       if (!email) return "";
-      const name = cleanString(recipient?.name);
+      const name = cleanString(recipient?.name).replace(/[\r\n]+/g, " ");
       return name ? `${name} <${email}>` : email;
     })
     .filter(Boolean)

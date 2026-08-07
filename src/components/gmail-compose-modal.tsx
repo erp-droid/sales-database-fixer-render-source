@@ -144,10 +144,6 @@ function sanitizeSignatureHtml(html: string): string {
   return template.innerHTML.trim();
 }
 
-function isEmailLike(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
 function buildRecipientLabel(recipient: MailRecipient): string {
   const name = cleanText(recipient.name);
   const email = cleanText(recipient.email);
@@ -159,7 +155,7 @@ function buildRecipientLabel(recipient: MailRecipient): string {
 
 function createManualRecipient(email: string): MailRecipient {
   return {
-    email: cleanText(email).toLowerCase(),
+    email: cleanText(email).replace(/[\r\n]+/g, " ").toLowerCase(),
     name: null,
     contactId: null,
     businessAccountRecordId: null,
@@ -265,13 +261,6 @@ function resolveRecipientInputValue(
     return {
       recipient: createRecipientFromSuggestion(matchingSuggestion),
       error: null,
-    };
-  }
-
-  if (!isEmailLike(normalizedValue)) {
-    return {
-      recipient: null,
-      error: "Enter a valid email address.",
     };
   }
 

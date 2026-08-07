@@ -22,7 +22,7 @@ const nullableTextSchema = z
   });
 
 const recipientSchema = z.object({
-  email: z.string().trim().email("Recipient email must be valid."),
+  email: z.string().trim().min(1, "Recipient address is required."),
   name: nullableTextSchema,
   contactId: z
     .union([z.number(), z.string(), z.null(), z.undefined()])

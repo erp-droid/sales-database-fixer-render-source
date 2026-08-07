@@ -97,10 +97,10 @@ describe("auth route timeouts", () => {
     Object.assign(process.env, originalEnv);
   });
 
-  it("trusts the local CRM session without probing Acumatica", async () => {
-    const fetchMock = vi.fn(() => {
-      throw new Error("Session checks should not call Acumatica.");
-    });
+  it("validates the local CRM session with Acumatica", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(jsonResponse({ status: 200, body: { ok: true } })),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const { GET } = await import("@/app/api/auth/session/route");
@@ -121,7 +121,7 @@ describe("auth route timeouts", () => {
         name: "jorge",
       },
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("creates a cookie-free session in isolated local development mode", async () => {
@@ -151,7 +151,9 @@ describe("auth route timeouts", () => {
   });
 
   it("uses the stored login name as the session identity", async () => {
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(jsonResponse({ status: 200, body: { ok: true } })),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const { GET } = await import("@/app/api/auth/session/route");
@@ -172,11 +174,13 @@ describe("auth route timeouts", () => {
         name: "jserrano",
       },
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("reuses a short-lived cached session response for repeated probes", async () => {
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(jsonResponse({ status: 200, body: { ok: true } })),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const { GET } = await import("@/app/api/auth/session/route");
@@ -210,7 +214,7 @@ describe("auth route timeouts", () => {
         name: "jserrano",
       },
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the session active when caller identity cannot be resolved", async () => {
@@ -248,10 +252,15 @@ describe("auth route timeouts", () => {
     });
   });
 
-  it("keeps the local session active even when the upstream cookie value is stale", async () => {
-    const fetchMock = vi.fn(() => {
-      throw new Error("Session checks should not refresh Acumatica.");
-    });
+  it("clears local auth cookies when the upstream session has expired", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          status: 401,
+          body: { message: "Session is invalid or expired" },
+        }),
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const { GET } = await import("@/app/api/auth/session/route");
@@ -266,14 +275,13 @@ describe("auth route timeouts", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      authenticated: true,
-      user: {
-        id: "smessih",
-        name: "smessih",
-      },
+      authenticated: false,
+      user: null,
     });
-    expect(response.headers.get("set-cookie")).toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
+    const setCookie = response.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain(".ASPXAUTH=");
+    expect(setCookie).toContain("mb_login_name=");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("clears local auth cookies when the signed-in username cookie is missing", async () => {

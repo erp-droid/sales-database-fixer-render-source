@@ -175,4 +175,28 @@ describe("mail auth helpers", () => {
     expect(syncCallEmployeeDirectory).toHaveBeenCalledTimes(1);
     expect(result.senderEmail).toBe("jserrano@meadowb.com");
   });
+
+  it("falls back to the login mailbox when source directory refresh fails", async () => {
+    readCallEmployeeDirectory.mockReturnValue([]);
+    readCallEmployeeDirectoryMeta.mockReturnValue({
+      total: 0,
+      latestUpdatedAt: null,
+    });
+    syncCallEmployeeDirectory.mockRejectedValue(
+      new Error("source system request failed with status 401"),
+    );
+
+    const { resolveMailSenderForRequest } = await import("@/lib/mail-auth");
+    const request = new NextRequest("http://localhost/api/mail/messages/send", {
+      headers: {
+        cookie: ".ASPXAUTH=expired-cookie; mb_login_name=stita",
+      },
+    });
+
+    await expect(resolveMailSenderForRequest(request)).resolves.toEqual({
+      loginName: "stita",
+      senderEmail: "stita@meadowb.com",
+      displayName: "stita",
+    });
+  });
 });

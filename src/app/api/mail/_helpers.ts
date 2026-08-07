@@ -8,7 +8,6 @@ import { repairMailActivitySync } from "@/lib/mail-activity-sync";
 import { type ResolvedMailSender, resolveMailSenderForRequest } from "@/lib/mail-auth";
 import { drainPendingMailSendJobs, enqueueMailSendJob } from "@/lib/mail-send-jobs";
 import { attachMatchedContactsToMailPayload } from "@/lib/mail-recipient-matches";
-import { collectUnresolvedMailRecipientEmails } from "@/lib/mail-validation";
 import {
   buildMailServiceOauthStartUrl,
   requestMailService,
@@ -203,20 +202,6 @@ function normalizeMailPayload(payload: unknown): Partial<MailComposePayload> {
   return payload && typeof payload === "object" ? (payload as Partial<MailComposePayload>) : {};
 }
 
-function assertResolvedMailRecipients(payload: Partial<MailComposePayload>): void {
-  const unresolvedRecipients = collectUnresolvedMailRecipientEmails(payload);
-  if (unresolvedRecipients.length === 0) {
-    return;
-  }
-
-  throw new HttpError(
-    422,
-    unresolvedRecipients.length === 1
-      ? `Recipient ${unresolvedRecipients[0]} is not a known contact. Add only recipients that exist in the app.`
-      : `These recipients are not known contacts: ${unresolvedRecipients.join(", ")}. Add only recipients that exist in the app.`,
-  );
-}
-
 export async function proxyMailJson(
   request: NextRequest,
   options: {
@@ -234,12 +219,24 @@ export async function proxyMailJson(
   const authCookieRefresh: AuthCookieRefreshState = { value: null };
 
   try {
-    const requestBody =
+    let requestBody = options.body;
+    if (
       options.resolveRecipients !== false &&
       options.body &&
       typeof options.body === "object"
-        ? await attachMatchedContactsToMailPayload(request, options.body, authCookieRefresh)
-        : options.body;
+    ) {
+      try {
+        requestBody = await attachMatchedContactsToMailPayload(
+          request,
+          options.body,
+          authCookieRefresh,
+        );
+      } catch {
+        // CRM enrichment is optional. Preserve the original recipients and
+        // continue to Gmail if local or source-system matching is unavailable.
+        requestBody = options.body;
+      }
+    }
     const upstream = await requestMailService(request, {
       ...options,
       body: requestBody,
@@ -303,16 +300,25 @@ export async function proxyAuditedMailSendJson(
   let resolvedSender: ResolvedMailSender | null = null;
 
   try {
-    const requestBody =
+    let requestBody = options.body;
+    if (
       options.resolveRecipients !== false &&
       options.body &&
       typeof options.body === "object"
-        ? await attachMatchedContactsToMailPayload(request, options.body, authCookieRefresh)
-        : options.body;
-    normalizedPayload = normalizeMailPayload(requestBody);
-    if (options.body && typeof requestBody === "object") {
-      assertResolvedMailRecipients(normalizedPayload);
+    ) {
+      try {
+        requestBody = await attachMatchedContactsToMailPayload(
+          request,
+          options.body,
+          authCookieRefresh,
+        );
+      } catch {
+        // Recipient matching must never block delivery. Gmail receives the
+        // addresses exactly as entered and remains the delivery authority.
+        requestBody = options.body;
+      }
     }
+    normalizedPayload = normalizeMailPayload(requestBody);
     resolvedSender = await resolveMailSenderForRequest(request, authCookieRefresh);
     const upstream = await requestMailService(request, {
       ...options,

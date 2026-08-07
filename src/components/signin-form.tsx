@@ -8,7 +8,6 @@ import styles from "@/app/signin/signin.module.css";
 
 const REMEMBER_PASSWORD_STORAGE_KEY = "businessAccounts.rememberPassword.v1";
 const COLUMN_PREF_RESET_STORAGE_KEY = "businessAccounts.resetColumnsOnNextLoad.v1";
-const RECENT_SIGN_IN_STORAGE_KEY = "businessAccounts.authJustSignedInAt.v1";
 const SESSION_CHECK_TIMEOUT_MS = 6000;
 const LOGIN_TIMEOUT_MS = 24000;
 
@@ -202,7 +201,6 @@ export function SignInForm({
       }
 
       window.sessionStorage.setItem(COLUMN_PREF_RESET_STORAGE_KEY, "1");
-      window.sessionStorage.setItem(RECENT_SIGN_IN_STORAGE_KEY, String(Date.now()));
       window.location.assign(nextPath);
     } catch (submitError) {
       if (isAbortError(submitError)) {

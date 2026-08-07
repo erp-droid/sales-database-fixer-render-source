@@ -3,7 +3,6 @@ import crypto from "node:crypto";
 import { getStoredLoginName, requireAuthCookieValue } from "@/lib/auth";
 import {
   readCallEmployeeDirectory,
-  readCallEmployeeDirectoryMeta,
   syncCallEmployeeDirectory,
 } from "@/lib/call-analytics/employee-directory";
 import { getEnv } from "@/lib/env";
@@ -26,19 +25,6 @@ export type ResolvedMailSender = {
 
 function cleanText(value: string | null | undefined): string {
   return value?.trim() ?? "";
-}
-
-function isFreshDirectory(latestUpdatedAt: string | null, staleAfterMs: number): boolean {
-  if (!latestUpdatedAt) {
-    return false;
-  }
-
-  const updatedAtMs = Date.parse(latestUpdatedAt);
-  if (!Number.isFinite(updatedAtMs)) {
-    return false;
-  }
-
-  return Date.now() - updatedAtMs <= staleAfterMs;
 }
 
 function normalizeEmail(value: string): string {
@@ -102,21 +88,22 @@ export async function resolveMailSenderForRequest(
     ) ?? null;
 
   let sender = findSender();
-  const directoryMeta = readCallEmployeeDirectoryMeta();
-  if (!sender || !isFreshDirectory(directoryMeta.latestUpdatedAt, env.CALL_EMPLOYEE_DIRECTORY_STALE_AFTER_MS)) {
-    await syncCallEmployeeDirectory(cookieValue, authCookieRefresh);
-    sender = findSender();
+  if (!sender) {
+    try {
+      await syncCallEmployeeDirectory(cookieValue, authCookieRefresh);
+      sender = findSender();
+    } catch {
+      // Source-system directory refresh is best effort for mail. The mailbox
+      // service is keyed by login name and can still attempt delivery.
+    }
   }
 
-  const senderEmail = cleanText(sender?.email);
-  if (!senderEmail) {
-    throw new HttpError(
-      422,
-      `No internal mailbox email is mapped to the signed-in login '${loginName}'.`,
-    );
-  }
-
-  const expectedSuffix = `@${env.MAIL_INTERNAL_DOMAIN.trim().toLowerCase()}`;
+  const internalDomain = env.MAIL_INTERNAL_DOMAIN.trim().toLowerCase();
+  const fallbackEmail = normalizedLoginName.includes("@")
+    ? normalizedLoginName
+    : `${normalizedLoginName}@${internalDomain}`;
+  const senderEmail = cleanText(sender?.email) || fallbackEmail;
+  const expectedSuffix = `@${internalDomain}`;
   if (!normalizeEmail(senderEmail).endsWith(expectedSuffix)) {
     throw new HttpError(
       422,

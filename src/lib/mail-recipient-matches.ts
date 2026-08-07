@@ -1,9 +1,3 @@
-import { requireAuthCookieValue } from "@/lib/auth";
-import {
-  findContactsByEmailSubstring,
-  readWrappedNumber,
-  readWrappedString,
-} from "@/lib/acumatica";
 import {
   filterSuppressedBusinessAccountRows,
 } from "@/lib/business-accounts";
@@ -79,43 +73,6 @@ function buildMatchedContactFromRow(
     contactName: row.primaryContactName ?? null,
     companyName: row.companyName ?? null,
     email: row.primaryContactEmail ?? null,
-  };
-}
-
-function buildMatchedContactFromLiveContact(
-  contact: Record<string, unknown>,
-  recipientEmail: string,
-): MailMatchedContact | null {
-  const contactId = readWrappedNumber(contact, "ContactID");
-  if (!contactId) {
-    return null;
-  }
-
-  const exactEmails = splitEmails(
-    readWrappedString(contact, "Email") || readWrappedString(contact, "EMail"),
-  );
-  if (exactEmails.length > 0 && !exactEmails.includes(recipientEmail)) {
-    return null;
-  }
-
-  return {
-    contactId,
-    businessAccountRecordId: null,
-    businessAccountId:
-      readWrappedString(contact, "BusinessAccountID") ||
-      readWrappedString(contact, "BAccountID") ||
-      readWrappedString(contact, "BusinessAccount") ||
-      null,
-    contactName:
-      readWrappedString(contact, "DisplayName") ||
-      readWrappedString(contact, "FullName") ||
-      readWrappedString(contact, "ContactName") ||
-      null,
-    companyName:
-      readWrappedString(contact, "CompanyName") ||
-      readWrappedString(contact, "AccountName") ||
-      null,
-    email: exactEmails.find((email) => email === recipientEmail) ?? recipientEmail,
   };
 }
 
@@ -242,8 +199,10 @@ function appendMatchedContactsFromRows(
 export async function attachMatchedContactsToMailPayload(
   request: NextRequest,
   payload: unknown,
-  authCookieRefresh?: AuthCookieRefreshState,
+  _authCookieRefresh?: AuthCookieRefreshState,
 ): Promise<Record<string, unknown>> {
+  void request;
+  void _authCookieRefresh;
   if (!isComposePayload(payload)) {
     return (payload ?? {}) as Record<string, unknown>;
   }
@@ -279,43 +238,9 @@ export async function attachMatchedContactsToMailPayload(
     nextCc = hydrateRecipients(payload.cc, matchedContactsByEmail);
     nextBcc = hydrateRecipients(payload.bcc, matchedContactsByEmail);
 
-    const remainingUnresolvedEmails = collectEmailsNeedingLookup([
-      ...nextTo,
-      ...nextCc,
-      ...nextBcc,
-    ]);
-
-    if (remainingUnresolvedEmails.size > 0) {
-      const cookieValue = requireAuthCookieValue(request);
-      const liveMatches = await Promise.all(
-        [...remainingUnresolvedEmails].map(async (email) => ({
-          email,
-          contacts: await findContactsByEmailSubstring(
-            cookieValue,
-            email,
-            authCookieRefresh,
-          ),
-        })),
-      );
-
-      for (const match of liveMatches) {
-        for (const contact of match.contacts) {
-          const matchedContact = buildMatchedContactFromLiveContact(
-            contact as Record<string, unknown>,
-            match.email,
-          );
-          if (!matchedContact) {
-            continue;
-          }
-
-          pushMatchedContactByEmail(matchedContactsByEmail, matchedContact);
-        }
-      }
-
-      nextTo = hydrateRecipients(nextTo, matchedContactsByEmail);
-      nextCc = hydrateRecipients(nextCc, matchedContactsByEmail);
-      nextBcc = hydrateRecipients(nextBcc, matchedContactsByEmail);
-    }
+    // Sending mail must never depend on a live Acumatica session. Known
+    // recipients are enriched from the local read model when possible; any
+    // remaining addresses are sent as entered and may be linked later.
   }
   const matchedContacts = collectMatchedContactsForRecipients(nextTo, matchedContactsByEmail);
   const nextLinkedContact =

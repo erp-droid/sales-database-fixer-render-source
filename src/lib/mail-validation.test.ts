@@ -103,6 +103,18 @@ describe("mail validation", () => {
     expect(parsed.attachments[0]?.fileName).toBe("proposal.pdf");
   });
 
+  it("allows a nonstandard recipient address for Gmail to accept or reject", () => {
+    const parsed = parseMailComposePayload({
+      subject: "Hello",
+      htmlBody: "<div>Hello</div>",
+      textBody: "Hello",
+      to: [{ email: "possibly-wrong-address" }],
+      linkedContact: {},
+    });
+
+    expect(parsed.to[0]?.email).toBe("possibly-wrong-address");
+  });
+
   it("parses link-contact payloads", () => {
     expect(
       parseMailLinkContactPayload({

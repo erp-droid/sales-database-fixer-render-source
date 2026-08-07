@@ -3,7 +3,6 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const requestMailService = vi.fn();
 const attachMatchedContactsToMailPayload = vi.fn();
-const collectUnresolvedMailRecipientEmails = vi.fn();
 const repairMailActivitySync = vi.fn();
 const resolveDeferredActionActor = vi.fn();
 const logMailSendAudit = vi.fn();
@@ -31,10 +30,6 @@ vi.mock("@/lib/mail-proxy", () => ({
 
 vi.mock("@/lib/mail-recipient-matches", () => ({
   attachMatchedContactsToMailPayload,
-}));
-
-vi.mock("@/lib/mail-validation", () => ({
-  collectUnresolvedMailRecipientEmails,
 }));
 
 vi.mock("@/lib/mail-activity-sync", () => ({
@@ -70,7 +65,6 @@ describe("proxyAuditedMailSendJson", () => {
     attachMatchedContactsToMailPayload.mockImplementation(
       async (_request: NextRequest, body: unknown) => body,
     );
-    collectUnresolvedMailRecipientEmails.mockReturnValue([]);
     resolveMailSenderForRequest.mockResolvedValue({
       loginName: "jserrano",
       senderEmail: "jserrano@meadowb.com",
@@ -177,5 +171,44 @@ describe("proxyAuditedMailSendJson", () => {
       }),
     );
     expect(drainPendingMailSendJobs).toHaveBeenCalledWith(25);
+  });
+
+  it("still sends the original payload when CRM recipient enrichment fails", async () => {
+    attachMatchedContactsToMailPayload.mockRejectedValueOnce(
+      Object.assign(new Error("source system request failed with status 401"), {
+        status: 401,
+      }),
+    );
+
+    const { proxyAuditedMailSendJson } = await import("@/app/api/mail/_helpers");
+    const request = new NextRequest("http://localhost/api/mail/messages/send", {
+      method: "POST",
+      body: JSON.stringify({ subject: "test" }),
+      headers: {
+        "content-type": "application/json",
+      },
+    });
+    const body = {
+      subject: "test",
+      to: [{ email: "not-in-crm@example.com", contactId: null }],
+      cc: [{ email: "service@meadowb.com", contactId: null }],
+      bcc: [],
+      linkedContact: null,
+      attachments: [],
+      sourceSurface: "accounts",
+    };
+
+    const response = await proxyAuditedMailSendJson(request, {
+      path: "/api/mail/messages/send",
+      method: "POST",
+      body,
+      forwardAcumaticaSession: true,
+    });
+
+    expect(response.status).toBe(200);
+    expect(requestMailService).toHaveBeenCalledWith(
+      request,
+      expect.objectContaining({ body }),
+    );
   });
 });

@@ -7,6 +7,7 @@ import {
   getStoredLoginName,
   setAuthCookie,
 } from "@/lib/auth";
+import { validateSessionWithAcumatica } from "@/lib/acumatica";
 import { resolveSignedInCallerIdentity } from "@/lib/caller-identity";
 import {
   createDeferredActionActor,
@@ -16,7 +17,7 @@ import { runDueDeferredActions } from "@/lib/deferred-actions-executor";
 import { getEnv } from "@/lib/env";
 import { HttpError } from "@/lib/errors";
 
-const AUTHENTICATED_SESSION_CACHE_TTL_MS = 60_000;
+const AUTHENTICATED_SESSION_CACHE_TTL_MS = 10_000;
 const CALLER_IDENTITY_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 type SessionResponsePayload = {
@@ -155,7 +156,28 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   const localDatabaseOnly = getEnv().LOCAL_DATABASE_ONLY;
-  const activeCookieValue = cookieValue;
+  const authCookieRefresh = { value: null as string | null };
+
+  if (!localDatabaseOnly) {
+    try {
+      await validateSessionWithAcumatica(cookieValue, authCookieRefresh);
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 401) {
+        cachedSessionResponses.delete(cacheKey);
+        callerIdentityRefreshByUser.delete(storedUser.id);
+        return buildInvalidSessionResponse();
+      }
+
+      const degradedPayload: SessionResponsePayload = {
+        authenticated: true,
+        user: storedUser,
+        degraded: true,
+      };
+      return buildSessionResponse(degradedPayload, authCookieRefresh.value);
+    }
+  }
+
+  const activeCookieValue = authCookieRefresh.value ?? cookieValue;
   const shouldRunDeferredActions = !localDatabaseOnly && hasRunnableDeferredActions();
   const shouldRunIdentityRefresh =
     !localDatabaseOnly && shouldRefreshCallerIdentity(storedUser.id);
@@ -198,8 +220,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   storeCachedSessionResponse(
     cacheKey,
     responsePayload,
-    null,
+    authCookieRefresh.value,
     AUTHENTICATED_SESSION_CACHE_TTL_MS,
   );
-  return buildSessionResponse(responsePayload, null);
+  return buildSessionResponse(responsePayload, authCookieRefresh.value);
 }

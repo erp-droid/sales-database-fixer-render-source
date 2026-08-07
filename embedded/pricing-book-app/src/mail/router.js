@@ -52,18 +52,8 @@ function normalizeEmail(value) {
   return cleanString(value).toLowerCase();
 }
 
-function isValidEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanString(value));
-}
-
 function readInternalMailDomain() {
   return cleanString(process.env.MAIL_INTERNAL_DOMAIN || "meadowb.com").toLowerCase();
-}
-
-function isAllowedInternalRecipientEmail(value) {
-  const email = normalizeEmail(value);
-  const domain = readInternalMailDomain();
-  return Boolean(email && domain && email.endsWith(`@${domain}`));
 }
 
 function toInteger(value) {
@@ -72,9 +62,9 @@ function toInteger(value) {
 }
 
 function normalizeRecipient(raw) {
-  const email = normalizeEmail(raw?.email);
-  if (!email || !isValidEmail(email)) {
-    throw new MailAuthError("Each recipient must include a valid email address.", 422);
+  const email = normalizeEmail(raw?.email).replace(/[\r\n]+/g, " ");
+  if (!email) {
+    throw new MailAuthError("Each recipient must include an address.", 422);
   }
 
   const contactId = toInteger(raw?.contactId);
@@ -188,63 +178,6 @@ function normalizeComposePayload(raw, options = {}) {
     attachments: normalizeAttachments(raw?.attachments),
     sourceSurface: cleanString(raw?.sourceSurface) === "accounts" ? "accounts" : "mail"
   };
-}
-
-function buildResolvedRecipientEmailSet(payload) {
-  const resolvedEmails = new Set(
-    (Array.isArray(payload?.matchedContacts) ? payload.matchedContacts : [])
-      .map((contact) => normalizeEmail(contact?.email))
-      .filter(Boolean)
-  );
-
-  [...(payload?.to || []), ...(payload?.cc || []), ...(payload?.bcc || [])].forEach((recipient) => {
-    if (toInteger(recipient?.contactId) && toInteger(recipient?.contactId) > 0) {
-      const email = normalizeEmail(recipient?.email);
-      if (email) {
-        resolvedEmails.add(email);
-      }
-    }
-  });
-
-  return resolvedEmails;
-}
-
-function collectUnresolvedRecipients(payload) {
-  const resolvedEmails = buildResolvedRecipientEmailSet(payload);
-  const unresolved = new Set();
-
-  [...(payload?.to || []), ...(payload?.cc || []), ...(payload?.bcc || [])].forEach((recipient) => {
-    const email = normalizeEmail(recipient?.email);
-    if (!email) {
-      return;
-    }
-
-    if (resolvedEmails.has(email)) {
-      return;
-    }
-
-    if (isAllowedInternalRecipientEmail(email)) {
-      return;
-    }
-
-    unresolved.add(email);
-  });
-
-  return [...unresolved];
-}
-
-function assertResolvedRecipients(payload) {
-  const unresolved = collectUnresolvedRecipients(payload);
-  if (unresolved.length === 0) {
-    return;
-  }
-
-  throw new MailAuthError(
-    unresolved.length === 1
-      ? `Recipient ${unresolved[0]} is not a known contact.`
-      : `These recipients are not known contacts: ${unresolved.join(", ")}.`,
-    422
-  );
 }
 
 function prepareSendPayload(payload) {
@@ -1155,7 +1088,6 @@ router.post("/messages/send", async (req, res, next) => {
       cookieHeader: acumaticaCookieHeader
     });
     const payload = prepareSendPayload(normalizeComposePayload(req.body));
-    assertResolvedRecipients(payload);
     const response = await sendMessage(connection, payload);
     if (skipActivitySync) {
       res.json(buildDeferredActivitySyncResponse(response));
@@ -1179,7 +1111,6 @@ router.post("/threads/:threadId/reply", async (req, res, next) => {
     const payload = prepareSendPayload(normalizeComposePayload(req.body, {
       threadId: req.params.threadId
     }));
-    assertResolvedRecipients(payload);
     const response = await sendMessage(connection, payload, {
       threadId: req.params.threadId
     });
@@ -1206,7 +1137,6 @@ router.post("/threads/:threadId/forward", async (req, res, next) => {
       threadId: null,
       draftId: null
     }));
-    assertResolvedRecipients(payload);
     const response = await sendMessage(connection, payload);
     if (shouldDeferActivitySync(req)) {
       res.json(buildDeferredActivitySyncResponse(response));
